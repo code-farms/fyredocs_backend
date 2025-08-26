@@ -29,7 +29,14 @@ export default function FileUpload({
 
   const uploadMutation = useMutation({
     mutationFn: async (formData: FormData) => {
-      const response = await apiRequest("POST", "/api/jobs", formData);
+      const response = await fetch("/api/jobs", {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Upload failed");
+      }
       return response.json();
     },
     onSuccess: (data) => {
@@ -76,10 +83,15 @@ export default function FileUpload({
   const { getRootProps, getInputProps, isDragActive, fileRejections } = useDropzone({
     onDrop,
     maxFiles,
-    accept: acceptedFileTypes.reduce((acc, type) => {
-      acc[type] = [];
-      return acc;
-    }, {} as Record<string, string[]>),
+    accept: {
+      'application/pdf': ['.pdf'],
+      'application/msword': ['.doc'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+      'application/vnd.ms-excel': ['.xls'],
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+      'application/vnd.ms-powerpoint': ['.ppt'],
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+    },
     maxSize: 50 * 1024 * 1024, // 50MB
   });
 
