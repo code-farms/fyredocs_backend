@@ -97,10 +97,13 @@ async function processFile(jobId: string, toolType: string, inputPath: string): 
   const outputFileName = `processed_${jobId}_${Date.now()}`;
   let outputPath: string;
   
+  console.log(`Processing file for job ${jobId}, tool: ${toolType}, input: ${inputPath}`);
+  
   try {
     switch (toolType) {
       case 'pdf-to-word':
         outputPath = path.join(outputDir, `${outputFileName}.docx`);
+        console.log(`Will create Word document at: ${outputPath}`);
         await convertPdfToWord(inputPath, outputPath);
         break;
         
@@ -254,13 +257,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Download processed file
   app.get("/api/download/:id", async (req, res) => {
     try {
+      console.log(`Download request for job: ${req.params.id}`);
       const job = await storage.getProcessingJob(req.params.id);
       if (!job || job.status !== "completed") {
+        console.log(`Job not found or not completed: ${job?.status}`);
         return res.status(404).json({ message: "File not ready for download" });
       }
 
       const outputFilePath = (job.metadata as any)?.outputFilePath as string;
+      console.log(`Looking for output file: ${outputFilePath}`);
       if (!outputFilePath || !fs.existsSync(outputFilePath)) {
+        console.log(`Output file not found or doesn't exist`);
         return res.status(404).json({ message: "Processed file not found" });
       }
 
@@ -285,6 +292,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           contentType = 'application/pdf';
       }
       
+      console.log(`Serving file: ${fileName} with content type: ${contentType}`);
+      
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
       res.setHeader('Content-Type', contentType);
       
@@ -292,17 +301,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fileStream = fs.createReadStream(outputFilePath);
       fileStream.pipe(res);
       
-      // Clean up files after download
+      // Clean up files after download (keep for 1 hour)
       fileStream.on('end', () => {
         setTimeout(() => {
           try {
-            if (fs.existsSync(outputFilePath)) fs.unlinkSync(outputFilePath);
+            console.log(`Cleaning up files for job ${job.id}`);
+            if (fs.existsSync(outputFilePath)) {
+              fs.unlinkSync(outputFilePath);
+              console.log(`Deleted output file: ${outputFilePath}`);
+            }
             const inputFilePath = (job.metadata as any)?.inputFilePath as string;
-            if (inputFilePath && fs.existsSync(inputFilePath)) fs.unlinkSync(inputFilePath);
+            if (inputFilePath && fs.existsSync(inputFilePath)) {
+              fs.unlinkSync(inputFilePath);
+              console.log(`Deleted input file: ${inputFilePath}`);
+            }
           } catch (cleanupError) {
             console.error('File cleanup error:', cleanupError);
           }
-        }, 5000); // Clean up after 5 seconds
+        }, 3600000); // Clean up after 1 hour (3600 seconds)
       });
       
     } catch (error) {
