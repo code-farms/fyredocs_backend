@@ -9,6 +9,27 @@ import { useToast } from "@/hooks/use-toast";
 import { Download, Trash2, FileText, CheckCircle2, Clock, AlertCircle } from "lucide-react";
 import { useEffect } from "react";
 
+function getDownloadButtonText(toolType: string): string {
+  const buttonTextMap: Record<string, string> = {
+    'pdf-to-word': 'Convert to Word',
+    'pdf-to-excel': 'Convert to Excel', 
+    'pdf-to-powerpoint': 'Convert to PowerPoint',
+    'word-to-pdf': 'Convert to PDF',
+    'excel-to-pdf': 'Convert to PDF',
+    'powerpoint-to-pdf': 'Convert to PDF',
+    'merge-pdf': 'Download Merged',
+    'split-pdf': 'Download Split',
+    'compress-pdf': 'Download Compressed',
+    'edit-pdf': 'Download Edited',
+    'protect-pdf': 'Download Protected',
+    'unlock-pdf': 'Download Unlocked',
+    'sign-pdf': 'Download Signed',
+    'watermark-pdf': 'Download Watermarked',
+  };
+  
+  return buttonTextMap[toolType] || 'Download';
+}
+
 export default function ProcessingQueue() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -168,7 +189,7 @@ export default function ProcessingQueue() {
                     data-testid={`download-button-${job.id}`}
                   >
                     <Download className="w-4 h-4 mr-2" />
-                    Download
+                    {getDownloadButtonText(job.toolType)}
                   </Button>
                 )}
 
