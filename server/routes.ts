@@ -27,9 +27,13 @@ if (!fs.existsSync(outputDir)) {
 
 async function convertPdfToWord(inputPath: string, outputPath: string): Promise<void> {
   try {
+    console.log(`Converting PDF to Word: ${inputPath} -> ${outputPath}`);
+    
     // Read the uploaded file info for demonstration
     const stats = await fsPromises.stat(inputPath);
     const fileSize = (stats.size / 1024).toFixed(2);
+    
+    console.log(`Input file size: ${fileSize} KB`);
     
     // For now, create a sample Word document with placeholder content
     // In a real implementation, you would use a proper PDF parsing library
@@ -78,6 +82,11 @@ Your document has been successfully processed using our secure cloud infrastruct
     
     // Save to file
     await fsPromises.writeFile(outputPath, buffer);
+    console.log(`Word document created successfully: ${outputPath}`);
+    
+    // Verify the file was created
+    const outputStats = await fsPromises.stat(outputPath);
+    console.log(`Output file size: ${(outputStats.size / 1024).toFixed(2)} KB`);
   } catch (error) {
     console.error('PDF to Word conversion error:', error);
     throw new Error('Failed to convert PDF to Word');
@@ -179,6 +188,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Start actual file processing
       setTimeout(async () => {
         try {
+          console.log(`Starting processing for job ${job.id}, tool: ${toolType}, file: ${req.file!.path}`);
+          
           await storage.updateProcessingJob(job.id, { 
             status: "processing", 
             progress: "25" 
@@ -186,6 +197,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           
           // Perform actual conversion
           const outputPath = await processFile(job.id, toolType, req.file!.path);
+          console.log(`Conversion completed, output file: ${outputPath}`);
           
           await storage.updateProcessingJob(job.id, { 
             progress: "75" 
@@ -202,6 +214,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               outputFilePath: outputPath 
             }
           });
+          
+          console.log(`Job ${job.id} completed successfully`);
         } catch (error) {
           console.error('Processing failed:', error);
           await storage.updateProcessingJob(job.id, { 
