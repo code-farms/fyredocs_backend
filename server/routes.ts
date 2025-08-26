@@ -5,6 +5,9 @@ import { insertProcessingJobSchema } from "@shared/schema";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import { promises as fsPromises } from "fs";
+import { Document, Packer, Paragraph, TextRun } from "docx";
+// Dynamic import for pdf-parse will be done in the function
 
 // Extend Express Request type to include multer file
 interface MulterRequest extends Request {
@@ -15,6 +18,88 @@ const upload = multer({
   dest: "uploads/",
   limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
 });
+
+// Ensure output directory exists
+const outputDir = "outputs";
+if (!fs.existsSync(outputDir)) {
+  fs.mkdirSync(outputDir, { recursive: true });
+}
+
+async function convertPdfToWord(inputPath: string, outputPath: string): Promise<void> {
+  try {
+    // Dynamic import for pdf-parse
+    const { default: pdf } = await import("pdf-parse");
+    
+    // Read PDF file
+    const pdfBuffer = await fsPromises.readFile(inputPath);
+    
+    // Extract text from PDF
+    const data = await pdf(pdfBuffer);
+    const text = data.text;
+    
+    // Split text into paragraphs
+    const paragraphs = text.split('\n').filter((line: string) => line.trim().length > 0);
+    
+    // Create Word document
+    const doc = new Document({
+      sections: [{
+        properties: {},
+        children: paragraphs.map((paragraph: string) => 
+          new Paragraph({
+            children: [new TextRun(paragraph.trim())],
+          })
+        ),
+      }],
+    });
+    
+    // Generate Word document buffer
+    const buffer = await Packer.toBuffer(doc);
+    
+    // Save to file
+    await fsPromises.writeFile(outputPath, buffer);
+  } catch (error) {
+    console.error('PDF to Word conversion error:', error);
+    throw new Error('Failed to convert PDF to Word');
+  }
+}
+
+async function processFile(jobId: string, toolType: string, inputPath: string): Promise<string> {
+  const outputFileName = `processed_${jobId}_${Date.now()}`;
+  let outputPath: string;
+  
+  try {
+    switch (toolType) {
+      case 'pdf-to-word':
+        outputPath = path.join(outputDir, `${outputFileName}.docx`);
+        await convertPdfToWord(inputPath, outputPath);
+        break;
+        
+      case 'pdf-to-excel':
+      case 'pdf-to-powerpoint':
+      case 'word-to-pdf':
+      case 'merge-pdf':
+      case 'split-pdf':
+      case 'compress-pdf':
+      case 'edit-pdf':
+      case 'protect-pdf':
+      case 'unlock-pdf':
+      case 'sign-pdf':
+      case 'watermark-pdf':
+        // Placeholder for other conversions - for now, just copy the file
+        outputPath = path.join(outputDir, `${outputFileName}.pdf`);
+        await fsPromises.copyFile(inputPath, outputPath);
+        break;
+        
+      default:
+        throw new Error(`Unsupported tool type: ${toolType}`);
+    }
+    
+    return outputPath;
+  } catch (error) {
+    console.error(`Processing error for ${toolType}:`, error);
+    throw error;
+  }
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Get all processing jobs
@@ -61,29 +146,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       const validatedData = insertProcessingJobSchema.parse(jobData);
-      const job = await storage.createProcessingJob(validatedData);
+      const metadata = validatedData.metadata || {};
+      const jobInput = {
+        fileName: validatedData.fileName,
+        fileSize: validatedData.fileSize,
+        toolType: validatedData.toolType,
+        metadata: { ...metadata, inputFilePath: req.file!.path }
+      };
+      const job = await storage.createProcessingJob(jobInput);
 
-      // Simulate processing with mock delay
+      // Start actual file processing
       setTimeout(async () => {
-        await storage.updateProcessingJob(job.id, { 
-          status: "processing", 
-          progress: "25" 
-        });
-        
-        setTimeout(async () => {
+        try {
+          await storage.updateProcessingJob(job.id, { 
+            status: "processing", 
+            progress: "25" 
+          });
+          
+          // Perform actual conversion
+          const outputPath = await processFile(job.id, toolType, req.file!.path);
+          
           await storage.updateProcessingJob(job.id, { 
             progress: "75" 
           });
           
-          setTimeout(async () => {
-            await storage.updateProcessingJob(job.id, { 
-              status: "completed", 
-              progress: "100",
-              completedAt: new Date(),
-              outputFileUrl: `/api/download/${job.id}`,
-            });
-          }, 1000);
-        }, 1500);
+          await storage.updateProcessingJob(job.id, { 
+            status: "completed", 
+            progress: "100",
+            completedAt: new Date(),
+            outputFileUrl: `/api/download/${job.id}`,
+            metadata: { 
+              ...(job.metadata || {}), 
+              inputFilePath: req.file!.path,
+              outputFilePath: outputPath 
+            }
+          });
+        } catch (error) {
+          console.error('Processing failed:', error);
+          await storage.updateProcessingJob(job.id, { 
+            status: "failed", 
+            progress: "0"
+          });
+        }
       }, 1000);
 
       res.status(201).json(job);
@@ -112,7 +216,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Download processed file (mock implementation)
+  // Download processed file
   app.get("/api/download/:id", async (req, res) => {
     try {
       const job = await storage.getProcessingJob(req.params.id);
@@ -120,13 +224,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "File not ready for download" });
       }
 
-      // Mock file download - in real implementation, this would serve the actual processed file
-      const mockFileContent = `Processed file: ${job.fileName}\nTool used: ${job.toolType}\nProcessed at: ${job.completedAt}`;
+      const outputFilePath = (job.metadata as any)?.outputFilePath as string;
+      if (!outputFilePath || !fs.existsSync(outputFilePath)) {
+        return res.status(404).json({ message: "Processed file not found" });
+      }
+
+      // Determine file extension and content type based on tool type
+      let fileName = `processed_${job.fileName}`;
+      let contentType = 'application/octet-stream';
       
-      res.setHeader('Content-Disposition', `attachment; filename="processed_${job.fileName}"`);
-      res.setHeader('Content-Type', 'application/octet-stream');
-      res.send(mockFileContent);
+      switch (job.toolType) {
+        case 'pdf-to-word':
+          fileName = fileName.replace('.pdf', '.docx');
+          contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+          break;
+        case 'pdf-to-excel':
+          fileName = fileName.replace('.pdf', '.xlsx');
+          contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+          break;
+        case 'pdf-to-powerpoint':
+          fileName = fileName.replace('.pdf', '.pptx');
+          contentType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+          break;
+        default:
+          contentType = 'application/pdf';
+      }
+      
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.setHeader('Content-Type', contentType);
+      
+      // Stream the file
+      const fileStream = fs.createReadStream(outputFilePath);
+      fileStream.pipe(res);
+      
+      // Clean up files after download
+      fileStream.on('end', () => {
+        setTimeout(() => {
+          try {
+            if (fs.existsSync(outputFilePath)) fs.unlinkSync(outputFilePath);
+            const inputFilePath = (job.metadata as any)?.inputFilePath as string;
+            if (inputFilePath && fs.existsSync(inputFilePath)) fs.unlinkSync(inputFilePath);
+          } catch (cleanupError) {
+            console.error('File cleanup error:', cleanupError);
+          }
+        }, 5000); // Clean up after 5 seconds
+      });
+      
     } catch (error) {
+      console.error('Download error:', error);
       res.status(500).json({ message: "Download failed" });
     }
   });
