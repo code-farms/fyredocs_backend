@@ -14,6 +14,7 @@ interface FileUploadProps {
   maxFiles?: number;
   acceptedFileTypes?: string[];
   className?: string;
+  options?: any;
 }
 
 export default function FileUpload({ 
@@ -21,7 +22,8 @@ export default function FileUpload({
   onUploadComplete,
   maxFiles = 1,
   acceptedFileTypes = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx'],
-  className 
+  className,
+  options
 }: FileUploadProps) {
   const [uploadProgress, setUploadProgress] = useState(0);
   const { toast } = useToast();
@@ -61,10 +63,14 @@ export default function FileUpload({
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
 
-    const file = acceptedFiles[0];
     const formData = new FormData();
-    formData.append("file", file);
+    acceptedFiles.forEach(file => {
+      formData.append("files", file);
+    });
     formData.append("toolType", toolType);
+    if (options) {
+      formData.append("options", JSON.stringify(options));
+    }
 
     // Simulate upload progress
     const progressInterval = setInterval(() => {
@@ -78,11 +84,11 @@ export default function FileUpload({
     }, 200);
 
     uploadMutation.mutate(formData);
-  }, [toolType, uploadMutation]);
+  }, [toolType, uploadMutation, options]);
 
   const { getRootProps, getInputProps, isDragActive, fileRejections } = useDropzone({
     onDrop,
-    maxFiles,
+    maxFiles: toolType === 'merge-pdf' ? 50 : maxFiles,
     accept: {
       'application/pdf': ['.pdf'],
       'application/msword': ['.doc'],

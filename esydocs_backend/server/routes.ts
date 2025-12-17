@@ -6,15 +6,17 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import { promises as fsPromises } from "fs";
+import ConvertAPI from 'convertapi';
 import { Document, Packer, Paragraph, TextRun } from "docx";
-// Dynamic import for pdf-parse will be done in the function
+
+const convertapi = new ConvertAPI(process.env.CONVERT_API_SECRET as string);
 
 // Extend Express Request type to include multer file
 interface MulterRequest extends Request {
-  file?: Express.Multer.File;
+  files?: Express.Multer.File[];
 }
 
-const upload = multer({ 
+const upload = multer({
   dest: "uploads/",
   limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
 });
@@ -93,7 +95,99 @@ Your document has been successfully processed using our secure cloud infrastruct
   }
 }
 
-async function processFile(jobId: string, toolType: string, inputPath: string): Promise<string> {
+async function convertPdfToExcel(inputPath: string, outputPath: string): Promise<void> {
+  try {
+    console.log(`Converting PDF to Excel: ${inputPath} -> ${outputPath}`);
+    const result = await convertapi.convert('xlsx', { File: inputPath });
+    await result.saveFiles(outputPath);
+    console.log(`Excel document created successfully: ${outputPath}`);
+  } catch (error) {
+    console.error('PDF to Excel conversion error:', error);
+    throw new Error('Failed to convert PDF to Excel');
+  }
+}
+
+async function convertPdfToPowerpoint(inputPath: string, outputPath: string): Promise<void> {
+  try {
+    console.log(`Converting PDF to Powerpoint: ${inputPath} -> ${outputPath}`);
+    const result = await convertapi.convert('pptx', { File: inputPath });
+    await result.saveFiles(outputPath);
+    console.log(`Powerpoint document created successfully: ${outputPath}`);
+  } catch (error) {
+    console.error('PDF to Powerpoint conversion error:', error);
+    throw new Error('Failed to convert PDF to Powerpoint');
+  }
+}
+
+async function convertWordToPdf(inputPath: string, outputPath: string): Promise<void> {
+  try {
+    console.log(`Converting Word to PDF: ${inputPath} -> ${outputPath}`);
+    const result = await convertapi.convert('pdf', { File: inputPath });
+    await result.saveFiles(outputPath);
+    console.log(`PDF document created successfully: ${outputPath}`);
+  } catch (error) {
+    console.error('Word to PDF conversion error:', error);
+    throw new Error('Failed to convert Word to PDF');
+  }
+}
+
+async function compressPdf(inputPath: string, outputPath: string): Promise<void> {
+  try {
+    console.log(`Compressing PDF: ${inputPath} -> ${outputPath}`);
+    const result = await convertapi.convert('pdf', { File: inputPath }, 'compress');
+    await result.saveFiles(outputPath);
+    console.log(`PDF document compressed successfully: ${outputPath}`);
+  } catch (error) {
+    console.error('PDF compression error:', error);
+    throw new Error('Failed to compress PDF');
+  }
+}
+
+async function mergePdf(inputPaths: string[], outputPath: string): Promise<void> {
+  try {
+    console.log(`Merging PDFs: ${inputPaths.join(", ")} -> ${outputPath}`);
+    const result = await convertapi.convert('pdf', { Files: inputPaths }, 'merge');
+    await result.saveFiles(outputPath);
+    console.log(`PDF document merged successfully: ${outputPath}`);
+  } catch (error) {
+    console.error('PDF merge error:', error);
+    throw new Error('Failed to merge PDFs');
+  }
+}
+
+async function splitPdf(inputPath: string, outputPath: string, options: any): Promise<void> {
+  try {
+    console.log(`Splitting PDF: ${inputPath} -> ${outputPath}`);
+    const params = {
+      File: inputPath,
+      PageRange: options.range
+    }
+    const result = await convertapi.convert('pdf', params, 'split');
+    await result.saveFiles(outputPath);
+    console.log(`PDF document split successfully: ${outputPath}`);
+  } catch (error) {
+    console.error('PDF split error:', error);
+    throw new Error('Failed to split PDF');
+  }
+}
+
+async function protectPdf(inputPath: string, outputPath: string, options: any): Promise<void> {
+  try {
+    console.log(`Protecting PDF: ${inputPath} -> ${outputPath}`);
+    const params = {
+      File: inputPath,
+      UserPassword: options.password
+    }
+    const result = await convertapi.convert('pdf', params, 'encrypt');
+    await result.saveFiles(outputPath);
+    console.log(`PDF document protected successfully: ${outputPath}`);
+  } catch (error) {
+    console.error('PDF protect error:', error);
+    throw new Error('Failed to protect PDF');
+  }
+}
+
+async function processFile(jobId: string, toolType: string, inputPath: string | string[], options: any): Promise<string> {
   const outputFileName = `processed_${jobId}_${Date.now()}`;
   let outputPath: string;
   
@@ -104,23 +198,73 @@ async function processFile(jobId: string, toolType: string, inputPath: string): 
       case 'pdf-to-word':
         outputPath = path.join(outputDir, `${outputFileName}.docx`);
         console.log(`Will create Word document at: ${outputPath}`);
-        await convertPdfToWord(inputPath, outputPath);
+        await convertPdfToWord(inputPath as string, outputPath);
         break;
-        
+      
       case 'pdf-to-excel':
+        outputPath = path.join(outputDir, `${outputFileName}.xlsx`);
+        console.log(`Will create Excel document at: ${outputPath}`);
+        await convertPdfToExcel(inputPath as string, outputPath);
+        break;
+
       case 'pdf-to-powerpoint':
+        outputPath = path.join(outputDir, `${outputFileName}.pptx`);
+        console.log(`Will create Powerpoint document at: ${outputPath}`);
+        await convertPdfToPowerpoint(inputPath as string, outputPath);
+        break;
+
       case 'word-to-pdf':
-      case 'merge-pdf':
-      case 'split-pdf':
-      case 'compress-pdf':
-      case 'edit-pdf':
-      case 'protect-pdf':
-      case 'unlock-pdf':
-      case 'sign-pdf':
-      case 'watermark-pdf':
-        // Placeholder for other conversions - for now, just copy the file
         outputPath = path.join(outputDir, `${outputFileName}.pdf`);
-        await fsPromises.copyFile(inputPath, outputPath);
+        console.log(`Will create PDF document at: ${outputPath}`);
+        await convertWordToPdf(inputPath as string, outputPath);
+        break;
+
+      case 'compress-pdf':
+        outputPath = path.join(outputDir, `${outputFileName}.pdf`);
+        console.log(`Will create compressed PDF document at: ${outputPath}`);
+        await compressPdf(inputPath as string, outputPath);
+        break;
+
+      case 'merge-pdf':
+        outputPath = path.join(outputDir, `${outputFileName}.pdf`);
+        console.log(`Will create merged PDF document at: ${outputPath}`);
+        await mergePdf(inputPath as string[], outputPath);
+        break;
+
+      case 'split-pdf':
+        outputPath = path.join(outputDir, `${outputFileName}.zip`);
+        console.log(`Will create split PDF zip at: ${outputPath}`);
+        await splitPdf(inputPath as string, outputPath, options);
+        break;
+
+      case 'protect-pdf':
+        outputPath = path.join(outputDir, `${outputFileName}.pdf`);
+        console.log(`Will create protected PDF at: ${outputPath}`);
+        await protectPdf(inputPath as string, outputPath, options);
+        break;
+
+      case 'edit-pdf':
+        // Placeholder for edit-pdf
+        outputPath = path.join(outputDir, `${outputFileName}.pdf`);
+        await fsPromises.copyFile(inputPath as string, outputPath);
+        break;
+
+      case 'unlock-pdf':
+        // Placeholder for unlock-pdf
+        outputPath = path.join(outputDir, `${outputFileName}.pdf`);
+        await fsPromises.copyFile(inputPath as string, outputPath);
+        break;
+
+      case 'sign-pdf':
+        // Placeholder for sign-pdf
+        outputPath = path.join(outputDir, `${outputFileName}.pdf`);
+        await fsPromises.copyFile(inputPath as string, outputPath);
+        break;
+
+      case 'watermark-pdf':
+        // Placeholder for watermark-pdf
+        outputPath = path.join(outputDir, `${outputFileName}.pdf`);
+        await fsPromises.copyFile(inputPath as string, outputPath);
         break;
         
       default:
@@ -159,9 +303,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create new processing job with file upload
-  app.post("/api/jobs", upload.single("file"), async (req: MulterRequest, res) => {
+  app.post("/api/jobs", upload.array("files"), async (req: MulterRequest, res) => {
     try {
-      if (!req.file) {
+      if (!req.files || req.files.length === 0) {
         return res.status(400).json({ message: "No file uploaded" });
       }
 
@@ -171,9 +315,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Tool type is required" });
       }
 
+      const files = req.files as Express.Multer.File[];
+      const file = files[0];
+
       const jobData = {
-        fileName: req.file.originalname,
-        fileSize: (req.file.size / 1024).toFixed(2) + " KB",
+        fileName: toolType === 'merge-pdf' ? 'merged.pdf' : file.originalname,
+        fileSize: files.reduce((acc, file) => acc + file.size, 0) / 1024 + " KB",
         toolType,
         metadata: options ? JSON.parse(options) : null,
       };
@@ -184,14 +331,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         fileName: validatedData.fileName,
         fileSize: validatedData.fileSize,
         toolType: validatedData.toolType,
-        metadata: { ...metadata, inputFilePath: req.file!.path }
+        metadata: { ...metadata, inputFilePath: files.map(f => f.path) }
       };
       const job = await storage.createProcessingJob(jobInput);
 
       // Start actual file processing
       setTimeout(async () => {
         try {
-          console.log(`Starting processing for job ${job.id}, tool: ${toolType}, file: ${req.file!.path}`);
+          const inputPaths = files.map(f => f.path);
+          console.log(`Starting processing for job ${job.id}, tool: ${toolType}, files: ${inputPaths.join(", ")}`);
           
           await storage.updateProcessingJob(job.id, { 
             status: "processing", 
@@ -199,7 +347,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           
           // Perform actual conversion
-          const outputPath = await processFile(job.id, toolType, req.file!.path);
+          const outputPath = await processFile(job.id, toolType, toolType === 'merge-pdf' ? inputPaths : inputPaths[0], options ? JSON.parse(options) : {});
           console.log(`Conversion completed, output file: ${outputPath}`);
           
           await storage.updateProcessingJob(job.id, { 
@@ -213,7 +361,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             outputFileUrl: `/api/download/${job.id}`,
             metadata: { 
               ...(job.metadata || {}), 
-              inputFilePath: req.file!.path,
+              inputFilePath: inputPaths,
               outputFilePath: outputPath 
             }
           });
@@ -287,6 +435,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         case 'pdf-to-powerpoint':
           fileName = fileName.replace('.pdf', '.pptx');
           contentType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+          break;
+        case 'split-pdf':
+          fileName = fileName.replace('.pdf', '.zip');
+          contentType = 'application/zip';
           break;
         default:
           contentType = 'application/pdf';

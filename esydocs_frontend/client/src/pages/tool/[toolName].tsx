@@ -8,9 +8,12 @@ import ProcessingQueue from "@/components/processing-queue";
 import { TOOLS } from "@/lib/types";
 import { ArrowLeft, FileText } from "lucide-react";
 
+import ProtectOptions from "@/components/protect-options";
+
 export default function ToolPage() {
   const { toolName } = useParams();
   const [, navigate] = useLocation();
+  const [options, setOptions] = useState<any>({});
   
   const tool = TOOLS.find(t => t.id === toolName);
   
@@ -95,6 +98,16 @@ export default function ToolPage() {
       <section className="py-16 bg-background">
         <div className="container mx-auto px-4">
           <div className="max-w-4xl mx-auto">
+            {tool.id === 'split-pdf' && (
+              <div className="mb-8">
+                <SplitOptions onOptionsChange={setOptions} />
+              </div>
+            )}
+            {tool.id === 'protect-pdf' && (
+              <div className="mb-8">
+                <ProtectOptions onOptionsChange={setOptions} />
+              </div>
+            )}
             <div className="text-center mb-12">
               <h2 className="text-3xl font-bold text-foreground mb-4">
                 Upload Your Files
@@ -108,6 +121,7 @@ export default function ToolPage() {
               toolType={tool.id}
               acceptedFileTypes={getAcceptedFileTypes(tool.id)}
               maxFiles={tool.id.includes('merge') ? 10 : 1}
+              options={options}
             />
           </div>
         </div>
