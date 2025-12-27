@@ -7,6 +7,7 @@ import FileUpload from "@/components/file-upload";
 import ProcessingQueue from "@/components/processing-queue";
 import { TOOLS } from "@/lib/types";
 import { ArrowLeft, FileText } from "lucide-react";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 import ProtectOptions from "@/components/protect-options";
 
@@ -55,11 +56,12 @@ export default function ToolPage() {
                 <div className="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
                   <FileText className="text-primary-foreground" size={24} />
                 </div>
-                <span className="text-2xl font-bold text-foreground">DocuFlow</span>
+                <span className="text-2xl font-bold text-foreground">EsyDocs</span>
               </div>
             </div>
             
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-2">
+              <ThemeToggle />
               <Button variant="ghost" data-testid="sign-in-button">Sign In</Button>
               <Button data-testid="get-started-button">Get Started</Button>
             </div>

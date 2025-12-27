@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: esydocs
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432" # Expose for local debugging, remove in production
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d esydocs"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
+      CONVERT_API_SECRET: ${CONVERT_API_SECRET} # Ensure this is set in your .env file or host env
+    volumes:
+      - uploads_data:/root/uploads
+      - outputs_data:/root/outputs
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env # Load .env for CONVERT_API_SECRET and other variables
+
+volumes:
+  postgres_data:
+  uploads_data:
+  outputs_data:

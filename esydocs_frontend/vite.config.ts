@@ -1,37 +1,43 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
-import path from "path";
-import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-export default defineConfig({
-  plugins: [
-    react(),
-    runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== "production" &&
-    process.env.REPL_ID !== undefined
-      ? [
-          await import("@replit/vite-plugin-cartographer").then((m) =>
-            m.cartographer(),
-          ),
-        ]
-      : []),
-  ],
-  resolve: {
-    alias: {
-      "@": path.resolve(import.meta.dirname, "src"),
-      "@shared": path.resolve(import.meta.dirname, "../esydocs_backend/shared"),
-      "@assets": path.resolve(import.meta.dirname, "attached_assets"),
+const rootDir = fileURLToPath(new URL(".", import.meta.url));
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, rootDir, "");
+  const apiTarget = env.VITE_API_BASE_URL ?? "http://localhost:5000";
+
+  return {
+    plugins: [react()],
+    resolve: {
+      alias: {
+        "@": path.resolve(rootDir, "src"),
+        "@shared": path.resolve(rootDir, "../esydocs_backend/shared"),
+        "@assets": path.resolve(rootDir, "attached_assets"),
+      },
     },
-  },
-  root: path.resolve(import.meta.dirname, "."),
-  build: {
-    outDir: path.resolve(import.meta.dirname, "dist"),
-    emptyOutDir: true,
-  },
-  server: {
-    fs: {
-      strict: true,
-      deny: ["**/.*"],
+    root: rootDir,
+    build: {
+      outDir: path.resolve(rootDir, "dist"),
+      emptyOutDir: true,
     },
-  },
+    server: {
+      fs: {
+        strict: true,
+        deny: ["**/.*"],
+      },
+      proxy: {
+        "/api": {
+          target: apiTarget,
+          changeOrigin: true,
+          secure: false,
+        },
+      },
+    },
+    define: {
+      __API_BASE_URL__: JSON.stringify(apiTarget),
+    },
+  };
 });

@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/api";
 import { type ProcessingJob } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -7,27 +7,26 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Download, Trash2, FileText, CheckCircle2, Clock, AlertCircle } from "lucide-react";
-import { useEffect } from "react";
 
 function getDownloadButtonText(toolType: string): string {
   const buttonTextMap: Record<string, string> = {
-    'pdf-to-word': 'Convert to Word',
-    'pdf-to-excel': 'Convert to Excel', 
-    'pdf-to-powerpoint': 'Convert to PowerPoint',
-    'word-to-pdf': 'Convert to PDF',
-    'excel-to-pdf': 'Convert to PDF',
-    'powerpoint-to-pdf': 'Convert to PDF',
-    'merge-pdf': 'Download Merged',
-    'split-pdf': 'Download Split',
-    'compress-pdf': 'Download Compressed',
-    'edit-pdf': 'Download Edited',
-    'protect-pdf': 'Download Protected',
-    'unlock-pdf': 'Download Unlocked',
-    'sign-pdf': 'Download Signed',
-    'watermark-pdf': 'Download Watermarked',
+    "pdf-to-word": "Convert to Word",
+    "pdf-to-excel": "Convert to Excel",
+    "pdf-to-powerpoint": "Convert to PowerPoint",
+    "word-to-pdf": "Convert to PDF",
+    "excel-to-pdf": "Convert to PDF",
+    "powerpoint-to-pdf": "Convert to PDF",
+    "merge-pdf": "Download Merged",
+    "split-pdf": "Download Split",
+    "compress-pdf": "Download Compressed",
+    "edit-pdf": "Download Edited",
+    "protect-pdf": "Download Protected",
+    "unlock-pdf": "Download Unlocked",
+    "sign-pdf": "Download Signed",
+    "watermark-pdf": "Download Watermarked",
   };
-  
-  return buttonTextMap[toolType] || 'Download';
+
+  return buttonTextMap[toolType] || "Download";
 }
 
 export default function ProcessingQueue() {
@@ -36,7 +35,8 @@ export default function ProcessingQueue() {
 
   const { data: jobs = [], isLoading } = useQuery<ProcessingJob[]>({
     queryKey: ["/api/jobs"],
-    refetchInterval: 2000, // Poll every 2 seconds for updates
+    // Avoid noisy polling; rely on mutations and focus to refresh
+    refetchInterval: false,
   });
 
   const deleteMutation = useMutation({
@@ -56,17 +56,17 @@ export default function ProcessingQueue() {
     try {
       const response = await fetch(`/api/download/${job.id}`);
       if (!response.ok) throw new Error("Download failed");
-      
+
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
+      const a = document.createElement("a");
       a.href = url;
       a.download = `processed_${job.fileName}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
-      
+
       toast({
         title: "Download started",
         description: "Your processed file is downloading",
@@ -110,7 +110,7 @@ export default function ProcessingQueue() {
 
   return (
     <div className="space-y-4">
-      <Card>
+      <Card className="border-border/70">
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
             <span>Processing Queue</span>
@@ -124,64 +124,62 @@ export default function ProcessingQueue() {
             <div
               key={job.id}
               className={`flex items-center justify-between p-4 rounded-lg border ${
-                job.status === 'completed' 
-                  ? 'bg-accent/10 border-accent/20' 
-                  : job.status === 'failed'
-                  ? 'bg-destructive/10 border-destructive/20'
-                  : 'bg-muted/50'
+                job.status === "completed"
+                  ? "bg-accent/10 border-accent/20"
+                  : job.status === "failed"
+                    ? "bg-destructive/10 border-destructive/20"
+                    : "bg-muted/50"
               }`}
               data-testid={`job-${job.id}`}
             >
               <div className="flex items-center space-x-4 flex-1">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                  job.status === 'completed' 
-                    ? 'bg-accent/20' 
-                    : job.status === 'failed'
-                    ? 'bg-destructive/20'
-                    : 'bg-primary/20'
-                }`}>
-                  {job.status === 'completed' ? (
+                <div
+                  className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                    job.status === "completed"
+                      ? "bg-accent/20"
+                      : job.status === "failed"
+                        ? "bg-destructive/20"
+                        : "bg-primary/20"
+                  }`}
+                >
+                  {job.status === "completed" ? (
                     <CheckCircle2 className="w-5 h-5 text-accent" />
-                  ) : job.status === 'failed' ? (
+                  ) : job.status === "failed" ? (
                     <AlertCircle className="w-5 h-5 text-destructive" />
                   ) : (
                     <Clock className="w-5 h-5 text-primary" />
                   )}
                 </div>
-                
+
                 <div className="flex-1">
                   <p className="font-medium text-foreground" data-testid={`job-filename-${job.id}`}>
                     {job.fileName}
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    {job.status === 'completed' ? (
-                      `Converted using ${job.toolType} • ${job.fileSize}`
-                    ) : job.status === 'failed' ? (
-                      `Failed to process • ${job.fileSize}`
-                    ) : job.status === 'processing' ? (
-                      `Processing with ${job.toolType} • ${job.fileSize}`
-                    ) : (
-                      `Waiting to process • ${job.fileSize}`
-                    )}
+                    {job.status === "completed"
+                      ? `Converted using ${job.toolType} - ${job.fileSize}`
+                      : job.status === "failed"
+                        ? `Failed to process - ${job.fileSize}`
+                        : job.status === "processing"
+                          ? `Processing with ${job.toolType} - ${job.fileSize}`
+                          : `Waiting to process - ${job.fileSize}`}
                   </p>
                 </div>
               </div>
 
               <div className="flex items-center space-x-3">
-                {job.status === 'processing' && (
+                {job.status === "processing" && (
                   <div className="w-32">
-                    <Progress 
-                      value={parseInt(job.progress || "0")} 
+                    <Progress
+                      value={parseInt(job.progress || "0")}
                       className="w-full"
                       data-testid={`job-progress-${job.id}`}
                     />
-                    <span className="text-xs text-muted-foreground ml-2">
-                      {job.progress}%
-                    </span>
+                    <span className="text-xs text-muted-foreground ml-2">{job.progress}%</span>
                   </div>
                 )}
-                
-                {job.status === 'completed' && (
+
+                {job.status === "completed" && (
                   <Button
                     size="sm"
                     className="bg-accent text-accent-foreground hover:bg-accent/90"

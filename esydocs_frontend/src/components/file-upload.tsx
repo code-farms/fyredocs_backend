@@ -1,10 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Upload, CloudUpload, CheckCircle2, AlertCircle } from "lucide-react";
 
@@ -15,6 +15,7 @@ interface FileUploadProps {
   acceptedFileTypes?: string[];
   className?: string;
   options?: any;
+  autoOpenKey?: number;
 }
 
 export default function FileUpload({ 
@@ -23,7 +24,8 @@ export default function FileUpload({
   maxFiles = 1,
   acceptedFileTypes = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx'],
   className,
-  options
+  options,
+  autoOpenKey,
 }: FileUploadProps) {
   const [uploadProgress, setUploadProgress] = useState(0);
   const { toast } = useToast();
@@ -86,7 +88,7 @@ export default function FileUpload({
     uploadMutation.mutate(formData);
   }, [toolType, uploadMutation, options]);
 
-  const { getRootProps, getInputProps, isDragActive, fileRejections } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, fileRejections, open } = useDropzone({
     onDrop,
     maxFiles: toolType === 'merge-pdf' ? 50 : maxFiles,
     accept: {
@@ -100,6 +102,14 @@ export default function FileUpload({
     },
     maxSize: 50 * 1024 * 1024, // 50MB
   });
+
+  // Open the native file dialog when parent triggers a new autoOpenKey
+  useEffect(() => {
+    if (autoOpenKey !== undefined) {
+      open();
+    }
+    // intentionally omit `open` from deps to avoid re-running on every render
+  }, [autoOpenKey]);
 
   const isUploading = uploadMutation.isPending;
   const isSuccess = uploadMutation.isSuccess;
