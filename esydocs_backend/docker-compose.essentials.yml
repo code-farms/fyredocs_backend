@@ -30,6 +30,20 @@ services:
     networks:
       - esydocs_net
 
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - esydocs_net
+
 networks:
   esydocs_net:
     name: esydocs_net
@@ -37,3 +51,4 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  rabbitmq_data:

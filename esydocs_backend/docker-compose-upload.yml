@@ -10,6 +10,7 @@ services:
       - "8081:8081"
     environment:
       PORT: "8081"
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     volumes:
       - uploads_data:/root/uploads
     networks:

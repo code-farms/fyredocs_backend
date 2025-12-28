@@ -11,6 +11,7 @@ services:
     environment:
       PORT: "8082"
       DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     env_file:
       - ./convert-from-pdf/.env
     volumes:
