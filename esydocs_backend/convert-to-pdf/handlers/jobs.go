@@ -2,11 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
-	"esydocs_backend_go/database"
-	"esydocs_backend_go/processing"
-	"fmt"
+	"convert-to-pdf/database"
+	"convert-to-pdf/processing"
 	"github.com/gin-gonic/gin"
-	"gorm.io/datatypes"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -34,70 +32,23 @@ c.JSON(http.StatusOK, job)
 }
 
 func CreateJob(c *gin.Context) {
-	// Ensure uploads directory exists
-	if err := os.MkdirAll("uploads", os.ModePerm); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create upload directory"})
-		return
-	}
-
-	form, err := c.MultipartForm()
+	req, err := parseJobRequest(c, nil)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to parse form"})
-		return
-	}
-
-	files := form.File["files"]
-	if len(files) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No file uploaded"})
-		return
-	}
-
-	toolType := form.Value["toolType"][0]
-	if toolType == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Tool type is required"})
-		return
-	}
-	
-	options := ""
-	if len(form.Value["options"]) > 0 {
-		options = form.Value["options"][0]
-	}
-
-	var totalSize int64
-	var originalFileName string
-	var inputPaths []string
-
-	if toolType == "merge-pdf" {
-		originalFileName = "merged.pdf"
-	} else {
-		originalFileName = files[0].Filename
-	}
-
-	for _, file := range files {
-		totalSize += file.Size
-		dst := filepath.Join("uploads", file.Filename)
-		if err := c.SaveUploadedFile(file, dst); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save uploaded file"})
-			return
+		status := http.StatusBadRequest
+		if err.Error() == "failed to create upload directory" || err.Error() == "failed to save uploaded file" {
+			status = http.StatusInternalServerError
 		}
-		inputPaths = append(inputPaths, dst)
-	}
-
-	job := database.ProcessingJob{
-		FileName: originalFileName,
-		FileSize: fmt.Sprintf("%.2f KB", float64(totalSize)/1024),
-		ToolType: toolType,
-		Status:   "pending",
-		Metadata: datatypes.JSON(fmt.Sprintf(`{"inputPaths": "%v", "options": %s}`, inputPaths, options)),
-	}
-
-	if err := database.DB.Create(&job).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create job"})
+		respondJobError(c, err, status)
 		return
 	}
 
-	// Asynchronous processing
-	go processing.ProcessFile(job.ID, toolType, inputPaths, options)
+	job, err := createJob(c, req)
+	if err != nil {
+		respondJobError(c, err, http.StatusInternalServerError)
+		return
+	}
+
+	go processing.ProcessFile(job.ID, req.ToolType, req.Files, req.Options)
 
 	c.JSON(http.StatusCreated, job)
 }
@@ -187,9 +138,15 @@ func DownloadFile(c *gin.Context) {
 	case "pdf-to-excel":
 		fileName = strings.Replace(fileName, ".pdf", ".xlsx", 1)
 		contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-	case "pdf-to-powerpoint":
+	case "pdf-to-powerpoint", "pdf-to-ppt":
 		fileName = strings.Replace(fileName, ".pdf", ".pptx", 1)
 		contentType = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	case "pdf-to-image", "pdf-to-img":
+		fileName = strings.Replace(fileName, ".pdf", ".zip", 1)
+		contentType = "application/zip"
+	case "ppt-to-pdf", "word-to-pdf", "excel-to-pdf", "image-to-pdf", "img-to-pdf":
+		fileName = strings.TrimSuffix(fileName, filepath.Ext(fileName)) + ".pdf"
+		contentType = "application/pdf"
 	case "split-pdf":
 		fileName = strings.Replace(fileName, ".pdf", ".zip", 1)
 		contentType = "application/zip"

@@ -1,18 +1,18 @@
 package routes
 
 import (
-	"esydocs_backend_go/handlers"
+	"convert-to-pdf/handlers"
 	"github.com/gin-gonic/gin"
 )
 
-func SetupRouter(r *gin.Engine) {
+func SetupConvertToPdfRouter(r *gin.Engine) {
 	api := r.Group("/api")
 	{
 		jobs := api.Group("/jobs")
 		{
 			jobs.GET("/", handlers.GetJobs)
 			jobs.GET("/:id", handlers.GetJob)
-			jobs.POST("/", handlers.CreateJob)
+			jobs.POST("/", handlers.CreatePdfToJob)
 			jobs.PATCH("/:id", handlers.UpdateJob)
 			jobs.DELETE("/:id", handlers.DeleteJob)
 		}

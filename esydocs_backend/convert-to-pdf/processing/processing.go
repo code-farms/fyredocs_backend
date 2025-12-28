@@ -5,13 +5,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
-	"esydocs_backend_go/database"
+	"convert-to-pdf/database"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -83,12 +84,29 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 	case "pdf-to-excel":
 		outputPath = filepath.Join(outputDir, outputFileName+".xlsx")
 		err = callConvertAPI("pdf", "xlsx", inputPaths, outputPath, nil)
-	case "pdf-to-powerpoint":
+	case "pdf-to-powerpoint", "pdf-to-ppt":
 		outputPath = filepath.Join(outputDir, outputFileName+".pptx")
 		err = callConvertAPI("pdf", "pptx", inputPaths, outputPath, nil)
+	case "pdf-to-image", "pdf-to-img":
+		outputPath = filepath.Join(outputDir, outputFileName+".zip")
+		err = callConvertAPI("pdf", "jpg", inputPaths, outputPath, nil)
 	case "word-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = callConvertAPI("docx", "pdf", inputPaths, outputPath, nil)
+	case "ppt-to-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = callConvertAPI("pptx", "pdf", inputPaths, outputPath, nil)
+	case "excel-to-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = callConvertAPI("xlsx", "pdf", inputPaths, outputPath, nil)
+	case "image-to-pdf", "img-to-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		imageTool, imageErr := imageToolFromPath(inputPaths[0])
+		if imageErr != nil {
+			err = imageErr
+			break
+		}
+		err = callConvertAPI(imageTool, "pdf", inputPaths, outputPath, nil)
 	case "compress-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = callConvertAPI("pdf", "compress", inputPaths, outputPath, map[string]string{"StoreFile": "true"})
@@ -278,4 +296,18 @@ func callConvertAPI(tool string, conversionType string, inputPaths []string, out
 	
 	_, err = io.Copy(out, resp.Body)
 	return err
+}
+
+func imageToolFromPath(path string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".jpg", ".jpeg":
+		return "jpg", nil
+	case ".png":
+		return "png", nil
+	case ".webp":
+		return "webp", nil
+	default:
+		return "", fmt.Errorf("unsupported image type: %s", ext)
+	}
 }

@@ -1,16 +1,18 @@
 version: '3.8'
 
 services:
-  backend:
-    build: .
+  convert-to-pdf:
+    build:
+      context: ./convert-to-pdf
+      dockerfile: Dockerfile
     restart: always
     ports:
-      - "8080:8080"
+      - "8083:8083"
     environment:
+      PORT: "8083"
       DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
-      CONVERT_API_SECRET: ${CONVERT_API_SECRET}
     env_file:
-      - .env
+      - ./convert-to-pdf/.env
     volumes:
       - uploads_data:/root/uploads
       - outputs_data:/root/outputs

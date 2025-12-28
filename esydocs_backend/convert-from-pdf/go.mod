@@ -1,4 +1,4 @@
-module esydocs_backend_go
+module convert-from-pdf
 
 go 1.25.0
 

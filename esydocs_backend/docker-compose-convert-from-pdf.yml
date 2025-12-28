@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  convert-from-pdf:
+    build:
+      context: ./convert-from-pdf
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "8082:8082"
+    environment:
+      PORT: "8082"
+      DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
+    env_file:
+      - ./convert-from-pdf/.env
+    volumes:
+      - uploads_data:/root/uploads
+      - outputs_data:/root/outputs
+    networks:
+      - esydocs_net
+
+networks:
+  esydocs_net:
+    external: true
+
+volumes:
+  uploads_data:
+  outputs_data:

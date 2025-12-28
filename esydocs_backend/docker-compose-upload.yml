@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  upload-service:
+    build:
+      context: ./upload-service
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: "8081"
+    volumes:
+      - uploads_data:/root/uploads
+    networks:
+      - esydocs_net
+
+networks:
+  esydocs_net:
+    external: true
+
+volumes:
+  uploads_data:
