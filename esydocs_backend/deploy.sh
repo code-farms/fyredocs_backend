@@ -17,4 +17,7 @@ docker compose -f docker-compose-convert-from-pdf.yml up -d --build
 echo "Starting convert-to-pdf..."
 docker compose -f docker-compose-convert-to-pdf.yml up -d --build
 
+echo "Starting api-gateway..."
+docker compose -f docker-compose-gateway.yml up -d --build
+
 echo "All services started."

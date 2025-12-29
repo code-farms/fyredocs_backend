@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Download, Trash2, FileText, CheckCircle2, Clock, AlertCircle } from "lucide-react";
+import { getAllJobServiceBases, getServiceBasePath } from "@/lib/service-routes";
 
 function getDownloadButtonText(toolType: string): string {
   const buttonTextMap: Record<string, string> = {
@@ -16,6 +17,7 @@ function getDownloadButtonText(toolType: string): string {
     "word-to-pdf": "Convert to PDF",
     "excel-to-pdf": "Convert to PDF",
     "powerpoint-to-pdf": "Convert to PDF",
+    "ppt-to-pdf": "Convert to PDF",
     "merge-pdf": "Download Merged",
     "split-pdf": "Download Split",
     "compress-pdf": "Download Compressed",
@@ -34,17 +36,31 @@ export default function ProcessingQueue() {
   const queryClient = useQueryClient();
 
   const { data: jobs = [], isLoading } = useQuery<ProcessingJob[]>({
-    queryKey: ["/api/jobs"],
-    // Avoid noisy polling; rely on mutations and focus to refresh
+    queryKey: ["jobs"],
+    queryFn: async () => {
+      const bases = getAllJobServiceBases();
+      const responses = await Promise.all(
+        bases.map((base) => fetch(`${base}/jobs`, { credentials: "include" })),
+      );
+      const payloads = await Promise.all(
+        responses.map(async (res) => (res.ok ? res.json() : [])),
+      );
+      return payloads.flat();
+    },
     refetchInterval: false,
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (jobId: string) => {
-      await apiRequest("DELETE", `/api/jobs/${jobId}`);
+      const job = jobs.find((item) => item.id === jobId);
+      if (!job) {
+        throw new Error("Job not found");
+      }
+      const basePath = getServiceBasePath(job.toolType);
+      await apiRequest("DELETE", `${basePath}/jobs/${jobId}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
       toast({
         title: "Job deleted",
         description: "Processing job has been removed",
@@ -54,7 +70,8 @@ export default function ProcessingQueue() {
 
   const downloadFile = async (job: ProcessingJob) => {
     try {
-      const response = await fetch(`/api/download/${job.id}`);
+      const basePath = getServiceBasePath(job.toolType);
+      const response = await fetch(`${basePath}/download/${job.id}`);
       if (!response.ok) throw new Error("Download failed");
 
       const blob = await response.blob();
