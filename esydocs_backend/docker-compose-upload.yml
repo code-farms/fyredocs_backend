@@ -1,6 +1,14 @@
 version: '3.8'
 
 services:
+  volume-init:
+    image: alpine:3.19
+    command: ["sh", "-c", "chown -R 10001:10001 /app/uploads"]
+    volumes:
+      - uploads_data:/app/uploads
+    networks:
+      - esydocs_net
+
   upload-service:
     build:
       context: ./upload-service
@@ -12,7 +20,18 @@ services:
       PORT: "8081"
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     volumes:
-      - uploads_data:/root/uploads
+      - uploads_data:/app/uploads
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.upload.rule=PathPrefix(`/api/upload`)"
+      - "traefik.http.routers.upload.entrypoints=web"
+      - "traefik.http.middlewares.upload-rewrite.replacepathregex.regex=^/api/upload(.*)"
+      - "traefik.http.middlewares.upload-rewrite.replacepathregex.replacement=/api/uploads$1"
+      - "traefik.http.routers.upload.middlewares=upload-rewrite"
+      - "traefik.http.services.upload.loadbalancer.server.port=8081"
     networks:
       - esydocs_net
 

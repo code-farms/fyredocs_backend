@@ -1,6 +1,15 @@
 version: '3.8'
 
 services:
+  volume-init:
+    image: alpine:3.19
+    command: ["sh", "-c", "chown -R 10001:10001 /app/uploads /app/outputs"]
+    volumes:
+      - uploads_data:/app/uploads
+      - outputs_data:/app/outputs
+    networks:
+      - esydocs_net
+
   convert-from-pdf:
     build:
       context: ./convert-from-pdf
@@ -15,8 +24,19 @@ services:
     env_file:
       - ./convert-from-pdf/.env
     volumes:
-      - uploads_data:/root/uploads
-      - outputs_data:/root/outputs
+      - uploads_data:/app/uploads
+      - outputs_data:/app/outputs
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.convert-from.rule=PathPrefix(`/api/convert-from-pdf`)"
+      - "traefik.http.routers.convert-from.entrypoints=web"
+      - "traefik.http.middlewares.convert-from-rewrite.replacepathregex.regex=^/api/convert-from-pdf(.*)"
+      - "traefik.http.middlewares.convert-from-rewrite.replacepathregex.replacement=/api$1"
+      - "traefik.http.routers.convert-from.middlewares=convert-from-rewrite"
+      - "traefik.http.services.convert-from.loadbalancer.server.port=8082"
     networks:
       - esydocs_net
 

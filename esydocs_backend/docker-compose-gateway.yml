@@ -1,16 +1,17 @@
+version: '3.8'
+
 services:
-  api-gateway:
-    build:
-      context: ./api-gateway
-      dockerfile: Dockerfile
+  traefik:
+    image: traefik:v2.11
     restart: always
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
     ports:
-      - "8080:8080"
-    environment:
-      PORT: "8080"
-      UPLOAD_SERVICE_URL: http://upload-service:8081
-      CONVERT_FROM_PDF_URL: http://convert-from-pdf:8082
-      CONVERT_TO_PDF_URL: http://convert-to-pdf:8083
+      - "8080:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - esydocs_net
 
