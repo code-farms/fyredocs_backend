@@ -6,7 +6,7 @@ import { Progress } from "@/components/ui/progress";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { Upload, CloudUpload, CheckCircle2, AlertCircle } from "lucide-react";
-import { getServiceBasePath, normalizeToolType } from "@/lib/service-routes";
+import { getToolEndpoint } from "@/lib/service-routes";
 
 interface FileUploadProps {
   toolType: string;
@@ -33,8 +33,8 @@ export default function FileUpload({
 
   const uploadMutation = useMutation({
     mutationFn: async (formData: FormData) => {
-      const basePath = getServiceBasePath(toolType);
-      const response = await fetch(`${basePath}/jobs`, {
+      const endpoint = getToolEndpoint(toolType);
+      const response = await fetch(endpoint, {
         method: "POST",
         body: formData,
       });
@@ -70,7 +70,6 @@ export default function FileUpload({
     acceptedFiles.forEach(file => {
       formData.append("files", file);
     });
-    formData.append("toolType", normalizeToolType(toolType));
     if (options) {
       formData.append("options", JSON.stringify(options));
     }

@@ -6,16 +6,13 @@ import (
 )
 
 func SetupConvertFromPdfRouter(r *gin.Engine) {
-	api := r.Group("/api")
+	api := r.Group("/api/convert-from-pdf")
 	{
-		jobs := api.Group("/jobs")
-		{
-			jobs.GET("/", handlers.GetJobs)
-			jobs.GET("/:id", handlers.GetJob)
-			jobs.POST("/", handlers.CreatePdfFromJob)
-			jobs.PATCH("/:id", handlers.UpdateJob)
-			jobs.DELETE("/:id", handlers.DeleteJob)
-		}
-		api.GET("/download/:id", handlers.DownloadFile)
+		api.GET("/:tool", handlers.GetJobs)
+		api.POST("/:tool", handlers.CreatePdfFromJob)
+		api.GET("/:tool/:id", handlers.GetJob)
+		api.PATCH("/:tool/:id", handlers.UpdateJob)
+		api.DELETE("/:tool/:id", handlers.DeleteJob)
+		api.GET("/:tool/:id/download", handlers.DownloadFile)
 	}
 }

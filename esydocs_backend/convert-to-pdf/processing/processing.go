@@ -93,7 +93,7 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 	case "word-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = callConvertAPI("docx", "pdf", inputPaths, outputPath, nil)
-	case "ppt-to-pdf":
+	case "ppt-to-pdf", "powerpoint-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = callConvertAPI("pptx", "pdf", inputPaths, outputPath, nil)
 	case "excel-to-pdf":

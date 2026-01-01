@@ -33,9 +33,6 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.convert-to.rule=PathPrefix(`/api/convert-to-pdf`)"
       - "traefik.http.routers.convert-to.entrypoints=web"
-      - "traefik.http.middlewares.convert-to-rewrite.replacepathregex.regex=^/api/convert-to-pdf(.*)"
-      - "traefik.http.middlewares.convert-to-rewrite.replacepathregex.replacement=/api$1"
-      - "traefik.http.routers.convert-to.middlewares=convert-to-rewrite"
       - "traefik.http.services.convert-to.loadbalancer.server.port=8083"
     networks:
       - esydocs_net

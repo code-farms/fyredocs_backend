@@ -6,16 +6,15 @@ import (
 	"net/http"
 )
 
-var pdfToTools = map[string]bool{
+var convertToTools = map[string]bool{
 	"word-to-pdf":  true,
-	"ppt-to-pdf":   true,
+	"powerpoint-to-pdf": true,
 	"excel-to-pdf": true,
 	"image-to-pdf": true,
-	"img-to-pdf":   true,
 }
 
 func CreatePdfToJob(c *gin.Context) {
-	req, err := parseJobRequest(c, pdfToTools)
+	req, err := parseJobRequest(c, convertToTools, c.Param("tool"))
 	if err != nil {
 		status := http.StatusBadRequest
 		if err.Error() == "failed to create upload directory" || err.Error() == "failed to save uploaded file" {

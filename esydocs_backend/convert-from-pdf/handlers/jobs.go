@@ -14,7 +14,13 @@ import (
 
 func GetJobs(c *gin.Context) {
 	var jobs []database.ProcessingJob
-	if err := database.DB.Find(&jobs).Error; err != nil {
+	toolType, err := toolFromParam(c, convertFromTools)
+	if err != nil {
+		respondJobError(c, err, http.StatusBadRequest)
+		return
+	}
+
+	if err := database.DB.Where("tool_type = ?", toolType).Find(&jobs).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch jobs"})
 		return
 	}
@@ -22,17 +28,23 @@ func GetJobs(c *gin.Context) {
 }
 
 func GetJob(c *gin.Context) {
+	toolType, err := toolFromParam(c, convertFromTools)
+	if err != nil {
+		respondJobError(c, err, http.StatusBadRequest)
+		return
+	}
+
 	id := c.Param("id")
 	var job database.ProcessingJob
-	if err := database.DB.First(&job, "id = ?", id).Error; err != nil {
+	if err := database.DB.First(&job, "id = ? AND tool_type = ?", id, toolType).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
 		return
 	}
-c.JSON(http.StatusOK, job)
+	c.JSON(http.StatusOK, job)
 }
 
 func CreateJob(c *gin.Context) {
-	req, err := parseJobRequest(c, nil)
+	req, err := parseJobRequest(c, nil, "")
 	if err != nil {
 		status := http.StatusBadRequest
 		if err.Error() == "failed to create upload directory" || err.Error() == "failed to save uploaded file" {
@@ -55,9 +67,15 @@ func CreateJob(c *gin.Context) {
 
 
 func UpdateJob(c *gin.Context) {
+	toolType, err := toolFromParam(c, convertFromTools)
+	if err != nil {
+		respondJobError(c, err, http.StatusBadRequest)
+		return
+	}
+
 	id := c.Param("id")
 	var job database.ProcessingJob
-	if err := database.DB.First(&job, "id = ?", id).Error; err != nil {
+	if err := database.DB.First(&job, "id = ? AND tool_type = ?", id, toolType).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
 		return
 	}
@@ -93,9 +111,15 @@ func UpdateJob(c *gin.Context) {
 }
 
 func DeleteJob(c *gin.Context) {
+	toolType, err := toolFromParam(c, convertFromTools)
+	if err != nil {
+		respondJobError(c, err, http.StatusBadRequest)
+		return
+	}
+
 	id := c.Param("id")
 	var job database.ProcessingJob
-	if err := database.DB.First(&job, "id = ?", id).Error; err != nil {
+	if err := database.DB.First(&job, "id = ? AND tool_type = ?", id, toolType).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
 		return
 	}
@@ -109,9 +133,15 @@ func DeleteJob(c *gin.Context) {
 }
 
 func DownloadFile(c *gin.Context) {
+	toolType, err := toolFromParam(c, convertFromTools)
+	if err != nil {
+		respondJobError(c, err, http.StatusBadRequest)
+		return
+	}
+
 	id := c.Param("id")
 	var job database.ProcessingJob
-	if err := database.DB.First(&job, "id = ?", id).Error; err != nil {
+	if err := database.DB.First(&job, "id = ? AND tool_type = ?", id, toolType).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
 		return
 	}

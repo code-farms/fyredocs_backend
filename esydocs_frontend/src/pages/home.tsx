@@ -146,7 +146,7 @@ export default function Home() {
                       </div>
                       {showUpload ? (
                         <FileUpload
-                          toolType="general"
+                          toolType="pdf-to-word"
                           onUploadComplete={() => setShowUpload(false)}
                           className="mb-6"
                           autoOpenKey={autoOpenKey}

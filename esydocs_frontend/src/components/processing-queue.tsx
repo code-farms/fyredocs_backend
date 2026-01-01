@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Download, Trash2, FileText, CheckCircle2, Clock, AlertCircle } from "lucide-react";
-import { getAllJobServiceBases, getServiceBasePath } from "@/lib/service-routes";
+import { getAllToolEndpoints, getToolEndpoint } from "@/lib/service-routes";
 
 function getDownloadButtonText(toolType: string): string {
   const buttonTextMap: Record<string, string> = {
@@ -38,9 +38,9 @@ export default function ProcessingQueue() {
   const { data: jobs = [], isLoading } = useQuery<ProcessingJob[]>({
     queryKey: ["jobs"],
     queryFn: async () => {
-      const bases = getAllJobServiceBases();
+      const endpoints = getAllToolEndpoints();
       const responses = await Promise.all(
-        bases.map((base) => fetch(`${base}/jobs`, { credentials: "include" })),
+        endpoints.map((endpoint) => fetch(endpoint, { credentials: "include" })),
       );
       const payloads = await Promise.all(
         responses.map(async (res) => (res.ok ? res.json() : [])),
@@ -56,8 +56,8 @@ export default function ProcessingQueue() {
       if (!job) {
         throw new Error("Job not found");
       }
-      const basePath = getServiceBasePath(job.toolType);
-      await apiRequest("DELETE", `${basePath}/jobs/${jobId}`);
+      const basePath = getToolEndpoint(job.toolType);
+      await apiRequest("DELETE", `${basePath}/${jobId}`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
@@ -70,8 +70,8 @@ export default function ProcessingQueue() {
 
   const downloadFile = async (job: ProcessingJob) => {
     try {
-      const basePath = getServiceBasePath(job.toolType);
-      const response = await fetch(`${basePath}/download/${job.id}`);
+      const basePath = getToolEndpoint(job.toolType);
+      const response = await fetch(`${basePath}/${job.id}/download`);
       if (!response.ok) throw new Error("Download failed");
 
       const blob = await response.blob();

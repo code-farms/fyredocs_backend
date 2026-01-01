@@ -7,6 +7,7 @@ import (
 	"gorm.io/datatypes"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type jobRequest struct {
@@ -17,7 +18,7 @@ type jobRequest struct {
 	FileName string
 }
 
-func parseJobRequest(c *gin.Context, allowedTools map[string]bool) (*jobRequest, error) {
+func parseJobRequest(c *gin.Context, allowedTools map[string]bool, toolTypeOverride string) (*jobRequest, error) {
 	if err := os.MkdirAll("uploads", os.ModePerm); err != nil {
 		return nil, fmt.Errorf("failed to create upload directory")
 	}
@@ -32,15 +33,16 @@ func parseJobRequest(c *gin.Context, allowedTools map[string]bool) (*jobRequest,
 		return nil, fmt.Errorf("no file uploaded")
 	}
 
-	toolType := ""
-	if len(form.Value["toolType"]) > 0 {
+	toolType := strings.TrimSpace(toolTypeOverride)
+	if toolType == "" && len(form.Value["toolType"]) > 0 {
 		toolType = form.Value["toolType"][0]
 	}
+	toolType = normalizeToolType(strings.TrimSpace(toolType))
 	if toolType == "" {
-		return nil, fmt.Errorf("tool type is required")
+		return nil, fmt.Errorf("tool is required")
 	}
 	if allowedTools != nil && !allowedTools[toolType] {
-		return nil, fmt.Errorf("unsupported tool type")
+		return nil, fmt.Errorf("unsupported tool")
 	}
 
 	options := ""
@@ -74,6 +76,31 @@ func parseJobRequest(c *gin.Context, allowedTools map[string]bool) (*jobRequest,
 		SizeKB:   fmt.Sprintf("%.2f KB", float64(totalSize)/1024),
 		FileName: originalFileName,
 	}, nil
+}
+
+func normalizeToolType(toolType string) string {
+	switch toolType {
+	case "ppt-to-pdf":
+		return "powerpoint-to-pdf"
+	case "pdf-to-ppt":
+		return "pdf-to-powerpoint"
+	case "pdf-to-img":
+		return "pdf-to-image"
+	case "img-to-pdf":
+		return "image-to-pdf"
+	}
+	return toolType
+}
+
+func toolFromParam(c *gin.Context, allowedTools map[string]bool) (string, error) {
+	toolType := normalizeToolType(strings.TrimSpace(c.Param("tool")))
+	if toolType == "" {
+		return "", fmt.Errorf("tool is required")
+	}
+	if allowedTools != nil && !allowedTools[toolType] {
+		return "", fmt.Errorf("unsupported tool")
+	}
+	return toolType, nil
 }
 
 func createJob(c *gin.Context, req *jobRequest) (*database.ProcessingJob, error) {
