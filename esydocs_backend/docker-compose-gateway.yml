@@ -9,6 +9,11 @@ services:
     environment:
       PORT: "8080"
       UPLOAD_SERVICE_URL: http://upload-service:8081
+      REDIS_ADDR: redis:6379
+    env_file:
+      - ./api-gateway/.env
+    volumes:
+      - ./api-gateway/.env:/app/.env:ro
     networks:
       - esydocs_net
 

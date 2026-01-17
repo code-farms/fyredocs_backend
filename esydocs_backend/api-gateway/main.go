@@ -6,9 +6,11 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"api-gateway/auth"
+	"github.com/joho/godotenv"
 )
 
 type routeConfig struct {
@@ -18,6 +20,7 @@ type routeConfig struct {
 }
 
 func main() {
+	loadEnv()
 	port := getEnv("PORT", "8080")
 	corsOrigins := parseCommaList(getEnv("CORS_ALLOW_ORIGINS", "http://localhost:5173"))
 	corsMethods := getEnv("CORS_ALLOW_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
@@ -96,6 +99,22 @@ func main() {
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
+}
+
+func loadEnv() {
+	candidates := []string{
+		".env",
+		filepath.Join("esydocs_backend", "api-gateway", ".env"),
+	}
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			if err := godotenv.Load(path); err != nil {
+				log.Printf("Failed to load env file %s: %v", path, err)
+			}
+			return
+		}
+	}
+	log.Println("No .env file found, relying on environment variables")
 }
 
 func newProxy(cfg routeConfig) http.Handler {
