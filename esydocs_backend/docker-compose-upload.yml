@@ -3,9 +3,10 @@ version: '3.8'
 services:
   volume-init:
     image: alpine:3.19
-    command: ["sh", "-c", "chown -R 10001:10001 /app/uploads"]
+    command: ["sh", "-c", "chown -R 10001:10001 /app/uploads /app/outputs"]
     volumes:
       - uploads_data:/app/uploads
+      - outputs_data:/app/outputs
     networks:
       - esydocs_net
 
@@ -18,20 +19,28 @@ services:
       - "8081:8081"
     environment:
       PORT: "8081"
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
+      REDIS_ADDR: redis:6379
+      UPLOAD_DIR: /app/uploads
+      OUTPUT_DIR: /app/outputs
+      MAX_UPLOAD_MB: "50"
+      GUEST_JOB_TTL: 2h
+      UPLOAD_TTL: 2h
+      MAX_RETRIES: "3"
+      PROCESSING_TIMEOUT: 30m
+      QUEUE_PREFIX: queue
+    env_file:
+      - ./upload-service/.env
     volumes:
       - uploads_data:/app/uploads
+      - outputs_data:/app/outputs
     depends_on:
       volume-init:
         condition: service_completed_successfully
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.upload.rule=PathPrefix(`/api/upload`)"
-      - "traefik.http.routers.upload.entrypoints=web"
-      - "traefik.http.middlewares.upload-rewrite.replacepathregex.regex=^/api/upload(.*)"
-      - "traefik.http.middlewares.upload-rewrite.replacepathregex.replacement=/api/uploads$1"
-      - "traefik.http.routers.upload.middlewares=upload-rewrite"
-      - "traefik.http.services.upload.loadbalancer.server.port=8081"
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - esydocs_net
 
@@ -41,3 +50,4 @@ networks:
 
 volumes:
   uploads_data:
+  outputs_data:

@@ -2,6 +2,8 @@ package main
 
 import (
 	"upload-service/config"
+	"upload-service/database"
+	"upload-service/redisstore"
 	"upload-service/routes"
 	"fmt"
 	"github.com/gin-gonic/gin"
@@ -10,6 +12,9 @@ import (
 
 func main() {
 	config.LoadConfig()
+	database.Connect()
+	database.Migrate()
+	redisstore.Connect()
 
 	r := gin.Default()
 	routes.SetupUploadRouter(r)

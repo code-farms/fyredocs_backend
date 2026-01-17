@@ -10,6 +10,7 @@ docker compose -f docker-compose.essentials.yml \
   -f docker-compose-upload.yml \
   -f docker-compose-convert-from-pdf.yml \
   -f docker-compose-convert-to-pdf.yml \
+  -f docker-compose-cleanup.yml \
   -f docker-compose-gateway.yml \
   down --remove-orphans
 
@@ -25,7 +26,10 @@ docker compose -f docker-compose-convert-from-pdf.yml up -d --build
 echo "Starting convert-to-pdf..."
 docker compose -f docker-compose-convert-to-pdf.yml up -d --build
 
-echo "Starting traefik..."
+echo "Starting cleanup worker..."
+docker compose -f docker-compose-cleanup.yml up -d --build
+
+echo "Starting api-gateway..."
 docker compose -f docker-compose-gateway.yml up -d --build
 
 echo "All services started."

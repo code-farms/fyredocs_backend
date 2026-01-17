@@ -20,7 +20,11 @@ services:
     environment:
       PORT: "8082"
       DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      REDIS_ADDR: redis:6379
+      OUTPUT_DIR: /app/outputs
+      QUEUE_PREFIX: queue
+      MAX_RETRIES: "3"
+      PROCESSING_TIMEOUT: 30m
     env_file:
       - ./convert-from-pdf/.env
     volumes:
@@ -29,11 +33,10 @@ services:
     depends_on:
       volume-init:
         condition: service_completed_successfully
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.convert-from.rule=PathPrefix(`/api/convert-from-pdf`)"
-      - "traefik.http.routers.convert-from.entrypoints=web"
-      - "traefik.http.services.convert-from.loadbalancer.server.port=8082"
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - esydocs_net
 

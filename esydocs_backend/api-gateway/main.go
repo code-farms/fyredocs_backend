@@ -19,8 +19,8 @@ func main() {
 	port := getEnv("PORT", "8080")
 
 	uploadURL := getEnv("UPLOAD_SERVICE_URL", "http://upload-service:8081")
-	convertFromURL := getEnv("CONVERT_FROM_PDF_URL", "http://convert-from-pdf:8082")
-	convertToURL := getEnv("CONVERT_TO_PDF_URL", "http://convert-to-pdf:8083")
+	convertFromURL := getEnv("CONVERT_FROM_PDF_URL", uploadURL)
+	convertToURL := getEnv("CONVERT_TO_PDF_URL", uploadURL)
 
 	routes := []routeConfig{
 		{
@@ -37,6 +37,11 @@ func main() {
 			prefix:         "/api/convert-to-pdf",
 			targetBasePath: "/api/convert-to-pdf",
 			targetURL:      convertToURL,
+		},
+		{
+			prefix:         "/api/jobs",
+			targetBasePath: "/api/jobs",
+			targetURL:      uploadURL,
 		},
 	}
 

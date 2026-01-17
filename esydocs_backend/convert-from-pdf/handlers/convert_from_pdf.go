@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"convert-from-pdf/processing"
 	"github.com/gin-gonic/gin"
 	"net/http"
 )
@@ -38,7 +37,7 @@ func CreatePdfFromJob(c *gin.Context) {
 		return
 	}
 
-	go processing.ProcessFile(job.ID, req.ToolType, req.Files, req.Options)
+	processJobAsync(job.ID, req.ToolType, req.Files, req.Options)
 
 	c.JSON(http.StatusCreated, job)
 }

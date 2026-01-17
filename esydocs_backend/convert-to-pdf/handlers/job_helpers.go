@@ -2,9 +2,13 @@ package handlers
 
 import (
 	"convert-to-pdf/database"
+	"convert-to-pdf/processing"
+	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/datatypes"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,4 +125,17 @@ func createJob(c *gin.Context, req *jobRequest) (*database.ProcessingJob, error)
 
 func respondJobError(c *gin.Context, err error, status int) {
 	c.JSON(status, gin.H{"error": err.Error()})
+}
+
+func processJobAsync(jobID uuid.UUID, toolType string, files []string, options string) {
+	opts := map[string]interface{}{}
+	if options != "" && json.Valid([]byte(options)) {
+		_ = json.Unmarshal([]byte(options), &opts)
+	}
+	outputDir := os.Getenv("OUTPUT_DIR")
+	go func() {
+		if _, err := processing.ProcessFile(jobID, toolType, files, opts, outputDir); err != nil {
+			log.Printf("processing failed jobId=%s err=%v", jobID, err)
+		}
+	}()
 }

@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  cleanup-worker:
+    build:
+      context: ./cleanup-worker
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
+      REDIS_ADDR: redis:6379
+      QUEUE_PREFIX: queue
+      UPLOAD_TTL: 2h
+      UPLOAD_DIR: /app/uploads
+      MAX_RETRIES: "3"
+      CLEANUP_INTERVAL: 15m
+    env_file:
+      - ./cleanup-worker/.env
+    volumes:
+      - uploads_data:/app/uploads
+      - outputs_data:/app/outputs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - esydocs_net
+
+networks:
+  esydocs_net:
+    external: true
+
+volumes:
+  uploads_data:
+  outputs_data:

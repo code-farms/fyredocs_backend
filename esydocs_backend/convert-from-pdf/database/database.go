@@ -22,6 +22,6 @@ func Connect() {
 }
 
 func Migrate() {
-	DB.AutoMigrate(&User{}, &ProcessingJob{})
+	DB.AutoMigrate(&User{}, &AuthMetadata{}, &SubscriptionPlan{}, &ProcessingJob{}, &FileMetadata{})
 	log.Println("Database migration completed")
 }

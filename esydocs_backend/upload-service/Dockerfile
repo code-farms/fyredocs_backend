@@ -20,10 +20,11 @@ WORKDIR /app
 COPY --from=builder /app/bin/upload-service ./upload-service
 COPY .env ./
 
-RUN mkdir -p uploads \
+RUN mkdir -p uploads outputs \
     && chown -R appuser:appuser /app
 
 VOLUME /app/uploads
+VOLUME /app/outputs
 
 USER appuser
 

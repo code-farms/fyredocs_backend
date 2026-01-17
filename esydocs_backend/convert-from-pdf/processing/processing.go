@@ -5,10 +5,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
-	"convert-from-pdf/database"
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,65 +17,36 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nguyenthenguyen/docx"
-	"gorm.io/datatypes"
 )
 
-const outputDir = "outputs"
-
-// updateJobStatus updates the status and progress of a job
-func updateJobStatus(id uuid.UUID, status string, progress string, metadataUpdates ...map[string]interface{}) {
-	var job database.ProcessingJob
-	if err := database.DB.First(&job, "id = ?", id).Error; err != nil {
-		fmt.Println("Error finding job to update:", err)
-		return
-	}
-
-	job.Status = status
-	job.Progress = progress
-
-	if status == "completed" {
-		now := time.Now()
-		job.CompletedAt = &now
-	}
-
-	// Merge metadata
-	if len(metadataUpdates) > 0 {
-		var existingMeta map[string]interface{}
-		json.Unmarshal(job.Metadata, &existingMeta)
-		if existingMeta == nil {
-			existingMeta = make(map[string]interface{})
-		}
-		for _, newMeta := range metadataUpdates {
-			for k, v := range newMeta {
-				existingMeta[k] = v
-			}
-		}
-		newMetaBytes, _ := json.Marshal(existingMeta)
-		job.Metadata = datatypes.JSON(newMetaBytes)
-	}
-
-	database.DB.Save(&job)
+type Result struct {
+	OutputPath string
+	Metadata   map[string]interface{}
 }
 
-func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options string) {
-	// Ensure output directory exists
-	if err := os.MkdirAll(outputDir, os.ModePerm); err != nil {
-		fmt.Println("Failed to create output directory:", err)
-		updateJobStatus(jobID, "failed", "0")
-		return
-	}
+type convertAPIError struct {
+	statusCode int
+	message    string
+}
 
-	updateJobStatus(jobID, "processing", "25")
+func (e convertAPIError) Error() string {
+	return fmt.Sprintf("convertapi status=%d: %s", e.statusCode, e.message)
+}
+
+func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (Result, error) {
+	if outputDir == "" {
+		outputDir = "outputs"
+	}
+	if len(inputPaths) == 0 {
+		return Result{}, fmt.Errorf("no input files provided")
+	}
+	if err := os.MkdirAll(outputDir, os.ModePerm); err != nil {
+		return Result{}, fmt.Errorf("failed to create output directory: %w", err)
+	}
 
 	outputFileName := fmt.Sprintf("processed_%s_%d", jobID, time.Now().Unix())
 	var outputPath string
 	var err error
-
-	// Parse options
-	var opts map[string]interface{}
-	if options != "" {
-		json.Unmarshal([]byte(options), &opts)
-	}
 
 	switch toolType {
 	case "pdf-to-word":
@@ -115,12 +86,19 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 		err = callConvertAPI("pdf", "merge", inputPaths, outputPath, nil)
 	case "split-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".zip")
-		err = callConvertAPI("pdf", "split", inputPaths, outputPath, map[string]string{"PageRange": opts["range"].(string)})
+		rangeValue, ok := optionString(options, "range")
+		if !ok {
+			return Result{}, fmt.Errorf("missing range option")
+		}
+		err = callConvertAPI("pdf", "split", inputPaths, outputPath, map[string]string{"PageRange": rangeValue})
 	case "protect-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = callConvertAPI("pdf", "encrypt", inputPaths, outputPath, map[string]string{"UserPassword": opts["password"].(string)})
+		password, ok := optionString(options, "password")
+		if !ok {
+			return Result{}, fmt.Errorf("missing password option")
+		}
+		err = callConvertAPI("pdf", "encrypt", inputPaths, outputPath, map[string]string{"UserPassword": password})
 	case "edit-pdf", "unlock-pdf", "sign-pdf", "watermark-pdf":
-		// Placeholder: copy file
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = copyFile(inputPaths[0], outputPath)
 	default:
@@ -128,36 +106,48 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 	}
 
 	if err != nil {
-		fmt.Printf("Processing failed for job %s: %v\n", jobID, err)
-		updateJobStatus(jobID, "failed", "0")
-		return
+		return Result{}, err
 	}
 
-	updateJobStatus(jobID, "processing", "75")
-
-	// Final update
-	finalMeta := map[string]interface{}{
+	meta := map[string]interface{}{
 		"outputFilePath": outputPath,
+		"inputPaths":     inputPaths,
 	}
-	updateJobStatus(jobID, "completed", "100", finalMeta)
+	return Result{
+		OutputPath: outputPath,
+		Metadata:   meta,
+	}, nil
+}
 
-	fmt.Printf("Job %s completed successfully. Output at: %s\n", jobID, outputPath)
+func optionString(options map[string]interface{}, key string) (string, bool) {
+	if options == nil {
+		return "", false
+	}
+	value, ok := options[key]
+	if !ok {
+		return "", false
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed, typed != ""
+	default:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return "", false
+		}
+		return strings.Trim(string(data), "\""), true
+	}
 }
 
 func convertPdfToWord(inputPath, outputPath string) error {
-	// This is a mock conversion, similar to the original Node.js implementation
 	r, err := docx.ReadDocxFile(inputPath)
 	if err != nil {
-		// This will fail for PDFs, which is the point of the mock.
-		// Create a minimal docx with placeholder text.
 		return createMinimalDocx(outputPath, "This is a placeholder document. The original file could not be read as a .docx.")
 	}
 	defer r.Close()
 
-	// If it was a docx, just save it again
 	editable := r.Editable()
-	err = editable.WriteToFile(outputPath)
-	return err
+	return editable.WriteToFile(outputPath)
 }
 
 func createMinimalDocx(outputPath string, text string) error {
@@ -219,13 +209,13 @@ func writeZipEntry(zipWriter *zip.Writer, name string, contents string) error {
 func copyFile(src, dst string) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
-		return
+		return err
 	}
 	defer in.Close()
 
 	out, err := os.Create(dst)
 	if err != nil {
-		return
+		return err
 	}
 	defer func() {
 		if e := out.Close(); e != nil {
@@ -233,13 +223,10 @@ func copyFile(src, dst string) (err error) {
 		}
 	}()
 
-	_, err = io.Copy(out, in)
-	if err != nil {
-		return
+	if _, err := io.Copy(out, in); err != nil {
+		return err
 	}
-
-	err = out.Sync()
-	return
+	return out.Sync()
 }
 
 func callConvertAPI(tool string, conversionType string, inputPaths []string, outputPath string, apiParams map[string]string) error {
@@ -259,9 +246,11 @@ func callConvertAPI(tool string, conversionType string, inputPaths []string, out
 		if err != nil {
 			return err
 		}
-		io.Copy(part, file)
+		if _, err := io.Copy(part, file); err != nil {
+			return err
+		}
 	}
-	
+
 	for key, val := range apiParams {
 		_ = writer.WriteField(key, val)
 	}
@@ -273,29 +262,43 @@ func callConvertAPI(tool string, conversionType string, inputPaths []string, out
 		return err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	
-	client := &http.Client{}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		if isRecoverableError(err) {
+			return err
+		}
+		return fmt.Errorf("convertapi request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Read body for error message
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ConvertAPI failed with status %d: %s", resp.StatusCode, string(respBody))
+		return convertAPIError{statusCode: resp.StatusCode, message: string(respBody)}
 	}
-	
+
 	out, err := os.Create(outputPath)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
-	
+
 	_, err = io.Copy(out, resp.Body)
 	return err
+}
+
+func isRecoverableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if netErr, ok := err.(net.Error); ok {
+		return netErr.Timeout() || netErr.Temporary()
+	}
+	return false
 }
 
 func imageToolFromPath(path string) (string, error) {

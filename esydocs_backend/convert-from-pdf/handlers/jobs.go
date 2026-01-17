@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"convert-from-pdf/database"
-	"convert-from-pdf/processing"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"os"
@@ -60,7 +59,7 @@ func CreateJob(c *gin.Context) {
 		return
 	}
 
-	go processing.ProcessFile(job.ID, req.ToolType, req.Files, req.Options)
+	processJobAsync(job.ID, req.ToolType, req.Files, req.Options)
 
 	c.JSON(http.StatusCreated, job)
 }
