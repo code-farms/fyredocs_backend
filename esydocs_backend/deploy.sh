@@ -5,7 +5,10 @@ ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 cd "$ROOT_DIR"
 
-echo "Stopping existing containers..."
+echo ""
+echo "=============================================================="
+echo "============== Stopping existing containers... ==============="
+echo "=============================================================="
 docker compose -f docker-compose.essentials.yml \
   -f docker-compose-upload.yml \
   -f docker-compose-convert-from-pdf.yml \
@@ -14,22 +17,43 @@ docker compose -f docker-compose.essentials.yml \
   -f docker-compose-gateway.yml \
   down --remove-orphans
 
-echo "Starting essentials (db, redis)..."
+echo ""
+echo "=============================================================="
+echo "============= Starting essentials (db, redis)... ============="
+echo "=============================================================="
 docker compose -f docker-compose.essentials.yml up -d
 
-echo "Starting upload-service..."
+echo ""
+echo "=============================================================="
+echo "============== Starting upload-service... ===================="
+echo "=============================================================="
 docker compose -f docker-compose-upload.yml up -d --build
 
-echo "Starting convert-from-pdf..."
+echo ""
+echo "=============================================================="
+echo "=============== Starting convert-from-pdf... ================"
+echo "=============================================================="
 docker compose -f docker-compose-convert-from-pdf.yml up -d --build
 
-echo "Starting convert-to-pdf..."
+echo ""
+echo "=============================================================="
+echo "================ Starting convert-to-pdf... =================="
+echo "=============================================================="
 docker compose -f docker-compose-convert-to-pdf.yml up -d --build
 
-echo "Starting cleanup worker..."
+echo ""
+echo "=============================================================="
+echo "================= Starting cleanup worker... ================="
+echo "=============================================================="
 docker compose -f docker-compose-cleanup.yml up -d --build
 
-echo "Starting api-gateway..."
+echo ""
+echo "=============================================================="
+echo "================== Starting api-gateway... ==================="
+echo "=============================================================="
 docker compose -f docker-compose-gateway.yml up -d --build
 
-echo "All services started."
+echo ""
+echo "=============================================================="
+echo "=================== All services started. ===================="
+echo "=============================================================="
