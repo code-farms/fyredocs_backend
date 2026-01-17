@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"api-gateway/auth"
 )
 
 type routeConfig struct {
@@ -21,6 +23,26 @@ func main() {
 	corsMethods := getEnv("CORS_ALLOW_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 	corsHeaders := getEnv("CORS_ALLOW_HEADERS", "Authorization,Content-Type,X-User-ID,X-Guest-Token")
 	corsAllowCredentials := getEnv("CORS_ALLOW_CREDENTIALS", "true")
+
+	redisClient, err := auth.NewRedisClientFromEnv()
+	if err != nil {
+		log.Fatalf("auth redis init failed: %v", err)
+	}
+	defer redisClient.Close()
+
+	guestStore := auth.NewRedisGuestStore(redisClient, auth.GuestStoreConfig{
+		KeyPrefix: os.Getenv("AUTH_GUEST_PREFIX"),
+		KeySuffix: os.Getenv("AUTH_GUEST_SUFFIX"),
+	})
+	var denylist auth.TokenDenylist
+	if getEnvBool("AUTH_DENYLIST_ENABLED", false) {
+		denylist = auth.NewRedisTokenDenylist(redisClient, os.Getenv("AUTH_DENYLIST_PREFIX"))
+	}
+
+	verifier, err := auth.NewVerifierFromEnv(denylist)
+	if err != nil {
+		log.Fatalf("auth verifier init failed: %v", err)
+	}
 
 	uploadURL := getEnv("UPLOAD_SERVICE_URL", "http://upload-service:8081")
 	convertFromURL := getEnv("CONVERT_FROM_PDF_URL", uploadURL)
@@ -61,7 +83,11 @@ func main() {
 	})
 
 	log.Printf("api-gateway listening on :%s", port)
-	handler := withCORS(mux, corsConfig{
+	authMiddleware := auth.HTTPAuthMiddleware(auth.HTTPMiddlewareOptions{
+		Verifier:   verifier,
+		GuestStore: guestStore,
+	})
+	handler := withCORS(authMiddleware(mux), corsConfig{
 		allowedOrigins:    corsOrigins,
 		allowedMethods:    corsMethods,
 		allowedHeaders:    corsHeaders,
@@ -88,6 +114,10 @@ func newProxy(cfg routeConfig) http.Handler {
 		req.URL.Host = target.Host
 		req.URL.Path = joinPath(cfg.targetBasePath, targetPath)
 		req.Host = target.Host
+		auth.ClearUserHeaders(req.Header)
+		if authCtx, ok := auth.FromContext(req.Context()); ok {
+			auth.ApplyUserHeaders(req.Header, authCtx)
+		}
 	}
 
 	return proxy
@@ -108,6 +138,21 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "y":
+		return true
+	case "0", "false", "no", "n":
+		return false
+	default:
+		return fallback
+	}
 }
 
 type corsConfig struct {

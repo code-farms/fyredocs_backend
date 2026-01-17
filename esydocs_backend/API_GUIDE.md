@@ -1,6 +1,6 @@
 # ESYDocs API Guide (Frontend)
 
-This guide documents the API exposed by the API gateway. Paths below are relative to the gateway root.
+This guide documents the public API exposed by the API gateway. Private/internal endpoints are omitted. Paths below are relative to the gateway root.
 
 ## Base URL
 - Default gateway: http://localhost:8080
@@ -178,23 +178,6 @@ Response 204.
 
 Only available when `status` is `completed`.
 Content-Type is set based on tool.
-
-### Job history (authenticated)
-`GET /api/jobs/history?limit=25&page=1`
-
-Requires auth headers.
-
-### Internal status update (workers)
-If gateway points to convert-from/convert-to services, a PATCH endpoint exists:
-
-`PATCH /api/convert-*/{tool}/{id}`
-
-Body:
-```json
-{ "status": "processing|completed|failed", "progress": "0-100" }
-```
-
-Not intended for frontend use.
 
 ## Frontend flow (typical)
 1. Start upload: `POST /api/upload/init`
