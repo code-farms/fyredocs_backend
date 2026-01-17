@@ -1,10 +1,8 @@
 package processing
 
 import (
-	"archive/zip"
 	"bytes"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -16,7 +14,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nguyenthenguyen/docx"
 )
 
 type Result struct {
@@ -51,7 +48,7 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 	switch toolType {
 	case "pdf-to-word":
 		outputPath = filepath.Join(outputDir, outputFileName+".docx")
-		err = convertPdfToWord(inputPaths[0], outputPath)
+		err = callConvertAPI("pdf", "docx", inputPaths, outputPath, nil)
 	case "pdf-to-excel":
 		outputPath = filepath.Join(outputDir, outputFileName+".xlsx")
 		err = callConvertAPI("pdf", "xlsx", inputPaths, outputPath, nil)
@@ -137,73 +134,6 @@ func optionString(options map[string]interface{}, key string) (string, bool) {
 		}
 		return strings.Trim(string(data), "\""), true
 	}
-}
-
-func convertPdfToWord(inputPath, outputPath string) error {
-	r, err := docx.ReadDocxFile(inputPath)
-	if err != nil {
-		return createMinimalDocx(outputPath, "This is a placeholder document. The original file could not be read as a .docx.")
-	}
-	defer r.Close()
-
-	editable := r.Editable()
-	return editable.WriteToFile(outputPath)
-}
-
-func createMinimalDocx(outputPath string, text string) error {
-	f, err := os.Create(outputPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	zipWriter := zip.NewWriter(f)
-	defer zipWriter.Close()
-
-	contentTypes := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-</Types>`
-	if err := writeZipEntry(zipWriter, "[Content_Types].xml", contentTypes); err != nil {
-		return err
-	}
-
-	rels := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>`
-	if err := writeZipEntry(zipWriter, "_rels/.rels", rels); err != nil {
-		return err
-	}
-
-	docRels := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`
-	if err := writeZipEntry(zipWriter, "word/_rels/document.xml.rels", docRels); err != nil {
-		return err
-	}
-
-	var escaped bytes.Buffer
-	if err := xml.EscapeText(&escaped, []byte(text)); err != nil {
-		return err
-	}
-	document := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:body>
-    <w:p><w:r><w:t>%s</w:t></w:r></w:p>
-  </w:body>
-</w:document>`, escaped.String())
-	return writeZipEntry(zipWriter, "word/document.xml", document)
-}
-
-func writeZipEntry(zipWriter *zip.Writer, name string, contents string) error {
-	writer, err := zipWriter.Create(name)
-	if err != nil {
-		return err
-	}
-	_, err = writer.Write([]byte(contents))
-	return err
 }
 
 func copyFile(src, dst string) (err error) {

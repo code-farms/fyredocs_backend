@@ -17,6 +17,10 @@ type routeConfig struct {
 
 func main() {
 	port := getEnv("PORT", "8080")
+	corsOrigins := parseCommaList(getEnv("CORS_ALLOW_ORIGINS", "http://localhost:5173"))
+	corsMethods := getEnv("CORS_ALLOW_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+	corsHeaders := getEnv("CORS_ALLOW_HEADERS", "Authorization,Content-Type,X-User-ID,X-Guest-Token")
+	corsAllowCredentials := getEnv("CORS_ALLOW_CREDENTIALS", "true")
 
 	uploadURL := getEnv("UPLOAD_SERVICE_URL", "http://upload-service:8081")
 	convertFromURL := getEnv("CONVERT_FROM_PDF_URL", uploadURL)
@@ -57,7 +61,13 @@ func main() {
 	})
 
 	log.Printf("api-gateway listening on :%s", port)
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
+	handler := withCORS(mux, corsConfig{
+		allowedOrigins:    corsOrigins,
+		allowedMethods:    corsMethods,
+		allowedHeaders:    corsHeaders,
+		allowCredentials:  strings.EqualFold(corsAllowCredentials, "true"),
+	})
+	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
@@ -98,4 +108,65 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+type corsConfig struct {
+	allowedOrigins   []string
+	allowedMethods   string
+	allowedHeaders   string
+	allowCredentials bool
+}
+
+func withCORS(next http.Handler, cfg corsConfig) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			allowOrigin := corsAllowOrigin(origin, cfg.allowedOrigins, cfg.allowCredentials)
+			if allowOrigin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+				w.Header().Set("Vary", "Origin")
+				if cfg.allowCredentials {
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+				}
+				w.Header().Set("Access-Control-Allow-Methods", cfg.allowedMethods)
+				w.Header().Set("Access-Control-Allow-Headers", cfg.allowedHeaders)
+			}
+		}
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func corsAllowOrigin(origin string, allowedOrigins []string, allowCredentials bool) string {
+	if origin == "" {
+		return ""
+	}
+	for _, allowed := range allowedOrigins {
+		if allowed == "*" {
+			if allowCredentials {
+				return origin
+			}
+			return "*"
+		}
+		if strings.EqualFold(strings.TrimSpace(allowed), origin) {
+			return origin
+		}
+	}
+	return ""
+}
+
+func parseCommaList(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	for i, part := range parts {
+		parts[i] = strings.TrimSpace(part)
+	}
+	return parts
 }
