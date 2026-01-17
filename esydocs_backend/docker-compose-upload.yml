@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   volume-init:
     image: alpine:3.19
@@ -21,6 +19,7 @@ services:
       PORT: "8081"
       DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
       REDIS_ADDR: redis:6379
+      TRUSTED_PROXIES: 172.18.0.0/16,127.0.0.1,::1
       UPLOAD_DIR: /app/uploads
       OUTPUT_DIR: /app/outputs
       MAX_UPLOAD_MB: "50"
@@ -37,10 +36,6 @@ services:
     depends_on:
       volume-init:
         condition: service_completed_successfully
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
     networks:
       - esydocs_net
 

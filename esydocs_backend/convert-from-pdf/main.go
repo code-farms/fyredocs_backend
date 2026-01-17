@@ -1,16 +1,19 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+
+	"github.com/gin-gonic/gin"
+
 	"convert-from-pdf/config"
 	"convert-from-pdf/database"
 	"convert-from-pdf/redisstore"
 	"convert-from-pdf/worker"
-	"context"
-	"fmt"
-	"github.com/gin-gonic/gin"
-	"os"
-	"os/signal"
-	"syscall"
 )
 
 func main() {
@@ -24,6 +27,9 @@ func main() {
 	go worker.Run(ctx)
 
 	r := gin.New()
+	if err := r.SetTrustedProxies(trustedProxies()); err != nil {
+		panic(err)
+	}
 	r.GET("/healthz", func(c *gin.Context) {
 		c.String(200, "ok")
 	})
@@ -48,4 +54,25 @@ func main() {
 			panic(err)
 		}
 	}
+}
+
+func trustedProxies() []string {
+	raw := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES"))
+	if raw == "" {
+		return []string{"127.0.0.1", "::1"}
+	}
+
+	parts := strings.Split(raw, ",")
+	proxies := make([]string, 0, len(parts))
+	for _, part := range parts {
+		proxy := strings.TrimSpace(part)
+		if proxy != "" {
+			proxies = append(proxies, proxy)
+		}
+	}
+	if len(proxies) == 0 {
+		return []string{"127.0.0.1", "::1"}
+	}
+
+	return proxies
 }

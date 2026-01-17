@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   cleanup-worker:
     build:
@@ -19,11 +17,6 @@ services:
     volumes:
       - uploads_data:/app/uploads
       - outputs_data:/app/outputs
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
     networks:
       - esydocs_net
 
