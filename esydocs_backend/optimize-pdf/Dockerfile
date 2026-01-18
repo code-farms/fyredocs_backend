@@ -30,7 +30,6 @@ RUN apk add --no-cache \
 WORKDIR /app
 
 COPY --from=builder /app/bin/optimize-pdf ./optimize-pdf
-COPY .env.example ./.env
 
 RUN mkdir -p uploads outputs \
     && chown -R appuser:appuser /app

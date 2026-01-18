@@ -10,29 +10,34 @@ COPY . .
 ENV CGO_ENABLED=0 GOOS=linux
 RUN go build -trimpath -ldflags="-s -w" -o /app/bin/convert-from-pdf .
 
-# Use pre-built base image with LibreOffice (must be built first)
-# To use Docker Hub image: --build-arg BASE_IMAGE=your-dockerhub-username/alpine-libreoffice:3.19
-# To use local image: Build base image first using docker/base-alpine-libreoffice.Dockerfile
-ARG BASE_IMAGE=alpine:3.19
+FROM alpine:3.19
 
-FROM ${BASE_IMAGE}
-
-# If using plain alpine (fallback), install dependencies
-# When using pre-built base image, these will already be present (no-op)
-RUN if ! command -v libreoffice >/dev/null 2>&1; then \
-        apk add --no-cache \
-            ca-certificates \
-            poppler-utils \
-            libreoffice \
-            openjdk17-jre-headless \
-            ttf-liberation; \
-    fi && \
-    adduser -D -u 10001 appuser 2>/dev/null || true
+# Install dependencies for PDF processing
+# - poppler-utils: for pdftoppm (PDF to images), pdftotext, pdftohtml
+# - ghostscript: for PDF/A conversion
+# - libreoffice-writer: for PDF to Word (minimal, not full suite)
+# - libreoffice-calc: for PDF to Excel
+# - libreoffice-impress: for PDF to PowerPoint
+# - ttf-liberation: fonts for better rendering
+RUN apk add --no-cache \
+        ca-certificates \
+        poppler-utils \
+        ghostscript \
+        libreoffice-writer \
+        libreoffice-calc \
+        libreoffice-impress \
+        libreoffice-common \
+        ttf-liberation \
+    && rm -rf /usr/lib/libreoffice/share/gallery \
+    && rm -rf /usr/lib/libreoffice/share/template \
+    && rm -rf /usr/lib/libreoffice/share/wizards \
+    && rm -rf /usr/lib/libreoffice/share/config/images_*.zip \
+    && rm -rf /var/cache/apk/* \
+    && adduser -D -u 10001 appuser
 
 WORKDIR /app
 
 COPY --from=builder /app/bin/convert-from-pdf ./convert-from-pdf
-COPY .env ./
 
 RUN mkdir -p uploads outputs \
     && chown -R appuser:appuser /app

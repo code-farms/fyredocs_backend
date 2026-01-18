@@ -33,8 +33,10 @@ That's it! The script will:
 |---------|------|-------------|---------------|
 | **API Gateway** | 8080 | Request routing, CORS, auth middleware | [API_GATEWAY.md](api-gateway/API_GATEWAY.md) |
 | **Upload Service** | 8081 | File uploads, job management, authentication | [UPLOAD_SERVICE.md](upload-service/UPLOAD_SERVICE.md) |
-| **Convert From PDF** | 8082 | PDF → Word/Excel/PPT/Image conversions | [CONVERT_FROM_PDF.md](convert-from-pdf/CONVERT_FROM_PDF.md) |
-| **Convert To PDF** | 8083 | Word/Excel/PPT/Image → PDF conversions | [CONVERT_TO_PDF.md](convert-to-pdf/CONVERT_TO_PDF.md) |
+| **Convert From PDF** | 8082 | PDF → Word/Excel/PPT/Image/HTML/Text conversions | [CONVERT_FROM_PDF.md](convert-from-pdf/CONVERT_FROM_PDF.md) |
+| **Convert To PDF** | 8083 | Word/Excel/PPT/HTML/Image → PDF conversions | [CONVERT_TO_PDF.md](convert-to-pdf/CONVERT_TO_PDF.md) |
+| **Organize PDF** | 8084 | Merge, split, reorder, extract pages | [ORGANIZE_PDF.md](organize-pdf/ORGANIZE_PDF.md) |
+| **Optimize PDF** | 8085 | Compress, repair, OCR for PDFs | [OPTIMIZE_PDF.md](optimize-pdf/OPTIMIZE_PDF.md) |
 | **Cleanup Worker** | - | Background cleanup of expired files/jobs | [CLEANUP_WORKER.md](cleanup-worker/CLEANUP_WORKER.md) |
 | **PostgreSQL** | 5432 | Primary database | - |
 | **Redis** | 6379 | Cache, queue, session storage | - |
@@ -53,16 +55,20 @@ Upload Service :8081
   ├─ /auth/* → Authentication
   ├─ /api/upload/* → Chunked Uploads
   ├─ /api/jobs/* → Job Management
-  └─ /api/convert-*/* → Create Conversion Jobs
+  └─ /api/{service}/* → Create Processing Jobs
       ↓
 Redis Queue
   ├─ queue:pdf-to-word
   ├─ queue:word-to-pdf
+  ├─ queue:merge-pdf
+  ├─ queue:compress-pdf
   └─ queue:{tool-type}
       ↓
 Worker Services
-  ├─ Convert From PDF :8082
-  └─ Convert To PDF :8083
+  ├─ Convert From PDF :8082 (PDF → Other formats)
+  ├─ Convert To PDF :8083 (Other formats → PDF)
+  ├─ Organize PDF :8084 (Merge, split, reorder)
+  └─ Optimize PDF :8085 (Compress, repair, OCR)
       ↓
 Job Completed
   ├─ Output stored in /app/outputs
@@ -120,25 +126,34 @@ fetch('http://localhost:8080/api/jobs', {
 
 ### Document Conversions
 
-#### PDF to Other Formats
+#### Convert From PDF (Port 8082)
 - PDF → Word (.docx)
 - PDF → Excel (.xlsx)
 - PDF → PowerPoint (.pptx)
-- PDF → Images (.zip with JPEGs)
+- PDF → Images (.zip with PNGs)
+- PDF → HTML (with images)
+- PDF → Plain Text (.txt)
+- PDF → PDF/A (archival format)
 
-#### Other Formats to PDF
+#### Convert To PDF (Port 8083)
 - Word (.doc, .docx) → PDF
 - Excel (.xls, .xlsx) → PDF
 - PowerPoint (.ppt, .pptx) → PDF
-- Images (.jpg, .png, .gif, .webp) → PDF
+- HTML (.html, .htm) → PDF
+- Images (.jpg, .png, .gif, .webp, .bmp) → PDF
 
-#### PDF Utilities
-- Merge multiple PDFs
-- Split PDF by page ranges
-- Compress PDF file size
-- Password protect/unlock PDF
-- Watermark PDF
-- (Planned: Sign PDF, Edit PDF)
+#### Organize PDF (Port 8084)
+- **Merge PDF** - Combine multiple PDFs into one
+- **Split PDF** - Split by page ranges
+- **Remove Pages** - Delete specific pages
+- **Extract Pages** - Extract pages into new PDF
+- **Organize PDF** - Reorder pages
+- **Scan to PDF** - Convert images to PDF with optional OCR
+
+#### Optimize PDF (Port 8085)
+- **Compress PDF** - Reduce file size (quality options: screen/ebook/printer/prepress)
+- **Repair PDF** - Fix corrupted PDFs using Ghostscript
+- **OCR PDF** - Add searchable text layer to scanned PDFs (Tesseract)
 
 ### File Upload
 
@@ -310,16 +325,20 @@ See [AUTHENTICATION.md](upload-service/AUTHENTICATION.md) for detailed documenta
 | GET | `/api/upload/{id}/status` | Get upload status |
 | POST | `/api/upload/{id}/complete` | Finalize upload |
 
-### Conversion Endpoints
+### Processing Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/convert-from-pdf/{tool}` | Convert PDF to other format |
 | POST | `/api/convert-to-pdf/{tool}` | Convert other format to PDF |
-| GET | `/api/convert-{type}-pdf/{tool}` | List jobs for tool |
-| GET | `/api/convert-{type}-pdf/{tool}/{id}` | Get job status |
-| GET | `/api/convert-{type}-pdf/{tool}/{id}/download` | Download result |
-| DELETE | `/api/convert-{type}-pdf/{tool}/{id}` | Delete job |
+| POST | `/api/organize-pdf/{tool}` | Organize PDF operations |
+| POST | `/api/optimize-pdf/{tool}` | Optimize PDF operations |
+| GET | `/api/{service}/{tool}` | List jobs for tool |
+| GET | `/api/{service}/{tool}/{id}` | Get job status |
+| GET | `/api/{service}/{tool}/{id}/download` | Download result |
+| DELETE | `/api/{service}/{tool}/{id}` | Delete job |
+
+**Services**: `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`
 
 ### Job Management Endpoints
 
@@ -419,13 +438,17 @@ docker compose exec redis redis-cli keys "denylist:jwt:*"
 
 ```bash
 # Check worker status
-docker compose ps convert-from-pdf convert-to-pdf
+docker compose ps convert-from-pdf convert-to-pdf organize-pdf optimize-pdf
 
 # Check queue depths
 docker compose exec redis redis-cli llen "queue:word-to-pdf"
+docker compose exec redis redis-cli llen "queue:merge-pdf"
+docker compose exec redis redis-cli llen "queue:compress-pdf"
 
 # View worker logs
 docker compose logs -f convert-from-pdf
+docker compose logs -f organize-pdf
+docker compose logs -f optimize-pdf
 ```
 
 ### CORS Issues
@@ -496,7 +519,12 @@ curl -b cookies.txt http://localhost:8080/api/convert-to-pdf/word-to-pdf/{jobID}
 - **Web Framework**: Gin (HTTP), net/http (Gateway)
 - **Database**: PostgreSQL 15
 - **Cache/Queue**: Redis 7
-- **Document Processing**: LibreOffice, pdfcpu, Poppler
+- **Document Processing**:
+  - LibreOffice (Office documents, PDF to Office)
+  - pdfcpu (Pure Go PDF manipulation)
+  - Poppler (PDF rendering, pdftoppm, pdftotext, pdftohtml)
+  - Ghostscript (PDF repair, PDF/A conversion)
+  - Tesseract OCR (Searchable PDF text layer)
 - **Authentication**: JWT (HS256)
 - **Containerization**: Docker, Docker Compose
 
@@ -529,6 +557,18 @@ esydocs_backend/
 │   ├── main.go
 │   ├── Dockerfile
 │   └── CONVERT_TO_PDF.md     # Service docs
+├── organize-pdf/             # PDF organization worker
+│   ├── processing/           # PDF manipulation logic
+│   ├── worker/               # Queue worker
+│   ├── main.go
+│   ├── Dockerfile
+│   └── ORGANIZE_PDF.md       # Service docs
+├── optimize-pdf/             # PDF optimization worker
+│   ├── processing/           # Compression, repair, OCR
+│   ├── worker/               # Queue worker
+│   ├── main.go
+│   ├── Dockerfile
+│   └── OPTIMIZE_PDF.md       # Service docs
 ├── cleanup-worker/           # Cleanup service
 │   ├── main.go
 │   ├── Dockerfile

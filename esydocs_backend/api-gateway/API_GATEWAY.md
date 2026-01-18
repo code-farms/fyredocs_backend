@@ -46,11 +46,13 @@ Route to Backend Service
 | `/auth/*` | upload-service:8081 | Authentication endpoints |
 | `/api/upload/*` | upload-service:8081 | File upload management |
 | `/api/jobs/*` | upload-service:8081 | Job status and management |
-| `/api/convert-from-pdf/*` | upload-service:8081 | PDF conversion requests |
-| `/api/convert-to-pdf/*` | upload-service:8081 | Document to PDF conversion |
+| `/api/convert-from-pdf/*` | convert-from-pdf:8082 | PDF → Other formats |
+| `/api/convert-to-pdf/*` | convert-to-pdf:8083 | Other formats → PDF |
+| `/api/organize-pdf/*` | organize-pdf:8084 | PDF organization (merge, split, etc.) |
+| `/api/optimize-pdf/*` | optimize-pdf:8085 | PDF optimization (compress, repair, OCR) |
 | `/healthz` | api-gateway (local) | Health check |
 
-**Note**: All conversion requests are routed through the upload-service, which manages job creation and queuing. The actual conversion is performed by worker services (convert-from-pdf and convert-to-pdf) that process jobs from the Redis queue.
+**Note**: The API Gateway routes requests directly to the appropriate processing service. Each service manages its own job creation, queuing, and processing through Redis queues.
 
 ## Environment Variables
 
@@ -61,6 +63,10 @@ Route to Backend Service
 | `JWT_HS256_SECRET` | **REQUIRED** - JWT signing secret (min 32 chars) | `your-64-char-hex-secret` |
 | `PORT` | Gateway listening port | `8080` |
 | `UPLOAD_SERVICE_URL` | Upload service base URL | `http://upload-service:8081` |
+| `CONVERT_FROM_PDF_URL` | Convert From PDF service URL | `http://convert-from-pdf:8082` |
+| `CONVERT_TO_PDF_URL` | Convert To PDF service URL | `http://convert-to-pdf:8083` |
+| `ORGANIZE_PDF_URL` | Organize PDF service URL | `http://organize-pdf:8084` |
+| `OPTIMIZE_PDF_URL` | Optimize PDF service URL | `http://optimize-pdf:8085` |
 | `REDIS_ADDR` | Redis server address | `redis:6379` |
 
 ### Optional (with defaults)

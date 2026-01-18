@@ -8,3 +8,6 @@
 
 # Keep example files
 !**/.env.example
+
+# Compiled binaries
+**/bin/

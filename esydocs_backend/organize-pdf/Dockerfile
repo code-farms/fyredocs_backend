@@ -22,7 +22,6 @@ RUN apk add --no-cache \
 WORKDIR /app
 
 COPY --from=builder /app/bin/organize-pdf ./organize-pdf
-COPY .env ./
 
 RUN mkdir -p uploads outputs \
     && chown -R appuser:appuser /app

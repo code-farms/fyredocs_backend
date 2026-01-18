@@ -34,18 +34,6 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 	var err error
 
 	switch toolType {
-	case "pdf-to-word":
-		outputPath = filepath.Join(outputDir, outputFileName+".docx")
-		err = pdfToOffice(inputPaths[0], outputPath, "docx")
-	case "pdf-to-excel":
-		outputPath = filepath.Join(outputDir, outputFileName+".xlsx")
-		err = pdfToOffice(inputPaths[0], outputPath, "xlsx")
-	case "pdf-to-powerpoint", "pdf-to-ppt":
-		outputPath = filepath.Join(outputDir, outputFileName+".pptx")
-		err = pdfToOffice(inputPaths[0], outputPath, "pptx")
-	case "pdf-to-image", "pdf-to-img":
-		outputPath = filepath.Join(outputDir, outputFileName+".zip")
-		err = pdfToImages(inputPaths[0], outputPath)
 	case "word-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = officeToPDF(inputPaths[0], outputPath, "docx")

@@ -2,18 +2,18 @@
 
 ## Overview
 
-The Convert To PDF service is a worker service that converts various document and image formats to PDF. It handles Word, Excel, PowerPoint, HTML, and image file conversions using LibreOffice and other open-source tools.
+The Convert To PDF service converts various document and image formats to PDF. It handles Word, Excel, PowerPoint, HTML, and image file conversions using LibreOffice and pdfcpu.
 
 **Port**: 8083 (internal, not exposed through API Gateway)
 **Type**: Background Worker + REST API
 **Framework**: Gin (Go)
-**Processing**: LibreOffice, ImageMagick/pdfcpu
+**Processing**: LibreOffice, pdfcpu
 
 ## Responsibilities
 
 1. **Office to PDF** - Convert Word/Excel/PowerPoint documents to PDF
 2. **HTML to PDF** - Convert HTML documents to PDF
-3. **Image to PDF** - Convert images (JPG, PNG, GIF, WebP) to PDF
+3. **Image to PDF** - Convert images (JPG, PNG, etc.) to PDF
 4. **Job Processing** - Pick jobs from Redis queue and process them
 5. **Status Updates** - Update job status and progress in database
 
@@ -25,23 +25,21 @@ Redis Queue (queue:word-to-pdf, queue:image-to-pdf, etc.)
 Convert-To-PDF Worker
   ├─ Poll Queue
   ├─ Download Input File(s)
-  ├─ Process with LibreOffice/ImageMagick
+  ├─ Process with LibreOffice/pdfcpu
   ├─ Upload Output PDF
   └─ Update Job Status (PostgreSQL)
 ```
 
 ## Supported Tools
 
-| Tool | Input Formats | Output | Status |
-|------|--------------|--------|--------|
-| `word-to-pdf` | .doc, .docx | .pdf | ✅ Implemented |
-| `excel-to-pdf` | .xls, .xlsx | .pdf | ✅ Implemented |
-| `ppt-to-pdf` | .ppt, .pptx | .pdf | ✅ Implemented |
-| `powerpoint-to-pdf` | .ppt, .pptx | .pdf | ✅ Alias for ppt-to-pdf |
-| `html-to-pdf` | .html, .htm | .pdf | ✅ Implemented |
-| `htm-to-pdf` | .html, .htm | .pdf | ✅ Alias for html-to-pdf |
-| `image-to-pdf` | .jpg, .jpeg, .png, .gif, .webp, .bmp | .pdf | ✅ Implemented |
-| `img-to-pdf` | .jpg, .jpeg, .png, .gif, .webp, .bmp | .pdf | ✅ Alias for image-to-pdf |
+| Tool | Input Formats | Output | Implementation | Status |
+|------|--------------|--------|----------------|--------|
+| `word-to-pdf` | .doc, .docx | .pdf | LibreOffice Writer | ✅ Implemented |
+| `excel-to-pdf` | .xls, .xlsx | .pdf | LibreOffice Calc | ✅ Implemented |
+| `ppt-to-pdf` | .ppt, .pptx | .pdf | LibreOffice Impress | ✅ Implemented |
+| `html-to-pdf` | .html, .htm | .pdf | LibreOffice Writer | ✅ Implemented |
+| `image-to-pdf` | .jpg, .png, .gif, .webp, .bmp | .pdf | pdfcpu | ✅ Implemented |
+| `img-to-pdf` | .jpg, .png, .gif, .webp, .bmp | .pdf | pdfcpu | ✅ Alias |
 
 ## API Endpoints
 
@@ -203,7 +201,7 @@ curl -X POST http://localhost:8080/api/convert-to-pdf/excel-to-pdf \
 
 ---
 
-### ppt-to-pdf / powerpoint-to-pdf
+### ppt-to-pdf
 
 Converts Microsoft PowerPoint presentations to PDF.
 
@@ -230,7 +228,7 @@ curl -X POST http://localhost:8080/api/convert-to-pdf/ppt-to-pdf \
 
 ---
 
-### html-to-pdf / htm-to-pdf
+### html-to-pdf
 
 Converts HTML documents to PDF format.
 
@@ -264,13 +262,13 @@ Converts images to PDF format.
 
 **Input**: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`
 **Output**: `.pdf`
-**Implementation**: pdfcpu / ImageMagick
+**Implementation**: pdfcpu (pure Go, no external dependencies)
 
 **Features**:
 - Multiple images combined into single PDF (one image per page)
-- Maintains image quality
+- Maintains image quality (no re-compression)
 - Automatic page sizing to fit image dimensions
-- Supports various image formats
+- Fast processing
 
 **Single Image Example**:
 ```bash
@@ -288,46 +286,7 @@ curl -X POST http://localhost:8080/api/convert-to-pdf/image-to-pdf \
 
 **Output**: Single PDF with 3 pages
 
-**Image Quality**:
-- Original image quality preserved
-- No re-compression (lossless embedding)
-- Appropriate for scanning/document digitization
-
 ---
-
-## Processing Workflow
-
-### Worker Loop
-
-```
-1. Poll Redis Queue
-   ↓
-2. Pop Job from Queue
-   ↓
-3. Mark Job as "processing"
-   ↓
-4. Download Input File(s)
-   ↓
-5. Execute Conversion
-   ├─ LibreOffice for Office docs
-   └─ pdfcpu/ImageMagick for images
-   ↓
-6. Upload Output PDF
-   ↓
-7. Mark Job as "completed"
-   ↓
-8. Return to Step 1
-```
-
-### Error Handling
-
-If processing fails:
-1. Increment retry count
-2. If retries < `MAX_RETRIES`:
-   - Re-queue job with exponential backoff
-3. If retries >= `MAX_RETRIES`:
-   - Mark job as "failed"
-   - Set `failureReason` in database
 
 ## Environment Variables
 
@@ -344,49 +303,20 @@ If processing fails:
 | `MAX_RETRIES` | `3` | Max retry attempts for failed jobs |
 | `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing |
 
-## File Size Limits
-
-- **Maximum Input Size**: 50 MB (enforced by upload-service)
-- **PDF Output Size**: Depends on input content
-- **Recommended**: Keep documents under 50 pages for optimal processing
-
-## Supported Input Formats
-
-### Office Documents
-
-| Format | Extension | Versions |
-|--------|-----------|----------|
-| Word | .doc, .docx | Word 97-2019 |
-| Excel | .xls, .xlsx | Excel 97-2019 |
-| PowerPoint | .ppt, .pptx | PowerPoint 97-2019 |
-
-### Image Formats
-
-| Format | Extensions | Notes |
-|--------|-----------|-------|
-| JPEG | .jpg, .jpeg | Most common, lossy compression |
-| PNG | .png | Lossless, supports transparency |
-| GIF | .gif | Supports animation (first frame used) |
-| WebP | .webp | Modern format, good compression |
-| BMP | .bmp | Uncompressed, large file size |
-
 ## Dependencies
 
 ### LibreOffice
 
-Used for Office document conversions.
+Used for Office and HTML document conversions.
 
 **Installed Packages**:
-- `libreoffice-writer` - Word to PDF
-- `libreoffice-calc` - Excel to PDF
-- `libreoffice-impress` - PowerPoint to PDF
+- `libreoffice` (full suite for all conversions)
+- `ttf-liberation` - Font support
 
 **Command Example**:
 ```bash
 libreoffice --headless --convert-to pdf --outdir /output /input/file.docx
 ```
-
-**Conversion Quality**: Production-quality PDF output
 
 ### pdfcpu
 
@@ -394,16 +324,9 @@ Pure Go PDF library for image to PDF conversion.
 
 **Features**:
 - Fast image embedding
-- No re-compression
+- No external dependencies
+- No re-compression (lossless)
 - Automatic page sizing
-
-### ImageMagick (Optional)
-
-Image processing library for advanced image operations.
-
-**Tools Used**:
-- `convert` - Image format conversion
-- `identify` - Image metadata extraction
 
 ## Deployment
 
@@ -437,6 +360,9 @@ convert-to-pdf:
 
    # macOS
    brew install libreoffice
+
+   # Alpine
+   apk add libreoffice ttf-liberation
    ```
 
 2. Start dependencies:
@@ -452,52 +378,24 @@ convert-to-pdf:
    go run main.go
    ```
 
+## Performance
+
+### Processing Times (Typical)
+
+| Tool | Small File | Medium File | Large File |
+|------|-----------|-------------|------------|
+| word-to-pdf | 2-3s | 5-8s | 15-30s |
+| excel-to-pdf | 2-4s | 6-10s | 20-40s |
+| ppt-to-pdf | 3-5s | 8-12s | 25-45s |
+| html-to-pdf | 1-2s | 3-5s | 8-15s |
+| image-to-pdf | <1s | 1-2s | 3-5s |
+
+**File Sizes**:
+- Small: < 1 MB, < 10 pages
+- Medium: 1-5 MB, 10-50 pages
+- Large: 5-50 MB, 50-100 pages
+
 ## Troubleshooting
-
-### Jobs Stuck in Queue
-
-**Symptoms**: Jobs remain in "queued" status indefinitely
-
-**Solutions**:
-```bash
-# Check worker status
-docker compose ps convert-to-pdf
-
-# Verify Redis queues
-docker compose exec redis redis-cli keys "queue:*"
-
-# Check specific queue length
-docker compose exec redis redis-cli llen "queue:word-to-pdf"
-
-# Restart worker
-docker compose restart convert-to-pdf
-```
-
-### Conversion Failures
-
-#### Common Error: "Unsupported File Format"
-
-**Cause**: File extension doesn't match actual file type
-
-**Solution**: Verify file type:
-```bash
-docker compose exec convert-to-pdf file /app/uploads/file.docx
-```
-
-#### Common Error: "LibreOffice Timeout"
-
-**Cause**: Document too large or complex
-
-**Solutions**:
-- Increase `PROCESSING_TIMEOUT`
-- Simplify document (remove large images, reduce pages)
-- Increase container memory limits
-
-#### Common Error: "Corrupted Document"
-
-**Cause**: Input file is damaged
-
-**Solution**: Try opening the file in the native application first to verify it's valid
 
 ### LibreOffice Issues
 
@@ -537,8 +435,6 @@ docker compose exec convert-to-pdf ls -lh /app/outputs/
    docker stats convert-to-pdf
    ```
 
-3. **Reduce Concurrent Processing**: Limit to 1 worker per instance
-
 ### Image Conversion Issues
 
 **Symptoms**: Image-to-PDF jobs fail
@@ -551,43 +447,16 @@ docker compose exec convert-to-pdf ls -lh /app/outputs/
 **Solutions**:
 ```bash
 # Verify image file
-docker compose exec convert-to-pdf identify /app/uploads/image.jpg
-
-# Check image dimensions
-docker compose exec convert-to-pdf \
-  identify -format "%wx%h" /app/uploads/image.jpg
+docker compose exec convert-to-pdf file /app/uploads/image.jpg
 ```
-
-## Performance
-
-### Processing Times (Typical)
-
-| Tool | Small File | Medium File | Large File |
-|------|-----------|-------------|------------|
-| word-to-pdf | 2-3s | 5-8s | 15-30s |
-| excel-to-pdf | 2-4s | 6-10s | 20-40s |
-| ppt-to-pdf | 3-5s | 8-12s | 25-45s |
-| html-to-pdf | 1-2s | 3-5s | 8-15s |
-| image-to-pdf | <1s | 1-2s | 3-5s |
-
-**File Sizes**:
-- Small: < 1 MB, < 10 pages
-- Medium: 1-5 MB, 10-50 pages
-- Large: 5-50 MB, 50-100 pages
-
-### Optimization Tips
-
-1. **Multiple Workers**: Run several instances
-2. **Resource Allocation**: Ensure adequate CPU/memory (2 GB recommended)
-3. **Queue Monitoring**: Alert on growing queue depths
-4. **Input Validation**: Reject oversized files early
 
 ## Related Documentation
 
+- [Convert From PDF](../convert-from-pdf/CONVERT_FROM_PDF.md) - Convert PDF to other formats
+- [Organize PDF](../organize-pdf/ORGANIZE_PDF.md) - PDF manipulation (merge, split, etc.)
+- [Optimize PDF](../optimize-pdf/OPTIMIZE_PDF.md) - PDF compression, repair, OCR
 - [Upload Service](../upload-service/UPLOAD_SERVICE.md) - Job creation and management
-- [Convert From PDF](../convert-from-pdf/CONVERT_FROM_PDF.md) - PDF conversion service
 - [API Gateway](../api-gateway/API_GATEWAY.md) - Request routing
-- [Main README](../README.md) - Overall architecture
 
 ## Support
 

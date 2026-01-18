@@ -93,36 +93,6 @@ func decryptPDF(inputPath string, outputPath string, password string) error {
 	return api.DecryptFile(inputPath, outputPath, conf)
 }
 
-func pdfToImages(inputPath string, outputPath string) error {
-	log.Printf("[INFO] Converting PDF to images: %s", inputPath)
-
-	// Create temp directory for images
-	tempDir, err := os.MkdirTemp("", "pdf-images-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	// Use pdfcpu to render pages as images
-	ctx, err := api.ReadContextFile(inputPath)
-	if err != nil {
-		return fmt.Errorf("failed to read PDF: %w", err)
-	}
-
-	// Extract each page as image using pdftoppm (from poppler-utils)
-	for i := 1; i <= ctx.PageCount; i++ {
-		// pdftoppm creates files with pattern: prefix-N.png
-		cmd := exec.Command("pdftoppm", "-png", "-f", fmt.Sprintf("%d", i), "-l", fmt.Sprintf("%d", i), inputPath, filepath.Join(tempDir, fmt.Sprintf("page_%03d", i)))
-		if err := cmd.Run(); err != nil {
-			log.Printf("[ERROR] pdftoppm failed: %v", err)
-			return fmt.Errorf("PDF to image conversion requires pdftoppm (poppler-utils): %w", err)
-		}
-	}
-
-	// Create zip archive
-	return zipDirectory(tempDir, outputPath)
-}
-
 func officeToPDF(inputPath string, outputPath string, fileType string) error {
 	log.Printf("[INFO] Converting %s to PDF: %s", fileType, inputPath)
 

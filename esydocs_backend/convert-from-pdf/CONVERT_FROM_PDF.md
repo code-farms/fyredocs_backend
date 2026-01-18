@@ -2,20 +2,22 @@
 
 ## Overview
 
-The Convert From PDF service is a worker service that processes PDF conversion jobs. It converts PDF files to other formats (images, Word, PowerPoint, Excel) and PDF/A archival format.
+The Convert From PDF service converts PDF files to other formats including images, Office documents (Word, Excel, PowerPoint), HTML, plain text, and PDF/A archival format.
 
 **Port**: 8082 (internal, not exposed through API Gateway)
 **Type**: Background Worker + REST API
 **Framework**: Gin (Go)
-**Processing**: LibreOffice, Ghostscript, Poppler
+**Processing**: LibreOffice, Ghostscript, Poppler (pdftotext, pdftohtml, pdftoppm)
 
 ## Responsibilities
 
-1. **PDF to Image** - Convert PDF pages to JPG images
-2. **PDF to Office** - Convert PDF to Word/PowerPoint/Excel formats
-3. **PDF to PDF/A** - Convert PDF to archival PDF/A format
-4. **Job Processing** - Pick jobs from Redis queue and process them
-5. **Status Updates** - Update job status and progress in database
+1. **PDF to Image** - Convert PDF pages to PNG images
+2. **PDF to Office** - Convert PDF to Word/Excel/PowerPoint formats
+3. **PDF to HTML** - Convert PDF to HTML format
+4. **PDF to Text** - Extract plain text from PDF
+5. **PDF to PDF/A** - Convert PDF to archival PDF/A format
+6. **Job Processing** - Pick jobs from Redis queue and process them
+7. **Status Updates** - Update job status and progress in database
 
 ## Architecture
 
@@ -32,17 +34,21 @@ Convert-From-PDF Worker
 
 ## Supported Tools
 
-| Tool | Input | Output | Status |
-|------|-------|--------|--------|
-| `pdf-to-image` | .pdf | .zip (PNGs) | ✅ Implemented |
-| `pdf-to-img` | .pdf | .zip (PNGs) | ✅ Alias for pdf-to-image |
-| `pdf-to-jpg` | .pdf | .zip (PNGs) | ✅ Alias for pdf-to-image |
-| `pdf-to-word` | .pdf | .docx | ✅ Implemented |
-| `pdf-to-powerpoint` | .pdf | .pptx | ✅ Implemented |
-| `pdf-to-ppt` | .pdf | .pptx | ✅ Alias for pdf-to-powerpoint |
-| `pdf-to-excel` | .pdf | .xlsx | ✅ Implemented |
-| `pdf-to-pdfa` | .pdf | .pdf (PDF/A-2b) | ✅ Implemented |
-| `pdf-to-pdf-a` | .pdf | .pdf (PDF/A-2b) | ✅ Alias for pdf-to-pdfa |
+| Tool | Input | Output | Implementation | Status |
+|------|-------|--------|----------------|--------|
+| `pdf-to-image` | .pdf | .zip (PNGs) | pdftoppm (Poppler) | ✅ Implemented |
+| `pdf-to-img` | .pdf | .zip (PNGs) | pdftoppm (Poppler) | ✅ Alias |
+| `pdf-to-word` | .pdf | .docx | LibreOffice Writer | ✅ Implemented |
+| `pdf-to-docx` | .pdf | .docx | LibreOffice Writer | ✅ Alias |
+| `pdf-to-excel` | .pdf | .xlsx | LibreOffice Calc | ✅ Implemented |
+| `pdf-to-xlsx` | .pdf | .xlsx | LibreOffice Calc | ✅ Alias |
+| `pdf-to-ppt` | .pdf | .pptx | LibreOffice Impress | ✅ Implemented |
+| `pdf-to-powerpoint` | .pdf | .pptx | LibreOffice Impress | ✅ Alias |
+| `pdf-to-pptx` | .pdf | .pptx | LibreOffice Impress | ✅ Alias |
+| `pdf-to-html` | .pdf | .zip (HTML+images) | pdftohtml (Poppler) | ✅ Implemented |
+| `pdf-to-text` | .pdf | .txt | pdftotext (Poppler) | ✅ Implemented |
+| `pdf-to-txt` | .pdf | .txt | pdftotext (Poppler) | ✅ Alias |
+| `pdf-to-pdfa` | .pdf | .pdf (PDF/A-2b) | Ghostscript | ✅ Implemented |
 
 ## API Endpoints
 
@@ -56,10 +62,7 @@ POST /api/convert-from-pdf/{tool}
 Content-Type: application/json
 
 {
-  "uploadId": "550e8400-e29b-41d4-a716-446655440000",
-  "options": {
-    "range": "1-3,5"  // For split-pdf
-  }
+  "uploadId": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
@@ -69,7 +72,6 @@ POST /api/convert-from-pdf/{tool}
 Content-Type: multipart/form-data
 
 file: [PDF file]
-options: {"range": "1-3,5"}  // Optional JSON string
 ```
 
 **Response** (200 OK):
@@ -130,7 +132,7 @@ Deletes the job and its associated files.
 
 ## Tool Details
 
-### pdf-to-image / pdf-to-img / pdf-to-jpg
+### pdf-to-image / pdf-to-img
 
 Converts PDF pages to PNG images.
 
@@ -154,17 +156,17 @@ curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-image \
 
 ---
 
-### pdf-to-word
+### pdf-to-word / pdf-to-docx
 
 Converts PDF to Microsoft Word (.docx).
 
 **Input**: `.pdf`
 **Output**: `.docx`
-**Implementation**: LibreOffice (Writer)
+**Implementation**: LibreOffice Writer (PDF import filter)
 
 **Limitations**:
 - Complex layouts may not convert perfectly
-- Images are embedded but may lose quality
+- Scanned PDFs will contain images, not editable text
 - Fonts may be substituted
 
 **Example**:
@@ -175,35 +177,13 @@ curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-word \
 
 ---
 
-### pdf-to-powerpoint / pdf-to-ppt
-
-Converts PDF to Microsoft PowerPoint (.pptx).
-
-**Input**: `.pdf`
-**Output**: `.pptx`
-**Implementation**: LibreOffice (Impress)
-
-**Behavior**: Each PDF page becomes a slide
-
-**Limitations**:
-- Animations not preserved
-- Some formatting may change
-
-**Example**:
-```bash
-curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-powerpoint \
-  -F "file=@document.pdf"
-```
-
----
-
-### pdf-to-excel
+### pdf-to-excel / pdf-to-xlsx
 
 Converts PDF to Microsoft Excel (.xlsx).
 
 **Input**: `.pdf`
 **Output**: `.xlsx`
-**Implementation**: LibreOffice (Calc)
+**Implementation**: LibreOffice Calc
 
 **Best For**: PDFs containing tables or structured data
 
@@ -219,7 +199,84 @@ curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-excel \
 
 ---
 
-### pdf-to-pdfa / pdf-to-pdf-a
+### pdf-to-ppt / pdf-to-powerpoint / pdf-to-pptx
+
+Converts PDF to Microsoft PowerPoint (.pptx).
+
+**Input**: `.pdf`
+**Output**: `.pptx`
+**Implementation**: LibreOffice Impress
+
+**Behavior**: Each PDF page becomes a slide
+
+**Limitations**:
+- Content is placed as images/shapes
+- Original animations not preserved
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-ppt \
+  -F "file=@document.pdf"
+```
+
+---
+
+### pdf-to-html
+
+Converts PDF to HTML format with embedded images.
+
+**Input**: `.pdf`
+**Output**: `.zip` containing HTML and image files
+**Implementation**: Poppler (pdftohtml)
+
+**Output Format**:
+```
+output.zip
+├── output.html
+├── output-1.png
+├── output-2.png
+└── ...
+```
+
+**Features**:
+- Preserves layout structure
+- Images extracted separately
+- CSS styling included
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-html \
+  -F "file=@document.pdf"
+```
+
+---
+
+### pdf-to-text / pdf-to-txt
+
+Extracts plain text from PDF.
+
+**Input**: `.pdf`
+**Output**: `.txt`
+**Implementation**: Poppler (pdftotext)
+
+**Features**:
+- Layout preservation mode
+- Fast extraction
+- Handles multi-page documents
+
+**Limitations**:
+- Scanned PDFs require OCR (use optimize-pdf/ocr-pdf first)
+- Complex layouts may affect text order
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-text \
+  -F "file=@document.pdf"
+```
+
+---
+
+### pdf-to-pdfa
 
 Converts PDF to PDF/A-2b archival format.
 
@@ -228,7 +285,7 @@ Converts PDF to PDF/A-2b archival format.
 **Implementation**: Ghostscript
 
 **What is PDF/A?**
-PDF/A is an ISO-standardized version of PDF designed for long-term archival and preservation of electronic documents. PDF/A-2b ensures:
+PDF/A is an ISO-standardized version of PDF designed for long-term archival:
 - All fonts are embedded
 - Color profiles are standardized
 - No external dependencies
@@ -237,7 +294,7 @@ PDF/A is an ISO-standardized version of PDF designed for long-term archival and 
 **Use Cases**:
 - Legal document archival
 - Government records
-- Long-term document preservation
+- Long-term preservation
 - Compliance requirements
 
 **Example**:
@@ -247,42 +304,6 @@ curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-pdfa \
 ```
 
 ---
-
-## Processing Workflow
-
-### Worker Loop
-
-```
-1. Poll Redis Queue
-   ↓
-2. Pop Job from Queue
-   ↓
-3. Mark Job as "processing"
-   ↓
-4. Download Input File(s)
-   ↓
-5. Execute Tool Logic
-   ├─ LibreOffice conversion
-   ├─ pdfcpu operations
-   └─ Poppler rendering
-   ↓
-6. Upload Output File
-   ↓
-7. Mark Job as "completed"
-   ↓
-8. Return to Step 1
-```
-
-### Error Handling
-
-If processing fails:
-1. Increment retry count
-2. If retries < `MAX_RETRIES`:
-   - Re-queue job
-   - Exponential backoff
-3. If retries >= `MAX_RETRIES`:
-   - Mark job as "failed"
-   - Set `failureReason` in database
 
 ## Environment Variables
 
@@ -299,38 +320,29 @@ If processing fails:
 | `MAX_RETRIES` | `3` | Max retry attempts for failed jobs |
 | `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing |
 
-## File Size Limits
-
-- **Maximum Input Size**: 50 MB (enforced by upload-service)
-- **Maximum Output Size**: No explicit limit (depends on conversion)
-- **Temporary Storage**: Cleaned up after job completion
-
-## Supported Input Formats
-
-- **PDF**: `.pdf` (any version)
-
 ## Dependencies
 
-### LibreOffice
+### LibreOffice (Optimized Installation)
 
 Used for PDF to Office format conversions.
 
-**Installed Packages**:
+**Installed Packages** (minimal, not full suite):
 - `libreoffice-writer` - PDF to Word
 - `libreoffice-calc` - PDF to Excel
 - `libreoffice-impress` - PDF to PowerPoint
+- `libreoffice-common` - Shared components
+- `ttf-liberation` - Font support
+
+**Optimization**: Unused assets removed (gallery, templates, wizards, icons) to reduce image size.
 
 **Command Line**:
 ```bash
-libreoffice --headless --convert-to docx --outdir /output /input/file.pdf
+libreoffice --headless --infilter=writer_pdf_import --convert-to docx --outdir /output /input/file.pdf
 ```
 
 ### Ghostscript
 
 Used for PDF to PDF/A conversion.
-
-**Installed Packages**:
-- `ghostscript`
 
 **Command Line**:
 ```bash
@@ -339,13 +351,14 @@ gs -dPDFA=2 -dBATCH -dNOPAUSE -sProcessColorModel=DeviceRGB -sDEVICE=pdfwrite -s
 
 ### Poppler
 
-PDF rendering library for image conversion.
+PDF utilities for image/text/HTML extraction.
 
 **Tools Used**:
-- `pdftoppm` - PDF to PNG conversion
+- `pdftoppm` - PDF to PNG images
+- `pdftotext` - PDF to plain text
+- `pdftohtml` - PDF to HTML
 
-**Installed Packages**:
-- `poppler-utils`
+**Installed Package**: `poppler-utils`
 
 ## Deployment
 
@@ -379,6 +392,9 @@ convert-from-pdf:
 
    # macOS
    brew install libreoffice poppler ghostscript
+
+   # Alpine
+   apk add libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils ghostscript
    ```
 
 2. Start dependencies:
@@ -394,56 +410,25 @@ convert-from-pdf:
    go run main.go
    ```
 
+## Performance
+
+### Processing Times (Typical)
+
+| Tool | 1-page PDF | 10-page PDF | 100-page PDF |
+|------|-----------|-------------|--------------|
+| pdf-to-image | 1-2s | 3-5s | 20-30s |
+| pdf-to-word | 2-3s | 5-10s | 30-60s |
+| pdf-to-excel | 2-3s | 5-10s | 30-60s |
+| pdf-to-ppt | 2-3s | 5-10s | 30-60s |
+| pdf-to-html | 1-2s | 3-5s | 15-25s |
+| pdf-to-text | <1s | 1-2s | 5-10s |
+| pdf-to-pdfa | 1-2s | 2-4s | 10-20s |
+
+**Note**: Times vary based on PDF complexity and server resources.
+
 ## Troubleshooting
 
-### Jobs Stuck in Queue
-
-**Symptoms**: Jobs remain in "queued" status
-
-**Possible Causes**:
-- Worker not running
-- Redis connection issue
-- Queue key mismatch
-
-**Solutions**:
-```bash
-# Check worker status
-docker compose ps convert-from-pdf
-
-# Check Redis queues
-docker compose exec redis redis-cli keys "queue:*"
-
-# Check queue length
-docker compose exec redis redis-cli llen "queue:pdf-to-word"
-
-# Restart worker
-docker compose restart convert-from-pdf
-```
-
-### Conversion Failures
-
-**Symptoms**: Jobs fail with error
-
-**Common Errors**:
-
-1. **LibreOffice timeout**:
-   - Increase `PROCESSING_TIMEOUT`
-   - Check CPU/memory resources
-
-2. **File not found**:
-   - Verify file paths in job metadata
-   - Check volume mounts
-
-3. **Corrupted PDF**:
-   - Input PDF may be damaged
-   - Try opening PDF in a viewer first
-
-**Check Logs**:
-```bash
-docker compose logs -f convert-from-pdf
-```
-
-### LibreOffice Issues
+### LibreOffice Conversion Failures
 
 **Symptoms**: PDF to Office conversions fail
 
@@ -454,9 +439,19 @@ docker compose exec convert-from-pdf libreoffice --version
 
 # Manual conversion test
 docker compose exec convert-from-pdf \
-  libreoffice --headless --convert-to docx \
-  --outdir /app/outputs /app/uploads/test.pdf
+  libreoffice --headless --infilter=writer_pdf_import \
+  --convert-to docx --outdir /app/outputs /app/uploads/test.pdf
 ```
+
+### Text Extraction Issues
+
+**Symptoms**: pdftotext returns empty or garbled text
+
+**Possible Causes**:
+- PDF is scanned image (no text layer)
+- PDF uses embedded fonts with encoding issues
+
+**Solution**: Use OCR service (`optimize-pdf/ocr-pdf`) for scanned documents first.
 
 ### Memory Issues
 
@@ -474,32 +469,13 @@ convert-from-pdf:
         memory: 1G
 ```
 
-## Performance
-
-### Processing Times (Typical)
-
-| Tool | 1-page PDF | 10-page PDF | 100-page PDF |
-|------|-----------|-------------|--------------|
-| pdf-to-image | 1-2s | 3-5s | 20-30s |
-| pdf-to-word | 2-3s | 5-10s | 30-60s |
-| pdf-to-powerpoint | 2-3s | 5-10s | 30-60s |
-| pdf-to-excel | 2-3s | 5-10s | 30-60s |
-| pdf-to-pdfa | 1-2s | 2-4s | 10-20s |
-
-**Note**: Times vary based on PDF complexity and server resources.
-
-### Optimization Tips
-
-1. **Increase Workers**: Run multiple instances
-2. **Resource Limits**: Ensure adequate CPU/memory
-3. **Queue Management**: Monitor queue depths
-4. **Cleanup**: Regular cleanup of old files
-
 ## Related Documentation
 
+- [Convert To PDF](../convert-to-pdf/CONVERT_TO_PDF.md) - Convert files TO PDF
+- [Organize PDF](../organize-pdf/ORGANIZE_PDF.md) - PDF manipulation (merge, split, etc.)
+- [Optimize PDF](../optimize-pdf/OPTIMIZE_PDF.md) - PDF compression, repair, OCR
 - [Upload Service](../upload-service/UPLOAD_SERVICE.md) - Job creation and management
 - [API Gateway](../api-gateway/API_GATEWAY.md) - Request routing
-- [Main README](../README.md) - Overall architecture
 
 ## Support
 

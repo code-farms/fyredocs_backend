@@ -1,9 +1,10 @@
 {
 	"info": {
-		"_postman_id": "esydocs-api-collection-v1",
+		"_postman_id": "esydocs-api-collection-v2",
 		"name": "EsyDocs API - Complete Collection",
-		"description": "Complete API testing collection for EsyDocs backend services. Includes authentication, file upload, and PDF conversion endpoints.",
-		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+		"description": "Complete API testing collection for EsyDocs backend services. Includes authentication, file upload, PDF conversion, organization, and optimization endpoints.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"version": "2.0.0"
 	},
 	"auth": {
 		"type": "noauth"
@@ -85,9 +86,8 @@
 									"    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
 									"});",
 									"",
-									"pm.test(\"Cookies are set\", function() {",
+									"pm.test(\"Cookie is set\", function() {",
 									"    pm.expect(pm.cookies.has('access_token')).to.be.true;",
-									"    pm.expect(pm.cookies.has('refresh_token')).to.be.true;",
 									"});",
 									"",
 									"if (pm.response.code === 200 || pm.response.code === 201) {",
@@ -114,16 +114,17 @@
 							"raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"SecurePassword123!\",\n  \"fullName\": \"John Doe\",\n  \"country\": \"United States\",\n  \"phone\": \"+1234567890\"\n}"
 						},
 						"url": {
-							"raw": "{{base_url}}/auth/signup",
+							"raw": "{{base_url}}/api/auth/signup",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
+								"api",
 								"auth",
 								"signup"
 							]
 						},
-						"description": "Create a new user account. Sets access_token and refresh_token cookies."
+						"description": "Create a new user account. Sets HTTP-only access_token cookie (8-hour lifetime)."
 					},
 					"response": []
 				},
@@ -138,9 +139,8 @@
 									"    pm.response.to.have.status(200);",
 									"});",
 									"",
-									"pm.test(\"Cookies are set\", function() {",
+									"pm.test(\"Cookie is set\", function() {",
 									"    pm.expect(pm.cookies.has('access_token')).to.be.true;",
-									"    pm.expect(pm.cookies.has('refresh_token')).to.be.true;",
 									"});",
 									"",
 									"const response = pm.response.json();",
@@ -165,16 +165,17 @@
 							"raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"SecurePassword123!\"\n}"
 						},
 						"url": {
-							"raw": "{{base_url}}/auth/login",
+							"raw": "{{base_url}}/api/auth/login",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
+								"api",
 								"auth",
 								"login"
 							]
 						},
-						"description": "Login with existing credentials. Returns user info and sets authentication cookies."
+						"description": "Login with existing credentials. Returns user info and sets HTTP-only access_token cookie."
 					},
 					"response": []
 				},
@@ -184,11 +185,12 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{base_url}}/auth/me",
+							"raw": "{{base_url}}/api/auth/me",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
+								"api",
 								"auth",
 								"me"
 							]
@@ -203,52 +205,17 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{base_url}}/auth/profile",
+							"raw": "{{base_url}}/api/auth/profile",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
+								"api",
 								"auth",
 								"profile"
 							]
 						},
 						"description": "Get detailed user profile including phone and image."
-					},
-					"response": []
-				},
-				{
-					"name": "Refresh Token",
-					"event": [
-						{
-							"listen": "test",
-							"script": {
-								"exec": [
-									"pm.test(\"Status code is 200\", function () {",
-									"    pm.response.to.have.status(200);",
-									"});",
-									"",
-									"pm.test(\"New access token cookie is set\", function() {",
-									"    pm.expect(pm.cookies.has('access_token')).to.be.true;",
-									"});"
-								],
-								"type": "text/javascript"
-							}
-						}
-					],
-					"request": {
-						"method": "POST",
-						"header": [],
-						"url": {
-							"raw": "{{base_url}}/auth/refresh",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"auth",
-								"refresh"
-							]
-						},
-						"description": "Get a new access token using the refresh token cookie."
 					},
 					"response": []
 				},
@@ -271,16 +238,17 @@
 						"method": "POST",
 						"header": [],
 						"url": {
-							"raw": "{{base_url}}/auth/logout",
+							"raw": "{{base_url}}/api/auth/logout",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
+								"api",
 								"auth",
 								"logout"
 							]
 						},
-						"description": "Logout and clear all authentication cookies."
+						"description": "Logout and clear authentication cookie. Adds token to denylist for immediate revocation."
 					},
 					"response": []
 				}
@@ -320,7 +288,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"filename\": \"resume.pdf\",\n  \"fileSize\": 1048576,\n  \"mimeType\": \"application/pdf\"\n}"
+							"raw": "{\n  \"filename\": \"document.pdf\",\n  \"fileSize\": 1048576,\n  \"mimeType\": \"application/pdf\"\n}"
 						},
 						"url": {
 							"raw": "{{base_url}}/api/upload/init",
@@ -333,7 +301,7 @@
 								"init"
 							]
 						},
-						"description": "Initialize a new file upload. Returns uploadId for subsequent chunk uploads."
+						"description": "Initialize a chunked upload. Returns uploadId for subsequent chunk uploads."
 					},
 					"response": []
 				},
@@ -408,7 +376,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"filename\": \"resume.pdf\"\n}"
+							"raw": "{\n  \"filename\": \"document.pdf\"\n}"
 						},
 						"url": {
 							"raw": "{{base_url}}/api/upload/{{upload_id}}/complete",
@@ -464,9 +432,9 @@
 									"});",
 									"",
 									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
-									"    console.log('Job ID saved:', response.jobID);",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
+									"    console.log('Job ID saved:', response.id);",
 									"}"
 								],
 								"type": "text/javascript"
@@ -475,15 +443,16 @@
 					],
 					"request": {
 						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
+						"header": [],
 						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\"{{file_path}}\"]\n}"
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": ""
+								}
+							]
 						},
 						"url": {
 							"raw": "{{base_url}}/api/convert-to-pdf/word-to-pdf",
@@ -496,7 +465,7 @@
 								"word-to-pdf"
 							]
 						},
-						"description": "Convert Word document (.docx) to PDF"
+						"description": "Convert Word document (.doc, .docx) to PDF using LibreOffice"
 					},
 					"response": []
 				},
@@ -508,8 +477,8 @@
 							"script": {
 								"exec": [
 									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
 									"}"
 								],
 								"type": "text/javascript"
@@ -518,15 +487,16 @@
 					],
 					"request": {
 						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
+						"header": [],
 						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\"{{file_path}}\"]\n}"
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": ""
+								}
+							]
 						},
 						"url": {
 							"raw": "{{base_url}}/api/convert-to-pdf/excel-to-pdf",
@@ -539,7 +509,7 @@
 								"excel-to-pdf"
 							]
 						},
-						"description": "Convert Excel spreadsheet (.xlsx) to PDF"
+						"description": "Convert Excel spreadsheet (.xls, .xlsx) to PDF using LibreOffice"
 					},
 					"response": []
 				},
@@ -551,8 +521,8 @@
 							"script": {
 								"exec": [
 									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
 									"}"
 								],
 								"type": "text/javascript"
@@ -561,15 +531,16 @@
 					],
 					"request": {
 						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
+						"header": [],
 						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\"{{file_path}}\"]\n}"
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": ""
+								}
+							]
 						},
 						"url": {
 							"raw": "{{base_url}}/api/convert-to-pdf/ppt-to-pdf",
@@ -582,20 +553,20 @@
 								"ppt-to-pdf"
 							]
 						},
-						"description": "Convert PowerPoint (.pptx) to PDF"
+						"description": "Convert PowerPoint (.ppt, .pptx) to PDF using LibreOffice"
 					},
 					"response": []
 				},
 				{
-					"name": "Image to PDF",
+					"name": "HTML to PDF",
 					"event": [
 						{
 							"listen": "test",
 							"script": {
 								"exec": [
 									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
 									"}"
 								],
 								"type": "text/javascript"
@@ -604,15 +575,65 @@
 					],
 					"request": {
 						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
+						"header": [],
 						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\n    \"/uploads/user-id/image1.jpg\",\n    \"/uploads/user-id/image2.png\"\n  ]\n}"
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": ""
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/convert-to-pdf/html-to-pdf",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"convert-to-pdf",
+								"html-to-pdf"
+							]
+						},
+						"description": "Convert HTML document (.html, .htm) to PDF using LibreOffice"
+					},
+					"response": []
+				},
+				{
+					"name": "Image to PDF (Multiple)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const response = pm.response.json();",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								},
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								}
+							]
 						},
 						"url": {
 							"raw": "{{base_url}}/api/convert-to-pdf/image-to-pdf",
@@ -625,7 +646,7 @@
 								"image-to-pdf"
 							]
 						},
-						"description": "Convert multiple images to PDF"
+						"description": "Convert multiple images to single PDF (one image per page). Supports: .jpg, .png, .gif, .webp, .bmp"
 					},
 					"response": []
 				},
@@ -651,7 +672,7 @@
 					"response": []
 				},
 				{
-					"name": "Download Converted File",
+					"name": "Download Result",
 					"request": {
 						"method": "GET",
 						"header": [],
@@ -673,7 +694,7 @@
 					"response": []
 				},
 				{
-					"name": "Cancel Job",
+					"name": "Delete Job",
 					"request": {
 						"method": "DELETE",
 						"header": [],
@@ -689,7 +710,7 @@
 								"{{job_id}}"
 							]
 						},
-						"description": "Cancel a running conversion job"
+						"description": "Delete a conversion job and its files"
 					},
 					"response": []
 				},
@@ -736,9 +757,9 @@
 							"script": {
 								"exec": [
 									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
-									"    console.log('Job ID saved:', response.jobID);",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
+									"    console.log('Job ID saved:', response.id);",
 									"}"
 								],
 								"type": "text/javascript"
@@ -747,15 +768,16 @@
 					],
 					"request": {
 						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
+						"header": [],
 						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\"{{file_path}}\"]\n}"
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": ""
+								}
+							]
 						},
 						"url": {
 							"raw": "{{base_url}}/api/convert-from-pdf/pdf-to-word",
@@ -768,7 +790,7 @@
 								"pdf-to-word"
 							]
 						},
-						"description": "Convert PDF to Word document (.docx)"
+						"description": "Convert PDF to Word (.docx) using LibreOffice"
 					},
 					"response": []
 				},
@@ -780,8 +802,8 @@
 							"script": {
 								"exec": [
 									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
 									"}"
 								],
 								"type": "text/javascript"
@@ -790,15 +812,16 @@
 					],
 					"request": {
 						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
+						"header": [],
 						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\"{{file_path}}\"]\n}"
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": ""
+								}
+							]
 						},
 						"url": {
 							"raw": "{{base_url}}/api/convert-from-pdf/pdf-to-excel",
@@ -811,7 +834,7 @@
 								"pdf-to-excel"
 							]
 						},
-						"description": "Convert PDF to Excel spreadsheet (.xlsx)"
+						"description": "Convert PDF to Excel (.xlsx) using LibreOffice"
 					},
 					"response": []
 				},
@@ -823,8 +846,8 @@
 							"script": {
 								"exec": [
 									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
 									"}"
 								],
 								"type": "text/javascript"
@@ -833,28 +856,29 @@
 					],
 					"request": {
 						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
+						"header": [],
 						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\"{{file_path}}\"]\n}"
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": ""
+								}
+							]
 						},
 						"url": {
-							"raw": "{{base_url}}/api/convert-from-pdf/pdf-to-powerpoint",
+							"raw": "{{base_url}}/api/convert-from-pdf/pdf-to-ppt",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
 								"api",
 								"convert-from-pdf",
-								"pdf-to-powerpoint"
+								"pdf-to-ppt"
 							]
 						},
-						"description": "Convert PDF to PowerPoint (.pptx)"
+						"description": "Convert PDF to PowerPoint (.pptx) using LibreOffice"
 					},
 					"response": []
 				},
@@ -866,8 +890,8 @@
 							"script": {
 								"exec": [
 									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
 									"}"
 								],
 								"type": "text/javascript"
@@ -876,15 +900,16 @@
 					],
 					"request": {
 						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
+						"header": [],
 						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\"{{file_path}}\"]\n}"
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": ""
+								}
+							]
 						},
 						"url": {
 							"raw": "{{base_url}}/api/convert-from-pdf/pdf-to-image",
@@ -897,20 +922,20 @@
 								"pdf-to-image"
 							]
 						},
-						"description": "Convert PDF pages to images (returns ZIP file)"
+						"description": "Convert PDF pages to PNG images (returns ZIP file) using pdftoppm"
 					},
 					"response": []
 				},
 				{
-					"name": "Merge PDFs",
+					"name": "PDF to HTML",
 					"event": [
 						{
 							"listen": "test",
 							"script": {
 								"exec": [
 									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
 									"}"
 								],
 								"type": "text/javascript"
@@ -919,41 +944,42 @@
 					],
 					"request": {
 						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
+						"header": [],
 						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\n    \"/uploads/user-id/file1.pdf\",\n    \"/uploads/user-id/file2.pdf\",\n    \"/uploads/user-id/file3.pdf\"\n  ]\n}"
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": ""
+								}
+							]
 						},
 						"url": {
-							"raw": "{{base_url}}/api/convert-from-pdf/merge-pdf",
+							"raw": "{{base_url}}/api/convert-from-pdf/pdf-to-html",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
 								"api",
 								"convert-from-pdf",
-								"merge-pdf"
+								"pdf-to-html"
 							]
 						},
-						"description": "Merge multiple PDFs into one"
+						"description": "Convert PDF to HTML with images (returns ZIP file) using pdftohtml"
 					},
 					"response": []
 				},
 				{
-					"name": "Split PDF",
+					"name": "PDF to Text",
 					"event": [
 						{
 							"listen": "test",
 							"script": {
 								"exec": [
 									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
 									"}"
 								],
 								"type": "text/javascript"
@@ -962,41 +988,42 @@
 					],
 					"request": {
 						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
+						"header": [],
 						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\"{{file_path}}\"],\n  \"options\": {\n    \"range\": \"1-5\"\n  }\n}"
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": ""
+								}
+							]
 						},
 						"url": {
-							"raw": "{{base_url}}/api/convert-from-pdf/split-pdf",
+							"raw": "{{base_url}}/api/convert-from-pdf/pdf-to-text",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
 								"api",
 								"convert-from-pdf",
-								"split-pdf"
+								"pdf-to-text"
 							]
 						},
-						"description": "Split PDF into pages (returns ZIP file)"
+						"description": "Extract plain text from PDF (.txt) using pdftotext"
 					},
 					"response": []
 				},
 				{
-					"name": "Compress PDF",
+					"name": "PDF to PDF/A",
 					"event": [
 						{
 							"listen": "test",
 							"script": {
 								"exec": [
 									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
 									"}"
 								],
 								"type": "text/javascript"
@@ -1005,157 +1032,29 @@
 					],
 					"request": {
 						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
+						"header": [],
 						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\"{{file_path}}\"]\n}"
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": ""
+								}
+							]
 						},
 						"url": {
-							"raw": "{{base_url}}/api/convert-from-pdf/compress-pdf",
+							"raw": "{{base_url}}/api/convert-from-pdf/pdf-to-pdfa",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
 								"api",
 								"convert-from-pdf",
-								"compress-pdf"
+								"pdf-to-pdfa"
 							]
 						},
-						"description": "Compress PDF file to reduce size"
-					},
-					"response": []
-				},
-				{
-					"name": "Protect PDF (Add Password)",
-					"event": [
-						{
-							"listen": "test",
-							"script": {
-								"exec": [
-									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
-									"}"
-								],
-								"type": "text/javascript"
-							}
-						}
-					],
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\"{{file_path}}\"],\n  \"options\": {\n    \"password\": \"SecurePass123\"\n  }\n}"
-						},
-						"url": {
-							"raw": "{{base_url}}/api/convert-from-pdf/protect-pdf",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"api",
-								"convert-from-pdf",
-								"protect-pdf"
-							]
-						},
-						"description": "Add password protection to PDF"
-					},
-					"response": []
-				},
-				{
-					"name": "Unlock PDF (Remove Password)",
-					"event": [
-						{
-							"listen": "test",
-							"script": {
-								"exec": [
-									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
-									"}"
-								],
-								"type": "text/javascript"
-							}
-						}
-					],
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\"/uploads/user-id/protected.pdf\"],\n  \"options\": {\n    \"password\": \"SecurePass123\"\n  }\n}"
-						},
-						"url": {
-							"raw": "{{base_url}}/api/convert-from-pdf/unlock-pdf",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"api",
-								"convert-from-pdf",
-								"unlock-pdf"
-							]
-						},
-						"description": "Remove password protection from PDF"
-					},
-					"response": []
-				},
-				{
-					"name": "Watermark PDF",
-					"event": [
-						{
-							"listen": "test",
-							"script": {
-								"exec": [
-									"const response = pm.response.json();",
-									"if (response.jobID) {",
-									"    pm.environment.set('job_id', response.jobID);",
-									"}"
-								],
-								"type": "text/javascript"
-							}
-						}
-					],
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"inputPaths\": [\"{{file_path}}\"],\n  \"options\": {\n    \"text\": \"CONFIDENTIAL\"\n  }\n}"
-						},
-						"url": {
-							"raw": "{{base_url}}/api/convert-from-pdf/watermark-pdf",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"api",
-								"convert-from-pdf",
-								"watermark-pdf"
-							]
-						},
-						"description": "Add text watermark to PDF"
+						"description": "Convert PDF to PDF/A-2b archival format using Ghostscript"
 					},
 					"response": []
 				},
@@ -1181,7 +1080,7 @@
 					"response": []
 				},
 				{
-					"name": "Download Converted File",
+					"name": "Download Result",
 					"request": {
 						"method": "GET",
 						"header": [],
@@ -1203,7 +1102,7 @@
 					"response": []
 				},
 				{
-					"name": "Cancel Job",
+					"name": "Delete Job",
 					"request": {
 						"method": "DELETE",
 						"header": [],
@@ -1219,7 +1118,7 @@
 								"{{job_id}}"
 							]
 						},
-						"description": "Cancel a running conversion job"
+						"description": "Delete a conversion job and its files"
 					},
 					"response": []
 				},
@@ -1256,22 +1155,667 @@
 			]
 		},
 		{
-			"name": "5. Job History",
+			"name": "5. Organize PDF",
 			"item": [
 				{
-					"name": "Get All Jobs History",
+					"name": "Merge PDFs",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const response = pm.response.json();",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
+									"    console.log('Job ID saved:', response.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
 					"request": {
-						"method": "GET",
+						"method": "POST",
 						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								},
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								},
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								}
+							]
+						},
 						"url": {
-							"raw": "{{base_url}}/api/jobs/history?limit=20&offset=0",
+							"raw": "{{base_url}}/api/organize-pdf/merge-pdf",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
 								"api",
-								"jobs",
-								"history"
+								"organize-pdf",
+								"merge-pdf"
+							]
+						},
+						"description": "Merge multiple PDFs into a single document using pdfcpu"
+					},
+					"response": []
+				},
+				{
+					"name": "Split PDF",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const response = pm.response.json();",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								},
+								{
+									"key": "options",
+									"value": "{\"range\":\"1-5,10\"}",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/organize-pdf/split-pdf",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"organize-pdf",
+								"split-pdf"
+							]
+						},
+						"description": "Split PDF into individual pages or ranges (returns ZIP file). Range format: \"1-3,5,7-9\" or \"all\""
+					},
+					"response": []
+				},
+				{
+					"name": "Remove Pages",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const response = pm.response.json();",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								},
+								{
+									"key": "options",
+									"value": "{\"pages\":\"2,4,6-8\"}",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/organize-pdf/remove-pages",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"organize-pdf",
+								"remove-pages"
+							]
+						},
+						"description": "Remove specified pages from PDF. Format: \"2,4,6\" or \"2-5\""
+					},
+					"response": []
+				},
+				{
+					"name": "Extract Pages",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const response = pm.response.json();",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								},
+								{
+									"key": "options",
+									"value": "{\"pages\":\"1,3,5-7\"}",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/organize-pdf/extract-pages",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"organize-pdf",
+								"extract-pages"
+							]
+						},
+						"description": "Extract specified pages into a new PDF. Format: \"1,3,5-7\""
+					},
+					"response": []
+				},
+				{
+					"name": "Organize PDF (Reorder)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const response = pm.response.json();",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								},
+								{
+									"key": "options",
+									"value": "{\"order\":\"3,1,2,4,5\"}",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/organize-pdf/organize-pdf",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"organize-pdf",
+								"organize-pdf"
+							]
+						},
+						"description": "Reorder pages in PDF according to specified order. Format: \"3,1,2,4\""
+					},
+					"response": []
+				},
+				{
+					"name": "Scan to PDF",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const response = pm.response.json();",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								},
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								},
+								{
+									"key": "options",
+									"value": "{\"ocr\":true}",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/organize-pdf/scan-to-pdf",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"organize-pdf",
+								"scan-to-pdf"
+							]
+						},
+						"description": "Convert images to PDF with optional OCR (requires Tesseract)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Job Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/organize-pdf/merge-pdf/{{job_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"organize-pdf",
+								"merge-pdf",
+								"{{job_id}}"
+							]
+						},
+						"description": "Check the status of an organization job"
+					},
+					"response": []
+				},
+				{
+					"name": "Download Result",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/organize-pdf/merge-pdf/{{job_id}}/download",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"organize-pdf",
+								"merge-pdf",
+								"{{job_id}}",
+								"download"
+							]
+						},
+						"description": "Download the organized PDF file"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Job",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/organize-pdf/merge-pdf/{{job_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"organize-pdf",
+								"merge-pdf",
+								"{{job_id}}"
+							]
+						},
+						"description": "Delete an organization job and its files"
+					},
+					"response": []
+				},
+				{
+					"name": "List Jobs by Tool",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/organize-pdf/merge-pdf?limit=10&offset=0",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"organize-pdf",
+								"merge-pdf"
+							],
+							"query": [
+								{
+									"key": "limit",
+									"value": "10"
+								},
+								{
+									"key": "offset",
+									"value": "0"
+								}
+							]
+						},
+						"description": "Get all jobs for merge-pdf tool"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "6. Optimize PDF",
+			"item": [
+				{
+					"name": "Compress PDF",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const response = pm.response.json();",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
+									"    console.log('Job ID saved:', response.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								},
+								{
+									"key": "options",
+									"value": "{\"quality\":\"ebook\"}",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/optimize-pdf/compress-pdf",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"optimize-pdf",
+								"compress-pdf"
+							]
+						},
+						"description": "Compress PDF to reduce file size. Quality options: screen (72dpi), ebook (150dpi), printer (300dpi), prepress (high quality)"
+					},
+					"response": []
+				},
+				{
+					"name": "Repair PDF",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const response = pm.response.json();",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/optimize-pdf/repair-pdf",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"optimize-pdf",
+								"repair-pdf"
+							]
+						},
+						"description": "Fix corrupted or damaged PDFs using Ghostscript to rebuild the PDF structure"
+					},
+					"response": []
+				},
+				{
+					"name": "OCR PDF",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"const response = pm.response.json();",
+									"if (response.id) {",
+									"    pm.environment.set('job_id', response.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "files",
+									"type": "file",
+									"src": ""
+								},
+								{
+									"key": "options",
+									"value": "{\"language\":\"eng\",\"dpi\":\"300\"}",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/optimize-pdf/ocr-pdf",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"optimize-pdf",
+								"ocr-pdf"
+							]
+						},
+						"description": "Add searchable text layer to scanned PDFs using Tesseract OCR. Options: language (default: eng), dpi (default: 300)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Job Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/optimize-pdf/compress-pdf/{{job_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"optimize-pdf",
+								"compress-pdf",
+								"{{job_id}}"
+							]
+						},
+						"description": "Check the status of an optimization job"
+					},
+					"response": []
+				},
+				{
+					"name": "Download Result",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/optimize-pdf/compress-pdf/{{job_id}}/download",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"optimize-pdf",
+								"compress-pdf",
+								"{{job_id}}",
+								"download"
+							]
+						},
+						"description": "Download the optimized PDF file"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Job",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/optimize-pdf/compress-pdf/{{job_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"optimize-pdf",
+								"compress-pdf",
+								"{{job_id}}"
+							]
+						},
+						"description": "Delete an optimization job and its files"
+					},
+					"response": []
+				},
+				{
+					"name": "List Jobs by Tool",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/optimize-pdf/compress-pdf?limit=10&offset=0",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"optimize-pdf",
+								"compress-pdf"
+							],
+							"query": [
+								{
+									"key": "limit",
+									"value": "10"
+								},
+								{
+									"key": "offset",
+									"value": "0"
+								}
+							]
+						},
+						"description": "Get all jobs for compress-pdf tool"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "7. Job Management",
+			"item": [
+				{
+					"name": "Get All Jobs",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/jobs?limit=20&offset=0",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"jobs"
 							],
 							"query": [
 								{
@@ -1284,7 +1828,47 @@
 								}
 							]
 						},
-						"description": "Get complete job history for the authenticated user"
+						"description": "Get all jobs for the authenticated user across all services"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Job by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/jobs/{{job_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"jobs",
+								"{{job_id}}"
+							]
+						},
+						"description": "Get details for a specific job by ID"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Job by ID",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/jobs/{{job_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"jobs",
+								"{{job_id}}"
+							]
+						},
+						"description": "Delete a job and its associated files by ID"
 					},
 					"response": []
 				}
