@@ -79,11 +79,11 @@ func main() {
 	})
 	var denylist auth.TokenDenylist
 	if getEnvBool("AUTH_DENYLIST_ENABLED", true) {
-		denylist = auth.NewRedisTokenDenylist(redisClient, os.Getenv("AUTH_DENYLIST_PREFIX"))
-		if denylist == nil {
-			log.Println("WARNING: Token denylist enabled but Redis unavailable")
-		} else {
+		if d := auth.NewRedisTokenDenylist(redisClient, os.Getenv("AUTH_DENYLIST_PREFIX")); d != nil {
+			denylist = d
 			log.Println("Token denylist enabled")
+		} else {
+			log.Println("WARNING: Token denylist enabled but Redis unavailable")
 		}
 	} else {
 		log.Println("WARNING: Token denylist disabled - logout will not revoke access tokens")
