@@ -1,13 +1,9 @@
 package processing
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,14 +17,6 @@ type Result struct {
 	Metadata   map[string]interface{}
 }
 
-type convertAPIError struct {
-	statusCode int
-	message    string
-}
-
-func (e convertAPIError) Error() string {
-	return fmt.Sprintf("convertapi status=%d: %s", e.statusCode, e.message)
-}
 
 func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (Result, error) {
 	if outputDir == "" {
@@ -48,54 +36,63 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 	switch toolType {
 	case "pdf-to-word":
 		outputPath = filepath.Join(outputDir, outputFileName+".docx")
-		err = callConvertAPI("pdf", "docx", inputPaths, outputPath, nil)
+		err = pdfToOffice(inputPaths[0], outputPath, "docx")
 	case "pdf-to-excel":
 		outputPath = filepath.Join(outputDir, outputFileName+".xlsx")
-		err = callConvertAPI("pdf", "xlsx", inputPaths, outputPath, nil)
+		err = pdfToOffice(inputPaths[0], outputPath, "xlsx")
 	case "pdf-to-powerpoint", "pdf-to-ppt":
 		outputPath = filepath.Join(outputDir, outputFileName+".pptx")
-		err = callConvertAPI("pdf", "pptx", inputPaths, outputPath, nil)
+		err = pdfToOffice(inputPaths[0], outputPath, "pptx")
 	case "pdf-to-image", "pdf-to-img":
 		outputPath = filepath.Join(outputDir, outputFileName+".zip")
-		err = callConvertAPI("pdf", "jpg", inputPaths, outputPath, nil)
+		err = pdfToImages(inputPaths[0], outputPath)
 	case "word-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = callConvertAPI("docx", "pdf", inputPaths, outputPath, nil)
+		err = officeToPDF(inputPaths[0], outputPath, "docx")
 	case "ppt-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = callConvertAPI("pptx", "pdf", inputPaths, outputPath, nil)
+		err = officeToPDF(inputPaths[0], outputPath, "pptx")
 	case "excel-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = callConvertAPI("xlsx", "pdf", inputPaths, outputPath, nil)
+		err = officeToPDF(inputPaths[0], outputPath, "xlsx")
 	case "image-to-pdf", "img-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		imageTool, imageErr := imageToolFromPath(inputPaths[0])
-		if imageErr != nil {
-			err = imageErr
-			break
-		}
-		err = callConvertAPI(imageTool, "pdf", inputPaths, outputPath, nil)
+		err = imageToPDF(inputPaths, outputPath)
 	case "compress-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = callConvertAPI("pdf", "compress", inputPaths, outputPath, map[string]string{"StoreFile": "true"})
+		err = compressPDF(inputPaths[0], outputPath)
 	case "merge-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = callConvertAPI("pdf", "merge", inputPaths, outputPath, nil)
+		err = mergePDFs(inputPaths, outputPath)
 	case "split-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".zip")
 		rangeValue, ok := optionString(options, "range")
 		if !ok {
 			return Result{}, fmt.Errorf("missing range option")
 		}
-		err = callConvertAPI("pdf", "split", inputPaths, outputPath, map[string]string{"PageRange": rangeValue})
+		err = splitPDF(inputPaths[0], outputPath, rangeValue)
 	case "protect-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		password, ok := optionString(options, "password")
 		if !ok {
 			return Result{}, fmt.Errorf("missing password option")
 		}
-		err = callConvertAPI("pdf", "encrypt", inputPaths, outputPath, map[string]string{"UserPassword": password})
-	case "edit-pdf", "unlock-pdf", "sign-pdf", "watermark-pdf":
+		err = encryptPDF(inputPaths[0], outputPath, password)
+	case "unlock-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		password, ok := optionString(options, "password")
+		if !ok {
+			return Result{}, fmt.Errorf("missing password option for decryption")
+		}
+		err = decryptPDF(inputPaths[0], outputPath, password)
+	case "watermark-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		watermarkText, ok := optionString(options, "text")
+		if !ok {
+			watermarkText = "CONFIDENTIAL"
+		}
+		err = watermarkPDF(inputPaths[0], outputPath, watermarkText)
+	case "edit-pdf", "sign-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = copyFile(inputPaths[0], outputPath)
 	default:
@@ -159,111 +156,5 @@ func copyFile(src, dst string) (err error) {
 	return out.Sync()
 }
 
-func callConvertAPI(tool string, conversionType string, inputPaths []string, outputPath string, apiParams map[string]string) error {
-	apiKey := convertAPISecret()
-	if apiKey == "" {
-		return fmt.Errorf("CONVERT_API_SECRET is not set")
-	}
-	url := fmt.Sprintf("https://v2.convertapi.com/convert/%s/to/%s", tool, conversionType)
-
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	for _, path := range inputPaths {
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		part, err := writer.CreateFormFile("Files", filepath.Base(path))
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(part, file); err != nil {
-			return err
-		}
-	}
-
-	for key, val := range apiParams {
-		_ = writer.WriteField(key, val)
-	}
-	_ = writer.WriteField("Secret", apiKey)
-
-	writer.Close()
-
-	req, err := http.NewRequest("POST", url, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		if isRecoverableError(err) {
-			return err
-		}
-		return fmt.Errorf("convertapi request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return convertAPIError{statusCode: resp.StatusCode, message: string(respBody)}
-	}
-
-	out, err := os.Create(outputPath)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, resp.Body)
-	return err
-}
-
-func convertAPISecret() string {
-	if value := cleanSecret(os.Getenv("CONVERT_API_SECRET")); value != "" {
-		return value
-	}
-	if value := cleanSecret(os.Getenv("CONVERT_API_KEY")); value != "" {
-		return value
-	}
-	if value := cleanSecret(os.Getenv("CONVERT_API_TOKEN")); value != "" {
-		return value
-	}
-	return ""
-}
-
-func cleanSecret(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	return strings.Trim(value, "\"'")
-}
-
-func isRecoverableError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if netErr, ok := err.(net.Error); ok {
-		return netErr.Timeout() || netErr.Temporary()
-	}
-	return false
-}
-
-func imageToolFromPath(path string) (string, error) {
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".jpg", ".jpeg":
-		return "jpg", nil
-	case ".png":
-		return "png", nil
-	case ".webp":
-		return "webp", nil
-	default:
-		return "", fmt.Errorf("unsupported image type: %s", ext)
-	}
-}
+// Legacy ConvertAPI functions removed - now using free open-source tools
+// See processing_free.go for implementations using pdfcpu, LibreOffice, and Poppler

@@ -2,58 +2,154 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-
 cd "$ROOT_DIR"
 
-echo ""
-echo "=============================================================="
-echo "============== Stopping existing containers... ==============="
-echo "=============================================================="
-docker compose -f docker-compose.essentials.yml \
-  -f docker-compose-upload.yml \
-  -f docker-compose-convert-from-pdf.yml \
-  -f docker-compose-convert-to-pdf.yml \
-  -f docker-compose-cleanup.yml \
-  -f docker-compose-gateway.yml \
-  down --remove-orphans
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-echo ""
-echo "=============================================================="
-echo "============= Starting essentials (db, redis)... ============="
-echo "=============================================================="
-docker compose -f docker-compose.essentials.yml up -d
+# Function to print colored messages
+print_step() {
+    echo ""
+    echo -e "${BLUE}=============================================================="
+    echo -e "============== $1 ============="
+    echo -e "==============================================================${NC}"
+}
 
-echo ""
-echo "=============================================================="
-echo "============== Starting upload-service... ===================="
-echo "=============================================================="
-docker compose -f docker-compose-upload.yml up -d --build
+print_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+}
 
-echo ""
-echo "=============================================================="
-echo "=============== Starting convert-from-pdf... ================"
-echo "=============================================================="
-docker compose -f docker-compose-convert-from-pdf.yml up -d --build
+print_warning() {
+    echo -e "${YELLOW}⚠ $1${NC}"
+}
 
-echo ""
-echo "=============================================================="
-echo "================ Starting convert-to-pdf... =================="
-echo "=============================================================="
-docker compose -f docker-compose-convert-to-pdf.yml up -d --build
+print_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
 
-echo ""
-echo "=============================================================="
-echo "================= Starting cleanup worker... ================="
-echo "=============================================================="
-docker compose -f docker-compose-cleanup.yml up -d --build
+# Check if openssl is available for generating secrets
+if ! command -v openssl &> /dev/null; then
+    print_error "openssl is required but not installed. Please install openssl first."
+    exit 1
+fi
 
-echo ""
-echo "=============================================================="
-echo "================== Starting api-gateway... ==================="
-echo "=============================================================="
-docker compose -f docker-compose-gateway.yml up -d --build
+# Generate or load JWT secret
+JWT_SECRET_FILE=".jwt_secret"
 
+if [ -f "$JWT_SECRET_FILE" ]; then
+    print_warning "Found existing JWT secret in $JWT_SECRET_FILE"
+    export JWT_HS256_SECRET=$(cat "$JWT_SECRET_FILE")
+    print_success "Loaded JWT secret from file"
+else
+    print_step "Generating new JWT secret..."
+    export JWT_HS256_SECRET=$(openssl rand -hex 32)
+    echo "$JWT_HS256_SECRET" > "$JWT_SECRET_FILE"
+    chmod 600 "$JWT_SECRET_FILE"
+    print_success "Generated and saved new JWT secret to $JWT_SECRET_FILE"
+    print_warning "IMPORTANT: Keep this file secure and don't commit it to git!"
+fi
+
+# Validate JWT secret
+if [ ${#JWT_HS256_SECRET} -lt 32 ]; then
+    print_error "JWT secret is too short (must be at least 32 characters)"
+    exit 1
+fi
+
+print_success "JWT secret validated (${#JWT_HS256_SECRET} characters)"
+
+# Note: PDF processing now uses free open-source tools
+# No API keys needed! (pdfcpu, LibreOffice, Poppler)
+print_step "PDF Processing Configuration"
+print_success "Using free open-source tools (pdfcpu, LibreOffice, Poppler)"
+print_success "No API keys or subscriptions required!"
+
+# Stop existing containers
+print_step "Stopping existing containers..."
+docker compose down --remove-orphans 2>/dev/null || true
+print_success "Stopped existing containers"
+
+# Build and start all services
+print_step "Building and starting all services..."
+docker compose up -d --build
+
+# Wait for services to be healthy
+print_step "Waiting for services to be ready..."
+
+echo -n "Waiting for database... "
+for i in {1..30}; do
+    if docker compose exec -T db pg_isready -U user -d esydocs &> /dev/null; then
+        print_success "Database is ready!"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+
+echo -n "Waiting for Redis... "
+for i in {1..10}; do
+    if docker compose exec -T redis redis-cli ping &> /dev/null; then
+        print_success "Redis is ready!"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+
+echo -n "Waiting for API Gateway... "
+for i in {1..30}; do
+    if curl -s http://localhost:8080/healthz &> /dev/null; then
+        print_success "API Gateway is ready!"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+
+echo -n "Waiting for Upload Service... "
+for i in {1..30}; do
+    if curl -s http://localhost:8081/healthz &> /dev/null; then
+        print_success "Upload Service is ready!"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+
+# Show service status
+print_step "Service Status"
+docker compose ps
+
+# Show logs command
 echo ""
-echo "=============================================================="
-echo "=================== All services started. ===================="
-echo "=============================================================="
+print_success "All services started successfully!"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "📋 Service Endpoints:"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  🌐 API Gateway:        http://localhost:8080"
+echo "  📤 Upload Service:     http://localhost:8081"
+echo "  🗄️ PostgreSQL:         localhost:5432"
+echo "  🔴 Redis:              localhost:6379"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔧 Useful Commands:"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  View logs:             docker compose logs -f"
+echo "  View specific service: docker compose logs -f api-gateway"
+echo "  Restart services:      docker compose restart"
+echo "  Stop all:              docker compose down"
+echo "  Remove all data:       docker compose down -v"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔐 Security Info:"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  JWT Secret stored in:  $JWT_SECRET_FILE"
+echo "  PDF Processing:        Free Open-Source Tools ✓"
+echo "                         (pdfcpu, LibreOffice, Poppler)"
+echo "  ⚠️  Keep JWT secret file secure and never commit it!"
+echo "  ⚠️  For production, use proper secret management"
+echo ""

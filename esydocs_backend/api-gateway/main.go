@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -19,8 +20,47 @@ type routeConfig struct {
 	targetURL      string
 }
 
+func validateJWTSecret() error {
+	secret := os.Getenv("JWT_HS256_SECRET")
+	if secret == "" {
+		secret = os.Getenv("JWT_SECRET")
+	}
+
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return fmt.Errorf("JWT_HS256_SECRET environment variable is required but not set")
+	}
+
+	// Minimum entropy check: 32 bytes (256 bits) for HS256
+	if len(secret) < 32 {
+		return fmt.Errorf("JWT_HS256_SECRET must be at least 32 characters (256 bits), got %d characters", len(secret))
+	}
+
+	// Check if it's the example/default secret (security smell)
+	dangerousSecrets := []string{
+		"4de0ea7311594deb860f03e5da60ac903fc4b4099bfe499a82e0fed013af32ca791ac065ea5e4d8aaade24a760e6dc58",
+		"change-me",
+		"secret",
+		"password",
+	}
+	for _, dangerous := range dangerousSecrets {
+		if secret == dangerous {
+			return fmt.Errorf("JWT_HS256_SECRET appears to be a default/example value - use a cryptographically random secret")
+		}
+	}
+
+	log.Println("JWT secret validation passed")
+	return nil
+}
+
 func main() {
 	loadEnv()
+
+	// SECURITY: Validate JWT secret is set and meets minimum requirements
+	if err := validateJWTSecret(); err != nil {
+		log.Fatalf("JWT secret validation failed: %v\n\nFor local development:\n  1. Copy .env.example to .env\n  2. Generate a secret: openssl rand -hex 32\n  3. Set JWT_HS256_SECRET in .env\n\nFor production:\n  Set environment variable: export JWT_HS256_SECRET=\"your-secret-here\"", err)
+	}
+
 	port := getEnv("PORT", "8080")
 	corsOrigins := parseCommaList(getEnv("CORS_ALLOW_ORIGINS", "http://localhost:5173"))
 	corsMethods := getEnv("CORS_ALLOW_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
@@ -38,8 +78,15 @@ func main() {
 		KeySuffix: os.Getenv("AUTH_GUEST_SUFFIX"),
 	})
 	var denylist auth.TokenDenylist
-	if getEnvBool("AUTH_DENYLIST_ENABLED", false) {
+	if getEnvBool("AUTH_DENYLIST_ENABLED", true) {
 		denylist = auth.NewRedisTokenDenylist(redisClient, os.Getenv("AUTH_DENYLIST_PREFIX"))
+		if denylist == nil {
+			log.Println("WARNING: Token denylist enabled but Redis unavailable")
+		} else {
+			log.Println("Token denylist enabled")
+		}
+	} else {
+		log.Println("WARNING: Token denylist disabled - logout will not revoke access tokens")
 	}
 
 	verifier, err := auth.NewVerifierFromEnv(denylist)

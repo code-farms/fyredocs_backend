@@ -6,12 +6,15 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -180,11 +183,24 @@ func Logout(c *gin.Context) {
 		return
 	}
 
+	ctx := c.Request.Context()
+
+	// Revoke refresh token (existing logic)
 	name := getEnv("AUTH_REFRESH_COOKIE", "refresh_token")
 	token, _ := c.Cookie(name)
 	if strings.TrimSpace(token) != "" {
-		ctx := c.Request.Context()
-		_ = revokeRefreshToken(ctx, token)
+		if err := revokeRefreshToken(ctx, token); err != nil {
+			log.Printf("WARNING: Failed to revoke refresh token: %v", err)
+		}
+	}
+
+	// NEW: Revoke access token by adding to denylist
+	accessToken, hasToken := extractAccessToken(c)
+	if hasToken && strings.TrimSpace(accessToken) != "" {
+		if err := denyAccessToken(ctx, accessToken); err != nil {
+			log.Printf("WARNING: Failed to deny access token: %v", err)
+			// Continue with logout even if denylist fails (fail gracefully)
+		}
 	}
 
 	clearRefreshCookie(c, name)
@@ -359,8 +375,14 @@ func revokeRefreshToken(ctx context.Context, token string) error {
 func setRefreshCookie(c *gin.Context, token string, ttl time.Duration) {
 	name := getEnv("AUTH_REFRESH_COOKIE", "refresh_token")
 	domain := strings.TrimSpace(getEnv("AUTH_COOKIE_DOMAIN", ""))
-	secure := getEnvBool("AUTH_COOKIE_SECURE", false)
+	secure := getEnvBool("AUTH_COOKIE_SECURE", true)
 	sameSite := getEnv("AUTH_COOKIE_SAMESITE", "lax")
+
+	// SECURITY WARNING: Check if HTTPS is disabled
+	if !secure {
+		log.Printf("WARNING: AUTH_COOKIE_SECURE is disabled - refresh tokens will be sent over unencrypted HTTP connections. This is INSECURE and should only be used for local development. Set AUTH_COOKIE_SECURE=true in production.")
+	}
+
 	c.SetSameSite(parseSameSite(sameSite))
 	maxAge := int(ttl.Seconds())
 	c.SetCookie(name, token, maxAge, "/", domain, secure, true)
@@ -368,8 +390,14 @@ func setRefreshCookie(c *gin.Context, token string, ttl time.Duration) {
 
 func clearRefreshCookie(c *gin.Context, name string) {
 	domain := strings.TrimSpace(getEnv("AUTH_COOKIE_DOMAIN", ""))
-	secure := getEnvBool("AUTH_COOKIE_SECURE", false)
+	secure := getEnvBool("AUTH_COOKIE_SECURE", true)
 	sameSite := getEnv("AUTH_COOKIE_SAMESITE", "lax")
+
+	// SECURITY WARNING: Check if HTTPS is disabled
+	if !secure {
+		log.Printf("WARNING: AUTH_COOKIE_SECURE is disabled - this is insecure for production use")
+	}
+
 	c.SetSameSite(parseSameSite(sameSite))
 	c.SetCookie(name, "", -1, "/", domain, secure, true)
 }
@@ -417,4 +445,87 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+// extractAccessToken extracts the access token from the Authorization header or context
+func extractAccessToken(c *gin.Context) (string, bool) {
+	// Try Authorization header first
+	authHeader := c.GetHeader("Authorization")
+	if authHeader != "" {
+		parts := strings.Fields(authHeader)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+			token := strings.TrimSpace(parts[1])
+			if token != "" {
+				return token, true
+			}
+		}
+	}
+
+	// Try from context (set by middleware)
+	if ctxToken, exists := c.Get("access_token"); exists {
+		if token, ok := ctxToken.(string); ok && token != "" {
+			return token, true
+		}
+	}
+
+	return "", false
+}
+
+// denyAccessToken adds the access token to the denylist
+func denyAccessToken(ctx context.Context, token string) error {
+	// Check if denylist is enabled
+	denylistEnabled := getEnvBool("AUTH_DENYLIST_ENABLED", true)
+	if !denylistEnabled {
+		return nil // Silently skip if disabled
+	}
+
+	// Get denylist instance
+	denylist := getDenylist()
+	if denylist == nil {
+		return fmt.Errorf("denylist not available")
+	}
+
+	// Parse token to get expiration time for TTL
+	ttl, err := getTokenRemainingTTL(token)
+	if err != nil {
+		log.Printf("WARNING: Could not parse token expiration, using default TTL: %v", err)
+		ttl = 15 * time.Minute // Default access token TTL
+	}
+
+	// Add token to denylist with remaining TTL
+	return denylist.DenyToken(ctx, token, ttl)
+}
+
+// getDenylist returns the singleton denylist instance
+var denylistInstance auth.TokenDenylist
+var denylistOnce sync.Once
+
+func getDenylist() auth.TokenDenylist {
+	denylistOnce.Do(func() {
+		if getEnvBool("AUTH_DENYLIST_ENABLED", true) {
+			denylistInstance = auth.NewRedisTokenDenylist(redisstore.Client, os.Getenv("AUTH_DENYLIST_PREFIX"))
+		}
+	})
+	return denylistInstance
+}
+
+// getTokenRemainingTTL calculates the remaining TTL from the token's expiration claim
+func getTokenRemainingTTL(tokenString string) (time.Duration, error) {
+	// Parse without verifying (we just need the expiration claim)
+	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, &auth.Claims{})
+	if err != nil {
+		return 0, err
+	}
+
+	claims, ok := token.Claims.(*auth.Claims)
+	if !ok || claims.ExpiresAt == nil {
+		return 0, fmt.Errorf("invalid claims or missing expiration")
+	}
+
+	remaining := time.Until(claims.ExpiresAt.Time)
+	if remaining < 0 {
+		return 0, nil // Token already expired
+	}
+
+	return remaining, nil
 }
