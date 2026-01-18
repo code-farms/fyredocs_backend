@@ -224,16 +224,24 @@ func callConvertAPI(tool string, conversionType string, inputPaths []string, out
 }
 
 func convertAPISecret() string {
-	if value := strings.TrimSpace(os.Getenv("CONVERT_API_SECRET")); value != "" {
+	if value := cleanSecret(os.Getenv("CONVERT_API_SECRET")); value != "" {
 		return value
 	}
-	if value := strings.TrimSpace(os.Getenv("CONVERT_API_KEY")); value != "" {
+	if value := cleanSecret(os.Getenv("CONVERT_API_KEY")); value != "" {
 		return value
 	}
-	if value := strings.TrimSpace(os.Getenv("CONVERT_API_TOKEN")); value != "" {
+	if value := cleanSecret(os.Getenv("CONVERT_API_TOKEN")); value != "" {
 		return value
 	}
 	return ""
+}
+
+func cleanSecret(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return strings.Trim(value, "\"'")
 }
 
 func isRecoverableError(err error) bool {

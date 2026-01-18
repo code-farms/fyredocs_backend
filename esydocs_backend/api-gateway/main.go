@@ -116,10 +116,12 @@ func loadEnv() {
 			if err := godotenv.Load(path); err != nil {
 				log.Printf("Failed to load env file %s: %v", path, err)
 			}
+			normalizeEnv()
 			return
 		}
 	}
 	log.Println("No .env file found, relying on environment variables")
+	normalizeEnv()
 }
 
 func newProxy(cfg routeConfig) http.Handler {
@@ -162,6 +164,30 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func normalizeEnv() {
+	for _, entry := range os.Environ() {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key, value := parts[0], parts[1]
+		cleaned := unquoteValue(value)
+		if cleaned != value {
+			_ = os.Setenv(key, cleaned)
+		}
+	}
+}
+
+func unquoteValue(value string) string {
+	if len(value) < 2 {
+		return value
+	}
+	if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+		return value[1 : len(value)-1]
+	}
+	return value
 }
 
 func getEnvBool(key string, fallback bool) bool {
