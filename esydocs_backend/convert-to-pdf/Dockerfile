@@ -15,7 +15,7 @@ FROM alpine:3.19
 # Install system dependencies for PDF processing
 # - poppler-utils: for pdftoppm (PDF to images)
 # - libreoffice: for Office document conversions
-# - msttcorefonts: for better font support
+# - ttf-liberation: for better font support
 RUN apk add --no-cache ca-certificates \
     poppler-utils \
     libreoffice \

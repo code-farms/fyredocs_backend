@@ -149,78 +149,25 @@ func officeToPDF(inputPath string, outputPath string, fileType string) error {
 	return nil
 }
 
-func pdfToOffice(inputPath string, outputPath string, outputFormat string) error {
-	log.Printf("[INFO] Converting PDF to %s: %s", outputFormat, inputPath)
-
-	// PDF to Office conversion using LibreOffice
-	// Note: This works best for simple PDFs. Complex layouts may not convert perfectly.
-
-	// Create isolated temporary directory for this conversion
-	// This ensures we can identify the output file regardless of LibreOffice's naming
-	tempDir, err := os.MkdirTemp("", "pdf-to-office-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	var convertFormat string
-	switch outputFormat {
-	case "docx":
-		convertFormat = "docx"
-	case "xlsx":
-		// PDF to Excel is very limited - only works for PDFs with tables
-		convertFormat = "xlsx"
-	case "pptx":
-		// PDF to PowerPoint - converts each page to a slide
-		convertFormat = "pptx"
-	default:
-		return fmt.Errorf("unsupported output format: %s", outputFormat)
-	}
-
-	log.Printf("[DEBUG] Using isolated temp directory: %s", tempDir)
-
-	// Run LibreOffice with the isolated temp directory
-	cmd := exec.Command("libreoffice",
-		"--headless",
-		"--convert-to", convertFormat,
-		"--outdir", tempDir,
-		inputPath)
-
+// validateJavaRuntime checks if Java is available for LibreOffice export filters
+func validateJavaRuntime() error {
+	cmd := exec.Command("java", "-version")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("[ERROR] LibreOffice PDF conversion failed: %s", string(output))
-		return fmt.Errorf("PDF to %s conversion failed. Note: Complex PDFs may not convert well. Error: %w", outputFormat, err)
+		return fmt.Errorf("Java Runtime Environment not found. LibreOffice requires Java for MS Office format conversions. Error: %w, Output: %s", err, string(output))
 	}
-
-	// Find the converted file in the temp directory
-	// We don't care what LibreOffice named it - just find any file with the target extension
-	files, err := os.ReadDir(tempDir)
-	if err != nil {
-		return fmt.Errorf("failed to read temp directory: %w", err)
-	}
-
-	log.Printf("[DEBUG] Files created in temp directory:")
-	var convertedFile string
-	for _, f := range files {
-		log.Printf("[DEBUG]   - %s", f.Name())
-		if !f.IsDir() && strings.HasSuffix(strings.ToLower(f.Name()), "."+convertFormat) {
-			convertedFile = filepath.Join(tempDir, f.Name())
-			log.Printf("[DEBUG] Found converted file: %s", convertedFile)
-			break
-		}
-	}
-
-	if convertedFile == "" {
-		return fmt.Errorf("LibreOffice did not create any .%s file in temp directory", convertFormat)
-	}
-
-	// Copy the converted file to the final output path with proper UUID-based name
-	if err := copyFile(convertedFile, outputPath); err != nil {
-		return fmt.Errorf("failed to copy converted file to output: %w", err)
-	}
-
-	log.Printf("[INFO] Successfully converted PDF to %s: %s", outputFormat, outputPath)
+	log.Printf("[DEBUG] Java runtime available: %s", string(output))
 	return nil
+}
+
+func pdfToOffice(inputPath string, outputPath string, outputFormat string) error {
+	log.Printf("[WARNING] Attempting PDF to %s conversion: %s", outputFormat, inputPath)
+
+	// IMPORTANT: PDF to Office conversion is NOT reliably supported
+	// LibreOffice can convert Office→PDF but PDF→Office is very limited
+	// This feature is provided on a best-effort basis and will fail for most PDFs
+
+	return fmt.Errorf("PDF to %s conversion is not supported. LibreOffice cannot convert PDF files to Office formats (docx, xlsx, pptx). This is a technical limitation - PDFs are 'final' output formats and cannot be reliably converted back to editable Office documents. Alternative: Use specialized PDF editing tools or OCR software for PDF to Office conversion", outputFormat)
 }
 
 func imageToPDF(inputPaths []string, outputPath string) error {

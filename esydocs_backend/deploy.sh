@@ -79,6 +79,7 @@ docker compose up -d --build
 # Wait for services to be healthy
 print_step "Waiting for services to be ready..."
 
+print_step "Starting PostgreSQL Database..."
 echo -n "Waiting for database... "
 for i in {1..30}; do
     if docker compose exec -T db pg_isready -U user -d esydocs &> /dev/null; then
@@ -89,6 +90,7 @@ for i in {1..30}; do
     sleep 1
 done
 
+print_step "Starting Redis Cache..."
 echo -n "Waiting for Redis... "
 for i in {1..10}; do
     if docker compose exec -T redis redis-cli ping &> /dev/null; then
@@ -99,6 +101,7 @@ for i in {1..10}; do
     sleep 1
 done
 
+print_step "Starting API Gateway (port 8080)..."
 echo -n "Waiting for API Gateway... "
 for i in {1..30}; do
     if curl -s http://localhost:8080/healthz &> /dev/null; then
@@ -109,10 +112,33 @@ for i in {1..30}; do
     sleep 1
 done
 
+print_step "Starting Upload Service (port 8081)..."
 echo -n "Waiting for Upload Service... "
 for i in {1..30}; do
     if curl -s http://localhost:8081/healthz &> /dev/null; then
         print_success "Upload Service is ready!"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+
+print_step "Starting Convert-From-PDF Service (port 8082)..."
+echo -n "Waiting for Convert-From-PDF Service... "
+for i in {1..30}; do
+    if curl -s http://localhost:8082/healthz &> /dev/null; then
+        print_success "Convert-From-PDF Service is ready!"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+
+print_step "Starting Convert-To-PDF Service (port 8083)..."
+echo -n "Waiting for Convert-To-PDF Service... "
+for i in {1..30}; do
+    if curl -s http://localhost:8083/healthz &> /dev/null; then
+        print_success "Convert-To-PDF Service is ready!"
         break
     fi
     echo -n "."
@@ -132,6 +158,8 @@ echo "📋 Service Endpoints:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  🌐 API Gateway:        http://localhost:8080"
 echo "  📤 Upload Service:     http://localhost:8081"
+echo "  📄 Convert-From-PDF:   http://localhost:8082"
+echo "  📑 Convert-To-PDF:     http://localhost:8083"
 echo "  🗄️ PostgreSQL:         localhost:5432"
 echo "  🔴 Redis:              localhost:6379"
 echo ""

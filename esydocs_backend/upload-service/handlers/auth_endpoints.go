@@ -124,34 +124,8 @@ func Login(c *gin.Context) {
 }
 
 func Refresh(c *gin.Context) {
-	name := getEnv("AUTH_REFRESH_COOKIE", "refresh_token")
-	token, err := c.Cookie(name)
-	if err != nil || strings.TrimSpace(token) == "" {
-		writeAuthError(c, http.StatusUnauthorized, "INVALID_REFRESH", "Invalid refresh token")
-		return
-	}
-
-	ctx := c.Request.Context()
-	userID, err := refreshTokenUser(ctx, token)
-	if err != nil {
-		writeAuthError(c, http.StatusUnauthorized, "INVALID_REFRESH", "Invalid refresh token")
-		return
-	}
-
-	parsedID, err := uuid.Parse(userID)
-	if err != nil {
-		writeAuthError(c, http.StatusUnauthorized, "INVALID_REFRESH", "Invalid refresh token")
-		return
-	}
-
-	var user database.User
-	if err := database.DB.First(&user, "id = ?", parsedID).Error; err != nil {
-		writeAuthError(c, http.StatusUnauthorized, "INVALID_REFRESH", "Invalid refresh token")
-		return
-	}
-
-	rotateRefreshToken(ctx, token, user.ID.String(), c)
-	respondWithAccessToken(c, user)
+	// Refresh endpoint is deprecated - using long-lived access tokens instead
+	writeAuthError(c, http.StatusGone, "ENDPOINT_DEPRECATED", "Refresh tokens are no longer supported. Please login again to get a new access token.")
 }
 
 func Me(c *gin.Context) {
@@ -185,16 +159,7 @@ func Logout(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
-	// Revoke refresh token (existing logic)
-	name := getEnv("AUTH_REFRESH_COOKIE", "refresh_token")
-	token, _ := c.Cookie(name)
-	if strings.TrimSpace(token) != "" {
-		if err := revokeRefreshToken(ctx, token); err != nil {
-			log.Printf("WARNING: Failed to revoke refresh token: %v", err)
-		}
-	}
-
-	// NEW: Revoke access token by adding to denylist
+	// Revoke access token by adding to denylist
 	accessToken, hasToken := extractAccessToken(c)
 	if hasToken && strings.TrimSpace(accessToken) != "" {
 		if err := denyAccessToken(ctx, accessToken); err != nil {
@@ -203,7 +168,9 @@ func Logout(c *gin.Context) {
 		}
 	}
 
-	clearRefreshCookie(c, name)
+	// Clear access token cookie
+	clearAccessTokenCookie(c)
+
 	c.Status(http.StatusNoContent)
 }
 
@@ -217,7 +184,6 @@ func parseAuthPayload(c *gin.Context) (authCredentials, bool) {
 }
 
 func respondWithTokens(c *gin.Context, user database.User) {
-	ctx := c.Request.Context()
 	issuer, err := auth.NewIssuerFromEnv()
 	if err != nil {
 		writeAuthError(c, http.StatusInternalServerError, "SERVER_ERROR", "Unable to issue token")
@@ -230,21 +196,11 @@ func respondWithTokens(c *gin.Context, user database.User) {
 		return
 	}
 
-	refreshToken, ttl, err := newRefreshToken()
-	if err != nil {
-		writeAuthError(c, http.StatusInternalServerError, "SERVER_ERROR", "Unable to issue token")
-		return
-	}
+	// Set access token as secure HTTP-only cookie
+	setAccessTokenCookie(c, accessToken)
 
-	if err := storeRefreshToken(ctx, refreshToken, user.ID.String(), ttl); err != nil {
-		writeAuthError(c, http.StatusInternalServerError, "SERVER_ERROR", "Unable to issue token")
-		return
-	}
-
-	setRefreshCookie(c, refreshToken, ttl)
 	c.JSON(http.StatusOK, gin.H{
-		"accessToken": accessToken,
-		"user":        buildUserResponse(user, "user"),
+		"user": buildUserResponse(user, "user"),
 	})
 }
 
@@ -372,6 +328,23 @@ func revokeRefreshToken(ctx context.Context, token string) error {
 	return redisstore.Client.Del(ctx, key).Err()
 }
 
+func setAccessTokenCookie(c *gin.Context, token string) {
+	name := getEnv("AUTH_ACCESS_COOKIE", "access_token")
+	domain := strings.TrimSpace(getEnv("AUTH_COOKIE_DOMAIN", ""))
+	secure := getEnvBool("AUTH_COOKIE_SECURE", true)
+	sameSite := getEnv("AUTH_COOKIE_SAMESITE", "lax")
+	ttl := getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
+
+	// SECURITY WARNING: Check if HTTPS is disabled
+	if !secure {
+		log.Printf("WARNING: AUTH_COOKIE_SECURE is disabled - access tokens will be sent over unencrypted HTTP connections. This is INSECURE and should only be used for local development. Set AUTH_COOKIE_SECURE=true in production.")
+	}
+
+	c.SetSameSite(parseSameSite(sameSite))
+	maxAge := int(ttl.Seconds())
+	c.SetCookie(name, token, maxAge, "/", domain, secure, true) // httpOnly=true
+}
+
 func setRefreshCookie(c *gin.Context, token string, ttl time.Duration) {
 	name := getEnv("AUTH_REFRESH_COOKIE", "refresh_token")
 	domain := strings.TrimSpace(getEnv("AUTH_COOKIE_DOMAIN", ""))
@@ -386,6 +359,16 @@ func setRefreshCookie(c *gin.Context, token string, ttl time.Duration) {
 	c.SetSameSite(parseSameSite(sameSite))
 	maxAge := int(ttl.Seconds())
 	c.SetCookie(name, token, maxAge, "/", domain, secure, true)
+}
+
+func clearAccessTokenCookie(c *gin.Context) {
+	name := getEnv("AUTH_ACCESS_COOKIE", "access_token")
+	domain := strings.TrimSpace(getEnv("AUTH_COOKIE_DOMAIN", ""))
+	secure := getEnvBool("AUTH_COOKIE_SECURE", true)
+	sameSite := getEnv("AUTH_COOKIE_SAMESITE", "lax")
+
+	c.SetSameSite(parseSameSite(sameSite))
+	c.SetCookie(name, "", -1, "/", domain, secure, true)
 }
 
 func clearRefreshCookie(c *gin.Context, name string) {

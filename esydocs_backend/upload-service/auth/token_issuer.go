@@ -41,7 +41,7 @@ func NewIssuerFromEnv() (*Issuer, error) {
 		hmacSecret: []byte(secret),
 		issuer:     strings.TrimSpace(os.Getenv("JWT_ISSUER")),
 		audience:   strings.TrimSpace(os.Getenv("JWT_AUDIENCE")),
-		accessTTL:  getEnvDuration("JWT_ACCESS_TTL", 15*time.Minute),
+		accessTTL:  getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour),
 	}, nil
 }
 

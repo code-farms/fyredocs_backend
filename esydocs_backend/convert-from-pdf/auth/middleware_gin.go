@@ -8,11 +8,12 @@ import (
 )
 
 type GinMiddlewareOptions struct {
-	Verifier             *Verifier
-	GuestStore           GuestStore
-	TrustGatewayHeaders  bool
-	GuestTokenHeaderName string
-	GuestCookieName      string
+	Verifier              *Verifier
+	GuestStore            GuestStore
+	TrustGatewayHeaders   bool
+	GuestTokenHeaderName  string
+	GuestCookieName       string
+	AccessTokenCookieName string
 }
 
 func GinAuthMiddleware(options GinMiddlewareOptions) gin.HandlerFunc {
@@ -20,9 +21,13 @@ func GinAuthMiddleware(options GinMiddlewareOptions) gin.HandlerFunc {
 	if headerName == "" {
 		headerName = "X-Guest-Token"
 	}
-	cookieName := options.GuestCookieName
-	if cookieName == "" {
-		cookieName = "guest_token"
+	guestCookieName := options.GuestCookieName
+	if guestCookieName == "" {
+		guestCookieName = "guest_token"
+	}
+	accessCookieName := options.AccessTokenCookieName
+	if accessCookieName == "" {
+		accessCookieName = "access_token"
 	}
 
 	return func(c *gin.Context) {
@@ -39,9 +44,19 @@ func GinAuthMiddleware(options GinMiddlewareOptions) gin.HandlerFunc {
 			}
 		}
 
-		guestCtx, _ := guestContextFromRequest(c.Request, options.GuestStore, headerName, cookieName)
+		guestCtx, _ := guestContextFromRequest(c.Request, options.GuestStore, headerName, guestCookieName)
 
+		// Try Authorization header first
 		token, hasToken := extractBearerToken(c.GetHeader("Authorization"))
+
+		// If no Authorization header, try cookie
+		if !hasToken {
+			if cookie, err := c.Cookie(accessCookieName); err == nil {
+				token = strings.TrimSpace(cookie)
+				hasToken = token != ""
+			}
+		}
+
 		if hasToken {
 			if options.Verifier == nil {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse{

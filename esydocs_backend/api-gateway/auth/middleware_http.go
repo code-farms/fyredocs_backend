@@ -6,11 +6,12 @@ import (
 )
 
 type HTTPMiddlewareOptions struct {
-	Verifier             *Verifier
-	GuestStore           GuestStore
-	TrustGatewayHeaders  bool
-	GuestTokenHeaderName string
-	GuestCookieName      string
+	Verifier              *Verifier
+	GuestStore            GuestStore
+	TrustGatewayHeaders   bool
+	GuestTokenHeaderName  string
+	GuestCookieName       string
+	AccessTokenCookieName string
 }
 
 func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.Handler {
@@ -18,9 +19,13 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 	if headerName == "" {
 		headerName = "X-Guest-Token"
 	}
-	cookieName := options.GuestCookieName
-	if cookieName == "" {
-		cookieName = "guest_token"
+	guestCookieName := options.GuestCookieName
+	if guestCookieName == "" {
+		guestCookieName = "guest_token"
+	}
+	accessCookieName := options.AccessTokenCookieName
+	if accessCookieName == "" {
+		accessCookieName = "access_token"
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -41,9 +46,19 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 				}
 			}
 
-			guestCtx, _ := guestContextFromRequest(r, options.GuestStore, headerName, cookieName)
+			guestCtx, _ := guestContextFromRequest(r, options.GuestStore, headerName, guestCookieName)
 
+			// Try Authorization header first
 			token, hasToken := extractBearerToken(r.Header.Get("Authorization"))
+
+			// If no Authorization header, try cookie
+			if !hasToken {
+				if cookie, err := r.Cookie(accessCookieName); err == nil {
+					token = strings.TrimSpace(cookie.Value)
+					hasToken = token != ""
+				}
+			}
+
 			if hasToken {
 				if options.Verifier == nil {
 					WriteError(w, http.StatusUnauthorized, ErrCodeUnauthorized, "Invalid or expired token")
