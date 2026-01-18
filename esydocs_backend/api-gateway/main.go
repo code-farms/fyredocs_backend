@@ -53,6 +53,11 @@ func main() {
 
 	routes := []routeConfig{
 		{
+			prefix:         "/auth",
+			targetBasePath: "/auth",
+			targetURL:      uploadURL,
+		},
+		{
 			prefix:         "/api/upload",
 			targetBasePath: "/api/uploads",
 			targetURL:      uploadURL,

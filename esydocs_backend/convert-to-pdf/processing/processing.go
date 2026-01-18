@@ -160,7 +160,10 @@ func copyFile(src, dst string) (err error) {
 }
 
 func callConvertAPI(tool string, conversionType string, inputPaths []string, outputPath string, apiParams map[string]string) error {
-	apiKey := os.Getenv("CONVERT_API_SECRET")
+	apiKey := convertAPISecret()
+	if apiKey == "" {
+		return fmt.Errorf("CONVERT_API_SECRET is not set")
+	}
 	url := fmt.Sprintf("https://v2.convertapi.com/convert/%s/to/%s", tool, conversionType)
 
 	body := &bytes.Buffer{}
@@ -184,6 +187,7 @@ func callConvertAPI(tool string, conversionType string, inputPaths []string, out
 	for key, val := range apiParams {
 		_ = writer.WriteField(key, val)
 	}
+	_ = writer.WriteField("Secret", apiKey)
 
 	writer.Close()
 
@@ -192,9 +196,7 @@ func callConvertAPI(tool string, conversionType string, inputPaths []string, out
 		return err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	client := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := client.Do(req)
@@ -219,6 +221,19 @@ func callConvertAPI(tool string, conversionType string, inputPaths []string, out
 
 	_, err = io.Copy(out, resp.Body)
 	return err
+}
+
+func convertAPISecret() string {
+	if value := strings.TrimSpace(os.Getenv("CONVERT_API_SECRET")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv("CONVERT_API_KEY")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv("CONVERT_API_TOKEN")); value != "" {
+		return value
+	}
+	return ""
 }
 
 func isRecoverableError(err error) bool {

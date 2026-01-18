@@ -33,6 +33,16 @@ func SetupUploadRouter(r *gin.Engine) {
 		api.GET("/jobs/history", auth.RequireAuthenticatedGin(), handlers.GetJobHistory)
 	}
 
+	authGroup := r.Group("/auth")
+	{
+		authGroup.POST("/signup", handlers.Signup)
+		authGroup.POST("/login", handlers.Login)
+		authGroup.POST("/refresh", handlers.Refresh)
+		authGroup.GET("/me", handlers.Me)
+		authGroup.GET("/profile", handlers.Profile)
+		authGroup.POST("/logout", handlers.Logout)
+	}
+
 	r.GET("/healthz", func(c *gin.Context) {
 		c.String(200, "ok")
 	})

@@ -11,6 +11,10 @@ import (
 type User struct {
 	ID           uuid.UUID `gorm:"type:uuid;primaryKey"`
 	Email        string    `gorm:"type:text;unique;not null"`
+	FullName     string    `gorm:"type:text"`
+	Phone        string    `gorm:"type:text"`
+	Country      string    `gorm:"type:text"`
+	ImageURL     string    `gorm:"type:text"`
 	PasswordHash string    `gorm:"type:text;not null"`
 	CreatedAt    time.Time `gorm:"default:CURRENT_TIMESTAMP"`
 }
