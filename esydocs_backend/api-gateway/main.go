@@ -98,6 +98,7 @@ func main() {
 	convertFromURL := getEnv("CONVERT_FROM_PDF_URL", uploadURL)
 	convertToURL := getEnv("CONVERT_TO_PDF_URL", uploadURL)
 	organizeURL := getEnv("ORGANIZE_PDF_URL", uploadURL)
+	optimizeURL := getEnv("OPTIMIZE_PDF_URL", uploadURL)
 
 	routes := []routeConfig{
 		{
@@ -124,6 +125,11 @@ func main() {
 			prefix:         "/api/organize-pdf",
 			targetBasePath: "/api/organize-pdf",
 			targetURL:      organizeURL,
+		},
+		{
+			prefix:         "/api/optimize-pdf",
+			targetBasePath: "/api/optimize-pdf",
+			targetURL:      optimizeURL,
 		},
 		{
 			prefix:         "/api/jobs",

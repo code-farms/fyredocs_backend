@@ -156,6 +156,17 @@ for i in {1..30}; do
     sleep 1
 done
 
+print_step "Starting Optimize-PDF Service (port 8085)..."
+echo -n "Waiting for Optimize-PDF Service... "
+for i in {1..30}; do
+    if curl -s http://localhost:8085/healthz &> /dev/null; then
+        print_success "Optimize-PDF Service is ready!"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+
 # Show service status
 print_step "Service Status"
 docker compose ps
@@ -172,6 +183,7 @@ echo "  📤 Upload Service:     http://localhost:8081"
 echo "  📄 Convert-From-PDF:   http://localhost:8082"
 echo "  📑 Convert-To-PDF:     http://localhost:8083"
 echo "  📋 Organize-PDF:       http://localhost:8084"
+echo "  🔧 Optimize-PDF:       http://localhost:8085"
 echo "  🗄️ PostgreSQL:         localhost:5432"
 echo "  🔴 Redis:              localhost:6379"
 echo ""
