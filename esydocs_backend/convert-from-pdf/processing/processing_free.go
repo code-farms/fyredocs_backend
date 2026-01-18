@@ -218,6 +218,34 @@ func zipDirectory(sourceDir string, zipPath string) error {
 	})
 }
 
+// pdfToPdfa converts a PDF to PDF/A format using Ghostscript
+func pdfToPdfa(inputPath string, outputPath string) error {
+	log.Printf("[INFO] Converting PDF to PDF/A: %s", inputPath)
+
+	// Use Ghostscript to convert PDF to PDF/A-2b
+	// gs -dPDFA=2 -dBATCH -dNOPAUSE -sProcessColorModel=DeviceRGB -sDEVICE=pdfwrite -sPDFACompatibilityPolicy=1 -sOutputFile=output.pdf input.pdf
+	cmd := exec.Command("gs",
+		"-dPDFA=2",
+		"-dBATCH",
+		"-dNOPAUSE",
+		"-dNOOUTERSAVE",
+		"-sProcessColorModel=DeviceRGB",
+		"-sDEVICE=pdfwrite",
+		"-sPDFACompatibilityPolicy=1",
+		fmt.Sprintf("-sOutputFile=%s", outputPath),
+		inputPath,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("[ERROR] Ghostscript PDF/A conversion failed: %s", string(output))
+		return fmt.Errorf("Ghostscript not available or conversion failed: %w. Install with: apt-get install ghostscript", err)
+	}
+
+	log.Printf("[INFO] PDF/A conversion completed: %s", outputPath)
+	return nil
+}
+
 // Watermark PDF
 func watermarkPDF(inputPath string, outputPath string, watermarkText string) error {
 	log.Printf("[INFO] Adding watermark to PDF: %s", inputPath)

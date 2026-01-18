@@ -6,10 +6,11 @@ import (
 )
 
 var convertToTools = map[string]bool{
-	"word-to-pdf":  true,
+	"word-to-pdf":       true,
 	"powerpoint-to-pdf": true,
-	"excel-to-pdf": true,
-	"image-to-pdf": true,
+	"excel-to-pdf":      true,
+	"image-to-pdf":      true,
+	"html-to-pdf":       true,
 }
 
 func CreatePdfToJob(c *gin.Context) {

@@ -52,6 +52,9 @@ services:
     environment:
       PORT: "8080"
       UPLOAD_SERVICE_URL: http://upload-service:8081
+      CONVERT_FROM_PDF_URL: http://convert-from-pdf:8082
+      CONVERT_TO_PDF_URL: http://convert-to-pdf:8083
+      ORGANIZE_PDF_URL: http://organize-pdf:8084
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
       REDIS_DB: "0"
@@ -194,6 +197,53 @@ services:
       MAX_RETRIES: "3"
       PROCESSING_TIMEOUT: 30m
       # Using free open-source tools: pdfcpu, LibreOffice, Poppler (no API keys needed)
+    volumes:
+      - uploads_data:/app/uploads
+      - outputs_data:/app/outputs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      volume-init:
+        condition: service_completed_successfully
+    networks:
+      - esydocs_net
+
+  # ==================== ORGANIZE PDF SERVICE ====================
+  organize-pdf:
+    build:
+      context: ./organize-pdf
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "8084:8084"
+    environment:
+      PORT: "8084"
+      DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      UPLOAD_DIR: /app/uploads
+      OUTPUT_DIR: /app/outputs
+      QUEUE_PREFIX: queue
+      MAX_RETRIES: "3"
+      PROCESSING_TIMEOUT: 30m
+      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+
+      # JWT Configuration
+      JWT_HS256_SECRET: ${JWT_HS256_SECRET}
+      JWT_ALLOWED_ALGS: "HS256"
+      JWT_ISSUER: "esydocs"
+      JWT_AUDIENCE: "esydocs-api"
+      JWT_CLOCK_SKEW: "60s"
+
+      # Auth settings
+      AUTH_GUEST_PREFIX: "guest"
+      AUTH_GUEST_SUFFIX: "jobs"
+      AUTH_DENYLIST_ENABLED: "true"
+      AUTH_DENYLIST_PREFIX: "denylist:jwt"
+      AUTH_TRUST_GATEWAY_HEADERS: "false"
     volumes:
       - uploads_data:/app/uploads
       - outputs_data:/app/outputs

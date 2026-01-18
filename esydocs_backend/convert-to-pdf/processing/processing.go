@@ -55,6 +55,9 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 	case "excel-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = officeToPDF(inputPaths[0], outputPath, "xlsx")
+	case "html-to-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = officeToPDF(inputPaths[0], outputPath, "html")
 	case "image-to-pdf", "img-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = imageToPDF(inputPaths, outputPath)

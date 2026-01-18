@@ -46,6 +46,9 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 	case "pdf-to-image", "pdf-to-img":
 		outputPath = filepath.Join(outputDir, outputFileName+".zip")
 		err = pdfToImages(inputPaths[0], outputPath)
+	case "pdf-to-pdfa":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = pdfToPdfa(inputPaths[0], outputPath)
 	case "word-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = officeToPDF(inputPaths[0], outputPath, "docx")

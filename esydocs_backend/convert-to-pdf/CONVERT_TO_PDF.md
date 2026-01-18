@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Convert To PDF service is a worker service that converts various document and image formats to PDF. It handles Word, Excel, PowerPoint, and image file conversions using LibreOffice and other open-source tools.
+The Convert To PDF service is a worker service that converts various document and image formats to PDF. It handles Word, Excel, PowerPoint, HTML, and image file conversions using LibreOffice and other open-source tools.
 
 **Port**: 8083 (internal, not exposed through API Gateway)
 **Type**: Background Worker + REST API
@@ -12,9 +12,10 @@ The Convert To PDF service is a worker service that converts various document an
 ## Responsibilities
 
 1. **Office to PDF** - Convert Word/Excel/PowerPoint documents to PDF
-2. **Image to PDF** - Convert images (JPG, PNG, GIF, WebP) to PDF
-3. **Job Processing** - Pick jobs from Redis queue and process them
-4. **Status Updates** - Update job status and progress in database
+2. **HTML to PDF** - Convert HTML documents to PDF
+3. **Image to PDF** - Convert images (JPG, PNG, GIF, WebP) to PDF
+4. **Job Processing** - Pick jobs from Redis queue and process them
+5. **Status Updates** - Update job status and progress in database
 
 ## Architecture
 
@@ -37,6 +38,8 @@ Convert-To-PDF Worker
 | `excel-to-pdf` | .xls, .xlsx | .pdf | ✅ Implemented |
 | `ppt-to-pdf` | .ppt, .pptx | .pdf | ✅ Implemented |
 | `powerpoint-to-pdf` | .ppt, .pptx | .pdf | ✅ Alias for ppt-to-pdf |
+| `html-to-pdf` | .html, .htm | .pdf | ✅ Implemented |
+| `htm-to-pdf` | .html, .htm | .pdf | ✅ Alias for html-to-pdf |
 | `image-to-pdf` | .jpg, .jpeg, .png, .gif, .webp, .bmp | .pdf | ✅ Implemented |
 | `img-to-pdf` | .jpg, .jpeg, .png, .gif, .webp, .bmp | .pdf | ✅ Alias for image-to-pdf |
 
@@ -223,6 +226,34 @@ Converts Microsoft PowerPoint presentations to PDF.
 ```bash
 curl -X POST http://localhost:8080/api/convert-to-pdf/ppt-to-pdf \
   -F "file=@presentation.pptx"
+```
+
+---
+
+### html-to-pdf / htm-to-pdf
+
+Converts HTML documents to PDF format.
+
+**Input**: `.html`, `.htm`
+**Output**: `.pdf`
+**Implementation**: LibreOffice Writer
+
+**Features**:
+- Renders HTML with CSS styling
+- Supports embedded images (base64)
+- Maintains document structure
+- Handles tables and lists
+
+**Limitations**:
+- External CSS files may not be loaded (use inline styles)
+- External images via URL may not render (use base64 or local paths)
+- JavaScript is not executed
+- Complex CSS3 features may not render perfectly
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-to-pdf/html-to-pdf \
+  -F "file=@document.html"
 ```
 
 ---
@@ -536,6 +567,7 @@ docker compose exec convert-to-pdf \
 | word-to-pdf | 2-3s | 5-8s | 15-30s |
 | excel-to-pdf | 2-4s | 6-10s | 20-40s |
 | ppt-to-pdf | 3-5s | 8-12s | 25-45s |
+| html-to-pdf | 1-2s | 3-5s | 8-15s |
 | image-to-pdf | <1s | 1-2s | 3-5s |
 
 **File Sizes**:

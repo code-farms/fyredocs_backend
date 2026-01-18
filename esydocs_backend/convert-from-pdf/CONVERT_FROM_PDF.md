@@ -2,59 +2,47 @@
 
 ## Overview
 
-The Convert From PDF service is a worker service that processes PDF conversion jobs. It converts PDF files to other formats (Word, Excel, PowerPoint, images) and provides PDF utility operations (merge, split, compress, protect, etc.).
+The Convert From PDF service is a worker service that processes PDF conversion jobs. It converts PDF files to other formats (images, Word, PowerPoint, Excel) and PDF/A archival format.
 
 **Port**: 8082 (internal, not exposed through API Gateway)
 **Type**: Background Worker + REST API
 **Framework**: Gin (Go)
-**Processing**: LibreOffice, pdfcpu, Poppler
+**Processing**: LibreOffice, Ghostscript, Poppler
 
 ## Responsibilities
 
-1. **PDF Conversion** - Convert PDF to Word/Excel/PowerPoint/Images
-2. **PDF Utilities** - Merge, split, compress, protect, unlock, watermark PDFs
-3. **Job Processing** - Pick jobs from Redis queue and process them
-4. **Status Updates** - Update job status and progress in database
+1. **PDF to Image** - Convert PDF pages to JPG images
+2. **PDF to Office** - Convert PDF to Word/PowerPoint/Excel formats
+3. **PDF to PDF/A** - Convert PDF to archival PDF/A format
+4. **Job Processing** - Pick jobs from Redis queue and process them
+5. **Status Updates** - Update job status and progress in database
 
 ## Architecture
 
 ```
-Redis Queue (queue:pdf-to-word, queue:merge-pdf, etc.)
+Redis Queue (queue:pdf-to-image, queue:pdf-to-word, etc.)
   ↓
 Convert-From-PDF Worker
   ├─ Poll Queue
   ├─ Download Input File
-  ├─ Process with LibreOffice/pdfcpu
+  ├─ Process with LibreOffice/Ghostscript/Poppler
   ├─ Upload Output File
   └─ Update Job Status (PostgreSQL)
 ```
 
 ## Supported Tools
 
-### Conversion Tools
-
 | Tool | Input | Output | Status |
 |------|-------|--------|--------|
+| `pdf-to-image` | .pdf | .zip (PNGs) | ✅ Implemented |
+| `pdf-to-img` | .pdf | .zip (PNGs) | ✅ Alias for pdf-to-image |
+| `pdf-to-jpg` | .pdf | .zip (PNGs) | ✅ Alias for pdf-to-image |
 | `pdf-to-word` | .pdf | .docx | ✅ Implemented |
-| `pdf-to-excel` | .pdf | .xlsx | ✅ Implemented |
 | `pdf-to-powerpoint` | .pdf | .pptx | ✅ Implemented |
 | `pdf-to-ppt` | .pdf | .pptx | ✅ Alias for pdf-to-powerpoint |
-| `pdf-to-image` | .pdf | .zip (JPEGs) | ✅ Implemented |
-| `pdf-to-img` | .pdf | .zip (JPEGs) | ✅ Alias for pdf-to-image |
-| `ocr` | .pdf | .pdf (searchable) | ❌ Not implemented |
-
-### PDF Utility Tools
-
-| Tool | Description | Status |
-|------|-------------|--------|
-| `merge-pdf` | Merge multiple PDFs into one | ✅ Implemented |
-| `split-pdf` | Split PDF by page ranges | ✅ Implemented |
-| `compress-pdf` | Reduce PDF file size | ✅ Implemented |
-| `protect-pdf` | Add password protection | ✅ Implemented |
-| `unlock-pdf` | Remove password protection | ✅ Implemented |
-| `watermark-pdf` | Add text watermark | ✅ Implemented |
-| `sign-pdf` | Digitally sign PDF | ⚠️ Stub (copies input) |
-| `edit-pdf` | Edit PDF content | ⚠️ Stub (copies input) |
+| `pdf-to-excel` | .pdf | .xlsx | ✅ Implemented |
+| `pdf-to-pdfa` | .pdf | .pdf (PDF/A-2b) | ✅ Implemented |
+| `pdf-to-pdf-a` | .pdf | .pdf (PDF/A-2b) | ✅ Alias for pdf-to-pdfa |
 
 ## API Endpoints
 
@@ -142,6 +130,30 @@ Deletes the job and its associated files.
 
 ## Tool Details
 
+### pdf-to-image / pdf-to-img / pdf-to-jpg
+
+Converts PDF pages to PNG images.
+
+**Input**: `.pdf`
+**Output**: `.zip` containing PNG files (one per page)
+**Implementation**: Poppler (pdftoppm)
+
+**Output Format**:
+```
+output.zip
+├── page_001-1.png
+├── page_002-1.png
+└── page_003-1.png
+```
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-image \
+  -F "file=@document.pdf"
+```
+
+---
+
 ### pdf-to-word
 
 Converts PDF to Microsoft Word (.docx).
@@ -163,22 +175,6 @@ curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-word \
 
 ---
 
-### pdf-to-excel
-
-Converts PDF to Microsoft Excel (.xlsx).
-
-**Input**: `.pdf`
-**Output**: `.xlsx`
-**Implementation**: LibreOffice (Calc)
-
-**Best For**: PDFs containing tables or structured data
-
-**Limitations**:
-- Works best with simple table structures
-- Complex layouts may require manual cleanup
-
----
-
 ### pdf-to-powerpoint / pdf-to-ppt
 
 Converts PDF to Microsoft PowerPoint (.pptx).
@@ -193,201 +189,62 @@ Converts PDF to Microsoft PowerPoint (.pptx).
 - Animations not preserved
 - Some formatting may change
 
----
-
-### pdf-to-image / pdf-to-img
-
-Converts PDF pages to JPEG images.
-
-**Input**: `.pdf`
-**Output**: `.zip` containing JPEG files (one per page)
-**Implementation**: Poppler (pdftoppm)
-
-**Output Format**:
-```
-output.zip
-├── page-001.jpg
-├── page-002.jpg
-└── page-003.jpg
-```
-
-**Resolution**: 150 DPI (configurable in processing code)
-
----
-
-### merge-pdf
-
-Merges multiple PDF files into a single PDF.
-
-**Input**: Multiple `.pdf` files
-**Output**: Single `.pdf` file
-**Implementation**: pdfcpu
-
-**Minimum**: 2 PDF files required
-
-**Example** (multipart):
+**Example**:
 ```bash
-curl -X POST http://localhost:8080/api/convert-from-pdf/merge-pdf \
-  -F "files=@file1.pdf" \
-  -F "files=@file2.pdf" \
-  -F "files=@file3.pdf"
-```
-
-**Example** (JSON with uploadIds):
-```json
-{
-  "uploadIds": [
-    "upload-id-1",
-    "upload-id-2",
-    "upload-id-3"
-  ]
-}
+curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-powerpoint \
+  -F "file=@document.pdf"
 ```
 
 ---
 
-### split-pdf
+### pdf-to-excel
 
-Splits PDF into separate pages or page ranges.
-
-**Input**: `.pdf` file
-**Output**: `.zip` containing split PDF files
-**Implementation**: pdfcpu
-
-**Options**:
-- `range`: Page range specification (e.g., "1-3,5,7-9")
-
-**Range Format**:
-- Single page: `"5"`
-- Range: `"1-10"`
-- Multiple ranges: `"1-3,5,7-9"`
-- All pages: `"all"` or omit
-
-**Example**:
-```json
-{
-  "uploadId": "file-upload-id",
-  "options": {
-    "range": "1-5,10"
-  }
-}
-```
-
----
-
-### compress-pdf
-
-Reduces PDF file size.
+Converts PDF to Microsoft Excel (.xlsx).
 
 **Input**: `.pdf`
-**Output**: `.pdf` (compressed)
-**Implementation**: pdfcpu
+**Output**: `.xlsx`
+**Implementation**: LibreOffice (Calc)
 
-**Compression Methods**:
-- Image optimization
-- Duplicate object removal
-- Stream compression
+**Best For**: PDFs containing tables or structured data
 
-**Typical Savings**: 20-50% file size reduction
+**Limitations**:
+- Works best with simple table structures
+- Complex layouts may require manual cleanup
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-excel \
+  -F "file=@document.pdf"
+```
 
 ---
 
-### protect-pdf
+### pdf-to-pdfa / pdf-to-pdf-a
 
-Adds password protection to PDF.
+Converts PDF to PDF/A-2b archival format.
 
 **Input**: `.pdf`
-**Output**: `.pdf` (password-protected)
-**Implementation**: pdfcpu
+**Output**: `.pdf` (PDF/A-2b compliant)
+**Implementation**: Ghostscript
 
-**Required Options**:
-- `password`: Password to protect the PDF
+**What is PDF/A?**
+PDF/A is an ISO-standardized version of PDF designed for long-term archival and preservation of electronic documents. PDF/A-2b ensures:
+- All fonts are embedded
+- Color profiles are standardized
+- No external dependencies
+- Metadata is preserved
 
-**Example**:
-```json
-{
-  "uploadId": "file-upload-id",
-  "options": {
-    "password": "SecurePassword123"
-  }
-}
-```
-
-**Permissions**: Full restrictions (no copying, printing, or editing)
-
----
-
-### unlock-pdf
-
-Removes password protection from PDF.
-
-**Input**: `.pdf` (password-protected)
-**Output**: `.pdf` (unlocked)
-**Implementation**: pdfcpu
-
-**Required Options**:
-- `password`: Current password of the PDF
+**Use Cases**:
+- Legal document archival
+- Government records
+- Long-term document preservation
+- Compliance requirements
 
 **Example**:
-```json
-{
-  "uploadId": "file-upload-id",
-  "options": {
-    "password": "CurrentPassword123"
-  }
-}
+```bash
+curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-pdfa \
+  -F "file=@document.pdf"
 ```
-
----
-
-### watermark-pdf
-
-Adds text watermark to all pages of a PDF.
-
-**Input**: `.pdf`
-**Output**: `.pdf` (watermarked)
-**Implementation**: pdfcpu
-
-**Options**:
-- `text`: Watermark text (default: "CONFIDENTIAL")
-
-**Example**:
-```json
-{
-  "uploadId": "file-upload-id",
-  "options": {
-    "text": "DRAFT - DO NOT DISTRIBUTE"
-  }
-}
-```
-
-**Watermark Position**: Diagonal across center of each page
-
----
-
-### sign-pdf (Stub)
-
-**Status**: ⚠️ Not fully implemented (copies input to output)
-
-Digital signature functionality requires:
-- X.509 certificates
-- Private key management
-- Signature appearance configuration
-
-**Planned Enhancement**: Full digital signature support
-
----
-
-### edit-pdf (Stub)
-
-**Status**: ⚠️ Not fully implemented (copies input to output)
-
-PDF editing functionality requires:
-- Advanced PDF manipulation library
-- Content stream parsing
-- Object modification
-
-**Planned Enhancement**: Basic text/image editing
 
 ---
 
@@ -451,7 +308,6 @@ If processing fails:
 ## Supported Input Formats
 
 - **PDF**: `.pdf` (any version)
-- **Multiple PDFs**: For merge operations
 
 ## Dependencies
 
@@ -469,24 +325,24 @@ Used for PDF to Office format conversions.
 libreoffice --headless --convert-to docx --outdir /output /input/file.pdf
 ```
 
-### pdfcpu
+### Ghostscript
 
-Pure Go PDF processor for utility operations.
+Used for PDF to PDF/A conversion.
 
-**Operations**:
-- Merge, split, compress
-- Encrypt/decrypt (protect/unlock)
-- Watermark
-- Optimize
+**Installed Packages**:
+- `ghostscript`
 
-**Installation**: Compiled into service binary
+**Command Line**:
+```bash
+gs -dPDFA=2 -dBATCH -dNOPAUSE -sProcessColorModel=DeviceRGB -sDEVICE=pdfwrite -sPDFACompatibilityPolicy=1 -sOutputFile=output.pdf input.pdf
+```
 
 ### Poppler
 
 PDF rendering library for image conversion.
 
 **Tools Used**:
-- `pdftoppm` - PDF to PPM/JPEG conversion
+- `pdftoppm` - PDF to PNG conversion
 
 **Installed Packages**:
 - `poppler-utils`
@@ -519,10 +375,10 @@ convert-from-pdf:
 1. Install dependencies:
    ```bash
    # Ubuntu/Debian
-   sudo apt-get install libreoffice poppler-utils
+   sudo apt-get install libreoffice poppler-utils ghostscript
 
    # macOS
-   brew install libreoffice poppler
+   brew install libreoffice poppler ghostscript
    ```
 
 2. Start dependencies:
@@ -624,10 +480,11 @@ convert-from-pdf:
 
 | Tool | 1-page PDF | 10-page PDF | 100-page PDF |
 |------|-----------|-------------|--------------|
-| pdf-to-word | 2-3s | 5-10s | 30-60s |
 | pdf-to-image | 1-2s | 3-5s | 20-30s |
-| merge-pdf | <1s | 1-2s | 3-5s |
-| compress-pdf | 1-2s | 3-5s | 15-25s |
+| pdf-to-word | 2-3s | 5-10s | 30-60s |
+| pdf-to-powerpoint | 2-3s | 5-10s | 30-60s |
+| pdf-to-excel | 2-3s | 5-10s | 30-60s |
+| pdf-to-pdfa | 1-2s | 2-4s | 10-20s |
 
 **Note**: Times vary based on PDF complexity and server resources.
 

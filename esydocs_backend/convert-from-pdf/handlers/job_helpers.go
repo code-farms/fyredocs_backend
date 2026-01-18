@@ -88,10 +88,12 @@ func normalizeToolType(toolType string) string {
 		return "powerpoint-to-pdf"
 	case "pdf-to-ppt":
 		return "pdf-to-powerpoint"
-	case "pdf-to-img":
+	case "pdf-to-img", "pdf-to-jpg":
 		return "pdf-to-image"
 	case "img-to-pdf":
 		return "image-to-pdf"
+	case "pdf-to-pdf-a", "pdfa":
+		return "pdf-to-pdfa"
 	}
 	return toolType
 }

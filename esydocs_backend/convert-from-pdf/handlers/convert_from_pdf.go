@@ -6,18 +6,11 @@ import (
 )
 
 var convertFromTools = map[string]bool{
-	"pdf-to-word":       true,
-	"pdf-to-excel":      true,
-	"pdf-to-powerpoint": true,
 	"pdf-to-image":      true,
-	"merge-pdf":         true,
-	"split-pdf":         true,
-	"compress-pdf":      true,
-	"edit-pdf":          true,
-	"protect-pdf":       true,
-	"unlock-pdf":        true,
-	"sign-pdf":          true,
-	"watermark-pdf":     true,
+	"pdf-to-word":       true,
+	"pdf-to-powerpoint": true,
+	"pdf-to-excel":      true,
+	"pdf-to-pdfa":       true,
 }
 
 func CreatePdfFromJob(c *gin.Context) {

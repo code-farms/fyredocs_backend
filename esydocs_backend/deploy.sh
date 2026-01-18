@@ -145,6 +145,17 @@ for i in {1..30}; do
     sleep 1
 done
 
+print_step "Starting Organize-PDF Service (port 8084)..."
+echo -n "Waiting for Organize-PDF Service... "
+for i in {1..30}; do
+    if curl -s http://localhost:8084/healthz &> /dev/null; then
+        print_success "Organize-PDF Service is ready!"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
+
 # Show service status
 print_step "Service Status"
 docker compose ps
@@ -160,6 +171,7 @@ echo "  🌐 API Gateway:        http://localhost:8080"
 echo "  📤 Upload Service:     http://localhost:8081"
 echo "  📄 Convert-From-PDF:   http://localhost:8082"
 echo "  📑 Convert-To-PDF:     http://localhost:8083"
+echo "  📋 Organize-PDF:       http://localhost:8084"
 echo "  🗄️ PostgreSQL:         localhost:5432"
 echo "  🔴 Redis:              localhost:6379"
 echo ""

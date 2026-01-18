@@ -92,6 +92,8 @@ func normalizeToolType(toolType string) string {
 		return "pdf-to-image"
 	case "img-to-pdf":
 		return "image-to-pdf"
+	case "htm-to-pdf":
+		return "html-to-pdf"
 	}
 	return toolType
 }
