@@ -109,7 +109,7 @@ func Run(ctx context.Context) {
 func handleFailure(ctx context.Context, payload JobPayload, err error, payloadJSON string, processingList string, maxRetries int) {
 	payload.Attempts++
 	recoverable := isRecoverable(err)
-	if recoverable && payload.Attempts <= maxRetries {
+	if recoverable && payload.Attempts < maxRetries {
 		log.Printf("job retry jobId=%s attempt=%d correlationId=%s err=%v", payload.JobID, payload.Attempts, payload.CorrelationID, err)
 		updateJobStatusString(payload.JobID, "queued", "0", fmt.Sprintf("retrying: %v", err))
 		ackProcessing(ctx, processingList, payloadJSON)
@@ -186,7 +186,9 @@ func recordOutput(jobID uuid.UUID, outputPath string) error {
 	if err != nil {
 		return err
 	}
-	_ = database.DB.Where("job_id = ? AND kind = ?", jobID, "output").Delete(&database.FileMetadata{}).Error
+	if err := database.DB.Where("job_id = ? AND kind = ?", jobID, "output").Delete(&database.FileMetadata{}).Error; err != nil {
+		log.Printf("WARNING: failed to delete old output record jobId=%s: %v", jobID, err)
+	}
 	output := database.FileMetadata{
 		ID:           uuid.New(),
 		JobID:        jobID,
@@ -246,6 +248,9 @@ func maxRetries() int {
 }
 
 func setProcessingMarker(ctx context.Context, payload JobPayload, timeout time.Duration) {
+	if redisstore.Client == nil {
+		return
+	}
 	key := fmt.Sprintf("processing:%s", payload.JobID)
 	redisstore.Client.HSet(ctx, key, map[string]interface{}{
 		"startedAt": time.Now().UTC().Format(time.RFC3339),
@@ -256,6 +261,9 @@ func setProcessingMarker(ctx context.Context, payload JobPayload, timeout time.D
 }
 
 func clearProcessingMarker(ctx context.Context, jobID string) {
+	if redisstore.Client == nil {
+		return
+	}
 	key := fmt.Sprintf("processing:%s", jobID)
 	redisstore.Client.Del(ctx, key)
 }

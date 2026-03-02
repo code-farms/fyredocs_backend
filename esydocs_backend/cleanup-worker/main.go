@@ -94,7 +94,8 @@ func cleanupUploadState(ctx context.Context) {
 		if time.Since(parsed) > ttl {
 			redisstore.Client.Del(ctx, key, key+":chunks")
 			uploadID := strings.TrimPrefix(key, "upload:")
-			if uploadID != "" {
+			// Validate that uploadID is a UUID to prevent path traversal.
+			if _, uuidErr := uuid.Parse(uploadID); uuidErr == nil {
 				_ = os.RemoveAll(filepath.Join(uploadBaseDir(), "tmp", uploadID))
 			}
 		}

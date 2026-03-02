@@ -177,6 +177,16 @@ func CompleteUpload(c *gin.Context) {
 		return
 	}
 
+	// Validate assembled file size against the configured maximum.
+	if info, err := os.Stat(finalPath); err == nil {
+		maxBytes := maxUploadBytes()
+		if info.Size() > maxBytes {
+			_ = os.Remove(finalPath)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "assembled file exceeds maximum size"})
+			return
+		}
+	}
+
 	_ = cleanupChunks(uploadID)
 	c.JSON(http.StatusOK, gin.H{"uploadId": uploadID, "storedPath": finalPath})
 }
@@ -188,8 +198,14 @@ func assembleChunks(uploadID string, totalChunks int, outputPath string) error {
 	if err != nil {
 		return err
 	}
+
+	// Track whether assembly succeeded so we can clean up the partial file on failure.
+	assembled := false
 	defer func() {
 		_ = out.Close()
+		if !assembled {
+			_ = os.Remove(outputPath)
+		}
 	}()
 
 	for i := 0; i < totalChunks; i++ {
@@ -204,6 +220,13 @@ func assembleChunks(uploadID string, totalChunks int, outputPath string) error {
 		}
 		_ = in.Close()
 	}
+
+	// Flush OS buffers before signalling success.
+	if err := out.Sync(); err != nil {
+		return err
+	}
+
+	assembled = true
 	return nil
 }
 

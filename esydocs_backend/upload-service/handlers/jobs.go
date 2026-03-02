@@ -101,6 +101,14 @@ func CreateJobFromTool(c *gin.Context) {
 		return
 	}
 
+	// Clean up the job directory if any subsequent step fails.
+	jobCreated := false
+	defer func() {
+		if !jobCreated {
+			_ = os.RemoveAll(jobDir)
+		}
+	}()
+
 	var totalSize int64
 	var inputPaths []string
 	var fileMetas []database.FileMetadata
@@ -205,7 +213,11 @@ func CreateJobFromTool(c *gin.Context) {
 		"options":      parseOptions(optionsRaw),
 		"correlationId": correlationID,
 	}
-	metaBytes, _ := json.Marshal(metaPayload)
+	metaBytes, err := json.Marshal(metaPayload)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build job metadata"})
+		return
+	}
 
 	job := database.ProcessingJob{
 		ID:        jobID,
@@ -254,6 +266,7 @@ func CreateJobFromTool(c *gin.Context) {
 		return
 	}
 
+	jobCreated = true
 	log.Printf("job queued jobId=%s tool=%s correlationId=%s", job.ID, toolType, correlationID)
 	c.JSON(http.StatusCreated, job)
 }
@@ -376,7 +389,7 @@ func DownloadJobFile(c *gin.Context) {
 	}
 
 	fileName, contentType := outputFileName(job.ToolType, job.FileName)
-	c.Header("Content-Disposition", "attachment; filename="+fileName)
+	c.Header("Content-Disposition", `attachment; filename="`+fileName+`"`)
 	c.Header("Content-Type", contentType)
 	c.File(outputFile.Path)
 }
@@ -480,8 +493,14 @@ func moveFile(src string, dst string) error {
 	if err != nil {
 		return err
 	}
+
+	// Track success so we can remove the partial dst file on failure.
+	copied := false
 	defer func() {
 		_ = out.Close()
+		if !copied {
+			_ = os.Remove(dst)
+		}
 	}()
 
 	if _, err := io.Copy(out, in); err != nil {
@@ -490,6 +509,7 @@ func moveFile(src string, dst string) error {
 	if err := out.Sync(); err != nil {
 		return err
 	}
+	copied = true
 	return os.Remove(src)
 }
 
@@ -687,7 +707,18 @@ func authorizeJobAccess(c *gin.Context, job *database.ProcessingJob) bool {
 		}
 		return job.UserID.String() == userID.String()
 	}
-	return true
+	// Guest job: verify the request's guest token actually owns this job in Redis.
+	// Without this check any caller could access any guest job.
+	token := guestToken(c)
+	if token == "" {
+		return false
+	}
+	for _, id := range guestJobIDs(c.Request.Context(), token) {
+		if id == job.ID.String() {
+			return true
+		}
+	}
+	return false
 }
 
 func guestToken(c *gin.Context) string {
