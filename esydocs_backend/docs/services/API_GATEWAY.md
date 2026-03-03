@@ -369,6 +369,123 @@ docker compose logs -f api-gateway
 - **ELK Stack**: Log aggregation
 - **Datadog/New Relic**: APM
 
+## Sequence Diagrams
+
+### Authenticated Request Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client (Browser)
+    participant GW as API Gateway :8080
+    participant R as Redis
+    participant JS as Job Service :8081
+
+    C->>GW: GET /api/convert-from-pdf/pdf-to-word (Cookie: access_token=<jwt>)
+
+    GW->>GW: CORS middleware (check Origin, set headers)
+    GW->>GW: Extract token (Authorization header > Cookie > Guest header)
+    GW->>GW: Validate JWT signature (HS256)
+    GW->>GW: Check expiration, issuer, audience
+
+    GW->>R: GET denylist:jwt:<token>
+    alt Token is denied
+        GW-->>C: 401 Unauthorized
+    else Token is valid
+        GW->>GW: Set X-User-ID header from JWT claims
+        GW->>JS: Proxy request with X-User-ID header
+        JS-->>GW: 200 {jobs data}
+        GW-->>C: 200 {jobs data}
+    end
+```
+
+### Guest User Request Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant GW as API Gateway :8080
+    participant R as Redis
+    participant JS as Job Service :8081
+
+    C->>GW: POST /api/convert-to-pdf/word-to-pdf (X-Guest-Token: <uuid>)
+
+    GW->>GW: CORS middleware
+    GW->>GW: No JWT token found
+    GW->>R: Check guest token validity
+    R-->>GW: Guest token exists
+
+    GW->>GW: Set guest context in request
+    GW->>JS: Proxy request with guest context headers
+    JS-->>GW: 201 {job created}
+    GW-->>C: 201 {job created}
+```
+
+### CORS Preflight Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Browser
+    participant GW as API Gateway :8080
+
+    C->>GW: OPTIONS /api/jobs (Origin: http://localhost:5173)
+    GW->>GW: Check Origin against CORS_ALLOW_ORIGINS
+    alt Origin allowed
+        GW-->>C: 204 No Content + CORS headers
+        Note over C,GW: Access-Control-Allow-Origin: http://localhost:5173<br/>Access-Control-Allow-Credentials: true<br/>Access-Control-Allow-Methods: GET,POST,...
+    else Origin not allowed
+        GW-->>C: 204 No Content (no CORS headers)
+        Note over C: Browser blocks the actual request
+    end
+
+    C->>GW: GET /api/jobs (actual request)
+    GW->>GW: Process normally with CORS headers
+```
+
+### Health Check Flow
+
+```mermaid
+sequenceDiagram
+    participant LB as Load Balancer
+    participant GW as API Gateway :8080
+    participant R as Redis
+
+    LB->>GW: GET /healthz
+    GW->>R: PING (with 2s timeout)
+    alt Redis healthy
+        R-->>GW: PONG
+        GW-->>LB: 200 {"status": "healthy"}
+    else Redis unreachable
+        GW-->>LB: 503 {"status": "unhealthy", "redis": "error message"}
+    end
+```
+
+## Error Flows
+
+### Gateway Error Responses
+
+| Error Code | HTTP Status | Condition |
+|------------|-------------|-----------|
+| `401 Unauthorized` | 401 | Invalid, expired, or revoked JWT token |
+| `401 Unauthorized` | 401 | Missing authentication on protected route |
+| `502 Bad Gateway` | 502 | Backend service unreachable |
+| `503 Service Unavailable` | 503 | Health check failed (Redis down) |
+| `204 No Content` | 204 | CORS preflight response |
+
+### Authentication Bypass Paths
+
+The following paths skip JWT authentication:
+- `/healthz` -- Health check endpoint
+- `/auth/signup` -- User registration
+- `/auth/login` -- User login
+- `OPTIONS` requests -- CORS preflight
+
+### Backend Service Failure Handling
+
+When a backend service is unreachable:
+1. The reverse proxy returns 502 Bad Gateway
+2. No retry is attempted at the gateway level
+3. The client should retry with exponential backoff
+
 ## Related Documentation
 
 - [Authentication System](../upload-service/AUTHENTICATION.md) - Detailed authentication documentation

@@ -16,9 +16,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
-	"esydocs/shared/auth"
-	"esydocs/shared/database"
 	"esydocs/shared/response"
+
+	"upload-service/internal/authverify"
+	"upload-service/internal/models"
+	"upload-service/internal/token"
 )
 
 type authCredentials struct {
@@ -44,8 +46,8 @@ type authUser struct {
 // Fix #15: Issuer is cached at startup, not created per-request
 // Fix #21: Denylist is passed from main, not initialized via sync.Once
 type AuthEndpoints struct {
-	Issuer   *auth.Issuer
-	Denylist auth.TokenDenylist
+	Issuer   *token.Issuer
+	Denylist authverify.TokenDenylist
 }
 
 func (ae *AuthEndpoints) Signup(c *gin.Context) {
@@ -75,8 +77,8 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 		return
 	}
 
-	var existing database.User
-	if err := database.DB.Where("email = ?", email).First(&existing).Error; err == nil {
+	var existing models.User
+	if err := models.DB.Where("email = ?", email).First(&existing).Error; err == nil {
 		response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "User already exists")
 		return
 	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -90,7 +92,7 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 		return
 	}
 
-	user := database.User{
+	user := models.User{
 		Email:        email,
 		FullName:     fullName,
 		Phone:        phone,
@@ -98,7 +100,7 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 		ImageURL:     image,
 		PasswordHash: string(passwordHash),
 	}
-	if err := database.DB.Create(&user).Error; err != nil {
+	if err := models.DB.Create(&user).Error; err != nil {
 		if isDuplicateError(err) {
 			response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "User already exists")
 			return
@@ -128,8 +130,8 @@ func (ae *AuthEndpoints) Login(c *gin.Context) {
 		return
 	}
 
-	var user database.User
-	if err := database.DB.Where("email = ?", email).First(&user).Error; err != nil {
+	var user models.User
+	if err := models.DB.Where("email = ?", email).First(&user).Error; err != nil {
 		response.Unauthorized(c, "INVALID_CREDENTIALS", "Invalid credentials")
 		return
 	}
@@ -169,7 +171,7 @@ func (ae *AuthEndpoints) Profile(c *gin.Context) {
 }
 
 func (ae *AuthEndpoints) Logout(c *gin.Context) {
-	authCtx, ok := auth.GetGinAuth(c)
+	authCtx, ok := authverify.GetGinAuth(c)
 	if !ok || strings.TrimSpace(authCtx.UserID) == "" {
 		response.Unauthorized(c, "UNAUTHORIZED", "Unauthorized")
 		return
@@ -189,7 +191,7 @@ func (ae *AuthEndpoints) Logout(c *gin.Context) {
 }
 
 // Fix #15: Uses the cached issuer instead of creating a new one per request
-func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user database.User) {
+func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 	accessToken, err := ae.Issuer.IssueAccessToken(user.ID.String(), "user", nil)
 	if err != nil {
 		response.InternalError(c, "SERVER_ERROR", "Unable to issue token")
@@ -227,7 +229,7 @@ func parseAuthPayload(c *gin.Context) (authCredentials, bool) {
 	return payload, true
 }
 
-func buildUserResponse(user database.User, role string) authUser {
+func buildUserResponse(user models.User, role string) authUser {
 	if strings.TrimSpace(role) == "" {
 		role = "user"
 	}
@@ -246,23 +248,23 @@ func normalizeEmail(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
 
-func loadUserFromAuth(c *gin.Context) (database.User, auth.AuthContext, bool) {
-	authCtx, ok := auth.GetGinAuth(c)
+func loadUserFromAuth(c *gin.Context) (models.User, authverify.AuthContext, bool) {
+	authCtx, ok := authverify.GetGinAuth(c)
 	if !ok || strings.TrimSpace(authCtx.UserID) == "" {
 		response.Unauthorized(c, "UNAUTHORIZED", "Unauthorized")
-		return database.User{}, auth.AuthContext{}, false
+		return models.User{}, authverify.AuthContext{}, false
 	}
 
 	parsedID, err := uuid.Parse(strings.TrimSpace(authCtx.UserID))
 	if err != nil {
 		response.Unauthorized(c, "UNAUTHORIZED", "Unauthorized")
-		return database.User{}, auth.AuthContext{}, false
+		return models.User{}, authverify.AuthContext{}, false
 	}
 
-	var user database.User
-	if err := database.DB.First(&user, "id = ?", parsedID).Error; err != nil {
+	var user models.User
+	if err := models.DB.First(&user, "id = ?", parsedID).Error; err != nil {
 		response.Unauthorized(c, "UNAUTHORIZED", "Unauthorized")
-		return database.User{}, auth.AuthContext{}, false
+		return models.User{}, authverify.AuthContext{}, false
 	}
 
 	return user, authCtx, true
@@ -372,12 +374,12 @@ func extractAccessToken(c *gin.Context) (string, bool) {
 }
 
 func getTokenRemainingTTL(tokenString string) (time.Duration, error) {
-	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, &auth.Claims{})
+	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, &authverify.Claims{})
 	if err != nil {
 		return 0, err
 	}
 
-	claims, ok := token.Claims.(*auth.Claims)
+	claims, ok := token.Claims.(*authverify.Claims)
 	if !ok || claims.ExpiresAt == nil {
 		return 0, fmt.Errorf("invalid claims or missing expiration")
 	}

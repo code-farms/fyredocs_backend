@@ -24,6 +24,8 @@ import (
 	"esydocs/shared/redisstore"
 	"esydocs/shared/response"
 
+	"job-service/internal/routing"
+
 	"job-service/internal/models"
 )
 
@@ -231,7 +233,7 @@ func CreateJobFromTool(c *gin.Context) {
 	assignGuestTokenIfNeeded(c, userID, jobID)
 
 	// Use centralized tool-to-service mapping
-	serviceName := queue.ServiceForTool(toolType)
+	serviceName := routing.ServiceForTool(toolType)
 	if serviceName == "" {
 		response.BadRequest(c, "INVALID_INPUT", "unsupported tool")
 		return

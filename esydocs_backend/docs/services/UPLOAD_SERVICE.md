@@ -585,6 +585,156 @@ docker compose exec db pg_isready -U user -d esydocs
 docker compose exec redis redis-cli ping
 ```
 
+## Sequence Diagrams
+
+### Chunked Upload Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant GW as API Gateway
+    participant US as Upload Service :8081
+    participant R as Redis
+    participant FS as File System
+
+    C->>GW: POST /api/upload/init {fileName, fileSize, totalChunks}
+    GW->>US: Proxy request
+    US->>R: HSET upload:<id> {fileName, fileSize, totalChunks, createdAt}
+    US->>R: EXPIRE upload:<id> 2h
+    US-->>GW: 201 {uploadId}
+    GW-->>C: 201 {uploadId}
+
+    loop For each chunk (can be parallel)
+        C->>GW: PUT /api/upload/<id>/chunk?index=N [chunk binary]
+        GW->>US: Proxy request
+        US->>R: HGETALL upload:<id> (verify exists)
+        US->>FS: Save chunk to uploads/tmp/<id>/<index>.part
+        US->>R: SADD upload:<id>:chunks N
+        US-->>GW: 200 {receivedChunks, complete}
+        GW-->>C: 200 {receivedChunks, complete}
+    end
+
+    C->>GW: POST /api/upload/<id>/complete
+    GW->>US: Proxy request
+    US->>R: SCARD upload:<id>:chunks
+    US->>US: Verify all chunks received
+    US->>FS: Assemble chunks into uploads/<id>/<fileName>
+    US->>FS: Remove tmp/<id>/ directory
+    US-->>GW: 200 {uploadId, storedPath}
+    GW-->>C: 200 {uploadId, storedPath}
+```
+
+### Job Creation via Upload ID
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant GW as API Gateway
+    participant US as Upload Service :8081
+    participant R as Redis
+    participant DB as PostgreSQL
+
+    C->>GW: POST /api/convert-from-pdf/pdf-to-word {uploadId}
+    GW->>US: Proxy (with auth headers)
+
+    US->>R: HGETALL upload:<uploadId>
+    R-->>US: {fileName, fileSize, ...}
+    US->>US: Validate file type for tool
+    US->>US: Move file to job directory
+
+    US->>DB: INSERT processing_job (status=queued)
+    US->>R: RPUSH queue:pdf-to-word {jobPayload}
+    US->>R: DEL upload:<uploadId> (consume upload)
+
+    US-->>GW: 201 {job object}
+    GW-->>C: 201 {job object}
+```
+
+### Job Status Polling and Download
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant GW as API Gateway
+    participant US as Upload Service :8081
+    participant DB as PostgreSQL
+    participant FS as File System
+
+    loop Poll until completed
+        C->>GW: GET /api/convert-from-pdf/pdf-to-word/<jobId>
+        GW->>US: Proxy request
+        US->>DB: SELECT * FROM processing_jobs WHERE id=<jobId>
+        US-->>GW: 200 {status, progress}
+        GW-->>C: 200 {status, progress}
+    end
+
+    C->>GW: GET /api/convert-from-pdf/pdf-to-word/<jobId>/download
+    GW->>US: Proxy request
+    US->>DB: Verify status=completed
+    US->>FS: Read output file
+    US-->>GW: 200 [binary] Content-Disposition: attachment
+    GW-->>C: 200 [binary file download]
+```
+
+### Authentication Flow (Signup)
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant GW as API Gateway
+    participant US as Upload Service :8081
+    participant DB as PostgreSQL
+
+    C->>GW: POST /auth/signup {email, password, fullName, country}
+    GW->>US: Proxy request
+
+    US->>US: Validate input
+    US->>DB: Check if email exists
+    US->>US: bcrypt hash password
+    US->>DB: INSERT INTO users
+
+    US->>US: Issue JWT access token
+    US-->>GW: 200 {user} + Set-Cookie: access_token=<jwt>
+    GW-->>C: 200 {user} + Set-Cookie
+```
+
+## Error Flows
+
+### Upload Errors
+
+| Error Code | HTTP Status | Condition |
+|------------|-------------|-----------|
+| `INVALID_INPUT` | 400 | Missing fileName, fileSize, or totalChunks |
+| `INVALID_INPUT` | 400 | Invalid or negative chunk index |
+| `NOT_FOUND` | 404 | Upload session expired or not found |
+| `BAD_REQUEST` | 400 | Attempting to complete an incomplete upload |
+| `FILE_TOO_LARGE` | 400 | Assembled file exceeds MAX_UPLOAD_MB |
+| `SERVER_ERROR` | 500 | Redis unavailable or filesystem error |
+
+### Job Errors
+
+| Error Code | HTTP Status | Condition |
+|------------|-------------|-----------|
+| `INVALID_INPUT` | 400 | Unsupported tool type |
+| `INVALID_INPUT` | 400 | File type mismatch for tool |
+| `NOT_FOUND` | 404 | Job not found or unauthorized |
+| `NOT_READY` | 400 | Download requested but job not completed |
+| `UNAUTHORIZED` | 401 | Job history without authentication |
+| `SERVER_ERROR` | 500 | Database or queue failure |
+
+### Error Response Format
+
+```json
+{
+  "success": false,
+  "message": "human readable message",
+  "error": {
+    "code": "ERROR_CODE",
+    "details": "detailed description"
+  }
+}
+```
+
 ## Related Documentation
 
 - [AUTHENTICATION.md](./AUTHENTICATION.md) - Complete authentication system documentation

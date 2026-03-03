@@ -16,7 +16,7 @@ func WriteErr(w http.ResponseWriter, status int, code string, message string) {
 		Success: false,
 		Message: message,
 		Data:    nil,
-		Error:   &APIError{Code: code, Message: message},
+		Error:   &APIError{Code: code, Details: message},
 	})
 }
 

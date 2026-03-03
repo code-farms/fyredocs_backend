@@ -469,6 +469,125 @@ convert-from-pdf:
         memory: 1G
 ```
 
+## Sequence Diagrams
+
+### Job Processing Flow (NATS Worker)
+
+```mermaid
+sequenceDiagram
+    participant JS as Job Service
+    participant NATS as NATS JetStream
+    participant W as convert-from-pdf Worker
+    participant DB as PostgreSQL
+    participant FS as File System
+    participant LO as LibreOffice/Poppler/GS
+
+    JS->>NATS: Publish JobCreated to dispatch.convert-from-pdf
+    NATS->>W: Deliver JobCreated event
+
+    W->>W: Validate toolType in AllowedTools
+    W->>DB: UPDATE processing_jobs SET status='processing'
+
+    W->>FS: Read input file from inputPaths
+    W->>LO: Execute conversion (tool-specific command)
+
+    alt Conversion succeeds
+        LO-->>W: Output file(s) produced
+        W->>FS: Write output to output directory
+        W->>DB: INSERT file_metadata (kind='output')
+        W->>DB: UPDATE processing_jobs SET status='completed', progress=100
+        W->>NATS: Ack message
+    else Conversion fails
+        LO-->>W: Error
+        W->>DB: UPDATE processing_jobs SET status='failed', failure_reason=error
+        W->>NATS: Ack message (no redelivery for permanent failures)
+    end
+```
+
+### PDF-to-Image Conversion Detail
+
+```mermaid
+sequenceDiagram
+    participant W as Worker
+    participant FS as File System
+    participant PP as pdftoppm (Poppler)
+
+    W->>FS: Read input PDF
+    W->>PP: pdftoppm -png input.pdf output_prefix
+    PP-->>FS: page_001-1.png, page_002-1.png, ...
+    W->>FS: Create ZIP archive from PNG files
+    W->>FS: Write output.zip to output directory
+    W-->>W: Return outputPath = output.zip
+```
+
+### PDF-to-Office Conversion Detail
+
+```mermaid
+sequenceDiagram
+    participant W as Worker
+    participant FS as File System
+    participant LO as LibreOffice
+
+    W->>FS: Read input PDF
+    W->>LO: libreoffice --headless --infilter=writer_pdf_import --convert-to docx --outdir /output input.pdf
+    LO-->>FS: output.docx
+    W->>FS: Verify output file exists
+    W-->>W: Return outputPath = output.docx
+```
+
+### Health Check Flow
+
+```mermaid
+sequenceDiagram
+    participant LB as Load Balancer
+    participant W as convert-from-pdf :8082
+    participant R as Redis
+    participant N as NATS
+
+    LB->>W: GET /healthz
+    W->>R: PING (2s timeout)
+    alt Redis unhealthy
+        W-->>LB: 503 {"status": "unhealthy", "redis": "error"}
+    end
+    W->>N: Check connection status
+    alt NATS disconnected
+        W-->>LB: 503 {"status": "unhealthy", "nats": "disconnected"}
+    else All healthy
+        W-->>LB: 200 {"status": "healthy"}
+    end
+```
+
+## Error Flows
+
+### Processing Errors
+
+| Error Type | Handling | Retry |
+|------------|----------|-------|
+| Invalid tool type | Reject immediately, set status=failed | No |
+| Input file missing | Set status=failed with reason | No |
+| LibreOffice crash/timeout | Set status=failed, log error | NATS redelivery (MaxDeliver) |
+| Poppler command failure | Set status=failed with stderr | No |
+| Ghostscript failure | Set status=failed with stderr | No |
+| Output file not produced | Set status=failed | No |
+| Database update failure | Log error, NATS message not acked | NATS redelivery |
+| Disk full | Set status=failed | No |
+
+### Error Response Format (Health Check)
+
+```json
+{
+  "status": "unhealthy",
+  "redis": "connection refused",
+  "nats": "disconnected"
+}
+```
+
+### NATS Redelivery
+
+NATS JetStream handles retries via `AckWait` and `MaxDeliver` settings:
+- If a worker crashes mid-processing, the message is redelivered after `AckWait` timeout
+- Messages are redelivered up to `MaxDeliver` times before being moved to a dead letter queue
+
 ## Related Documentation
 
 - [Convert To PDF](../convert-to-pdf/CONVERT_TO_PDF.md) - Convert files TO PDF

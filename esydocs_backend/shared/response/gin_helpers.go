@@ -55,7 +55,7 @@ func Err(c *gin.Context, status int, code string, message string) {
 		Success: false,
 		Message: message,
 		Data:    nil,
-		Error:   &APIError{Code: code, Message: message},
+		Error:   &APIError{Code: code, Details: message},
 		Meta:    extractMeta(c),
 	})
 }
@@ -66,7 +66,7 @@ func AbortErr(c *gin.Context, status int, code string, message string) {
 		Success: false,
 		Message: message,
 		Data:    nil,
-		Error:   &APIError{Code: code, Message: message},
+		Error:   &APIError{Code: code, Details: message},
 		Meta:    extractMeta(c),
 	})
 }

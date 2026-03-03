@@ -442,6 +442,156 @@ cleanup-worker:
 2. **Off-Peak Cleanup**: Schedule cleanup during low-traffic periods
 3. **Incremental Deletion**: Delete a limited number of files per cycle
 
+## Sequence Diagrams
+
+### Cleanup Cycle Flow
+
+```mermaid
+sequenceDiagram
+    participant T as Ticker (every CLEANUP_INTERVAL)
+    participant CW as Cleanup Worker
+    participant DB as PostgreSQL
+    participant R as Redis
+    participant FS as File System
+
+    T->>CW: Tick (trigger cleanup cycle)
+
+    Note over CW: Phase 1: Expired Job Cleanup
+    CW->>DB: SELECT * FROM processing_jobs WHERE user_id IS NULL AND expires_at <= NOW() LIMIT 100
+
+    loop For each expired job (batched)
+        CW->>DB: SELECT * FROM file_metadata WHERE job_id = <id>
+        loop For each file
+            CW->>FS: os.Remove(file.Path)
+        end
+        CW->>DB: DELETE FROM file_metadata WHERE job_id = <id>
+        CW->>DB: DELETE FROM processing_jobs WHERE id = <id>
+    end
+
+    Note over CW: Phase 2: Expired Upload State Cleanup
+    CW->>R: SCAN 0 MATCH upload:* COUNT 100
+
+    loop For each upload key
+        CW->>R: HGET <key> createdAt
+        CW->>CW: Check if age > UPLOAD_TTL
+        alt Upload expired
+            CW->>R: DEL <key> <key>:chunks
+            CW->>FS: os.RemoveAll(uploads/tmp/<uploadId>/)
+        end
+    end
+
+    Note over CW: Cycle complete, wait for next tick
+```
+
+### Expired Job Cleanup Detail
+
+```mermaid
+sequenceDiagram
+    participant CW as Cleanup Worker
+    participant DB as PostgreSQL
+    participant FS as File System
+
+    CW->>DB: SELECT * FROM processing_jobs WHERE user_id IS NULL AND expires_at <= NOW() LIMIT 100
+    DB-->>CW: [job1, job2, ..., jobN]
+
+    loop For each job
+        CW->>DB: SELECT * FROM file_metadata WHERE job_id = job.ID
+        DB-->>CW: [file1, file2]
+
+        CW->>FS: os.Remove(file1.Path)
+        alt File exists
+            FS-->>CW: OK
+        else File already deleted
+            CW->>CW: Log warning, continue
+        end
+
+        CW->>FS: os.Remove(file2.Path)
+        CW->>DB: DELETE FROM file_metadata WHERE job_id = job.ID
+        CW->>DB: DELETE FROM processing_jobs WHERE id = job.ID
+    end
+
+    Note over CW: If 100 jobs found, loop again (pagination)
+    alt len(jobs) == 100
+        CW->>DB: SELECT next batch...
+    else len(jobs) < 100
+        CW->>CW: Done with job cleanup
+    end
+```
+
+### Upload State Cleanup Detail
+
+```mermaid
+sequenceDiagram
+    participant CW as Cleanup Worker
+    participant R as Redis
+    participant FS as File System
+
+    CW->>R: SCAN 0 MATCH upload:* COUNT 100
+    R-->>CW: [upload:abc123, upload:abc123:chunks, upload:def456]
+
+    loop For each key (skip :chunks keys)
+        CW->>R: HGET upload:abc123 createdAt
+        R-->>CW: "2024-01-15T08:00:00Z"
+
+        CW->>CW: time.Since(createdAt) > UPLOAD_TTL?
+
+        alt Upload expired
+            CW->>R: DEL upload:abc123 upload:abc123:chunks
+            CW->>CW: Parse uploadId from key
+            CW->>FS: os.RemoveAll(uploads/tmp/abc123/)
+        else Upload still valid
+            CW->>CW: Skip
+        end
+    end
+```
+
+### Startup and Lifecycle
+
+```mermaid
+sequenceDiagram
+    participant OS as Operating System
+    participant CW as Cleanup Worker
+    participant DB as PostgreSQL
+    participant R as Redis
+
+    OS->>CW: Start process
+    CW->>CW: LoadConfig()
+    CW->>CW: logger.Init("cleanup-worker")
+    CW->>CW: telemetry.Init("cleanup-worker")
+    CW->>DB: Connect (PostgreSQL)
+    CW->>DB: Migrate (ensure tables exist)
+    CW->>R: Connect (Redis)
+
+    CW->>CW: Create ticker (CLEANUP_INTERVAL)
+
+    loop Forever
+        CW->>CW: runCleanup()
+        CW->>CW: Wait for next tick
+    end
+```
+
+## Error Flows
+
+### Cleanup Error Handling
+
+| Error Type | Impact | Handling |
+|------------|--------|----------|
+| Database query failure | Jobs not cleaned up | Log error, skip to next phase |
+| File deletion failure (permission) | Orphaned files on disk | Log warning, continue with other files |
+| File not found on disk | No impact (already cleaned) | Log warning, delete DB record anyway |
+| Redis SCAN failure | Upload state not cleaned | Log error, skip upload cleanup |
+| Redis DEL failure | Stale upload keys remain | Log warning, will retry next cycle |
+| Database DELETE failure | Stale DB records remain | Log error, will retry next cycle |
+
+### Failure Recovery
+
+The cleanup worker is designed for resilience:
+1. **Idempotent operations**: Deleting a file or record that does not exist is treated as a warning, not an error
+2. **Batched processing**: Jobs are processed in batches of 100 to limit memory usage
+3. **Independent phases**: Upload cleanup runs even if job cleanup fails
+4. **Automatic retry**: Any items missed in one cycle will be caught in the next cycle
+5. **No NATS dependency**: The cleanup worker does not use NATS -- it operates directly on the database and filesystem
+
 ## Related Documentation
 
 - [Upload Service](../upload-service/UPLOAD_SERVICE.md) - Upload and job management

@@ -185,6 +185,138 @@ go run .
 curl http://localhost:8085/healthz
 ```
 
+## Sequence Diagrams
+
+### Job Processing Flow (NATS Worker)
+
+```mermaid
+sequenceDiagram
+    participant JS as Job Service
+    participant NATS as NATS JetStream
+    participant W as optimize-pdf Worker
+    participant DB as PostgreSQL
+    participant FS as File System
+    participant T as Tool (pdfcpu/GS/Tesseract)
+
+    JS->>NATS: Publish JobCreated to dispatch.optimize-pdf
+    NATS->>W: Deliver JobCreated event
+
+    W->>W: Validate toolType in AllowedTools
+    W->>DB: UPDATE processing_jobs SET status='processing'
+
+    W->>FS: Read input PDF from inputPaths
+
+    alt compress-pdf
+        W->>T: pdfcpu.OptimizeFile(input, output, config)
+    else repair-pdf
+        W->>T: gs -dBATCH -dNOPAUSE -sDEVICE=pdfwrite -sOutputFile=output input
+    else ocr-pdf
+        W->>T: pdftoppm (PDF to images)
+        W->>T: tesseract (OCR each image to PDF)
+        W->>T: pdfcpu merge (combine pages)
+    end
+
+    alt Processing succeeds
+        T-->>W: Output file produced
+        W->>FS: Write output to output directory
+        W->>DB: INSERT file_metadata (kind='output')
+        W->>DB: UPDATE processing_jobs SET status='completed', progress=100
+        W->>NATS: Ack message
+    else Processing fails
+        W->>DB: UPDATE processing_jobs SET status='failed', failure_reason=error
+        W->>NATS: Ack message
+    end
+```
+
+### OCR PDF Multi-Step Flow
+
+```mermaid
+sequenceDiagram
+    participant W as Worker
+    participant FS as File System
+    participant PP as pdftoppm
+    participant TS as Tesseract
+    participant PC as pdfcpu
+
+    W->>FS: Read input PDF
+    W->>PP: Convert PDF pages to PNG images (300 DPI)
+    PP-->>FS: page1.png, page2.png, ...
+
+    loop For each page
+        W->>TS: tesseract page_N.png page_N pdf (language=eng)
+        TS-->>FS: page_N.pdf (searchable PDF page)
+    end
+
+    W->>PC: Merge all page PDFs into final output
+    PC-->>FS: output.pdf (searchable PDF)
+    W->>FS: Cleanup temporary PNG and individual PDF files
+    W-->>W: Return outputPath = output.pdf
+```
+
+### Compress PDF Flow
+
+```mermaid
+sequenceDiagram
+    participant W as Worker
+    participant FS as File System
+    participant PC as pdfcpu
+
+    W->>FS: Read input PDF
+    W->>W: Parse quality option (screen/ebook/printer/prepress)
+    W->>PC: pdfcpu.OptimizeFile(input, output, config)
+    PC->>PC: Remove duplicate content streams
+    PC->>PC: Optimize object streams
+    PC->>PC: Compress embedded fonts
+    PC-->>FS: Optimized output.pdf
+    W->>FS: Compare file sizes (log compression ratio)
+    W-->>W: Return outputPath
+```
+
+### Health Check Flow
+
+```mermaid
+sequenceDiagram
+    participant LB as Load Balancer
+    participant W as optimize-pdf :8085
+    participant R as Redis
+    participant N as NATS
+
+    LB->>W: GET /healthz
+    W->>R: PING (2s timeout)
+    alt Redis unhealthy
+        W-->>LB: 503 {"status": "unhealthy", "redis": "error"}
+    end
+    W->>N: Check connection status
+    alt NATS disconnected
+        W-->>LB: 503 {"status": "unhealthy", "nats": "disconnected"}
+    else All healthy
+        W-->>LB: 200 {"status": "healthy"}
+    end
+```
+
+## Error Flows
+
+### Processing Error Matrix
+
+| Error Type | Tool(s) Affected | Handling | Retry |
+|------------|-----------------|----------|-------|
+| Invalid tool type | All | Reject, status=failed | No |
+| Input file missing | All | status=failed | No |
+| Corrupted PDF | compress, repair | Tool returns error, status=failed | No |
+| Ghostscript failure | repair-pdf | status=failed with stderr | No |
+| Tesseract not installed | ocr-pdf | status=failed | No |
+| Invalid language code | ocr-pdf | Fallback to "eng" or status=failed | No |
+| No text found by OCR | ocr-pdf | Returns PDF anyway (empty text layer) | No |
+| Disk full | All | status=failed | No |
+| Worker crash | All | NATS redelivery (MaxDeliver) | Yes |
+| Database failure | All | Message not acked, NATS redelivery | Yes |
+
+### NATS Redelivery
+
+NATS JetStream handles retries via `AckWait` and `MaxDeliver`:
+- Transient failures (worker crash, DB timeout) trigger redelivery
+- Permanent failures (invalid input, missing tools) are acked to prevent infinite retry
+
 ## Processing Details
 
 ### Compress PDF

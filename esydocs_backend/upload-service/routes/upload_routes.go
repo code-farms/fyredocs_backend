@@ -7,13 +7,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"esydocs/shared/auth"
 	"esydocs/shared/redisstore"
+
 	"upload-service/handlers"
+	"upload-service/internal/authverify"
+	"upload-service/internal/token"
 	"upload-service/middleware"
 )
 
-func SetupUploadRouter(r *gin.Engine, issuer *auth.Issuer, denylist auth.TokenDenylist) {
+func SetupUploadRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenDenylist) {
 	authEndpoints := &handlers.AuthEndpoints{
 		Issuer:   issuer,
 		Denylist: denylist,
@@ -37,21 +39,21 @@ func SetupUploadRouter(r *gin.Engine, issuer *auth.Issuer, denylist auth.TokenDe
 		uploads.GET("/:uploadId/status", handlers.GetUploadStatus)
 		uploads.POST("/:uploadId/complete", handlers.CompleteUpload)
 
-		convertFrom := api.Group("/convert-from-pdf", auth.RequireAuthenticatedGin())
+		convertFrom := api.Group("/convert-from-pdf", authverify.RequireAuthenticatedGin())
 		convertFrom.GET("/:tool", handlers.GetJobsByTool)
 		convertFrom.POST("/:tool", handlers.CreateJobFromTool)
 		convertFrom.GET("/:tool/:id", handlers.GetJobByID)
 		convertFrom.DELETE("/:tool/:id", handlers.DeleteJobByID)
 		convertFrom.GET("/:tool/:id/download", handlers.DownloadJobFile)
 
-		convertTo := api.Group("/convert-to-pdf", auth.RequireAuthenticatedGin())
+		convertTo := api.Group("/convert-to-pdf", authverify.RequireAuthenticatedGin())
 		convertTo.GET("/:tool", handlers.GetJobsByTool)
 		convertTo.POST("/:tool", handlers.CreateJobFromTool)
 		convertTo.GET("/:tool/:id", handlers.GetJobByID)
 		convertTo.DELETE("/:tool/:id", handlers.DeleteJobByID)
 		convertTo.GET("/:tool/:id/download", handlers.DownloadJobFile)
 
-		api.GET("/jobs/history", auth.RequireAuthenticatedGin(), handlers.GetJobHistory)
+		api.GET("/jobs/history", authverify.RequireAuthenticatedGin(), handlers.GetJobHistory)
 	}
 
 	loginLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{

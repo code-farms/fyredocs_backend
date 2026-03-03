@@ -12,7 +12,7 @@ type APIResponse struct {
 // APIError represents a structured error.
 type APIError struct {
 	Code    string `json:"code"`
-	Message string `json:"message"`
+	Details string `json:"details"`
 }
 
 // Meta holds optional pagination or request metadata.

@@ -19,7 +19,7 @@ echo ""
 
 # Build the base image
 docker build \
-    -f docker/base-alpine-libreoffice.Dockerfile \
+    -f infra/base-alpine-libreoffice.Dockerfile \
     -t "${FULL_IMAGE}" \
     -t "${REGISTRY}/${USERNAME}/${IMAGE_NAME}:latest" \
     .

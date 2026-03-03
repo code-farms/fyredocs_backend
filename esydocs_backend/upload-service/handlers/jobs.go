@@ -19,10 +19,11 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
-	"esydocs/shared/database"
 	"esydocs/shared/queue"
 	"esydocs/shared/redisstore"
 	"esydocs/shared/response"
+
+	"upload-service/internal/models"
 )
 
 var convertFromTools = map[string]bool{
@@ -112,7 +113,7 @@ func CreateJobFromTool(c *gin.Context) {
 
 	var totalSize int64
 	var inputPaths []string
-	var fileMetas []database.FileMetadata
+	var fileMetas []models.FileMetadata
 	originalName := ""
 	optionsRaw := ""
 
@@ -140,7 +141,7 @@ func CreateJobFromTool(c *gin.Context) {
 			}
 			totalSize += size
 			inputPaths = append(inputPaths, consumed.Path)
-			fileMetas = append(fileMetas, database.FileMetadata{
+			fileMetas = append(fileMetas, models.FileMetadata{
 				ID:           uuid.New(),
 				JobID:        jobID,
 				Kind:         "input",
@@ -188,7 +189,7 @@ func CreateJobFromTool(c *gin.Context) {
 			}
 			totalSize += file.Size
 			inputPaths = append(inputPaths, dst)
-			fileMetas = append(fileMetas, database.FileMetadata{
+			fileMetas = append(fileMetas, models.FileMetadata{
 				ID:           uuid.New(),
 				JobID:        jobID,
 				Kind:         "input",
@@ -221,7 +222,7 @@ func CreateJobFromTool(c *gin.Context) {
 	}
 
 	// Fix #12: Progress is now int, FileSize is now int64
-	job := database.ProcessingJob{
+	job := models.ProcessingJob{
 		ID:        jobID,
 		UserID:    userID,
 		ToolType:  toolType,
@@ -233,7 +234,7 @@ func CreateJobFromTool(c *gin.Context) {
 		ExpiresAt: expiresAt,
 	}
 
-	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+	if err := models.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&job).Error; err != nil {
 			return err
 		}
@@ -289,11 +290,11 @@ func GetJobsByTool(c *gin.Context) {
 	if userID == nil {
 		jobIDs := guestJobIDs(c.Request.Context(), guestToken(c))
 		if len(jobIDs) == 0 {
-			response.OKWithMeta(c, "Jobs retrieved", []database.ProcessingJob{}, &response.Meta{Page: page, Limit: limit, Total: 0})
+			response.OKWithMeta(c, "Jobs retrieved", []models.ProcessingJob{}, &response.Meta{Page: page, Limit: limit, Total: 0})
 			return
 		}
-		var jobs []database.ProcessingJob
-		if err := database.DB.Where("id IN ? AND tool_type = ? AND user_id IS NULL", jobIDs, toolType).
+		var jobs []models.ProcessingJob
+		if err := models.DB.Where("id IN ? AND tool_type = ? AND user_id IS NULL", jobIDs, toolType).
 			Order("created_at desc").
 			Limit(limit).Offset(offset).
 			Find(&jobs).Error; err != nil {
@@ -304,8 +305,8 @@ func GetJobsByTool(c *gin.Context) {
 		return
 	}
 
-	var jobs []database.ProcessingJob
-	if err := database.DB.Where("user_id = ? AND tool_type = ?", userID, toolType).
+	var jobs []models.ProcessingJob
+	if err := models.DB.Where("user_id = ? AND tool_type = ?", userID, toolType).
 		Order("created_at desc").
 		Limit(limit).Offset(offset).
 		Find(&jobs).Error; err != nil {
@@ -323,8 +324,8 @@ func GetJobByID(c *gin.Context) {
 	}
 	jobID := c.Param("id")
 
-	var job database.ProcessingJob
-	if err := database.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
+	var job models.ProcessingJob
+	if err := models.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
 		response.NotFound(c, "NOT_FOUND", "job not found")
 		return
 	}
@@ -345,8 +346,8 @@ func DeleteJobByID(c *gin.Context) {
 	}
 	jobID := c.Param("id")
 
-	var job database.ProcessingJob
-	if err := database.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
+	var job models.ProcessingJob
+	if err := models.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
 		response.NotFound(c, "NOT_FOUND", "job not found")
 		return
 	}
@@ -355,8 +356,8 @@ func DeleteJobByID(c *gin.Context) {
 		return
 	}
 
-	var files []database.FileMetadata
-	if err := database.DB.Where("job_id = ?", job.ID).Find(&files).Error; err != nil {
+	var files []models.FileMetadata
+	if err := models.DB.Where("job_id = ?", job.ID).Find(&files).Error; err != nil {
 		slog.Error("failed to fetch file metadata for deletion", "jobId", job.ID, "error", err)
 	}
 	for _, file := range files {
@@ -364,11 +365,11 @@ func DeleteJobByID(c *gin.Context) {
 			slog.Warn("failed to remove file", "path", file.Path, "error", err)
 		}
 	}
-	if err := database.DB.Where("job_id = ?", job.ID).Delete(&database.FileMetadata{}).Error; err != nil {
+	if err := models.DB.Where("job_id = ?", job.ID).Delete(&models.FileMetadata{}).Error; err != nil {
 		slog.Error("failed to delete file metadata", "jobId", job.ID, "error", err)
 	}
 
-	if err := database.DB.Delete(&job).Error; err != nil {
+	if err := models.DB.Delete(&job).Error; err != nil {
 		response.InternalError(c, "SERVER_ERROR", "failed to delete job")
 		return
 	}
@@ -385,8 +386,8 @@ func DownloadJobFile(c *gin.Context) {
 	}
 	jobID := c.Param("id")
 
-	var job database.ProcessingJob
-	if err := database.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
+	var job models.ProcessingJob
+	if err := models.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
 		response.NotFound(c, "NOT_FOUND", "job not found")
 		return
 	}
@@ -399,8 +400,8 @@ func DownloadJobFile(c *gin.Context) {
 		return
 	}
 
-	var outputFile database.FileMetadata
-	if err := database.DB.First(&outputFile, "job_id = ? AND kind = ?", job.ID, "output").Error; err != nil {
+	var outputFile models.FileMetadata
+	if err := models.DB.First(&outputFile, "job_id = ? AND kind = ?", job.ID, "output").Error; err != nil {
 		response.NotFound(c, "NOT_FOUND", "output file not found")
 		return
 	}
@@ -423,8 +424,8 @@ func GetJobHistory(c *gin.Context) {
 	page := clampInt(queryInt(c, "page", 1), 1, 100000)
 	offset := (page - 1) * limit
 
-	var jobs []database.ProcessingJob
-	if err := database.DB.Where("user_id = ?", userID).
+	var jobs []models.ProcessingJob
+	if err := models.DB.Where("user_id = ?", userID).
 		Order("created_at desc").
 		Limit(limit).
 		Offset(offset).
@@ -716,7 +717,7 @@ func removeGuestJob(ctx context.Context, token string, jobID uuid.UUID) {
 	redisstore.Client.SRem(ctx, key, jobID.String())
 }
 
-func authorizeJobAccess(c *gin.Context, job *database.ProcessingJob) bool {
+func authorizeJobAccess(c *gin.Context, job *models.ProcessingJob) bool {
 	userID := authUserID(c)
 	if job.UserID != nil {
 		if userID == nil {

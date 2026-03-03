@@ -429,6 +429,142 @@ redis-cli LRANGE queue:organize-pdf:processing 0 -1
 3. Ensure sufficient disk space
 4. Check worker timeout settings
 
+## Sequence Diagrams
+
+### Job Processing Flow (NATS Worker)
+
+```mermaid
+sequenceDiagram
+    participant JS as Job Service
+    participant NATS as NATS JetStream
+    participant W as organize-pdf Worker
+    participant DB as PostgreSQL
+    participant FS as File System
+    participant PC as pdfcpu
+
+    JS->>NATS: Publish JobCreated to dispatch.organize-pdf
+    NATS->>W: Deliver JobCreated event
+
+    W->>W: Validate toolType in AllowedTools
+    W->>DB: UPDATE processing_jobs SET status='processing'
+
+    W->>FS: Read input PDF file(s) from inputPaths
+
+    alt merge-pdf
+        W->>PC: pdfcpu merge [file1.pdf, file2.pdf, ...] -> merged.pdf
+    else split-pdf
+        W->>PC: pdfcpu split input.pdf by page range
+        W->>FS: Create ZIP archive of split pages
+    else remove-pages
+        W->>PC: pdfcpu remove pages [2,4,6] from input.pdf
+    else extract-pages
+        W->>PC: pdfcpu extract pages [1,3,5-7] from input.pdf
+    else organize-pdf (reorder)
+        W->>PC: pdfcpu reorder pages [3,1,2,4] in input.pdf
+    else scan-to-pdf
+        W->>PC: pdfcpu import images to PDF
+    end
+
+    alt Processing succeeds
+        PC-->>W: Output file produced
+        W->>FS: Write output to output directory
+        W->>DB: INSERT file_metadata (kind='output')
+        W->>DB: UPDATE processing_jobs SET status='completed', progress=100
+        W->>NATS: Ack message
+    else Processing fails
+        W->>DB: UPDATE processing_jobs SET status='failed', failure_reason=error
+        W->>NATS: Ack message
+    end
+```
+
+### Merge PDF Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant JS as Job Service
+    participant NATS as NATS JetStream
+    participant W as organize-pdf Worker
+    participant FS as File System
+
+    C->>JS: POST /api/organize-pdf/merge-pdf (files: [doc1.pdf, doc2.pdf, doc3.pdf])
+    JS->>JS: Save all files to uploads/<jobId>/
+    JS->>NATS: Publish JobCreated {inputPaths: [doc1.pdf, doc2.pdf, doc3.pdf]}
+
+    NATS->>W: Deliver JobCreated
+    W->>FS: Read all input PDFs
+    W->>W: pdfcpu.MergeCreateFile(inputPaths, outputPath)
+    W->>FS: Write merged.pdf
+    W-->>W: Job completed
+```
+
+### Split PDF Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant JS as Job Service
+    participant NATS as NATS JetStream
+    participant W as organize-pdf Worker
+    participant FS as File System
+
+    C->>JS: POST /api/organize-pdf/split-pdf {files: [doc.pdf], options: {range: "1-3,5"}}
+    JS->>NATS: Publish JobCreated {inputPaths: [doc.pdf], options: {range: "1-3,5"}}
+
+    NATS->>W: Deliver JobCreated
+    W->>FS: Read input PDF
+    W->>W: Parse page range "1-3,5"
+    W->>W: Extract pages 1, 2, 3, 5 into individual PDFs
+    W->>FS: Create ZIP archive of extracted pages
+    W->>FS: Write output.zip
+    W-->>W: Job completed
+```
+
+### Health Check Flow
+
+```mermaid
+sequenceDiagram
+    participant LB as Load Balancer
+    participant W as organize-pdf :8084
+    participant R as Redis
+    participant N as NATS
+
+    LB->>W: GET /healthz
+    W->>R: PING (2s timeout)
+    alt Redis unhealthy
+        W-->>LB: 503 {"status": "unhealthy", "redis": "error"}
+    end
+    W->>N: Check connection status
+    alt NATS disconnected
+        W-->>LB: 503 {"status": "unhealthy", "nats": "disconnected"}
+    else All healthy
+        W-->>LB: 200 {"status": "healthy"}
+    end
+```
+
+## Error Flows (Detailed)
+
+### Processing Error Matrix
+
+| Error Type | Tool(s) Affected | Handling | Retry |
+|------------|-----------------|----------|-------|
+| Invalid tool type | All | Reject, status=failed | No |
+| Input file missing | All | status=failed | No |
+| Corrupted PDF | All | pdfcpu returns error, status=failed | No |
+| Invalid page range | split, remove, extract, organize | status=failed, "invalid page range" | No |
+| Page number out of bounds | split, remove, extract, organize | status=failed | No |
+| Missing required option | remove, extract, organize | status=failed, "missing X option" | No |
+| Empty merge (no files) | merge-pdf | status=failed, "no files" | No |
+| Disk full | All | status=failed | No |
+| Worker crash | All | NATS redelivery (MaxDeliver) | Yes |
+| Database failure | All | Message not acked, NATS redelivery | Yes |
+
+### NATS Redelivery
+
+NATS JetStream handles retries via `AckWait` and `MaxDeliver`:
+- Transient failures (worker crash, DB timeout) trigger redelivery
+- Permanent failures (invalid input, corrupted PDF) are acked to prevent infinite retry
+
 ## Future Enhancements
 
 - Page thumbnails for preview

@@ -13,11 +13,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"esydocs/shared/auth"
 	"esydocs/shared/config"
-	"esydocs/shared/database"
 	"esydocs/shared/logger"
+	"esydocs/shared/metrics"
 	"esydocs/shared/redisstore"
+	"esydocs/shared/telemetry"
+
+	"upload-service/internal/authverify"
+	"upload-service/internal/models"
+	"upload-service/internal/token"
 	"upload-service/routes"
 )
 
@@ -55,30 +59,32 @@ func validateJWTSecret() error {
 func main() {
 	config.LoadConfig()
 	logger.Init("upload-service", os.Getenv("LOG_MODE"))
+	shutdownTracer := telemetry.Init("upload-service")
+	defer shutdownTracer(context.Background())
 
 	if err := validateJWTSecret(); err != nil {
 		slog.Error("JWT secret validation failed", "error", err)
 		os.Exit(1)
 	}
 
-	database.Connect(database.PoolConfig{
+	models.Connect(models.PoolConfig{
 		MaxOpenConns: 20,
 		MaxIdleConns: 10,
 	})
-	database.Migrate()
+	models.Migrate()
 	redisstore.Connect()
 
 	// Fix #15: Initialize Issuer once at startup
-	issuer, err := auth.NewIssuerFromEnv()
+	issuer, err := token.NewIssuerFromEnv()
 	if err != nil {
 		slog.Error("auth issuer init failed", "error", err)
 		os.Exit(1)
 	}
 
 	// Fix #21: Initialize denylist once, pass to handlers
-	var denylist auth.TokenDenylist
+	var denylist authverify.TokenDenylist
 	if getEnvBool("AUTH_DENYLIST_ENABLED", true) {
-		denylist = auth.NewRedisTokenDenylist(redisstore.Client, os.Getenv("AUTH_DENYLIST_PREFIX"))
+		denylist = authverify.NewRedisTokenDenylist(redisstore.Client, os.Getenv("AUTH_DENYLIST_PREFIX"))
 		if denylist == nil {
 			slog.Warn("Token denylist enabled but Redis unavailable")
 		} else {
@@ -89,8 +95,11 @@ func main() {
 	}
 
 	r := gin.Default()
+	r.Use(telemetry.GinTraceMiddleware("upload-service"))
+	r.Use(metrics.GinMetricsMiddleware())
 	r.Use(logger.GinRequestID())
 	r.Use(logger.GinRequestLogger())
+	r.GET("/metrics", metrics.MetricsHandler())
 	// Fix #25: Set max multipart memory
 	r.MaxMultipartMemory = 50 << 20
 	if err := r.SetTrustedProxies(trustedProxies()); err != nil {
@@ -155,21 +164,21 @@ func trustedProxies() []string {
 	return proxies
 }
 
-func buildAuthMiddleware(denylist auth.TokenDenylist) gin.HandlerFunc {
+func buildAuthMiddleware(denylist authverify.TokenDenylist) gin.HandlerFunc {
 	trustGateway := getEnvBool("AUTH_TRUST_GATEWAY_HEADERS", false)
 
-	verifier, err := auth.NewVerifierFromEnv(denylist)
+	verifier, err := authverify.NewVerifierFromEnv(denylist)
 	if err != nil {
 		slog.Error("auth verifier init failed", "error", err)
 		os.Exit(1)
 	}
 
-	guestStore := auth.NewRedisGuestStore(redisstore.Client, auth.GuestStoreConfig{
+	guestStore := authverify.NewRedisGuestStore(redisstore.Client, authverify.GuestStoreConfig{
 		KeyPrefix: os.Getenv("AUTH_GUEST_PREFIX"),
 		KeySuffix: os.Getenv("AUTH_GUEST_SUFFIX"),
 	})
 
-	return auth.GinAuthMiddleware(auth.GinMiddlewareOptions{
+	return authverify.GinAuthMiddleware(authverify.GinMiddlewareOptions{
 		Verifier:            verifier,
 		GuestStore:          guestStore,
 		TrustGatewayHeaders: trustGateway,

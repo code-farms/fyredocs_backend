@@ -1,4 +1,4 @@
-package queue
+package routing
 
 // ToolServiceMap maps tool types to their processing service names.
 // This is the single source of truth for queue routing.

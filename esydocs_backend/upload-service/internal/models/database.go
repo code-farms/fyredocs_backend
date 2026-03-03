@@ -74,6 +74,7 @@ func Connect(pool ...PoolConfig) {
 
 func Migrate() {
 	if err := DB.AutoMigrate(
+		&User{},
 		&ProcessingJob{},
 		&FileMetadata{},
 	); err != nil {

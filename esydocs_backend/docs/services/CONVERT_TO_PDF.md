@@ -450,6 +450,111 @@ docker compose exec convert-to-pdf ls -lh /app/outputs/
 docker compose exec convert-to-pdf file /app/uploads/image.jpg
 ```
 
+## Sequence Diagrams
+
+### Job Processing Flow (NATS Worker)
+
+```mermaid
+sequenceDiagram
+    participant JS as Job Service
+    participant NATS as NATS JetStream
+    participant W as convert-to-pdf Worker
+    participant DB as PostgreSQL
+    participant FS as File System
+    participant LO as LibreOffice/pdfcpu
+
+    JS->>NATS: Publish JobCreated to dispatch.convert-to-pdf
+    NATS->>W: Deliver JobCreated event
+
+    W->>W: Validate toolType in AllowedTools
+    W->>DB: UPDATE processing_jobs SET status='processing'
+
+    W->>FS: Read input file(s) from inputPaths
+
+    alt Office document (word/excel/ppt/html)
+        W->>LO: libreoffice --headless --convert-to pdf --outdir /output input.docx
+        LO-->>FS: output.pdf
+    else Image to PDF
+        W->>LO: pdfcpu import images to PDF
+        LO-->>FS: output.pdf
+    end
+
+    alt Conversion succeeds
+        W->>FS: Verify output file exists
+        W->>DB: INSERT file_metadata (kind='output')
+        W->>DB: UPDATE processing_jobs SET status='completed', progress=100
+        W->>NATS: Ack message
+    else Conversion fails
+        W->>DB: UPDATE processing_jobs SET status='failed', failure_reason=error
+        W->>NATS: Ack message
+    end
+```
+
+### Image-to-PDF Multi-File Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant JS as Job Service
+    participant NATS as NATS JetStream
+    participant W as convert-to-pdf Worker
+    participant FS as File System
+
+    C->>JS: POST /api/convert-to-pdf/image-to-pdf {uploadIds: [id1, id2, id3]}
+    JS->>JS: Consume each upload, move files to job directory
+    JS->>NATS: Publish JobCreated {inputPaths: [img1.jpg, img2.jpg, img3.png]}
+
+    NATS->>W: Deliver JobCreated
+    W->>FS: Read all image files
+    W->>W: pdfcpu: create PDF with one image per page
+    W->>FS: Write combined output.pdf
+    W-->>W: Job completed (3 pages)
+```
+
+### Health Check Flow
+
+```mermaid
+sequenceDiagram
+    participant LB as Load Balancer
+    participant W as convert-to-pdf :8083
+    participant R as Redis
+    participant N as NATS
+
+    LB->>W: GET /healthz
+    W->>R: PING (2s timeout)
+    alt Redis unhealthy
+        W-->>LB: 503 {"status": "unhealthy", "redis": "error"}
+    end
+    W->>N: Check connection status
+    alt NATS disconnected
+        W-->>LB: 503 {"status": "unhealthy", "nats": "disconnected"}
+    else All healthy
+        W-->>LB: 200 {"status": "healthy"}
+    end
+```
+
+## Error Flows
+
+### Processing Errors
+
+| Error Type | Handling | Retry |
+|------------|----------|-------|
+| Invalid tool type | Reject immediately, set status=failed | No |
+| Input file missing | Set status=failed with reason | No |
+| LibreOffice crash/timeout | Set status=failed, log error | NATS redelivery (MaxDeliver) |
+| pdfcpu image import failure | Set status=failed | No |
+| Unsupported image format | Set status=failed | No |
+| Output file not produced | Set status=failed | No |
+| Database update failure | Log error, message not acked | NATS redelivery |
+| Disk full | Set status=failed | No |
+
+### NATS Redelivery
+
+NATS JetStream handles retries via `AckWait` and `MaxDeliver` settings:
+- If a worker crashes mid-processing, the message is redelivered after `AckWait` timeout
+- Messages are redelivered up to `MaxDeliver` times before being moved to a dead letter queue
+- Permanent failures (invalid input, unsupported format) are acked immediately to prevent infinite retry
+
 ## Related Documentation
 
 - [Convert From PDF](../convert-from-pdf/CONVERT_FROM_PDF.md) - Convert PDF to other formats

@@ -226,7 +226,7 @@ paths:
                         $ref: "#/components/schemas/APIError"
                         example:
                           code: USER_ALREADY_EXISTS
-                          message: User already exists
+                          details: User already exists
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -296,7 +296,7 @@ paths:
                         $ref: "#/components/schemas/APIError"
                         example:
                           code: ENDPOINT_DEPRECATED
-                          message: Refresh tokens are no longer supported. Please login again to get a new access token.
+                          details: Refresh tokens are no longer supported. Please login again to get a new access token.
 
   /auth/me:
     get:
@@ -1374,13 +1374,13 @@ components:
 
     APIError:
       type: object
-      required: [code, message]
+      required: [code, details]
       properties:
         code:
           type: string
           description: Machine-readable error code (e.g. INVALID_INPUT, NOT_FOUND)
           example: INVALID_INPUT
-        message:
+        details:
           type: string
           description: Human-readable error description
           example: Invalid request body
@@ -1631,7 +1631,7 @@ components:
                     $ref: "#/components/schemas/APIError"
                     example:
                       code: INVALID_INPUT
-                      message: Invalid request body
+                      details: Invalid request body
 
     Unauthorized:
       description: Authentication required or invalid credentials
@@ -1651,7 +1651,7 @@ components:
                     $ref: "#/components/schemas/APIError"
                     example:
                       code: UNAUTHORIZED
-                      message: Unauthorized
+                      details: Unauthorized
 
     NotFound:
       description: Resource not found
@@ -1671,7 +1671,7 @@ components:
                     $ref: "#/components/schemas/APIError"
                     example:
                       code: NOT_FOUND
-                      message: Resource not found
+                      details: Resource not found
 
     RateLimited:
       description: Rate limit exceeded
@@ -1697,7 +1697,7 @@ components:
                     $ref: "#/components/schemas/APIError"
                     example:
                       code: RATE_LIMITED
-                      message: Too many requests
+                      details: Too many requests
 
     InternalError:
       description: Internal server error
@@ -1717,4 +1717,4 @@ components:
                     $ref: "#/components/schemas/APIError"
                     example:
                       code: SERVER_ERROR
-                      message: An unexpected error occurred
+                      details: An unexpected error occurred
