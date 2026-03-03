@@ -1,36 +1,42 @@
+# ---- Builder Stage ----
 FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
-COPY go.mod go.sum ./
-RUN go mod download
+# Download shared module dependencies
+COPY shared/go.mod shared/go.sum* ./shared/
+RUN cd shared && go mod download
 
-COPY . .
+# Download service dependencies
+COPY organize-pdf/go.mod organize-pdf/go.sum* ./organize-pdf/
+RUN cd organize-pdf && go mod download
 
-ENV CGO_ENABLED=0 GOOS=linux
-RUN go build -trimpath -ldflags="-s -w" -o /app/bin/organize-pdf .
+# Copy source code
+COPY shared/ ./shared/
+COPY organize-pdf/ ./organize-pdf/
 
-# Use alpine with PDF processing dependencies
+# Build the binary
+RUN cd organize-pdf && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/bin/organize-pdf .
+
+# ---- Runtime Stage ----
 FROM alpine:3.19
 
-# Install dependencies for PDF operations
 RUN apk add --no-cache \
-        ca-certificates \
-        poppler-utils \
-        && adduser -D -u 10001 appuser 2>/dev/null || true
+    poppler-utils \
+    && rm -rf /var/cache/apk/*
+
+RUN adduser -D -u 10001 appuser
 
 WORKDIR /app
 
-COPY --from=builder /app/bin/organize-pdf ./organize-pdf
+RUN mkdir -p uploads outputs
 
-RUN mkdir -p uploads outputs \
-    && chown -R appuser:appuser /app
-
-VOLUME /app/uploads
-VOLUME /app/outputs
+COPY --from=builder /app/bin/organize-pdf .
 
 USER appuser
 
 EXPOSE 8084
+
+VOLUME /app/uploads /app/outputs
 
 CMD ["./organize-pdf"]

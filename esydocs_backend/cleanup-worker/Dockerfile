@@ -1,24 +1,31 @@
+# ---- Builder Stage ----
 FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
-COPY go.mod go.sum ./
-RUN go mod download
+# Download shared module dependencies
+COPY shared/go.mod shared/go.sum* ./shared/
+RUN cd shared && go mod download
 
-COPY . .
+# Download service dependencies
+COPY cleanup-worker/go.mod cleanup-worker/go.sum* ./cleanup-worker/
+RUN cd cleanup-worker && go mod download
 
-ENV CGO_ENABLED=0 GOOS=linux
-RUN go build -trimpath -ldflags="-s -w" -o /app/bin/cleanup-worker .
+# Copy source code
+COPY shared/ ./shared/
+COPY cleanup-worker/ ./cleanup-worker/
 
+# Build the binary
+RUN cd cleanup-worker && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/bin/cleanup-worker .
+
+# ---- Runtime Stage ----
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates \
-    && adduser -D -u 10001 appuser
+RUN adduser -D -u 10001 appuser
 
 WORKDIR /app
 
-COPY --from=builder /app/bin/cleanup-worker ./cleanup-worker
-COPY .env ./
+COPY --from=builder /app/bin/cleanup-worker .
 
 USER appuser
 

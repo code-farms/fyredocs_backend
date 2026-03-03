@@ -51,8 +51,8 @@ services:
   # ==================== API GATEWAY ====================
   api-gateway:
     build:
-      context: ./api-gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: api-gateway/Dockerfile
     restart: always
     ports:
       - "8080:8080"
@@ -101,8 +101,8 @@ services:
   # ==================== UPLOAD SERVICE ====================
   upload-service:
     build:
-      context: ./upload-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: upload-service/Dockerfile
     restart: always
     ports:
       - "8081:8081"
@@ -170,8 +170,8 @@ services:
   # ==================== CONVERT FROM PDF SERVICE ====================
   convert-from-pdf:
     build:
-      context: ./convert-from-pdf
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: convert-from-pdf/Dockerfile
     restart: always
     environment:
       PORT: "8082"
@@ -201,8 +201,8 @@ services:
   # ==================== CONVERT TO PDF SERVICE ====================
   convert-to-pdf:
     build:
-      context: ./convert-to-pdf
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: convert-to-pdf/Dockerfile
     restart: always
     environment:
       PORT: "8083"
@@ -232,8 +232,8 @@ services:
   # ==================== ORGANIZE PDF SERVICE ====================
   organize-pdf:
     build:
-      context: ./organize-pdf
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: organize-pdf/Dockerfile
     restart: always
     ports:
       - "8084:8084"
@@ -279,8 +279,8 @@ services:
   # ==================== OPTIMIZE PDF SERVICE ====================
   optimize-pdf:
     build:
-      context: ./optimize-pdf
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: optimize-pdf/Dockerfile
     restart: always
     ports:
       - "8085:8085"
@@ -330,8 +330,8 @@ services:
   # ==================== CLEANUP WORKER ====================
   cleanup-worker:
     build:
-      context: ./cleanup-worker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: cleanup-worker/Dockerfile
     restart: always
     environment:
       DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable

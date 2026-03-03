@@ -1,44 +1,45 @@
-FROM golang:1.23-alpine AS builder
+# ---- Builder Stage ----
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
-COPY go.mod go.sum ./
-RUN go mod download
+# Download shared module dependencies
+COPY shared/go.mod shared/go.sum* ./shared/
+RUN cd shared && go mod download
 
-COPY . .
+# Download service dependencies
+COPY optimize-pdf/go.mod optimize-pdf/go.sum* ./optimize-pdf/
+RUN cd optimize-pdf && go mod download
 
-ENV CGO_ENABLED=0 GOOS=linux
-RUN go build -trimpath -ldflags="-s -w" -o /app/bin/optimize-pdf .
+# Copy source code
+COPY shared/ ./shared/
+COPY optimize-pdf/ ./optimize-pdf/
 
-# Runtime image with PDF processing dependencies
+# Build the binary
+RUN cd optimize-pdf && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/bin/optimize-pdf .
+
+# ---- Runtime Stage ----
 FROM alpine:3.19
 
-# Install all required dependencies for optimize-pdf
-# - ca-certificates: SSL/TLS support
-# - poppler-utils: pdftoppm for PDF to image conversion (OCR workflow)
-# - ghostscript: PDF repair and rebuilding
-# - tesseract-ocr: OCR engine for text recognition
-# - tesseract-ocr-data-eng: English language data (default)
 RUN apk add --no-cache \
-        ca-certificates \
-        poppler-utils \
-        ghostscript \
-        tesseract-ocr \
-        tesseract-ocr-data-eng \
-    && adduser -D -u 10001 appuser 2>/dev/null || true
+    poppler-utils \
+    ghostscript \
+    tesseract-ocr \
+    tesseract-ocr-data-eng \
+    && rm -rf /var/cache/apk/*
+
+RUN adduser -D -u 10001 appuser
 
 WORKDIR /app
 
-COPY --from=builder /app/bin/optimize-pdf ./optimize-pdf
+RUN mkdir -p uploads outputs
 
-RUN mkdir -p uploads outputs \
-    && chown -R appuser:appuser /app
-
-VOLUME /app/uploads
-VOLUME /app/outputs
+COPY --from=builder /app/bin/optimize-pdf .
 
 USER appuser
 
 EXPOSE 8085
+
+VOLUME /app/uploads /app/outputs
 
 CMD ["./optimize-pdf"]

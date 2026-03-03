@@ -1,25 +1,31 @@
+# ---- Builder Stage ----
 FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
-COPY go.mod ./
-RUN go mod download
+# Download shared module dependencies
+COPY shared/go.mod shared/go.sum* ./shared/
+RUN cd shared && go mod download
 
-COPY . .
+# Download service dependencies
+COPY api-gateway/go.mod api-gateway/go.sum* ./api-gateway/
+RUN cd api-gateway && go mod download
 
-ENV CGO_ENABLED=0 GOOS=linux
-RUN go build -trimpath -ldflags="-s -w" -o /app/bin/api-gateway .
+# Copy source code
+COPY shared/ ./shared/
+COPY api-gateway/ ./api-gateway/
 
+# Build the binary
+RUN cd api-gateway && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/bin/api-gateway .
+
+# ---- Runtime Stage ----
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates \
-    && adduser -D -u 10001 appuser
+RUN adduser -D -u 10001 appuser
 
 WORKDIR /app
 
-COPY --from=builder /app/bin/api-gateway ./api-gateway
-
-RUN chown -R appuser:appuser /app
+COPY --from=builder /app/bin/api-gateway .
 
 USER appuser
 

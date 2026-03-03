@@ -1,6 +1,7 @@
 package processing
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,14 +18,14 @@ type Result struct {
 	Metadata   map[string]interface{}
 }
 
-func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (Result, error) {
+func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (Result, error) {
 	if outputDir == "" {
 		outputDir = "outputs"
 	}
 	if len(inputPaths) == 0 {
 		return Result{}, fmt.Errorf("no input files provided")
 	}
-	if err := os.MkdirAll(outputDir, os.ModePerm); err != nil {
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
 		return Result{}, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -39,10 +40,10 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 		metadata, err = compressPDF(inputPaths[0], outputPath, options)
 	case "repair-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = repairPDF(inputPaths[0], outputPath)
+		err = repairPDF(ctx, inputPaths[0], outputPath)
 	case "ocr-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		metadata, err = ocrPDF(inputPaths[0], outputPath, options)
+		metadata, err = ocrPDF(ctx, inputPaths[0], outputPath, options)
 	default:
 		err = fmt.Errorf("unsupported tool type: %s", toolType)
 	}
@@ -55,7 +56,6 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 		"outputFilePath": outputPath,
 		"inputPaths":     inputPaths,
 	}
-	// Merge additional metadata
 	for k, v := range metadata {
 		meta[k] = v
 	}

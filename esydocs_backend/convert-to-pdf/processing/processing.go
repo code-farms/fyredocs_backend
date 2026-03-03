@@ -1,6 +1,7 @@
 package processing
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,15 +18,14 @@ type Result struct {
 	Metadata   map[string]interface{}
 }
 
-
-func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (Result, error) {
+func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (Result, error) {
 	if outputDir == "" {
 		outputDir = "outputs"
 	}
 	if len(inputPaths) == 0 {
 		return Result{}, fmt.Errorf("no input files provided")
 	}
-	if err := os.MkdirAll(outputDir, os.ModePerm); err != nil {
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
 		return Result{}, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -36,16 +36,16 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 	switch toolType {
 	case "word-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = officeToPDF(inputPaths[0], outputPath, "docx")
+		err = officeToPDF(ctx, inputPaths[0], outputPath, "docx")
 	case "ppt-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = officeToPDF(inputPaths[0], outputPath, "pptx")
+		err = officeToPDF(ctx, inputPaths[0], outputPath, "pptx")
 	case "excel-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = officeToPDF(inputPaths[0], outputPath, "xlsx")
+		err = officeToPDF(ctx, inputPaths[0], outputPath, "xlsx")
 	case "html-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = officeToPDF(inputPaths[0], outputPath, "html")
+		err = officeToPDF(ctx, inputPaths[0], outputPath, "html")
 	case "image-to-pdf", "img-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = imageToPDF(inputPaths, outputPath)
@@ -146,6 +146,3 @@ func copyFile(src, dst string) (err error) {
 	}
 	return out.Sync()
 }
-
-// Legacy ConvertAPI functions removed - now using free open-source tools
-// See processing_free.go for implementations using pdfcpu, LibreOffice, and Poppler

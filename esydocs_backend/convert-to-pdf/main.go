@@ -2,18 +2,24 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
-	"convert-to-pdf/config"
-	"convert-to-pdf/database"
-	"convert-to-pdf/redisstore"
-	"convert-to-pdf/worker"
+	"esydocs/shared/config"
+	"esydocs/shared/database"
+	"esydocs/shared/pdfhandlers"
+	"esydocs/shared/redisstore"
+	"esydocs/shared/worker"
+
+	"convert-to-pdf/processing"
 )
 
 func main() {
@@ -24,35 +30,105 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go worker.Run(ctx)
+
+	processFunc := func(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (*worker.ProcessResult, error) {
+		result, err := processing.ProcessFile(ctx, jobID, toolType, inputPaths, options, outputDir)
+		if err != nil {
+			return nil, err
+		}
+		return &worker.ProcessResult{OutputPath: result.OutputPath, Metadata: result.Metadata}, nil
+	}
+
+	go worker.Run(ctx, worker.WorkerConfig{
+		ServiceName: "convert-to-pdf",
+		AllowedTools: map[string]bool{
+			"word-to-pdf":   true,
+			"ppt-to-pdf":    true,
+			"excel-to-pdf":  true,
+			"html-to-pdf":   true,
+			"image-to-pdf":  true, "img-to-pdf": true,
+			"compress-pdf":  true,
+			"merge-pdf":     true,
+			"split-pdf":     true,
+			"protect-pdf":   true,
+			"unlock-pdf":    true,
+			"watermark-pdf": true,
+			"edit-pdf":      true,
+			"sign-pdf":      true,
+		},
+		Process:     processFunc,
+		RedisClient: redisstore.Client,
+		DB:          database.DB,
+	})
 
 	r := gin.New()
+	r.Use(gin.Recovery())
 	if err := r.SetTrustedProxies(trustedProxies()); err != nil {
-		panic(err)
+		slog.Error("failed to set trusted proxies", "error", err)
+		os.Exit(1)
 	}
+
 	r.GET("/healthz", func(c *gin.Context) {
-		c.String(200, "ok")
+		hctx, hcancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer hcancel()
+		if err := redisstore.Client.Ping(hctx).Err(); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "redis": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
+
+	h := pdfhandlers.NewHandlers(pdfhandlers.HandlerConfig{
+		SupportedTools: map[string]bool{
+			"word-to-pdf":   true,
+			"ppt-to-pdf":    true,
+			"excel-to-pdf":  true,
+			"html-to-pdf":   true,
+			"image-to-pdf":  true, "img-to-pdf": true,
+			"compress-pdf":  true,
+			"merge-pdf":     true,
+			"split-pdf":     true,
+			"protect-pdf":   true,
+			"unlock-pdf":    true,
+			"watermark-pdf": true,
+			"edit-pdf":      true,
+			"sign-pdf":      true,
+		},
+		Normalizations: map[string]string{
+			"img-to-pdf": "image-to-pdf",
+		},
+		OutputMappings: map[string]pdfhandlers.OutputMapping{
+			"split-pdf": {Extension: ".zip", ContentType: "application/zip"},
+		},
+		DB: database.DB,
+	})
+	api := r.Group("/api/convert-to-pdf")
+	h.RegisterRoutes(api)
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8083"
 	}
 
-	serverErr := make(chan error, 1)
+	srv := &http.Server{Addr: ":" + port, Handler: r}
 	go func() {
-		serverErr <- r.Run(fmt.Sprintf(":%s", port))
+		slog.Info("convert-to-pdf listening", "port", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("server failed", "error", err)
+			os.Exit(1)
+		}
 	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case <-stop:
-		cancel()
-	case err := <-serverErr:
-		if err != nil {
-			panic(err)
-		}
+	<-stop
+
+	slog.Info("shutting down")
+	cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("server shutdown error", "error", err)
 	}
 }
 
@@ -61,7 +137,6 @@ func trustedProxies() []string {
 	if raw == "" {
 		return []string{"127.0.0.1", "::1"}
 	}
-
 	parts := strings.Split(raw, ",")
 	proxies := make([]string, 0, len(parts))
 	for _, part := range parts {
@@ -73,6 +148,5 @@ func trustedProxies() []string {
 	if len(proxies) == 0 {
 		return []string{"127.0.0.1", "::1"}
 	}
-
 	return proxies
 }

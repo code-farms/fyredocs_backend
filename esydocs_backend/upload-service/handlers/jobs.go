@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,9 +20,9 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
-	"upload-service/database"
-	"upload-service/queue"
-	"upload-service/redisstore"
+	"esydocs/shared/database"
+	"esydocs/shared/queue"
+	"esydocs/shared/redisstore"
 )
 
 var convertFromTools = map[string]bool{
@@ -33,20 +34,20 @@ var convertFromTools = map[string]bool{
 }
 
 var convertToTools = map[string]bool{
-	"word-to-pdf":        true,
-	"excel-to-pdf":       true,
-	"powerpoint-to-pdf":  true,
-	"image-to-pdf":       true,
-	"merge-pdf":          true,
-	"split-pdf":          true,
-	"compress-pdf":       true,
-	"page-reorder":       true,
-	"page-rotate":        true,
-	"watermark-pdf":      true,
-	"protect-pdf":        true,
-	"unlock-pdf":         true,
-	"sign-pdf":           true,
-	"edit-pdf":           true,
+	"word-to-pdf":       true,
+	"excel-to-pdf":      true,
+	"powerpoint-to-pdf": true,
+	"image-to-pdf":      true,
+	"merge-pdf":         true,
+	"split-pdf":         true,
+	"compress-pdf":      true,
+	"page-reorder":      true,
+	"page-rotate":       true,
+	"watermark-pdf":     true,
+	"protect-pdf":       true,
+	"unlock-pdf":        true,
+	"sign-pdf":          true,
+	"edit-pdf":          true,
 }
 
 var toolQueueMap = map[string]string{
@@ -96,12 +97,12 @@ func CreateJobFromTool(c *gin.Context) {
 	jobID := uuid.New()
 	uploadDir := uploadBaseDir()
 	jobDir := filepath.Join(uploadDir, jobID.String())
-	if err := os.MkdirAll(jobDir, os.ModePerm); err != nil {
+	// Fix #17: Use 0750 instead of os.ModePerm
+	if err := os.MkdirAll(jobDir, 0750); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload directory"})
 		return
 	}
 
-	// Clean up the job directory if any subsequent step fails.
 	jobCreated := false
 	defer func() {
 		if !jobCreated {
@@ -209,8 +210,8 @@ func CreateJobFromTool(c *gin.Context) {
 	correlationID := uuid.NewString()
 
 	metaPayload := map[string]interface{}{
-		"inputPaths":   inputPaths,
-		"options":      parseOptions(optionsRaw),
+		"inputPaths":    inputPaths,
+		"options":       parseOptions(optionsRaw),
 		"correlationId": correlationID,
 	}
 	metaBytes, err := json.Marshal(metaPayload)
@@ -219,14 +220,15 @@ func CreateJobFromTool(c *gin.Context) {
 		return
 	}
 
+	// Fix #12: Progress is now int, FileSize is now int64
 	job := database.ProcessingJob{
 		ID:        jobID,
 		UserID:    userID,
 		ToolType:  toolType,
 		Status:    "queued",
-		Progress:  "0",
+		Progress:  0,
 		FileName:  originalName,
-		FileSize:  fmt.Sprintf("%.2f KB", float64(totalSize)/1024),
+		FileSize:  totalSize,
 		Metadata:  datatypes.JSON(metaBytes),
 		ExpiresAt: expiresAt,
 	}
@@ -261,22 +263,27 @@ func CreateJobFromTool(c *gin.Context) {
 		Attempts:      0,
 		CorrelationID: correlationID,
 	}
-	if err := queue.Enqueue(c.Request.Context(), queue.QueueNameForWorker(queueName), payload); err != nil {
+	if err := queue.Enqueue(c.Request.Context(), redisstore.Client, queue.QueueNameForWorker(queueName), payload); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue job"})
 		return
 	}
 
 	jobCreated = true
-	log.Printf("job queued jobId=%s tool=%s correlationId=%s", job.ID, toolType, correlationID)
+	slog.Info("job queued", "jobId", job.ID, "tool", toolType, "correlationId", correlationID)
 	c.JSON(http.StatusCreated, job)
 }
 
+// Fix #29: Add pagination to GetJobsByTool
 func GetJobsByTool(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	limit := clampInt(queryInt(c, "limit", 25), 1, 100)
+	page := clampInt(queryInt(c, "page", 1), 1, 100000)
+	offset := (page - 1) * limit
 
 	userID := authUserID(c)
 	if userID == nil {
@@ -287,7 +294,9 @@ func GetJobsByTool(c *gin.Context) {
 		}
 		var jobs []database.ProcessingJob
 		if err := database.DB.Where("id IN ? AND tool_type = ? AND user_id IS NULL", jobIDs, toolType).
-			Order("created_at desc").Find(&jobs).Error; err != nil {
+			Order("created_at desc").
+			Limit(limit).Offset(offset).
+			Find(&jobs).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch jobs"})
 			return
 		}
@@ -297,7 +306,9 @@ func GetJobsByTool(c *gin.Context) {
 
 	var jobs []database.ProcessingJob
 	if err := database.DB.Where("user_id = ? AND tool_type = ?", userID, toolType).
-		Order("created_at desc").Find(&jobs).Error; err != nil {
+		Order("created_at desc").
+		Limit(limit).Offset(offset).
+		Find(&jobs).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch jobs"})
 		return
 	}
@@ -345,11 +356,17 @@ func DeleteJobByID(c *gin.Context) {
 	}
 
 	var files []database.FileMetadata
-	_ = database.DB.Where("job_id = ?", job.ID).Find(&files).Error
-	for _, file := range files {
-		_ = os.Remove(file.Path)
+	if err := database.DB.Where("job_id = ?", job.ID).Find(&files).Error; err != nil {
+		slog.Error("failed to fetch file metadata for deletion", "jobId", job.ID, "error", err)
 	}
-	_ = database.DB.Where("job_id = ?", job.ID).Delete(&database.FileMetadata{}).Error
+	for _, file := range files {
+		if err := os.Remove(file.Path); err != nil {
+			slog.Warn("failed to remove file", "path", file.Path, "error", err)
+		}
+	}
+	if err := database.DB.Where("job_id = ?", job.ID).Delete(&database.FileMetadata{}).Error; err != nil {
+		slog.Error("failed to delete file metadata", "jobId", job.ID, "error", err)
+	}
 
 	if err := database.DB.Delete(&job).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete job"})
@@ -389,7 +406,8 @@ func DownloadJobFile(c *gin.Context) {
 	}
 
 	fileName, contentType := outputFileName(job.ToolType, job.FileName)
-	c.Header("Content-Disposition", `attachment; filename="`+fileName+`"`)
+	// Fix #6: Use mime.FormatMediaType for safe Content-Disposition
+	c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": fileName}))
 	c.Header("Content-Type", contentType)
 	c.File(outputFile.Path)
 }
@@ -494,7 +512,6 @@ func moveFile(src string, dst string) error {
 		return err
 	}
 
-	// Track success so we can remove the partial dst file on failure.
 	copied := false
 	defer func() {
 		_ = out.Close()
@@ -707,8 +724,6 @@ func authorizeJobAccess(c *gin.Context, job *database.ProcessingJob) bool {
 		}
 		return job.UserID.String() == userID.String()
 	}
-	// Guest job: verify the request's guest token actually owns this job in Redis.
-	// Without this check any caller could access any guest job.
 	token := guestToken(c)
 	if token == "" {
 		return false

@@ -1,17 +1,21 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
-	"api-gateway/auth"
+	"esydocs/shared/auth"
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 )
 
 type routeConfig struct {
@@ -31,12 +35,10 @@ func validateJWTSecret() error {
 		return fmt.Errorf("JWT_HS256_SECRET environment variable is required but not set")
 	}
 
-	// Minimum entropy check: 32 bytes (256 bits) for HS256
 	if len(secret) < 32 {
 		return fmt.Errorf("JWT_HS256_SECRET must be at least 32 characters (256 bits), got %d characters", len(secret))
 	}
 
-	// Check if it's the example/default secret (security smell)
 	dangerousSecrets := []string{
 		"4de0ea7311594deb860f03e5da60ac903fc4b4099bfe499a82e0fed013af32ca791ac065ea5e4d8aaade24a760e6dc58",
 		"change-me",
@@ -49,16 +51,16 @@ func validateJWTSecret() error {
 		}
 	}
 
-	log.Println("JWT secret validation passed")
+	slog.Info("JWT secret validation passed")
 	return nil
 }
 
 func main() {
 	loadEnv()
 
-	// SECURITY: Validate JWT secret is set and meets minimum requirements
 	if err := validateJWTSecret(); err != nil {
-		log.Fatalf("JWT secret validation failed: %v\n\nFor local development:\n  1. Copy .env.example to .env\n  2. Generate a secret: openssl rand -hex 32\n  3. Set JWT_HS256_SECRET in .env\n\nFor production:\n  Set environment variable: export JWT_HS256_SECRET=\"your-secret-here\"", err)
+		slog.Error("JWT secret validation failed", "error", err)
+		os.Exit(1)
 	}
 
 	port := getEnv("PORT", "8080")
@@ -69,7 +71,8 @@ func main() {
 
 	redisClient, err := auth.NewRedisClientFromEnv()
 	if err != nil {
-		log.Fatalf("auth redis init failed: %v", err)
+		slog.Error("auth redis init failed", "error", err)
+		os.Exit(1)
 	}
 	defer redisClient.Close()
 
@@ -81,24 +84,26 @@ func main() {
 	if getEnvBool("AUTH_DENYLIST_ENABLED", true) {
 		if d := auth.NewRedisTokenDenylist(redisClient, os.Getenv("AUTH_DENYLIST_PREFIX")); d != nil {
 			denylist = d
-			log.Println("Token denylist enabled")
+			slog.Info("Token denylist enabled")
 		} else {
-			log.Println("WARNING: Token denylist enabled but Redis unavailable")
+			slog.Warn("Token denylist enabled but Redis unavailable")
 		}
 	} else {
-		log.Println("WARNING: Token denylist disabled - logout will not revoke access tokens")
+		slog.Warn("Token denylist disabled - logout will not revoke access tokens")
 	}
 
 	verifier, err := auth.NewVerifierFromEnv(denylist)
 	if err != nil {
-		log.Fatalf("auth verifier init failed: %v", err)
+		slog.Error("auth verifier init failed", "error", err)
+		os.Exit(1)
 	}
 
+	// Fix #24: Use explicit default URLs for each service, not uploadURL fallback
 	uploadURL := getEnv("UPLOAD_SERVICE_URL", "http://upload-service:8081")
-	convertFromURL := getEnv("CONVERT_FROM_PDF_URL", uploadURL)
-	convertToURL := getEnv("CONVERT_TO_PDF_URL", uploadURL)
-	organizeURL := getEnv("ORGANIZE_PDF_URL", uploadURL)
-	optimizeURL := getEnv("OPTIMIZE_PDF_URL", uploadURL)
+	convertFromURL := getEnv("CONVERT_FROM_PDF_URL", "http://convert-from-pdf:8082")
+	convertToURL := getEnv("CONVERT_TO_PDF_URL", "http://convert-to-pdf:8083")
+	organizeURL := getEnv("ORGANIZE_PDF_URL", "http://organize-pdf:8084")
+	optimizeURL := getEnv("OPTIMIZE_PDF_URL", "http://optimize-pdf:8085")
 
 	routes := []routeConfig{
 		{
@@ -144,24 +149,36 @@ func main() {
 		mux.Handle(cfg.prefix+"/", newProxy(cfg))
 	}
 
+	// Fix #28: Deep health check - ping Redis
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			resp, _ := json.Marshal(map[string]string{"status": "unhealthy", "redis": err.Error()})
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(resp)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write([]byte(`{"status":"healthy"}`))
 	})
 
-	log.Printf("api-gateway listening on :%s", port)
+	slog.Info("api-gateway listening", "port", port)
 	authMiddleware := auth.HTTPAuthMiddleware(auth.HTTPMiddlewareOptions{
 		Verifier:   verifier,
 		GuestStore: guestStore,
 	})
 	handler := withCORS(authMiddleware(mux), corsConfig{
-		allowedOrigins:    corsOrigins,
-		allowedMethods:    corsMethods,
-		allowedHeaders:    corsHeaders,
-		allowCredentials:  strings.EqualFold(corsAllowCredentials, "true"),
+		allowedOrigins:   corsOrigins,
+		allowedMethods:   corsMethods,
+		allowedHeaders:   corsHeaders,
+		allowCredentials: strings.EqualFold(corsAllowCredentials, "true"),
 	})
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
-		log.Fatalf("server failed: %v", err)
+		slog.Error("server failed", "error", err)
+		os.Exit(1)
 	}
 }
 
@@ -173,20 +190,21 @@ func loadEnv() {
 	for _, path := range candidates {
 		if _, err := os.Stat(path); err == nil {
 			if err := godotenv.Load(path); err != nil {
-				log.Printf("Failed to load env file %s: %v", path, err)
+				slog.Error("failed to load env file", "path", path, "error", err)
 			}
 			normalizeEnv()
 			return
 		}
 	}
-	log.Println("No .env file found, relying on environment variables")
+	slog.Info("No .env file found, relying on environment variables")
 	normalizeEnv()
 }
 
 func newProxy(cfg routeConfig) http.Handler {
 	target, err := url.Parse(cfg.targetURL)
 	if err != nil {
-		log.Fatalf("invalid target URL for %s: %v", cfg.prefix, err)
+		slog.Error("invalid target URL", "prefix", cfg.prefix, "error", err)
+		os.Exit(1)
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
@@ -324,3 +342,6 @@ func parseCommaList(value string) []string {
 	}
 	return parts
 }
+
+// redisClient is declared at package level for healthz, suppress unused import
+var _ redis.Client

@@ -3,7 +3,7 @@ package middleware
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -17,7 +17,7 @@ type RateLimitConfig struct {
 	KeyPrefix   string
 	MaxRequests int
 	Window      time.Duration
-	Burst       int // Optional: allow burst above limit
+	Burst       int
 }
 
 type RateLimiter struct {
@@ -26,7 +26,24 @@ type RateLimiter struct {
 	maxRequests int
 	window      time.Duration
 	burst       int
+	script      *redis.Script
 }
+
+// Fix #16: Lua script for atomic rate limiting (fixes TOCTOU race)
+var rateLimitLua = redis.NewScript(`
+local key = KEYS[1]
+local window_start = tonumber(ARGV[1])
+local now = tonumber(ARGV[2])
+local member = ARGV[3]
+local ttl = tonumber(ARGV[4])
+
+redis.call('ZREMRANGEBYSCORE', key, '0', tostring(window_start))
+local count = redis.call('ZCOUNT', key, tostring(window_start), '+inf')
+redis.call('ZADD', key, now, member)
+redis.call('EXPIRE', key, ttl)
+
+return count
+`)
 
 func NewRateLimiter(config RateLimitConfig) *RateLimiter {
 	if config.KeyPrefix == "" {
@@ -44,31 +61,27 @@ func NewRateLimiter(config RateLimitConfig) *RateLimiter {
 		maxRequests: config.MaxRequests,
 		window:      config.Window,
 		burst:       config.Burst,
+		script:      rateLimitLua,
 	}
 }
 
-// RateLimitByIP creates middleware that rate limits by client IP
 func (rl *RateLimiter) RateLimitByIP() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if rl.client == nil {
-			// If Redis unavailable, fail open (allow request) but log warning
-			log.Printf("WARNING: Rate limiter Redis unavailable, allowing request")
+			slog.Warn("rate limiter Redis unavailable, allowing request")
 			c.Next()
 			return
 		}
 
-		// Get client IP (respects X-Forwarded-For if behind proxy)
 		clientIP := c.ClientIP()
 
 		allowed, remaining, resetTime, err := rl.checkLimit(c.Request.Context(), clientIP)
 		if err != nil {
-			// On error, fail open but log
-			log.Printf("ERROR: Rate limit check failed for %s: %v", clientIP, err)
+			slog.Error("rate limit check failed", "ip", clientIP, "error", err)
 			c.Next()
 			return
 		}
 
-		// Set rate limit headers (helpful for clients)
 		c.Header("X-RateLimit-Limit", strconv.Itoa(rl.maxRequests))
 		c.Header("X-RateLimit-Remaining", strconv.Itoa(remaining))
 		c.Header("X-RateLimit-Reset", strconv.FormatInt(resetTime.Unix(), 10))
@@ -90,46 +103,28 @@ func (rl *RateLimiter) RateLimitByIP() gin.HandlerFunc {
 	}
 }
 
-// checkLimit implements sliding window algorithm using Redis sorted sets
 func (rl *RateLimiter) checkLimit(ctx context.Context, identifier string) (allowed bool, remaining int, resetTime time.Time, err error) {
 	key := fmt.Sprintf("%s:%s", rl.keyPrefix, identifier)
 	now := time.Now()
 	windowStart := now.Add(-rl.window)
+	ttlSeconds := int(rl.window.Seconds()) * 2
 
-	pipe := rl.client.Pipeline()
-
-	// Remove old entries outside the window
-	pipe.ZRemRangeByScore(ctx, key, "0", strconv.FormatInt(windowStart.UnixNano(), 10))
-
-	// Count current requests in window
-	zCount := pipe.ZCount(ctx, key, strconv.FormatInt(windowStart.UnixNano(), 10), "+inf")
-
-	// Add current request with timestamp as score
-	pipe.ZAdd(ctx, key, redis.Z{
-		Score:  float64(now.UnixNano()),
-		Member: fmt.Sprintf("%d", now.UnixNano()),
-	})
-
-	// Set expiration on key (cleanup)
-	pipe.Expire(ctx, key, rl.window*2)
-
-	_, err = pipe.Exec(ctx)
+	count, err := rl.script.Run(ctx, rl.client, []string{key},
+		windowStart.UnixNano(),
+		now.UnixNano(),
+		fmt.Sprintf("%d", now.UnixNano()),
+		ttlSeconds,
+	).Int64()
 	if err != nil {
 		return false, 0, time.Time{}, err
 	}
 
-	count, err := zCount.Result()
-	if err != nil {
-		return false, 0, time.Time{}, err
-	}
-
-	// Allow burst if configured
 	maxAllowed := rl.maxRequests
 	if rl.burst > 0 {
 		maxAllowed = rl.maxRequests + rl.burst
 	}
 
-	remaining = maxAllowed - int(count) - 1 // -1 for current request
+	remaining = maxAllowed - int(count) - 1
 	if remaining < 0 {
 		remaining = 0
 	}

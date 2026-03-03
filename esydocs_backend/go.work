@@ -1,0 +1,12 @@
+go 1.25.0
+
+use (
+	./api-gateway
+	./cleanup-worker
+	./convert-from-pdf
+	./convert-to-pdf
+	./optimize-pdf
+	./organize-pdf
+	./shared
+	./upload-service
+)

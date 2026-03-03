@@ -2,9 +2,10 @@ package processing
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,19 +17,16 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
-// mergePDFs merges multiple PDF files into one
 func mergePDFs(inputPaths []string, outputPath string) error {
 	if len(inputPaths) < 2 {
 		return fmt.Errorf("merge requires at least 2 PDF files")
 	}
-
-	log.Printf("[INFO] Merging %d PDFs to %s", len(inputPaths), outputPath)
+	slog.Info("merging PDFs", "count", len(inputPaths), "output", outputPath)
 	return api.MergeCreateFile(inputPaths, outputPath, false, nil)
 }
 
-// splitPDF splits a PDF into individual pages or page ranges
 func splitPDF(inputPath string, outputPath string, pageRange string) error {
-	log.Printf("[INFO] Splitting PDF %s with range %s", inputPath, pageRange)
+	slog.Info("splitting PDF", "input", inputPath, "range", pageRange)
 
 	ctx, err := api.ReadContextFile(inputPath)
 	if err != nil {
@@ -36,7 +34,7 @@ func splitPDF(inputPath string, outputPath string, pageRange string) error {
 	}
 
 	pageCount := ctx.PageCount
-	log.Printf("[INFO] PDF has %d pages", pageCount)
+	slog.Info("PDF page count", "pages", pageCount)
 
 	tempDir, err := os.MkdirTemp("", "pdf-split-*")
 	if err != nil {
@@ -44,18 +42,16 @@ func splitPDF(inputPath string, outputPath string, pageRange string) error {
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Parse page range
 	pages := parsePageRange(pageRange, pageCount)
 	if len(pages) == 0 {
 		return fmt.Errorf("invalid page range: %s", pageRange)
 	}
 
-	// Split into individual pages
 	for _, pageNum := range pages {
 		outputFile := filepath.Join(tempDir, fmt.Sprintf("page_%03d.pdf", pageNum))
 		err := api.ExtractPagesFile(inputPath, outputFile, []string{fmt.Sprintf("%d", pageNum)}, nil)
 		if err != nil {
-			log.Printf("[WARN] Failed to extract page %d: %v", pageNum, err)
+			slog.Warn("failed to extract page", "page", pageNum, "error", err)
 			continue
 		}
 	}
@@ -63,9 +59,8 @@ func splitPDF(inputPath string, outputPath string, pageRange string) error {
 	return zipDirectory(tempDir, outputPath)
 }
 
-// removePages removes specified pages from a PDF
 func removePages(inputPath string, outputPath string, pages string) error {
-	log.Printf("[INFO] Removing pages %s from PDF %s", pages, inputPath)
+	slog.Info("removing pages from PDF", "pages", pages, "input", inputPath)
 
 	ctx, err := api.ReadContextFile(inputPath)
 	if err != nil {
@@ -78,7 +73,6 @@ func removePages(inputPath string, outputPath string, pages string) error {
 		return fmt.Errorf("invalid pages specification: %s", pages)
 	}
 
-	// Convert to string slice for pdfcpu
 	pageStrings := make([]string, len(pagesToRemove))
 	for i, p := range pagesToRemove {
 		pageStrings[i] = fmt.Sprintf("%d", p)
@@ -87,9 +81,8 @@ func removePages(inputPath string, outputPath string, pages string) error {
 	return api.RemovePagesFile(inputPath, outputPath, pageStrings, nil)
 }
 
-// extractPages extracts specified pages from a PDF
 func extractPages(inputPath string, outputPath string, pages string) error {
-	log.Printf("[INFO] Extracting pages %s from PDF %s", pages, inputPath)
+	slog.Info("extracting pages from PDF", "pages", pages, "input", inputPath)
 
 	ctx, err := api.ReadContextFile(inputPath)
 	if err != nil {
@@ -102,7 +95,6 @@ func extractPages(inputPath string, outputPath string, pages string) error {
 		return fmt.Errorf("invalid pages specification: %s", pages)
 	}
 
-	// Convert to string slice for pdfcpu
 	pageStrings := make([]string, len(pagesToExtract))
 	for i, p := range pagesToExtract {
 		pageStrings[i] = fmt.Sprintf("%d", p)
@@ -111,9 +103,8 @@ func extractPages(inputPath string, outputPath string, pages string) error {
 	return api.ExtractPagesFile(inputPath, outputPath, pageStrings, nil)
 }
 
-// organizePDF reorders pages in a PDF according to specified order
 func organizePDF(inputPath string, outputPath string, order string) error {
-	log.Printf("[INFO] Organizing PDF %s with order %s", inputPath, order)
+	slog.Info("organizing PDF", "input", inputPath, "order", order)
 
 	ctx, err := api.ReadContextFile(inputPath)
 	if err != nil {
@@ -126,14 +117,12 @@ func organizePDF(inputPath string, outputPath string, order string) error {
 		return fmt.Errorf("invalid page order: %s", order)
 	}
 
-	// Create temp directory for extracted pages
 	tempDir, err := os.MkdirTemp("", "pdf-organize-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Extract pages in the specified order
 	tempFiles := make([]string, len(pageOrder))
 	for i, pageNum := range pageOrder {
 		tempFile := filepath.Join(tempDir, fmt.Sprintf("page_%03d.pdf", i))
@@ -144,36 +133,30 @@ func organizePDF(inputPath string, outputPath string, order string) error {
 		tempFiles[i] = tempFile
 	}
 
-	// Merge pages in new order
 	return api.MergeCreateFile(tempFiles, outputPath, false, nil)
 }
 
-// scanToPDF converts images to PDF (similar to scanning documents)
-func scanToPDF(inputPaths []string, outputPath string, options map[string]interface{}) error {
-	log.Printf("[INFO] Converting %d images to PDF (scan-to-pdf)", len(inputPaths))
+func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, options map[string]interface{}) error {
+	slog.Info("converting images to PDF (scan-to-pdf)", "count", len(inputPaths))
 
 	if len(inputPaths) == 0 {
 		return fmt.Errorf("no input images provided")
 	}
 
-	// Check if OCR is requested
 	ocr, _ := options["ocr"].(bool)
 	if ocr {
-		return scanToPDFWithOCR(inputPaths, outputPath)
+		return scanToPDFWithOCR(ctx, inputPaths, outputPath)
 	}
 
-	// Use pdfcpu to create PDF from images
 	conf := model.NewDefaultConfiguration()
 	return api.ImportImagesFile(inputPaths, outputPath, nil, conf)
 }
 
-// scanToPDFWithOCR converts images to searchable PDF using OCR
-func scanToPDFWithOCR(inputPaths []string, outputPath string) error {
-	log.Printf("[INFO] Converting images to searchable PDF using OCR")
+func scanToPDFWithOCR(ctx context.Context, inputPaths []string, outputPath string) error {
+	slog.Info("converting images to searchable PDF using OCR")
 
-	// Check if tesseract is available
 	if _, err := exec.LookPath("tesseract"); err != nil {
-		return fmt.Errorf("OCR requires tesseract to be installed. Install with: apt-get install tesseract-ocr")
+		return fmt.Errorf("OCR requires tesseract to be installed")
 	}
 
 	tempDir, err := os.MkdirTemp("", "pdf-ocr-*")
@@ -182,18 +165,15 @@ func scanToPDFWithOCR(inputPaths []string, outputPath string) error {
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Process each image with OCR
 	pdfFiles := make([]string, len(inputPaths))
 	for i, imgPath := range inputPaths {
 		baseName := filepath.Base(imgPath)
 		nameWithoutExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 		outputBase := filepath.Join(tempDir, fmt.Sprintf("ocr_%d_%s", i, nameWithoutExt))
 
-		// Tesseract automatically adds .pdf extension
-		cmd := exec.Command("tesseract", imgPath, outputBase, "-l", "eng", "pdf")
+		cmd := exec.CommandContext(ctx, "tesseract", imgPath, outputBase, "-l", "eng", "pdf")
 		if err := cmd.Run(); err != nil {
-			log.Printf("[WARN] OCR failed for %s: %v", imgPath, err)
-			// Fallback to non-OCR conversion for this page
+			slog.Warn("OCR failed, falling back to non-OCR", "image", imgPath, "error", err)
 			pdfFile := outputBase + ".pdf"
 			if err := api.ImportImagesFile([]string{imgPath}, pdfFile, nil, nil); err != nil {
 				return fmt.Errorf("failed to process image %s: %w", imgPath, err)
@@ -204,14 +184,12 @@ func scanToPDFWithOCR(inputPaths []string, outputPath string) error {
 		}
 	}
 
-	// Merge all PDFs
 	if len(pdfFiles) == 1 {
 		return copyFile(pdfFiles[0], outputPath)
 	}
 	return api.MergeCreateFile(pdfFiles, outputPath, false, nil)
 }
 
-// parsePageRange parses page range strings like "1-3,5,7-9" or "all"
 func parsePageRange(rangeStr string, maxPages int) []int {
 	rangeStr = strings.TrimSpace(rangeStr)
 	if rangeStr == "" || rangeStr == "all" {
@@ -260,12 +238,10 @@ func parsePageRange(rangeStr string, maxPages int) []int {
 	return pages
 }
 
-// parsePageOrder parses page order strings like "3,1,2,4" or "1-4"
 func parsePageOrder(order string, maxPages int) []int {
 	return parsePageRange(order, maxPages)
 }
 
-// zipDirectory creates a zip archive from directory contents
 func zipDirectory(sourceDir string, zipPath string) error {
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
@@ -299,9 +275,11 @@ func zipDirectory(sourceDir string, zipPath string) error {
 		if err != nil {
 			return err
 		}
-		defer file.Close()
-
-		_, err = io.Copy(zipEntry, file)
-		return err
+		_, copyErr := io.Copy(zipEntry, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
 	})
 }

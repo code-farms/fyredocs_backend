@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
-	"upload-service/redisstore"
+	"esydocs/shared/redisstore"
 )
 
 type UploadInitRequest struct {
@@ -93,7 +93,8 @@ func UploadChunk(c *gin.Context) {
 
 	tmpDir := uploadTmpDir()
 	chunkDir := filepath.Join(tmpDir, uploadID)
-	if err := os.MkdirAll(chunkDir, os.ModePerm); err != nil {
+	// Fix #17: Use 0750 instead of os.ModePerm
+	if err := os.MkdirAll(chunkDir, 0750); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create chunk directory"})
 		return
 	}
@@ -166,7 +167,8 @@ func CompleteUpload(c *gin.Context) {
 
 	uploadDir := uploadBaseDir()
 	jobDir := filepath.Join(uploadDir, uploadID)
-	if err := os.MkdirAll(jobDir, os.ModePerm); err != nil {
+	// Fix #17: Use 0750 instead of os.ModePerm
+	if err := os.MkdirAll(jobDir, 0750); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload directory"})
 		return
 	}
@@ -177,7 +179,6 @@ func CompleteUpload(c *gin.Context) {
 		return
 	}
 
-	// Validate assembled file size against the configured maximum.
 	if info, err := os.Stat(finalPath); err == nil {
 		maxBytes := maxUploadBytes()
 		if info.Size() > maxBytes {
@@ -199,7 +200,6 @@ func assembleChunks(uploadID string, totalChunks int, outputPath string) error {
 		return err
 	}
 
-	// Track whether assembly succeeded so we can clean up the partial file on failure.
 	assembled := false
 	defer func() {
 		_ = out.Close()
@@ -221,7 +221,6 @@ func assembleChunks(uploadID string, totalChunks int, outputPath string) error {
 		_ = in.Close()
 	}
 
-	// Flush OS buffers before signalling success.
 	if err := out.Sync(); err != nil {
 		return err
 	}

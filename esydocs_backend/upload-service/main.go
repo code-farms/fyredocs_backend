@@ -1,17 +1,22 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log"
+	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"upload-service/auth"
-	"upload-service/config"
-	"upload-service/database"
-	"upload-service/redisstore"
+	"esydocs/shared/auth"
+	"esydocs/shared/config"
+	"esydocs/shared/database"
+	"esydocs/shared/redisstore"
 	"upload-service/routes"
 )
 
@@ -26,12 +31,10 @@ func validateJWTSecret() error {
 		return fmt.Errorf("JWT_HS256_SECRET environment variable is required but not set")
 	}
 
-	// Minimum entropy check: 32 bytes (256 bits) for HS256
 	if len(secret) < 32 {
 		return fmt.Errorf("JWT_HS256_SECRET must be at least 32 characters (256 bits), got %d characters", len(secret))
 	}
 
-	// Check if it's the example/default secret (security smell)
 	dangerousSecrets := []string{
 		"4de0ea7311594deb860f03e5da60ac903fc4b4099bfe499a82e0fed013af32ca791ac065ea5e4d8aaade24a760e6dc58",
 		"change-me",
@@ -44,37 +47,87 @@ func validateJWTSecret() error {
 		}
 	}
 
-	log.Println("JWT secret validation passed")
+	slog.Info("JWT secret validation passed")
 	return nil
 }
 
 func main() {
 	config.LoadConfig()
 
-	// SECURITY: Validate JWT secret is set and meets minimum requirements
 	if err := validateJWTSecret(); err != nil {
-		panic(fmt.Sprintf("JWT secret validation failed: %v\n\nFor local development:\n  1. Copy .env.example to .env\n  2. Generate a secret: openssl rand -hex 32\n  3. Set JWT_HS256_SECRET in .env\n\nFor production:\n  Set environment variable: export JWT_HS256_SECRET=\"your-secret-here\"", err))
+		slog.Error("JWT secret validation failed", "error", err)
+		os.Exit(1)
 	}
 
-	database.Connect()
+	database.Connect(database.PoolConfig{
+		MaxOpenConns: 20,
+		MaxIdleConns: 10,
+	})
 	database.Migrate()
 	redisstore.Connect()
 
-	r := gin.Default()
-	if err := r.SetTrustedProxies(trustedProxies()); err != nil {
-		panic(err)
+	// Fix #15: Initialize Issuer once at startup
+	issuer, err := auth.NewIssuerFromEnv()
+	if err != nil {
+		slog.Error("auth issuer init failed", "error", err)
+		os.Exit(1)
 	}
-	authMiddleware := buildAuthMiddleware()
+
+	// Fix #21: Initialize denylist once, pass to handlers
+	var denylist auth.TokenDenylist
+	if getEnvBool("AUTH_DENYLIST_ENABLED", true) {
+		denylist = auth.NewRedisTokenDenylist(redisstore.Client, os.Getenv("AUTH_DENYLIST_PREFIX"))
+		if denylist == nil {
+			slog.Warn("Token denylist enabled but Redis unavailable")
+		} else {
+			slog.Info("Token denylist enabled")
+		}
+	} else {
+		slog.Warn("Token denylist disabled - logout will not revoke access tokens")
+	}
+
+	r := gin.Default()
+	// Fix #25: Set max multipart memory
+	r.MaxMultipartMemory = 50 << 20
+	if err := r.SetTrustedProxies(trustedProxies()); err != nil {
+		slog.Error("failed to set trusted proxies", "error", err)
+		os.Exit(1)
+	}
+	authMiddleware := buildAuthMiddleware(denylist)
 	r.Use(authMiddleware)
-	routes.SetupUploadRouter(r)
+	routes.SetupUploadRouter(r, issuer, denylist)
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8081"
 	}
-	if err := r.Run(fmt.Sprintf(":%s", port)); err != nil {
-		panic(err)
+
+	// Fix #14: Graceful shutdown
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: r,
 	}
+
+	go func() {
+		slog.Info("upload-service listening", "port", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("server failed", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	slog.Info("shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		slog.Error("server forced to shutdown", "error", err)
+	}
+	redisstore.Close()
+	slog.Info("server exited")
 }
 
 func trustedProxies() []string {
@@ -98,32 +151,18 @@ func trustedProxies() []string {
 	return proxies
 }
 
-func buildAuthMiddleware() gin.HandlerFunc {
-	denylistEnabled := getEnvBool("AUTH_DENYLIST_ENABLED", true)
-	guestPrefix := os.Getenv("AUTH_GUEST_PREFIX")
-	guestSuffix := os.Getenv("AUTH_GUEST_SUFFIX")
+func buildAuthMiddleware(denylist auth.TokenDenylist) gin.HandlerFunc {
 	trustGateway := getEnvBool("AUTH_TRUST_GATEWAY_HEADERS", false)
-
-	var denylist auth.TokenDenylist
-	if denylistEnabled {
-		denylist = auth.NewRedisTokenDenylist(redisstore.Client, os.Getenv("AUTH_DENYLIST_PREFIX"))
-		if denylist == nil {
-			log.Println("WARNING: Token denylist enabled but Redis unavailable - logout will not revoke access tokens")
-		} else {
-			log.Println("Token denylist enabled - access tokens will be revoked on logout")
-		}
-	} else {
-		log.Println("WARNING: Token denylist disabled - logged-out users can still use access tokens until expiration (15 minutes)")
-	}
 
 	verifier, err := auth.NewVerifierFromEnv(denylist)
 	if err != nil {
-		log.Fatalf("auth verifier init failed: %v", err)
+		slog.Error("auth verifier init failed", "error", err)
+		os.Exit(1)
 	}
 
 	guestStore := auth.NewRedisGuestStore(redisstore.Client, auth.GuestStoreConfig{
-		KeyPrefix: guestPrefix,
-		KeySuffix: guestSuffix,
+		KeyPrefix: os.Getenv("AUTH_GUEST_PREFIX"),
+		KeySuffix: os.Getenv("AUTH_GUEST_SUFFIX"),
 	})
 
 	return auth.GinAuthMiddleware(auth.GinMiddlewareOptions{

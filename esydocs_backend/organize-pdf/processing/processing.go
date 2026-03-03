@@ -1,6 +1,7 @@
 package processing
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,14 +18,14 @@ type Result struct {
 	Metadata   map[string]interface{}
 }
 
-func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (Result, error) {
+func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (Result, error) {
 	if outputDir == "" {
 		outputDir = "outputs"
 	}
 	if len(inputPaths) == 0 {
 		return Result{}, fmt.Errorf("no input files provided")
 	}
-	if err := os.MkdirAll(outputDir, os.ModePerm); err != nil {
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
 		return Result{}, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -66,7 +67,7 @@ func ProcessFile(jobID uuid.UUID, toolType string, inputPaths []string, options 
 		err = organizePDF(inputPaths[0], outputPath, order)
 	case "scan-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = scanToPDF(inputPaths, outputPath, options)
+		err = scanToPDF(ctx, inputPaths, outputPath, options)
 	default:
 		err = fmt.Errorf("unsupported tool type: %s", toolType)
 	}

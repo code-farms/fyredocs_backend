@@ -7,16 +7,31 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"upload-service/auth"
+	"esydocs/shared/auth"
+	"esydocs/shared/redisstore"
 	"upload-service/handlers"
 	"upload-service/middleware"
-	"upload-service/redisstore"
 )
 
-func SetupUploadRouter(r *gin.Engine) {
+func SetupUploadRouter(r *gin.Engine, issuer *auth.Issuer, denylist auth.TokenDenylist) {
+	authEndpoints := &handlers.AuthEndpoints{
+		Issuer:   issuer,
+		Denylist: denylist,
+	}
+
+	// Fix #4: Add rate limiting to upload endpoints
+	window := getEnvDuration("RATE_LIMIT_WINDOW", 60*time.Second)
+
+	uploadLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
+		RedisClient: redisstore.Client,
+		KeyPrefix:   "ratelimit:upload",
+		MaxRequests: getEnvInt("RATE_LIMIT_UPLOAD", 30),
+		Window:      window,
+	})
+
 	api := r.Group("/api")
 	{
-		uploads := api.Group("/uploads")
+		uploads := api.Group("/uploads", uploadLimiter.RateLimitByIP())
 		uploads.POST("/init", handlers.InitUpload)
 		uploads.PUT("/:uploadId/chunk", handlers.UploadChunk)
 		uploads.GET("/:uploadId/status", handlers.GetUploadStatus)
@@ -38,9 +53,6 @@ func SetupUploadRouter(r *gin.Engine) {
 
 		api.GET("/jobs/history", auth.RequireAuthenticatedGin(), handlers.GetJobHistory)
 	}
-
-	// Create rate limiters for auth endpoints
-	window := getEnvDuration("RATE_LIMIT_WINDOW", 60*time.Second)
 
 	loginLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
 		RedisClient: redisstore.Client,
@@ -65,12 +77,12 @@ func SetupUploadRouter(r *gin.Engine) {
 
 	authGroup := r.Group("/auth")
 	{
-		authGroup.POST("/signup", signupLimiter.RateLimitByIP(), handlers.Signup)
-		authGroup.POST("/login", loginLimiter.RateLimitByIP(), handlers.Login)
-		authGroup.POST("/refresh", refreshLimiter.RateLimitByIP(), handlers.Refresh)
-		authGroup.GET("/me", handlers.Me)
-		authGroup.GET("/profile", handlers.Profile)
-		authGroup.POST("/logout", handlers.Logout)
+		authGroup.POST("/signup", signupLimiter.RateLimitByIP(), authEndpoints.Signup)
+		authGroup.POST("/login", loginLimiter.RateLimitByIP(), authEndpoints.Login)
+		authGroup.POST("/refresh", refreshLimiter.RateLimitByIP(), authEndpoints.Refresh)
+		authGroup.GET("/me", authEndpoints.Me)
+		authGroup.GET("/profile", authEndpoints.Profile)
+		authGroup.POST("/logout", authEndpoints.Logout)
 	}
 
 	r.GET("/healthz", func(c *gin.Context) {
