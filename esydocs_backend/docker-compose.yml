@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # ==================== ESSENTIALS ====================
+  # ==================== INFRASTRUCTURE ====================
   db:
     image: postgres:15-alpine
     restart: always
@@ -24,7 +24,6 @@ services:
   redis:
     image: redis:7-alpine
     restart: always
-    # Enable AOF persistence so job queue data survives restarts.
     command: redis-server --appendonly yes
     ports:
       - "6379:6379"
@@ -32,6 +31,23 @@ services:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - esydocs_net
+
+  nats:
+    image: nats:2.10-alpine
+    restart: always
+    command: ["--jetstream", "--store_dir=/data", "-m", "8222"]
+    ports:
+      - "4222:4222"   # Client connections
+      - "8222:8222"   # Monitoring HTTP
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -58,16 +74,13 @@ services:
       - "8080:8080"
     environment:
       PORT: "8080"
-      UPLOAD_SERVICE_URL: http://upload-service:8081
-      CONVERT_FROM_PDF_URL: http://convert-from-pdf:8082
-      CONVERT_TO_PDF_URL: http://convert-to-pdf:8083
-      ORGANIZE_PDF_URL: http://organize-pdf:8084
-      OPTIMIZE_PDF_URL: http://optimize-pdf:8085
+      JOB_SERVICE_URL: http://job-service:8081
+      AUTH_SERVICE_URL: http://auth-service:8086
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
       REDIS_DB: "0"
 
-      # JWT Configuration (from environment or .env file)
+      # JWT Configuration
       JWT_HS256_SECRET: ${JWT_HS256_SECRET}
       JWT_ALLOWED_ALGS: "HS256"
       JWT_ISSUER: "esydocs"
@@ -85,6 +98,9 @@ services:
       CORS_ALLOW_METHODS: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
       CORS_ALLOW_HEADERS: "Authorization,Content-Type,X-User-ID,X-Guest-Token"
       CORS_ALLOW_CREDENTIALS: "true"
+
+      # Observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
       interval: 10s
@@ -93,27 +109,29 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      upload-service:
+      auth-service:
+        condition: service_started
+      job-service:
         condition: service_started
     networks:
       - esydocs_net
 
-  # ==================== UPLOAD SERVICE ====================
-  upload-service:
+  # ==================== AUTH SERVICE ====================
+  auth-service:
     build:
       context: .
-      dockerfile: upload-service/Dockerfile
+      dockerfile: auth-service/Dockerfile
     restart: always
     ports:
-      - "8081:8081"
+      - "8086:8086"
     environment:
-      PORT: "8081"
+      PORT: "8086"
       DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
       REDIS_DB: "0"
 
-      # JWT Configuration (from environment or .env file)
+      # JWT Configuration
       JWT_HS256_SECRET: ${JWT_HS256_SECRET}
       JWT_ALLOWED_ALGS: "HS256"
       JWT_ISSUER: "esydocs"
@@ -125,7 +143,6 @@ services:
       AUTH_REFRESH_TTL: "720h"
       AUTH_REFRESH_COOKIE: "refresh_token"
       AUTH_COOKIE_DOMAIN: ""
-      # SECURITY: Set to "true" in production (requires HTTPS). "false" is for local dev only.
       AUTH_COOKIE_SECURE: "false"
       AUTH_COOKIE_SAMESITE: "lax"
 
@@ -139,6 +156,53 @@ services:
       RATE_LIMIT_REFRESH: "10"
       RATE_LIMIT_WINDOW: "60s"
 
+      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+
+      # Observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8086/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - esydocs_net
+
+  # ==================== JOB SERVICE (formerly upload-service) ====================
+  job-service:
+    build:
+      context: .
+      dockerfile: job-service/Dockerfile
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: "8081"
+      DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      NATS_URL: nats://nats:4222
+
+      # JWT Configuration
+      JWT_HS256_SECRET: ${JWT_HS256_SECRET}
+      JWT_ALLOWED_ALGS: "HS256"
+      JWT_ISSUER: "esydocs"
+      JWT_AUDIENCE: "esydocs-api"
+      JWT_CLOCK_SKEW: "60s"
+
+      # Auth settings
+      AUTH_GUEST_PREFIX: "guest"
+      AUTH_GUEST_SUFFIX: "jobs"
+      AUTH_DENYLIST_ENABLED: "true"
+      AUTH_DENYLIST_PREFIX: "denylist:jwt"
+      AUTH_TRUST_GATEWAY_HEADERS: "false"
+
       # File Handling
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
       UPLOAD_DIR: /app/uploads
@@ -146,9 +210,9 @@ services:
       MAX_UPLOAD_MB: "50"
       GUEST_JOB_TTL: 2h
       UPLOAD_TTL: 2h
-      MAX_RETRIES: "3"
-      PROCESSING_TIMEOUT: 30m
-      QUEUE_PREFIX: queue
+
+      # Observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8081/healthz || exit 1"]
       interval: 10s
@@ -162,12 +226,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      nats:
+        condition: service_healthy
       volume-init:
         condition: service_completed_successfully
     networks:
       - esydocs_net
 
-  # ==================== CONVERT FROM PDF SERVICE ====================
+  # ==================== CONVERT FROM PDF (worker) ====================
   convert-from-pdf:
     build:
       context: .
@@ -179,26 +245,27 @@ services:
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
       REDIS_DB: "0"
+      NATS_URL: nats://nats:4222
       UPLOAD_DIR: /app/uploads
       OUTPUT_DIR: /app/outputs
-      QUEUE_PREFIX: queue
-      MAX_RETRIES: "3"
-      PROCESSING_TIMEOUT: 30m
-      # Using free open-source tools: pdfcpu, LibreOffice, Poppler (no API keys needed)
+      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+
+      # Observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
       - uploads_data:/app/uploads
       - outputs_data:/app/outputs
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      nats:
         condition: service_healthy
       volume-init:
         condition: service_completed_successfully
     networks:
       - esydocs_net
 
-  # ==================== CONVERT TO PDF SERVICE ====================
+  # ==================== CONVERT TO PDF (worker) ====================
   convert-to-pdf:
     build:
       context: .
@@ -210,117 +277,88 @@ services:
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
       REDIS_DB: "0"
+      NATS_URL: nats://nats:4222
       UPLOAD_DIR: /app/uploads
       OUTPUT_DIR: /app/outputs
-      QUEUE_PREFIX: queue
-      MAX_RETRIES: "3"
-      PROCESSING_TIMEOUT: 30m
-      # Using free open-source tools: pdfcpu, LibreOffice, Poppler (no API keys needed)
+      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+
+      # Observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
       - uploads_data:/app/uploads
       - outputs_data:/app/outputs
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      nats:
         condition: service_healthy
       volume-init:
         condition: service_completed_successfully
     networks:
       - esydocs_net
 
-  # ==================== ORGANIZE PDF SERVICE ====================
+  # ==================== ORGANIZE PDF (worker) ====================
   organize-pdf:
     build:
       context: .
       dockerfile: organize-pdf/Dockerfile
     restart: always
-    ports:
-      - "8084:8084"
     environment:
       PORT: "8084"
       DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
       REDIS_DB: "0"
+      NATS_URL: nats://nats:4222
       UPLOAD_DIR: /app/uploads
       OUTPUT_DIR: /app/outputs
-      QUEUE_PREFIX: queue
-      MAX_RETRIES: "3"
-      PROCESSING_TIMEOUT: 30m
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
-      # JWT Configuration
-      JWT_HS256_SECRET: ${JWT_HS256_SECRET}
-      JWT_ALLOWED_ALGS: "HS256"
-      JWT_ISSUER: "esydocs"
-      JWT_AUDIENCE: "esydocs-api"
-      JWT_CLOCK_SKEW: "60s"
-
-      # Auth settings
-      AUTH_GUEST_PREFIX: "guest"
-      AUTH_GUEST_SUFFIX: "jobs"
-      AUTH_DENYLIST_ENABLED: "true"
-      AUTH_DENYLIST_PREFIX: "denylist:jwt"
-      AUTH_TRUST_GATEWAY_HEADERS: "false"
+      # Observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
       - uploads_data:/app/uploads
       - outputs_data:/app/outputs
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      nats:
         condition: service_healthy
       volume-init:
         condition: service_completed_successfully
     networks:
       - esydocs_net
 
-  # ==================== OPTIMIZE PDF SERVICE ====================
+  # ==================== OPTIMIZE PDF (worker) ====================
   optimize-pdf:
     build:
       context: .
       dockerfile: optimize-pdf/Dockerfile
     restart: always
-    ports:
-      - "8085:8085"
     environment:
       PORT: "8085"
       DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
       REDIS_DB: "0"
+      NATS_URL: nats://nats:4222
       UPLOAD_DIR: /app/uploads
       OUTPUT_DIR: /app/outputs
-      QUEUE_PREFIX: queue
-      MAX_RETRIES: "3"
-      PROCESSING_TIMEOUT: 30m
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
-
-      # JWT Configuration
-      JWT_HS256_SECRET: ${JWT_HS256_SECRET}
-      JWT_ALLOWED_ALGS: "HS256"
-      JWT_ISSUER: "esydocs"
-      JWT_AUDIENCE: "esydocs-api"
-      JWT_CLOCK_SKEW: "60s"
-
-      # Auth settings
-      AUTH_GUEST_PREFIX: "guest"
-      AUTH_GUEST_SUFFIX: "jobs"
-      AUTH_DENYLIST_ENABLED: "true"
-      AUTH_DENYLIST_PREFIX: "denylist:jwt"
-      AUTH_TRUST_GATEWAY_HEADERS: "false"
 
       # OCR settings
       OCR_DEFAULT_LANGUAGE: "eng"
       OCR_DEFAULT_DPI: "300"
+
+      # Observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
       - uploads_data:/app/uploads
       - outputs_data:/app/outputs
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      nats:
         condition: service_healthy
       volume-init:
         condition: service_completed_successfully
@@ -343,8 +381,9 @@ services:
       UPLOAD_TTL: 2h
       CLEANUP_INTERVAL: 5m
       GUEST_JOB_TTL: 2h
-      MAX_RETRIES: "3"
-      QUEUE_PREFIX: queue
+
+      # Observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
       - uploads_data:/app/uploads
       - outputs_data:/app/outputs
@@ -366,5 +405,6 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  nats_data:
   uploads_data:
   outputs_data:

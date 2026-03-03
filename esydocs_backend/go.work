@@ -2,6 +2,7 @@ go 1.25.0
 
 use (
 	./api-gateway
+	./auth-service
 	./cleanup-worker
 	./convert-from-pdf
 	./convert-to-pdf
@@ -9,4 +10,5 @@ use (
 	./organize-pdf
 	./shared
 	./upload-service
+	./job-service
 )

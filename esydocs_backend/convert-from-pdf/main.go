@@ -15,20 +15,34 @@ import (
 
 	"esydocs/shared/config"
 	"esydocs/shared/logger"
-	"esydocs/shared/database"
-	"esydocs/shared/pdfhandlers"
+	"esydocs/shared/metrics"
+	"esydocs/shared/natsconn"
 	"esydocs/shared/redisstore"
-	"esydocs/shared/worker"
+	"esydocs/shared/telemetry"
 
+	"convert-from-pdf/internal/models"
+	"convert-from-pdf/internal/worker"
 	"convert-from-pdf/processing"
 )
 
 func main() {
 	config.LoadConfig()
 	logger.Init("convert-from-pdf", os.Getenv("LOG_MODE"))
-	database.Connect()
-	database.Migrate()
+	shutdownTracer := telemetry.Init("convert-from-pdf")
+	defer shutdownTracer(context.Background())
+	models.Connect()
+	models.Migrate()
 	redisstore.Connect()
+
+	if err := natsconn.Connect(); err != nil {
+		slog.Error("NATS connection failed", "error", err)
+		os.Exit(1)
+	}
+	defer natsconn.Close()
+	if err := natsconn.EnsureStreams(context.Background()); err != nil {
+		slog.Error("NATS stream setup failed", "error", err)
+		os.Exit(1)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -53,14 +67,18 @@ func main() {
 			"pdf-to-text":  true, "pdf-to-txt": true,
 		},
 		Process:     processFunc,
+		JS:          natsconn.JS,
+		DB:          models.DB,
 		RedisClient: redisstore.Client,
-		DB:          database.DB,
 	})
 
 	r := gin.New()
+	r.Use(telemetry.GinTraceMiddleware("convert-from-pdf"))
+	r.Use(metrics.GinMetricsMiddleware())
 	r.Use(logger.GinRequestID())
 	r.Use(logger.GinRequestLogger())
 	r.Use(gin.Recovery())
+	r.GET("/metrics", metrics.MetricsHandler())
 	if err := r.SetTrustedProxies(trustedProxies()); err != nil {
 		slog.Error("failed to set trusted proxies", "error", err)
 		os.Exit(1)
@@ -73,40 +91,12 @@ func main() {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "redis": err.Error()})
 			return
 		}
+		if natsconn.Conn == nil || !natsconn.Conn.IsConnected() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "nats": "disconnected"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
-
-	h := pdfhandlers.NewHandlers(pdfhandlers.HandlerConfig{
-		SupportedTools: map[string]bool{
-			"pdf-to-image": true, "pdf-to-img": true,
-			"pdf-to-pdfa":  true,
-			"pdf-to-word":  true, "pdf-to-docx": true,
-			"pdf-to-excel": true, "pdf-to-xlsx": true,
-			"pdf-to-ppt":   true, "pdf-to-powerpoint": true, "pdf-to-pptx": true,
-			"pdf-to-html":  true,
-			"pdf-to-text":  true, "pdf-to-txt": true,
-		},
-		Normalizations: map[string]string{
-			"pdf-to-img":        "pdf-to-image",
-			"pdf-to-docx":       "pdf-to-word",
-			"pdf-to-xlsx":       "pdf-to-excel",
-			"pdf-to-powerpoint": "pdf-to-ppt",
-			"pdf-to-pptx":       "pdf-to-ppt",
-			"pdf-to-txt":        "pdf-to-text",
-		},
-		OutputMappings: map[string]pdfhandlers.OutputMapping{
-			"pdf-to-image": {Extension: ".zip", ContentType: "application/zip"},
-			"pdf-to-word":  {Extension: ".docx", ContentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
-			"pdf-to-excel": {Extension: ".xlsx", ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
-			"pdf-to-ppt":   {Extension: ".pptx", ContentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
-			"pdf-to-html":  {Extension: ".zip", ContentType: "application/zip"},
-			"pdf-to-text":  {Extension: ".txt", ContentType: "text/plain"},
-			"pdf-to-pdfa":  {Extension: ".pdf", ContentType: "application/pdf"},
-		},
-		DB: database.DB,
-	})
-	api := r.Group("/api/convert-from-pdf")
-	h.RegisterRoutes(api)
 
 	port := os.Getenv("PORT")
 	if port == "" {

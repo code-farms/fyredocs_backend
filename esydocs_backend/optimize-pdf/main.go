@@ -15,20 +15,34 @@ import (
 
 	"esydocs/shared/config"
 	"esydocs/shared/logger"
-	"esydocs/shared/database"
-	"esydocs/shared/pdfhandlers"
+	"esydocs/shared/metrics"
+	"esydocs/shared/natsconn"
 	"esydocs/shared/redisstore"
-	"esydocs/shared/worker"
+	"esydocs/shared/telemetry"
 
+	"optimize-pdf/internal/models"
+	"optimize-pdf/internal/worker"
 	"optimize-pdf/processing"
 )
 
 func main() {
 	config.LoadConfig()
 	logger.Init("optimize-pdf", os.Getenv("LOG_MODE"))
-	database.Connect()
-	database.Migrate()
+	shutdownTracer := telemetry.Init("optimize-pdf")
+	defer shutdownTracer(context.Background())
+	models.Connect()
+	models.Migrate()
 	redisstore.Connect()
+
+	if err := natsconn.Connect(); err != nil {
+		slog.Error("NATS connection failed", "error", err)
+		os.Exit(1)
+	}
+	defer natsconn.Close()
+	if err := natsconn.EnsureStreams(context.Background()); err != nil {
+		slog.Error("NATS stream setup failed", "error", err)
+		os.Exit(1)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -49,14 +63,18 @@ func main() {
 			"ocr-pdf":      true,
 		},
 		Process:     processFunc,
+		JS:          natsconn.JS,
 		RedisClient: redisstore.Client,
-		DB:          database.DB,
+		DB:          models.DB,
 	})
 
 	r := gin.New()
+	r.Use(telemetry.GinTraceMiddleware("optimize-pdf"))
+	r.Use(metrics.GinMetricsMiddleware())
 	r.Use(logger.GinRequestID())
 	r.Use(logger.GinRequestLogger())
 	r.Use(gin.Recovery())
+	r.GET("/metrics", metrics.MetricsHandler())
 	if err := r.SetTrustedProxies(trustedProxies()); err != nil {
 		slog.Error("failed to set trusted proxies", "error", err)
 		os.Exit(1)
@@ -69,19 +87,12 @@ func main() {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "redis": err.Error()})
 			return
 		}
+		if natsconn.Conn == nil || !natsconn.Conn.IsConnected() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "nats": "disconnected"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
-
-	h := pdfhandlers.NewHandlers(pdfhandlers.HandlerConfig{
-		SupportedTools: map[string]bool{
-			"compress-pdf": true,
-			"repair-pdf":   true,
-			"ocr-pdf":      true,
-		},
-		DB: database.DB,
-	})
-	api := r.Group("/api/optimize-pdf")
-	h.RegisterRoutes(api)
 
 	port := os.Getenv("PORT")
 	if port == "" {

@@ -13,8 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"esydocs/shared/auth"
+	"api-gateway/internal/authverify"
 	"esydocs/shared/logger"
+	"esydocs/shared/metrics"
+	"esydocs/shared/telemetry"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 )
@@ -59,6 +61,8 @@ func validateJWTSecret() error {
 func main() {
 	loadEnv()
 	logger.Init("api-gateway", os.Getenv("LOG_MODE"))
+	shutdownTracer := telemetry.Init("api-gateway")
+	defer shutdownTracer(context.Background())
 
 	if err := validateJWTSecret(); err != nil {
 		slog.Error("JWT secret validation failed", "error", err)
@@ -71,20 +75,20 @@ func main() {
 	corsHeaders := getEnv("CORS_ALLOW_HEADERS", "Authorization,Content-Type,X-User-ID,X-Guest-Token")
 	corsAllowCredentials := getEnv("CORS_ALLOW_CREDENTIALS", "true")
 
-	redisClient, err := auth.NewRedisClientFromEnv()
+	redisClient, err := authverify.NewRedisClientFromEnv()
 	if err != nil {
 		slog.Error("auth redis init failed", "error", err)
 		os.Exit(1)
 	}
 	defer redisClient.Close()
 
-	guestStore := auth.NewRedisGuestStore(redisClient, auth.GuestStoreConfig{
+	guestStore := authverify.NewRedisGuestStore(redisClient, authverify.GuestStoreConfig{
 		KeyPrefix: os.Getenv("AUTH_GUEST_PREFIX"),
 		KeySuffix: os.Getenv("AUTH_GUEST_SUFFIX"),
 	})
-	var denylist auth.TokenDenylist
+	var denylist authverify.TokenDenylist
 	if getEnvBool("AUTH_DENYLIST_ENABLED", true) {
-		if d := auth.NewRedisTokenDenylist(redisClient, os.Getenv("AUTH_DENYLIST_PREFIX")); d != nil {
+		if d := authverify.NewRedisTokenDenylist(redisClient, os.Getenv("AUTH_DENYLIST_PREFIX")); d != nil {
 			denylist = d
 			slog.Info("Token denylist enabled")
 		} else {
@@ -94,54 +98,52 @@ func main() {
 		slog.Warn("Token denylist disabled - logout will not revoke access tokens")
 	}
 
-	verifier, err := auth.NewVerifierFromEnv(denylist)
+	verifier, err := authverify.NewVerifierFromEnv(denylist)
 	if err != nil {
 		slog.Error("auth verifier init failed", "error", err)
 		os.Exit(1)
 	}
 
-	// Fix #24: Use explicit default URLs for each service, not uploadURL fallback
-	uploadURL := getEnv("UPLOAD_SERVICE_URL", "http://upload-service:8081")
-	convertFromURL := getEnv("CONVERT_FROM_PDF_URL", "http://convert-from-pdf:8082")
-	convertToURL := getEnv("CONVERT_TO_PDF_URL", "http://convert-to-pdf:8083")
-	organizeURL := getEnv("ORGANIZE_PDF_URL", "http://organize-pdf:8084")
-	optimizeURL := getEnv("OPTIMIZE_PDF_URL", "http://optimize-pdf:8085")
+	// Job service owns all job CRUD, uploads, and tool endpoints.
+	// Auth routes go to auth-service when it exists, otherwise job-service.
+	jobServiceURL := getEnv("JOB_SERVICE_URL", "http://job-service:8081")
+	authServiceURL := getEnv("AUTH_SERVICE_URL", jobServiceURL) // Phase 2: separate auth-service
 
 	routes := []routeConfig{
 		{
 			prefix:         "/auth",
 			targetBasePath: "/auth",
-			targetURL:      uploadURL,
+			targetURL:      authServiceURL,
 		},
 		{
 			prefix:         "/api/upload",
 			targetBasePath: "/api/uploads",
-			targetURL:      uploadURL,
+			targetURL:      jobServiceURL,
 		},
 		{
 			prefix:         "/api/convert-from-pdf",
 			targetBasePath: "/api/convert-from-pdf",
-			targetURL:      convertFromURL,
+			targetURL:      jobServiceURL,
 		},
 		{
 			prefix:         "/api/convert-to-pdf",
 			targetBasePath: "/api/convert-to-pdf",
-			targetURL:      convertToURL,
+			targetURL:      jobServiceURL,
 		},
 		{
 			prefix:         "/api/organize-pdf",
 			targetBasePath: "/api/organize-pdf",
-			targetURL:      organizeURL,
+			targetURL:      jobServiceURL,
 		},
 		{
 			prefix:         "/api/optimize-pdf",
 			targetBasePath: "/api/optimize-pdf",
-			targetURL:      optimizeURL,
+			targetURL:      jobServiceURL,
 		},
 		{
 			prefix:         "/api/jobs",
 			targetBasePath: "/api/jobs",
-			targetURL:      uploadURL,
+			targetURL:      jobServiceURL,
 		},
 	}
 
@@ -150,6 +152,8 @@ func main() {
 		mux.Handle(cfg.prefix, newProxy(cfg))
 		mux.Handle(cfg.prefix+"/", newProxy(cfg))
 	}
+
+	mux.Handle("/metrics", metrics.HTTPMetricsHandler())
 
 	// Fix #28: Deep health check - ping Redis
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -168,16 +172,22 @@ func main() {
 	})
 
 	slog.Info("api-gateway listening", "port", port)
-	authMiddleware := auth.HTTPAuthMiddleware(auth.HTTPMiddlewareOptions{
+	authMiddleware := authverify.HTTPAuthMiddleware(authverify.HTTPMiddlewareOptions{
 		Verifier:   verifier,
 		GuestStore: guestStore,
 	})
-	handler := logger.HTTPRequestID(withCORS(authMiddleware(mux), corsConfig{
-		allowedOrigins:   corsOrigins,
-		allowedMethods:   corsMethods,
-		allowedHeaders:   corsHeaders,
-		allowCredentials: strings.EqualFold(corsAllowCredentials, "true"),
-	}))
+	handler := telemetry.HTTPTraceMiddleware("api-gateway")(
+		metrics.HTTPMetricsMiddleware(
+			logger.HTTPRequestID(
+				withCORS(authMiddleware(mux), corsConfig{
+					allowedOrigins:   corsOrigins,
+					allowedMethods:   corsMethods,
+					allowedHeaders:   corsHeaders,
+					allowCredentials: strings.EqualFold(corsAllowCredentials, "true"),
+				}),
+			),
+		),
+	)
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
@@ -219,9 +229,9 @@ func newProxy(cfg routeConfig) http.Handler {
 		req.URL.Host = target.Host
 		req.URL.Path = joinPath(cfg.targetBasePath, targetPath)
 		req.Host = target.Host
-		auth.ClearUserHeaders(req.Header)
-		if authCtx, ok := auth.FromContext(req.Context()); ok {
-			auth.ApplyUserHeaders(req.Header, authCtx)
+		authverify.ClearUserHeaders(req.Header)
+		if authCtx, ok := authverify.FromContext(req.Context()); ok {
+			authverify.ApplyUserHeaders(req.Header, authCtx)
 		}
 	}
 

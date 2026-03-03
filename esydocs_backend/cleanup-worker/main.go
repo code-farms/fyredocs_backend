@@ -2,12 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,24 +12,19 @@ import (
 
 	"esydocs/shared/config"
 	"esydocs/shared/logger"
-	"esydocs/shared/database"
 	"esydocs/shared/redisstore"
-)
+	"esydocs/shared/telemetry"
 
-type JobPayload struct {
-	JobID         string          `json:"jobId"`
-	ToolType      string          `json:"toolType"`
-	InputPaths    []string        `json:"inputPaths"`
-	Options       json.RawMessage `json:"options,omitempty"`
-	Attempts      int             `json:"attempts"`
-	CorrelationID string          `json:"correlationId"`
-}
+	"cleanup-worker/internal/models"
+)
 
 func main() {
 	config.LoadConfig()
 	logger.Init("cleanup-worker", os.Getenv("LOG_MODE"))
-	database.Connect()
-	database.Migrate()
+	shutdownTracer := telemetry.Init("cleanup-worker")
+	defer shutdownTracer(context.Background())
+	models.Connect()
+	models.Migrate()
 	redisstore.Connect()
 
 	interval := cleanupInterval()
@@ -50,21 +42,15 @@ func main() {
 func runCleanup(ctx context.Context) {
 	cleanupExpiredJobs(ctx)
 	cleanupUploadState(ctx)
-	// Fix #9: Requeue stale jobs for ALL services, not just convert-from/to-pdf
-	requeueStaleJobs(ctx, queueName("convert-from-pdf"))
-	requeueStaleJobs(ctx, queueName("convert-to-pdf"))
-	requeueStaleJobs(ctx, queueName("organize-pdf"))
-	requeueStaleJobs(ctx, queueName("optimize-pdf"))
-	// Fix #7: Recover orphaned jobs stuck in "queued" status
-	requeueOrphanedJobs(ctx)
+	// NATS JetStream handles redelivery via AckWait and MaxDeliver.
+	// requeueStaleJobs and requeueOrphanedJobs are no longer needed.
 }
 
-// Fix #18: Batch expired job processing with Limit(100) loop
 func cleanupExpiredJobs(ctx context.Context) {
 	now := time.Now().UTC()
 	for {
-		var jobs []database.ProcessingJob
-		query := database.DB.Where("user_id IS NULL AND expires_at IS NOT NULL AND expires_at <= ?", now).Limit(100)
+		var jobs []models.ProcessingJob
+		query := models.DB.Where("user_id IS NULL AND expires_at IS NOT NULL AND expires_at <= ?", now).Limit(100)
 		if err := query.Find(&jobs).Error; err != nil {
 			slog.Error("cleanup jobs query failed", "error", err)
 			return
@@ -74,8 +60,8 @@ func cleanupExpiredJobs(ctx context.Context) {
 		}
 
 		for _, job := range jobs {
-			var files []database.FileMetadata
-			if err := database.DB.Where("job_id = ?", job.ID).Find(&files).Error; err != nil {
+			var files []models.FileMetadata
+			if err := models.DB.Where("job_id = ?", job.ID).Find(&files).Error; err != nil {
 				slog.Error("failed to find files for job", "jobId", job.ID, "error", err)
 			}
 			for _, file := range files {
@@ -83,10 +69,10 @@ func cleanupExpiredJobs(ctx context.Context) {
 					slog.Warn("failed to remove file", "path", file.Path, "error", err)
 				}
 			}
-			if err := database.DB.Where("job_id = ?", job.ID).Delete(&database.FileMetadata{}).Error; err != nil {
+			if err := models.DB.Where("job_id = ?", job.ID).Delete(&models.FileMetadata{}).Error; err != nil {
 				slog.Error("failed to delete file metadata", "jobId", job.ID, "error", err)
 			}
-			if err := database.DB.Delete(&job).Error; err != nil {
+			if err := models.DB.Delete(&job).Error; err != nil {
 				slog.Error("failed to delete job", "jobId", job.ID, "error", err)
 			}
 		}
@@ -101,7 +87,6 @@ func cleanupUploadState(ctx context.Context) {
 	if redisstore.Client == nil {
 		return
 	}
-	// Fix #19: Add count=100 to SCAN call
 	iter := redisstore.Client.Scan(ctx, 0, "upload:*", 100).Iterator()
 	ttl := uploadTTL()
 	for iter.Next(ctx) {
@@ -134,132 +119,6 @@ func cleanupUploadState(ctx context.Context) {
 	}
 }
 
-func requeueStaleJobs(ctx context.Context, queue string) {
-	if redisstore.Client == nil {
-		return
-	}
-	processingList := queue + ":processing"
-	items, err := redisstore.Client.LRange(ctx, processingList, 0, -1).Result()
-	if err != nil {
-		slog.Error("failed to list processing queue", "queue", processingList, "error", err)
-		return
-	}
-	for _, item := range items {
-		var payload JobPayload
-		if err := json.Unmarshal([]byte(item), &payload); err != nil {
-			if err := redisstore.Client.LRem(ctx, processingList, 1, item).Err(); err != nil {
-				slog.Error("failed to remove invalid payload", "error", err)
-			}
-			continue
-		}
-		if payload.JobID == "" {
-			if err := redisstore.Client.LRem(ctx, processingList, 1, item).Err(); err != nil {
-				slog.Error("failed to remove empty job payload", "error", err)
-			}
-			continue
-		}
-		key := fmt.Sprintf("processing:%s", payload.JobID)
-		ttl, err := redisstore.Client.TTL(ctx, key).Result()
-		if err == nil && ttl > 0 {
-			continue
-		}
-
-		payload.Attempts++
-		if payload.Attempts > maxRetries() {
-			markFailed(payload.JobID, "processing timeout")
-			if err := redisstore.Client.LRem(ctx, processingList, 1, item).Err(); err != nil {
-				slog.Error("failed to ack timed out job", "jobId", payload.JobID, "error", err)
-			}
-			continue
-		}
-
-		if err := redisstore.Client.LRem(ctx, processingList, 1, item).Err(); err != nil {
-			slog.Error("failed to remove stale job from processing", "jobId", payload.JobID, "error", err)
-		}
-		newPayload, _ := json.Marshal(payload)
-		if err := redisstore.Client.LPush(ctx, queue, newPayload).Err(); err != nil {
-			slog.Error("failed to requeue stale job", "jobId", payload.JobID, "error", err)
-		}
-		if err := redisstore.Client.Del(ctx, key).Err(); err != nil {
-			slog.Error("failed to delete processing marker", "jobId", payload.JobID, "error", err)
-		}
-		slog.Info("requeued stale job", "jobId", payload.JobID, "attempt", payload.Attempts)
-	}
-}
-
-// Fix #7: Recover orphaned jobs stuck in "queued" status with no queue entry
-func requeueOrphanedJobs(ctx context.Context) {
-	if redisstore.Client == nil {
-		return
-	}
-	staleThreshold := time.Now().UTC().Add(-30 * time.Minute)
-	var jobs []database.ProcessingJob
-	if err := database.DB.Where("status = 'queued' AND updated_at < ?", staleThreshold).Limit(100).Find(&jobs).Error; err != nil {
-		slog.Error("failed to query orphaned jobs", "error", err)
-		return
-	}
-
-	for _, job := range jobs {
-		queue := queueName(serviceForTool(job.ToolType))
-		if queue == "" {
-			continue
-		}
-		payload := JobPayload{
-			JobID:    job.ID.String(),
-			ToolType: job.ToolType,
-		}
-		data, _ := json.Marshal(payload)
-		if err := redisstore.Client.LPush(ctx, queue, data).Err(); err != nil {
-			slog.Error("failed to requeue orphaned job", "jobId", job.ID, "error", err)
-			continue
-		}
-		slog.Info("requeued orphaned job", "jobId", job.ID, "toolType", job.ToolType)
-	}
-}
-
-func serviceForTool(toolType string) string {
-	switch toolType {
-	case "pdf-to-image", "pdf-to-img", "pdf-to-pdfa", "pdf-to-word", "pdf-to-docx",
-		"pdf-to-excel", "pdf-to-xlsx", "pdf-to-ppt", "pdf-to-powerpoint", "pdf-to-pptx",
-		"pdf-to-html", "pdf-to-text", "pdf-to-txt":
-		return "convert-from-pdf"
-	case "word-to-pdf", "ppt-to-pdf", "excel-to-pdf", "html-to-pdf",
-		"image-to-pdf", "img-to-pdf", "compress-pdf", "merge-pdf", "split-pdf",
-		"protect-pdf", "unlock-pdf", "watermark-pdf", "edit-pdf", "sign-pdf":
-		return "convert-to-pdf"
-	case "remove-pages", "extract-pages", "organize-pdf", "scan-to-pdf":
-		return "organize-pdf"
-	case "repair-pdf", "ocr-pdf":
-		return "optimize-pdf"
-	default:
-		return ""
-	}
-}
-
-// Fix #12: progress is now int, not string
-func markFailed(jobID string, reason string) {
-	parsed, err := uuid.Parse(jobID)
-	if err != nil {
-		return
-	}
-	updates := map[string]interface{}{
-		"status":         "failed",
-		"progress":       0,
-		"failure_reason": reason,
-	}
-	if err := database.DB.Model(&database.ProcessingJob{}).Where("id = ?", parsed).Updates(updates).Error; err != nil {
-		slog.Error("failed to mark job as failed", "jobId", jobID, "error", err)
-	}
-}
-
-func queueName(worker string) string {
-	prefix := os.Getenv("QUEUE_PREFIX")
-	if prefix == "" {
-		prefix = "queue"
-	}
-	return fmt.Sprintf("%s:%s", prefix, worker)
-}
-
 func cleanupInterval() time.Duration {
 	value := os.Getenv("CLEANUP_INTERVAL")
 	if value == "" {
@@ -289,16 +148,4 @@ func uploadBaseDir() string {
 		return value
 	}
 	return "uploads"
-}
-
-func maxRetries() int {
-	value := os.Getenv("MAX_RETRIES")
-	if value == "" {
-		return 3
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < 0 {
-		return 3
-	}
-	return parsed
 }

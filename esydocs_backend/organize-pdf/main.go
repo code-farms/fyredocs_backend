@@ -15,20 +15,34 @@ import (
 
 	"esydocs/shared/config"
 	"esydocs/shared/logger"
-	"esydocs/shared/database"
-	"esydocs/shared/pdfhandlers"
+	"esydocs/shared/metrics"
+	"esydocs/shared/natsconn"
 	"esydocs/shared/redisstore"
-	"esydocs/shared/worker"
+	"esydocs/shared/telemetry"
 
+	"organize-pdf/internal/models"
+	"organize-pdf/internal/worker"
 	"organize-pdf/processing"
 )
 
 func main() {
 	config.LoadConfig()
 	logger.Init("organize-pdf", os.Getenv("LOG_MODE"))
-	database.Connect()
-	database.Migrate()
+	shutdownTracer := telemetry.Init("organize-pdf")
+	defer shutdownTracer(context.Background())
+	models.Connect()
+	models.Migrate()
 	redisstore.Connect()
+
+	if err := natsconn.Connect(); err != nil {
+		slog.Error("NATS connection failed", "error", err)
+		os.Exit(1)
+	}
+	defer natsconn.Close()
+	if err := natsconn.EnsureStreams(context.Background()); err != nil {
+		slog.Error("NATS stream setup failed", "error", err)
+		os.Exit(1)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -52,14 +66,18 @@ func main() {
 			"scan-to-pdf":   true,
 		},
 		Process:     processFunc,
+		JS:          natsconn.JS,
 		RedisClient: redisstore.Client,
-		DB:          database.DB,
+		DB:          models.DB,
 	})
 
 	r := gin.New()
+	r.Use(telemetry.GinTraceMiddleware("organize-pdf"))
+	r.Use(metrics.GinMetricsMiddleware())
 	r.Use(logger.GinRequestID())
 	r.Use(logger.GinRequestLogger())
 	r.Use(gin.Recovery())
+	r.GET("/metrics", metrics.MetricsHandler())
 	if err := r.SetTrustedProxies(trustedProxies()); err != nil {
 		slog.Error("failed to set trusted proxies", "error", err)
 		os.Exit(1)
@@ -72,25 +90,12 @@ func main() {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "redis": err.Error()})
 			return
 		}
+		if natsconn.Conn == nil || !natsconn.Conn.IsConnected() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "nats": "disconnected"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
-
-	h := pdfhandlers.NewHandlers(pdfhandlers.HandlerConfig{
-		SupportedTools: map[string]bool{
-			"merge-pdf":     true,
-			"split-pdf":     true,
-			"remove-pages":  true,
-			"extract-pages": true,
-			"organize-pdf":  true,
-			"scan-to-pdf":   true,
-		},
-		OutputMappings: map[string]pdfhandlers.OutputMapping{
-			"split-pdf": {Extension: ".zip", ContentType: "application/zip"},
-		},
-		DB: database.DB,
-	})
-	api := r.Group("/api/organize-pdf")
-	h.RegisterRoutes(api)
 
 	port := os.Getenv("PORT")
 	if port == "" {
