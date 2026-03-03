@@ -16,6 +16,7 @@ import (
 	"esydocs/shared/auth"
 	"esydocs/shared/config"
 	"esydocs/shared/database"
+	"esydocs/shared/logger"
 	"esydocs/shared/redisstore"
 	"upload-service/routes"
 )
@@ -53,6 +54,7 @@ func validateJWTSecret() error {
 
 func main() {
 	config.LoadConfig()
+	logger.Init("upload-service", os.Getenv("LOG_MODE"))
 
 	if err := validateJWTSecret(); err != nil {
 		slog.Error("JWT secret validation failed", "error", err)
@@ -87,6 +89,8 @@ func main() {
 	}
 
 	r := gin.Default()
+	r.Use(logger.GinRequestID())
+	r.Use(logger.GinRequestLogger())
 	// Fix #25: Set max multipart memory
 	r.MaxMultipartMemory = 50 << 20
 	if err := r.SetTrustedProxies(trustedProxies()); err != nil {

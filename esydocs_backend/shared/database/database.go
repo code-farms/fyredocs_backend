@@ -2,7 +2,7 @@ package database
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -29,7 +29,8 @@ func DefaultPoolConfig() PoolConfig {
 func Connect(pool ...PoolConfig) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		log.Fatal("DATABASE_URL is not set")
+		slog.Error("DATABASE_URL is not set")
+		os.Exit(1)
 	}
 
 	cfg := DefaultPoolConfig()
@@ -48,12 +49,14 @@ func Connect(pool ...PoolConfig) {
 	var err error
 	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		log.Fatal("Failed to connect to database")
+		slog.Error("Failed to connect to database", "error", err)
+		os.Exit(1)
 	}
 
 	sqlDB, err := DB.DB()
 	if err != nil {
-		log.Fatal("Failed to create database handle")
+		slog.Error("Failed to create database handle", "error", err)
+		os.Exit(1)
 	}
 	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
@@ -62,10 +65,11 @@ func Connect(pool ...PoolConfig) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := sqlDB.PingContext(ctx); err != nil {
-		log.Fatal("Database ping failed")
+		slog.Error("Database ping failed", "error", err)
+		os.Exit(1)
 	}
 
-	log.Println("Database connection established")
+	slog.Info("Database connection established")
 }
 
 func Migrate() {
@@ -76,7 +80,8 @@ func Migrate() {
 		&ProcessingJob{},
 		&FileMetadata{},
 	); err != nil {
-		log.Fatalf("Database migration failed: %v", err)
+		slog.Error("Database migration failed", "error", err)
+		os.Exit(1)
 	}
-	log.Println("Database migration completed")
+	slog.Info("Database migration completed")
 }

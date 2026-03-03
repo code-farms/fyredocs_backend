@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"esydocs/shared/config"
+	"esydocs/shared/logger"
 	"esydocs/shared/database"
 	"esydocs/shared/pdfhandlers"
 	"esydocs/shared/redisstore"
@@ -24,6 +25,7 @@ import (
 
 func main() {
 	config.LoadConfig()
+	logger.Init("organize-pdf", os.Getenv("LOG_MODE"))
 	database.Connect()
 	database.Migrate()
 	redisstore.Connect()
@@ -55,6 +57,8 @@ func main() {
 	})
 
 	r := gin.New()
+	r.Use(logger.GinRequestID())
+	r.Use(logger.GinRequestLogger())
 	r.Use(gin.Recovery())
 	if err := r.SetTrustedProxies(trustedProxies()); err != nil {
 		slog.Error("failed to set trusted proxies", "error", err)

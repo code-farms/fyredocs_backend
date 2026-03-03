@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"esydocs/shared/response"
 )
 
 func IsAuthenticated(authCtx AuthContext) bool {
@@ -49,15 +51,11 @@ func RequireAuthenticatedGin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authCtx, ok := GetGinAuth(c)
 		if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse{
-				Error: AuthError{Code: ErrCodeUnauthorized, Message: "Invalid or expired token"},
-			})
+			response.AbortErr(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Invalid or expired token")
 			return
 		}
 		if authCtx.IsGuest {
-			c.AbortWithStatusJSON(http.StatusForbidden, ErrorResponse{
-				Error: AuthError{Code: ErrCodeForbidden, Message: "Insufficient permissions"},
-			})
+			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "Insufficient permissions")
 			return
 		}
 		c.Next()
@@ -68,21 +66,15 @@ func RequireRoleGin(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authCtx, ok := GetGinAuth(c)
 		if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse{
-				Error: AuthError{Code: ErrCodeUnauthorized, Message: "Invalid or expired token"},
-			})
+			response.AbortErr(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Invalid or expired token")
 			return
 		}
 		if authCtx.IsGuest {
-			c.AbortWithStatusJSON(http.StatusForbidden, ErrorResponse{
-				Error: AuthError{Code: ErrCodeForbidden, Message: "Insufficient permissions"},
-			})
+			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "Insufficient permissions")
 			return
 		}
 		if !HasRole(authCtx, roles...) {
-			c.AbortWithStatusJSON(http.StatusForbidden, ErrorResponse{
-				Error: AuthError{Code: ErrCodeForbidden, Message: "Insufficient permissions"},
-			})
+			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "Insufficient permissions")
 			return
 		}
 		c.Next()
@@ -93,21 +85,15 @@ func RequireScopeGin(scopes ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authCtx, ok := GetGinAuth(c)
 		if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse{
-				Error: AuthError{Code: ErrCodeUnauthorized, Message: "Invalid or expired token"},
-			})
+			response.AbortErr(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Invalid or expired token")
 			return
 		}
 		if authCtx.IsGuest {
-			c.AbortWithStatusJSON(http.StatusForbidden, ErrorResponse{
-				Error: AuthError{Code: ErrCodeForbidden, Message: "Insufficient permissions"},
-			})
+			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "Insufficient permissions")
 			return
 		}
 		if !HasScope(authCtx, scopes...) {
-			c.AbortWithStatusJSON(http.StatusForbidden, ErrorResponse{
-				Error: AuthError{Code: ErrCodeForbidden, Message: "Insufficient permissions"},
-			})
+			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "Insufficient permissions")
 			return
 		}
 		c.Next()

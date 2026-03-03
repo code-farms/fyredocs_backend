@@ -31,13 +31,13 @@ That's it! The script will:
 
 | Service | Port | Description | Documentation |
 |---------|------|-------------|---------------|
-| **API Gateway** | 8080 | Request routing, CORS, auth middleware | [API_GATEWAY.md](api-gateway/API_GATEWAY.md) |
-| **Upload Service** | 8081 | File uploads, job management, authentication | [UPLOAD_SERVICE.md](upload-service/UPLOAD_SERVICE.md) |
-| **Convert From PDF** | 8082 | PDF → Word/Excel/PPT/Image/HTML/Text conversions | [CONVERT_FROM_PDF.md](convert-from-pdf/CONVERT_FROM_PDF.md) |
-| **Convert To PDF** | 8083 | Word/Excel/PPT/HTML/Image → PDF conversions | [CONVERT_TO_PDF.md](convert-to-pdf/CONVERT_TO_PDF.md) |
-| **Organize PDF** | 8084 | Merge, split, reorder, extract pages | [ORGANIZE_PDF.md](organize-pdf/ORGANIZE_PDF.md) |
-| **Optimize PDF** | 8085 | Compress, repair, OCR for PDFs | [OPTIMIZE_PDF.md](optimize-pdf/OPTIMIZE_PDF.md) |
-| **Cleanup Worker** | - | Background cleanup of expired files/jobs | [CLEANUP_WORKER.md](cleanup-worker/CLEANUP_WORKER.md) |
+| **API Gateway** | 8080 | Request routing, CORS, auth middleware | [API_GATEWAY.md](docs/services/API_GATEWAY.md) |
+| **Upload Service** | 8081 | File uploads, job management, authentication | [UPLOAD_SERVICE.md](docs/services/UPLOAD_SERVICE.md) |
+| **Convert From PDF** | 8082 | PDF → Word/Excel/PPT/Image/HTML/Text conversions | [CONVERT_FROM_PDF.md](docs/services/CONVERT_FROM_PDF.md) |
+| **Convert To PDF** | 8083 | Word/Excel/PPT/HTML/Image → PDF conversions | [CONVERT_TO_PDF.md](docs/services/CONVERT_TO_PDF.md) |
+| **Organize PDF** | 8084 | Merge, split, reorder, extract pages | [ORGANIZE_PDF.md](docs/services/ORGANIZE_PDF.md) |
+| **Optimize PDF** | 8085 | Compress, repair, OCR for PDFs | [OPTIMIZE_PDF.md](docs/services/OPTIMIZE_PDF.md) |
+| **Cleanup Worker** | - | Background cleanup of expired files/jobs | [CLEANUP_WORKER.md](docs/services/CLEANUP_WORKER.md) |
 | **PostgreSQL** | 5432 | Primary database | - |
 | **Redis** | 6379 | Cache, queue, session storage | - |
 
@@ -86,7 +86,7 @@ EsyDocs uses a modern **cookie-based authentication system** with HTTP-only cook
 - 🌐 CORS-compatible with credentials
 - 🔄 Backward compatible with Bearer tokens
 
-**Complete Documentation**: [AUTHENTICATION.md](upload-service/AUTHENTICATION.md)
+**Complete Documentation**: [AUTHENTICATION.md](docs/services/AUTHENTICATION.md)
 
 ### Quick Examples
 
@@ -314,7 +314,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 | POST | `/api/auth/logout` | Logout and revoke token |
 | GET | `/api/auth/me` | Get current user profile |
 
-See [AUTHENTICATION.md](upload-service/AUTHENTICATION.md) for detailed documentation.
+See [AUTHENTICATION.md](docs/services/AUTHENTICATION.md) for detailed documentation.
 
 ### File Upload Endpoints
 
@@ -535,46 +535,51 @@ esydocs_backend/
 ├── api-gateway/              # API Gateway service
 │   ├── auth/                 # Auth middleware
 │   ├── main.go
-│   ├── Dockerfile
-│   └── API_GATEWAY.md        # Service docs
+│   └── Dockerfile
 ├── upload-service/           # Upload & auth service
 │   ├── auth/                 # Auth logic
 │   ├── handlers/             # HTTP handlers
 │   ├── database/             # DB layer
 │   ├── main.go
-│   ├── Dockerfile
-│   ├── UPLOAD_SERVICE.md     # Service docs
-│   └── AUTHENTICATION.md     # Auth system docs ⭐
+│   └── Dockerfile
 ├── convert-from-pdf/         # PDF conversion worker
 │   ├── processing/           # Conversion logic
 │   ├── worker/               # Queue worker
 │   ├── main.go
-│   ├── Dockerfile
-│   └── CONVERT_FROM_PDF.md   # Service docs
+│   └── Dockerfile
 ├── convert-to-pdf/           # Document conversion worker
 │   ├── processing/           # Conversion logic
 │   ├── worker/               # Queue worker
 │   ├── main.go
-│   ├── Dockerfile
-│   └── CONVERT_TO_PDF.md     # Service docs
+│   └── Dockerfile
 ├── organize-pdf/             # PDF organization worker
 │   ├── processing/           # PDF manipulation logic
 │   ├── worker/               # Queue worker
 │   ├── main.go
-│   ├── Dockerfile
-│   └── ORGANIZE_PDF.md       # Service docs
+│   └── Dockerfile
 ├── optimize-pdf/             # PDF optimization worker
 │   ├── processing/           # Compression, repair, OCR
 │   ├── worker/               # Queue worker
 │   ├── main.go
-│   ├── Dockerfile
-│   └── OPTIMIZE_PDF.md       # Service docs
+│   └── Dockerfile
 ├── cleanup-worker/           # Cleanup service
 │   ├── main.go
-│   ├── Dockerfile
-│   └── CLEANUP_WORKER.md     # Service docs
+│   └── Dockerfile
+├── shared/                   # Shared libraries
+│   ├── auth/                 # Auth middleware (Gin + HTTP)
+│   ├── config/               # Configuration loading
+│   ├── database/             # Database models & connection
+│   ├── logger/               # Structured logging (slog)
+│   ├── pdfhandlers/          # Common PDF service handlers
+│   ├── redisstore/           # Redis client setup
+│   ├── response/             # Unified API response envelope
+│   └── worker/               # Background job worker
+├── docs/                     # All documentation
+│   ├── api/                  # API endpoint docs
+│   ├── services/             # Service architecture docs
+│   ├── architecture/         # System architecture docs
+│   └── swagger/              # OpenAPI specification
 ├── docker/                   # Docker configs
-│   └── BASE_IMAGE_SETUP.md
 ├── docker-compose.yml        # Service orchestration
 ├── deploy.sh                 # One-command deploy
 └── README.md                 # This file
@@ -596,7 +601,7 @@ esydocs_backend/
 ## Support
 
 For issues or questions:
-- **Documentation**: See service-specific .md files in each directory
+- **Documentation**: See [docs/](docs/) directory for all service and API documentation
 - **Logs**: `docker compose logs -f [service]`
 - **Database**: `docker compose exec db psql -U user -d esydocs`
 - **Redis**: `docker compose exec redis redis-cli`

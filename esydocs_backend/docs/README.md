@@ -71,20 +71,52 @@ Authorization: Bearer <JWT_TOKEN>
 
 ---
 
-## Common Response Formats
+## Standard API Response Format
+
+All API endpoints use a unified response envelope:
 
 ### Success Response
 ```json
 {
-  "data": { ... }
+  "success": true,
+  "message": "Operation completed successfully",
+  "data": { ... },
+  "error": null,
+  "meta": {
+    "requestId": "uuid"
+  }
+}
+```
+
+### Success Response with Pagination
+```json
+{
+  "success": true,
+  "message": "Jobs retrieved",
+  "data": [ ... ],
+  "error": null,
+  "meta": {
+    "page": 1,
+    "limit": 25,
+    "total": 100,
+    "requestId": "uuid"
+  }
 }
 ```
 
 ### Error Response
 ```json
 {
-  "code": "ERROR_CODE",
-  "message": "Human readable error message"
+  "success": false,
+  "message": "Human readable error message",
+  "data": null,
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Human readable error message"
+  },
+  "meta": {
+    "requestId": "uuid"
+  }
 }
 ```
 
@@ -96,7 +128,10 @@ Authorization: Bearer <JWT_TOKEN>
 | `USER_ALREADY_EXISTS` | 409 | Email already registered |
 | `INVALID_CREDENTIALS` | 401 | Wrong email or password |
 | `UNAUTHORIZED` | 401 | Authentication required |
+| `AUTH_UNAUTHORIZED` | 401 | Invalid or expired token |
+| `AUTH_FORBIDDEN` | 403 | Insufficient permissions |
 | `NOT_FOUND` | 404 | Resource not found |
+| `FILE_TOO_LARGE` | 400 | Uploaded file exceeds size limit |
 | `RATE_LIMIT_EXCEEDED` | 429 | Too many requests |
 | `SERVER_ERROR` | 500 | Internal server error |
 
@@ -123,10 +158,21 @@ Retry-After: 45
 ### Rate Limit Error Response (429)
 ```json
 {
-  "code": "RATE_LIMIT_EXCEEDED",
-  "message": "Too many requests. Please try again in 45 seconds."
+  "success": false,
+  "message": "Too many requests. Please try again in 45 seconds.",
+  "data": null,
+  "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "Too many requests. Please try again in 45 seconds."
+  }
 }
 ```
+
+---
+
+## Request Tracing
+
+All API responses include an `X-Request-ID` header. You can also pass your own `X-Request-ID` header in requests, and the same ID will be echoed back and included in `meta.requestId` of the response.
 
 ---
 
@@ -160,13 +206,39 @@ pending → processing → completed
 
 | File | Description |
 |------|-------------|
-| [AUTH_API.md](./AUTH_API.md) | Authentication endpoints |
-| [UPLOAD_API.md](./UPLOAD_API.md) | File upload endpoints |
-| [CONVERT_TO_PDF_API.md](./CONVERT_TO_PDF_API.md) | Convert documents to PDF |
-| [CONVERT_FROM_PDF_API.md](./CONVERT_FROM_PDF_API.md) | Convert PDF to documents |
-| [ORGANIZE_PDF_API.md](./ORGANIZE_PDF_API.md) | PDF organization tools |
-| [OPTIMIZE_PDF_API.md](./OPTIMIZE_PDF_API.md) | PDF optimization tools |
-| [JOBS_API.md](./JOBS_API.md) | Job management endpoints |
+| [AUTH_API.md](./api/AUTH_API.md) | Authentication endpoints |
+| [UPLOAD_API.md](./api/UPLOAD_API.md) | File upload endpoints |
+| [CONVERT_TO_PDF_API.md](./api/CONVERT_TO_PDF_API.md) | Convert documents to PDF |
+| [CONVERT_FROM_PDF_API.md](./api/CONVERT_FROM_PDF_API.md) | Convert PDF to documents |
+| [ORGANIZE_PDF_API.md](./api/ORGANIZE_PDF_API.md) | PDF organization tools |
+| [OPTIMIZE_PDF_API.md](./api/OPTIMIZE_PDF_API.md) | PDF optimization tools |
+| [JOBS_API.md](./api/JOBS_API.md) | Job management endpoints |
+
+## Service Documentation
+
+| File | Description |
+|------|-------------|
+| [API_GATEWAY.md](./services/API_GATEWAY.md) | API Gateway service |
+| [UPLOAD_SERVICE.md](./services/UPLOAD_SERVICE.md) | Upload service |
+| [AUTHENTICATION.md](./services/AUTHENTICATION.md) | Authentication system |
+| [CONVERT_TO_PDF.md](./services/CONVERT_TO_PDF.md) | Convert to PDF service |
+| [CONVERT_FROM_PDF.md](./services/CONVERT_FROM_PDF.md) | Convert from PDF service |
+| [ORGANIZE_PDF.md](./services/ORGANIZE_PDF.md) | Organize PDF service |
+| [OPTIMIZE_PDF.md](./services/OPTIMIZE_PDF.md) | Optimize PDF service |
+| [CLEANUP_WORKER.md](./services/CLEANUP_WORKER.md) | Cleanup worker |
+| [BASE_IMAGE_SETUP.md](./services/BASE_IMAGE_SETUP.md) | Docker base image setup |
+
+## Architecture Documentation
+
+| File | Description |
+|------|-------------|
+| [REDIS_ARCHITECTURE.md](./architecture/REDIS_ARCHITECTURE.md) | Redis data structures and caching |
+
+## OpenAPI / Swagger
+
+| File | Description |
+|------|-------------|
+| [openapi.yaml](./swagger/openapi.yaml) | OpenAPI 3.0 specification |
 
 ---
 
@@ -186,4 +258,15 @@ pending → processing → completed
 GET /healthz
 ```
 
-**Response:** `ok` (200)
+**Response:** `{"status":"healthy"}` (200)
+
+---
+
+## Logging
+
+All services use structured logging via Go's `log/slog`:
+
+- **Development mode** (`LOG_MODE=dev`): Human-readable text output with source info
+- **Production mode** (`LOG_MODE=prod` or unset): JSON structured logs
+
+Set `LOG_LEVEL` environment variable to control verbosity: `debug`, `info` (default), `warn`, `error`.

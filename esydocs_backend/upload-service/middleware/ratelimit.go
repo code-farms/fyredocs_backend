@@ -10,6 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+
+	"esydocs/shared/response"
 )
 
 type RateLimitConfig struct {
@@ -92,10 +94,8 @@ func (rl *RateLimiter) RateLimitByIP() gin.HandlerFunc {
 				retryAfter = 0
 			}
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
-				"code":    "RATE_LIMIT_EXCEEDED",
-				"message": fmt.Sprintf("Too many requests. Please try again in %d seconds.", retryAfter),
-			})
+			response.AbortErr(c, http.StatusTooManyRequests, "RATE_LIMIT_EXCEEDED",
+				fmt.Sprintf("Too many requests. Please try again in %d seconds.", retryAfter))
 			return
 		}
 

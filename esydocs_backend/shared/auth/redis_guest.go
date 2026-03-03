@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strconv"
 	"time"
@@ -126,7 +126,7 @@ func NewRedisClientFromEnv() (*redis.Client, error) {
 	if err := client.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("redis connection failed: %w", err)
 	}
-	log.Println("Auth redis connection established")
+	slog.Info("Auth redis connection established")
 	return client, nil
 }
 

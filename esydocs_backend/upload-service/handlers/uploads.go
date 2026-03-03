@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"esydocs/shared/redisstore"
+	"esydocs/shared/response"
 )
 
 type UploadInitRequest struct {
@@ -34,11 +34,11 @@ type UploadStatus struct {
 func InitUpload(c *gin.Context) {
 	var req UploadInitRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		response.BadRequest(c, "INVALID_INPUT", "Invalid request body")
 		return
 	}
 	if req.FileName == "" || req.FileSize <= 0 || req.TotalChunks <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "fileName, fileSize, and totalChunks are required"})
+		response.BadRequest(c, "INVALID_INPUT", "fileName, fileSize, and totalChunks are required")
 		return
 	}
 
@@ -55,39 +55,39 @@ func InitUpload(c *gin.Context) {
 	})
 	pipe.Expire(ctx, uploadKey, uploadTTL())
 	if _, err := pipe.Exec(ctx); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initialize upload"})
+		response.InternalError(c, "SERVER_ERROR", "Failed to initialize upload")
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"uploadId": uploadID})
+	response.Created(c, "Upload initialized", gin.H{"uploadId": uploadID})
 }
 
 func UploadChunk(c *gin.Context) {
 	uploadID := c.Param("uploadId")
 	indexStr := c.Query("index")
 	if uploadID == "" || indexStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "uploadId and chunk index are required"})
+		response.BadRequest(c, "INVALID_INPUT", "uploadId and chunk index are required")
 		return
 	}
 	index, err := strconv.Atoi(indexStr)
 	if err != nil || index < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chunk index"})
+		response.BadRequest(c, "INVALID_INPUT", "invalid chunk index")
 		return
 	}
 
 	file, err := c.FormFile("chunk")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "chunk is required"})
+		response.BadRequest(c, "INVALID_INPUT", "chunk is required")
 		return
 	}
 
 	state, err := fetchUploadState(c.Request.Context(), uploadID)
 	if err != nil {
-		status := http.StatusInternalServerError
 		if err == redis.Nil {
-			status = http.StatusNotFound
+			response.NotFound(c, "NOT_FOUND", "upload not found")
+		} else {
+			response.InternalError(c, "SERVER_ERROR", "upload not found")
 		}
-		c.JSON(status, gin.H{"error": "upload not found"})
 		return
 	}
 
@@ -95,12 +95,12 @@ func UploadChunk(c *gin.Context) {
 	chunkDir := filepath.Join(tmpDir, uploadID)
 	// Fix #17: Use 0750 instead of os.ModePerm
 	if err := os.MkdirAll(chunkDir, 0750); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create chunk directory"})
+		response.InternalError(c, "SERVER_ERROR", "failed to create chunk directory")
 		return
 	}
 	chunkPath := filepath.Join(chunkDir, fmt.Sprintf("%06d.part", index))
 	if err := c.SaveUploadedFile(file, chunkPath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save chunk"})
+		response.InternalError(c, "SERVER_ERROR", "failed to save chunk")
 		return
 	}
 
@@ -111,57 +111,57 @@ func UploadChunk(c *gin.Context) {
 	pipe.Expire(ctx, chunkSetKey, uploadTTL())
 	pipe.Expire(ctx, uploadStateKey(uploadID), uploadTTL())
 	if _, err := pipe.Exec(ctx); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update upload state"})
+		response.InternalError(c, "SERVER_ERROR", "failed to update upload state")
 		return
 	}
 
 	status := uploadStatusFromState(uploadID, state, ctx)
-	c.JSON(http.StatusOK, status)
+	response.OK(c, "Chunk uploaded", status)
 }
 
 func GetUploadStatus(c *gin.Context) {
 	uploadID := c.Param("uploadId")
 	if uploadID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "uploadId is required"})
+		response.BadRequest(c, "INVALID_INPUT", "uploadId is required")
 		return
 	}
 
 	ctx := c.Request.Context()
 	state, err := fetchUploadState(ctx, uploadID)
 	if err != nil {
-		status := http.StatusInternalServerError
 		if err == redis.Nil {
-			status = http.StatusNotFound
+			response.NotFound(c, "NOT_FOUND", "upload not found")
+		} else {
+			response.InternalError(c, "SERVER_ERROR", "upload not found")
 		}
-		c.JSON(status, gin.H{"error": "upload not found"})
 		return
 	}
 
 	status := uploadStatusFromState(uploadID, state, ctx)
-	c.JSON(http.StatusOK, status)
+	response.OK(c, "Upload status retrieved", status)
 }
 
 func CompleteUpload(c *gin.Context) {
 	uploadID := c.Param("uploadId")
 	if uploadID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "uploadId is required"})
+		response.BadRequest(c, "INVALID_INPUT", "uploadId is required")
 		return
 	}
 
 	ctx := c.Request.Context()
 	state, err := fetchUploadState(ctx, uploadID)
 	if err != nil {
-		status := http.StatusInternalServerError
 		if err == redis.Nil {
-			status = http.StatusNotFound
+			response.NotFound(c, "NOT_FOUND", "upload not found")
+		} else {
+			response.InternalError(c, "SERVER_ERROR", "upload not found")
 		}
-		c.JSON(status, gin.H{"error": "upload not found"})
 		return
 	}
 
 	status := uploadStatusFromState(uploadID, state, ctx)
 	if !status.Complete {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "upload is incomplete"})
+		response.BadRequest(c, "BAD_REQUEST", "upload is incomplete")
 		return
 	}
 
@@ -169,13 +169,13 @@ func CompleteUpload(c *gin.Context) {
 	jobDir := filepath.Join(uploadDir, uploadID)
 	// Fix #17: Use 0750 instead of os.ModePerm
 	if err := os.MkdirAll(jobDir, 0750); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload directory"})
+		response.InternalError(c, "SERVER_ERROR", "failed to create upload directory")
 		return
 	}
 
 	finalPath := filepath.Join(jobDir, status.FileName)
 	if err := assembleChunks(uploadID, status.TotalChunks, finalPath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to assemble chunks"})
+		response.InternalError(c, "SERVER_ERROR", "failed to assemble chunks")
 		return
 	}
 
@@ -183,13 +183,13 @@ func CompleteUpload(c *gin.Context) {
 		maxBytes := maxUploadBytes()
 		if info.Size() > maxBytes {
 			_ = os.Remove(finalPath)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "assembled file exceeds maximum size"})
+			response.BadRequest(c, "FILE_TOO_LARGE", "assembled file exceeds maximum size")
 			return
 		}
 	}
 
 	_ = cleanupChunks(uploadID)
-	c.JSON(http.StatusOK, gin.H{"uploadId": uploadID, "storedPath": finalPath})
+	response.OK(c, "Upload completed", gin.H{"uploadId": uploadID, "storedPath": finalPath})
 }
 
 func assembleChunks(uploadID string, totalChunks int, outputPath string) error {

@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 
 	"esydocs/shared/database"
+	"esydocs/shared/response"
 )
 
 type OutputMapping struct {
@@ -68,66 +69,68 @@ func (h *Handlers) GetJobs(c *gin.Context) {
 	var jobs []database.ProcessingJob
 	toolType, err := h.toolFromParam(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, "INVALID_INPUT", err.Error())
 		return
 	}
 
 	if err := h.db.Where("tool_type = ?", toolType).Find(&jobs).Error; err != nil {
 		slog.Error("failed to fetch jobs", "tool", toolType, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch jobs"})
+		response.InternalError(c, "SERVER_ERROR", "Failed to fetch jobs")
 		return
 	}
-	c.JSON(http.StatusOK, jobs)
+	response.OK(c, "Jobs retrieved", jobs)
 }
 
 func (h *Handlers) GetJob(c *gin.Context) {
 	toolType, err := h.toolFromParam(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, "INVALID_INPUT", err.Error())
 		return
 	}
 
 	id := c.Param("id")
 	var job database.ProcessingJob
 	if err := h.db.First(&job, "id = ? AND tool_type = ?", id, toolType).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+		response.NotFound(c, "NOT_FOUND", "Job not found")
 		return
 	}
-	c.JSON(http.StatusOK, job)
+	response.OK(c, "Job retrieved", job)
 }
 
 func (h *Handlers) CreateJob(c *gin.Context) {
 	req, err := h.parseJobRequest(c, nil, "")
 	if err != nil {
 		status := http.StatusBadRequest
+		code := "INVALID_INPUT"
 		if err.Error() == "failed to create upload directory" || err.Error() == "failed to save uploaded file" {
 			status = http.StatusInternalServerError
+			code = "SERVER_ERROR"
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		response.Err(c, status, code, err.Error())
 		return
 	}
 
 	job, err := h.createJob(req)
 	if err != nil {
 		slog.Error("failed to create job", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		response.InternalError(c, "SERVER_ERROR", err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, job)
+	response.Created(c, "Job created", job)
 }
 
 func (h *Handlers) UpdateJob(c *gin.Context) {
 	toolType, err := h.toolFromParam(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, "INVALID_INPUT", err.Error())
 		return
 	}
 
 	id := c.Param("id")
 	var job database.ProcessingJob
 	if err := h.db.First(&job, "id = ? AND tool_type = ?", id, toolType).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+		response.NotFound(c, "NOT_FOUND", "Job not found")
 		return
 	}
 
@@ -137,7 +140,7 @@ func (h *Handlers) UpdateJob(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&updateData); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		response.BadRequest(c, "INVALID_INPUT", "Invalid request body")
 		return
 	}
 
@@ -155,64 +158,64 @@ func (h *Handlers) UpdateJob(c *gin.Context) {
 
 	if err := h.db.Save(&job).Error; err != nil {
 		slog.Error("failed to update job", "jobId", id, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update job"})
+		response.InternalError(c, "SERVER_ERROR", "Failed to update job")
 		return
 	}
 
-	c.JSON(http.StatusOK, job)
+	response.OK(c, "Job updated", job)
 }
 
 func (h *Handlers) DeleteJob(c *gin.Context) {
 	toolType, err := h.toolFromParam(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, "INVALID_INPUT", err.Error())
 		return
 	}
 
 	id := c.Param("id")
 	var job database.ProcessingJob
 	if err := h.db.First(&job, "id = ? AND tool_type = ?", id, toolType).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+		response.NotFound(c, "NOT_FOUND", "Job not found")
 		return
 	}
 
 	if err := h.db.Delete(&job).Error; err != nil {
 		slog.Error("failed to delete job", "jobId", id, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete job"})
+		response.InternalError(c, "SERVER_ERROR", "Failed to delete job")
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	response.NoContent(c)
 }
 
 func (h *Handlers) DownloadFile(c *gin.Context) {
 	toolType, err := h.toolFromParam(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, "INVALID_INPUT", err.Error())
 		return
 	}
 
 	id := c.Param("id")
 	var job database.ProcessingJob
 	if err := h.db.First(&job, "id = ? AND tool_type = ?", id, toolType).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+		response.NotFound(c, "NOT_FOUND", "Job not found")
 		return
 	}
 
 	if job.Status != "completed" {
-		c.JSON(http.StatusNotFound, gin.H{"error": "File not ready for download"})
+		response.NotFound(c, "NOT_READY", "File not ready for download")
 		return
 	}
 
 	var meta map[string]interface{}
 	if err := json.Unmarshal(job.Metadata, &meta); err != nil {
 		slog.Error("failed to unmarshal job metadata", "jobId", id, "error", err)
-		c.JSON(http.StatusNotFound, gin.H{"error": "Processed file not found"})
+		response.NotFound(c, "NOT_FOUND", "Processed file not found")
 		return
 	}
 	outputFilePath, ok := meta["outputFilePath"].(string)
 	if !ok || outputFilePath == "" {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Processed file not found"})
+		response.NotFound(c, "NOT_FOUND", "Processed file not found")
 		return
 	}
 

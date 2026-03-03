@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"esydocs/shared/config"
+	"esydocs/shared/logger"
 	"esydocs/shared/database"
 	"esydocs/shared/redisstore"
 )
@@ -29,6 +30,7 @@ type JobPayload struct {
 
 func main() {
 	config.LoadConfig()
+	logger.Init("cleanup-worker", os.Getenv("LOG_MODE"))
 	database.Connect()
 	database.Migrate()
 	redisstore.Connect()

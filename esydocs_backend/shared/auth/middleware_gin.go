@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"esydocs/shared/response"
 )
 
 type GinMiddlewareOptions struct {
@@ -59,22 +61,12 @@ func GinAuthMiddleware(options GinMiddlewareOptions) gin.HandlerFunc {
 
 		if hasToken {
 			if options.Verifier == nil {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse{
-					Error: AuthError{
-						Code:    ErrCodeUnauthorized,
-						Message: "Invalid or expired token",
-					},
-				})
+				response.AbortErr(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Invalid or expired token")
 				return
 			}
 			claims, err := options.Verifier.Verify(c.Request.Context(), token)
 			if err != nil {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse{
-					Error: AuthError{
-						Code:    ErrCodeUnauthorized,
-						Message: "Invalid or expired token",
-					},
-				})
+				response.AbortErr(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Invalid or expired token")
 				return
 			}
 			SetGinAuth(c, claims.ToAuthContext())

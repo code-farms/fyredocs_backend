@@ -2,7 +2,7 @@ package redisstore
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"strconv"
 	"time"
@@ -26,9 +26,10 @@ func Connect() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := Client.Ping(ctx).Err(); err != nil {
-		log.Fatalf("Failed to connect to redis: %v", err)
+		slog.Error("Failed to connect to redis", "error", err)
+		os.Exit(1)
 	}
-	log.Println("Redis connection established")
+	slog.Info("Redis connection established")
 }
 
 func Close() {

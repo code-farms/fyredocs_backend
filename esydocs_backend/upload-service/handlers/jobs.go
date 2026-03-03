@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"mime"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,6 +22,7 @@ import (
 	"esydocs/shared/database"
 	"esydocs/shared/queue"
 	"esydocs/shared/redisstore"
+	"esydocs/shared/response"
 )
 
 var convertFromTools = map[string]bool{
@@ -81,7 +81,7 @@ type UploadJobRequest struct {
 func CreateJobFromTool(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, "INVALID_INPUT", err.Error())
 		return
 	}
 
@@ -90,7 +90,7 @@ func CreateJobFromTool(c *gin.Context) {
 		allowed = convertToTools
 	}
 	if !allowed[toolType] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported tool"})
+		response.BadRequest(c, "INVALID_INPUT", "unsupported tool")
 		return
 	}
 
@@ -99,7 +99,7 @@ func CreateJobFromTool(c *gin.Context) {
 	jobDir := filepath.Join(uploadDir, jobID.String())
 	// Fix #17: Use 0750 instead of os.ModePerm
 	if err := os.MkdirAll(jobDir, 0750); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload directory"})
+		response.InternalError(c, "SERVER_ERROR", "failed to create upload directory")
 		return
 	}
 
@@ -119,7 +119,7 @@ func CreateJobFromTool(c *gin.Context) {
 	if strings.Contains(c.GetHeader("Content-Type"), "application/json") {
 		var uploadReq UploadJobRequest
 		if err := c.ShouldBindJSON(&uploadReq); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+			response.BadRequest(c, "INVALID_INPUT", "invalid request body")
 			return
 		}
 		uploadIDs := uploadReq.UploadIDs
@@ -127,7 +127,7 @@ func CreateJobFromTool(c *gin.Context) {
 			uploadIDs = []string{uploadReq.UploadID}
 		}
 		if len(uploadIDs) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "uploadId is required"})
+			response.BadRequest(c, "INVALID_INPUT", "uploadId is required")
 			return
 		}
 		optionsRaw = string(uploadReq.Options)
@@ -135,7 +135,7 @@ func CreateJobFromTool(c *gin.Context) {
 		for idx, uploadID := range uploadIDs {
 			consumed, size, err := consumeUpload(c.Request.Context(), toolType, uploadID, jobDir, idx)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				response.BadRequest(c, "INVALID_INPUT", err.Error())
 				return
 			}
 			totalSize += size
@@ -155,12 +155,12 @@ func CreateJobFromTool(c *gin.Context) {
 	} else {
 		form, err := c.MultipartForm()
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to parse form"})
+			response.BadRequest(c, "INVALID_INPUT", "failed to parse form")
 			return
 		}
 		files := form.File["files"]
 		if len(files) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "no file uploaded"})
+			response.BadRequest(c, "INVALID_INPUT", "no file uploaded")
 			return
 		}
 		if len(form.Value["options"]) > 0 {
@@ -174,16 +174,16 @@ func CreateJobFromTool(c *gin.Context) {
 		maxSize := maxUploadBytes()
 		for _, file := range files {
 			if file.Size > maxSize {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "file exceeds maximum size"})
+				response.BadRequest(c, "FILE_TOO_LARGE", "file exceeds maximum size")
 				return
 			}
 			if err := validateFileType(toolType, file.Filename); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				response.BadRequest(c, "INVALID_INPUT", err.Error())
 				return
 			}
 			dst := filepath.Join(jobDir, filepath.Base(file.Filename))
 			if err := c.SaveUploadedFile(file, dst); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save uploaded file"})
+				response.InternalError(c, "SERVER_ERROR", "failed to save uploaded file")
 				return
 			}
 			totalSize += file.Size
@@ -216,7 +216,7 @@ func CreateJobFromTool(c *gin.Context) {
 	}
 	metaBytes, err := json.Marshal(metaPayload)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build job metadata"})
+		response.InternalError(c, "SERVER_ERROR", "failed to build job metadata")
 		return
 	}
 
@@ -244,7 +244,7 @@ func CreateJobFromTool(c *gin.Context) {
 		}
 		return nil
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create job"})
+		response.InternalError(c, "SERVER_ERROR", "failed to create job")
 		return
 	}
 
@@ -252,7 +252,7 @@ func CreateJobFromTool(c *gin.Context) {
 
 	queueName, ok := toolQueueMap[toolType]
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported tool"})
+		response.BadRequest(c, "INVALID_INPUT", "unsupported tool")
 		return
 	}
 	payload := queue.JobPayload{
@@ -264,20 +264,20 @@ func CreateJobFromTool(c *gin.Context) {
 		CorrelationID: correlationID,
 	}
 	if err := queue.Enqueue(c.Request.Context(), redisstore.Client, queue.QueueNameForWorker(queueName), payload); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue job"})
+		response.InternalError(c, "SERVER_ERROR", "failed to enqueue job")
 		return
 	}
 
 	jobCreated = true
 	slog.Info("job queued", "jobId", job.ID, "tool", toolType, "correlationId", correlationID)
-	c.JSON(http.StatusCreated, job)
+	response.Created(c, "Job created", job)
 }
 
 // Fix #29: Add pagination to GetJobsByTool
 func GetJobsByTool(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, "INVALID_INPUT", err.Error())
 		return
 	}
 
@@ -289,7 +289,7 @@ func GetJobsByTool(c *gin.Context) {
 	if userID == nil {
 		jobIDs := guestJobIDs(c.Request.Context(), guestToken(c))
 		if len(jobIDs) == 0 {
-			c.JSON(http.StatusOK, []database.ProcessingJob{})
+			response.OKWithMeta(c, "Jobs retrieved", []database.ProcessingJob{}, &response.Meta{Page: page, Limit: limit, Total: 0})
 			return
 		}
 		var jobs []database.ProcessingJob
@@ -297,10 +297,10 @@ func GetJobsByTool(c *gin.Context) {
 			Order("created_at desc").
 			Limit(limit).Offset(offset).
 			Find(&jobs).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch jobs"})
+			response.InternalError(c, "SERVER_ERROR", "failed to fetch jobs")
 			return
 		}
-		c.JSON(http.StatusOK, jobs)
+		response.OKWithMeta(c, "Jobs retrieved", jobs, &response.Meta{Page: page, Limit: limit})
 		return
 	}
 
@@ -309,49 +309,49 @@ func GetJobsByTool(c *gin.Context) {
 		Order("created_at desc").
 		Limit(limit).Offset(offset).
 		Find(&jobs).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch jobs"})
+		response.InternalError(c, "SERVER_ERROR", "failed to fetch jobs")
 		return
 	}
-	c.JSON(http.StatusOK, jobs)
+	response.OKWithMeta(c, "Jobs retrieved", jobs, &response.Meta{Page: page, Limit: limit})
 }
 
 func GetJobByID(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, "INVALID_INPUT", err.Error())
 		return
 	}
 	jobID := c.Param("id")
 
 	var job database.ProcessingJob
 	if err := database.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		response.NotFound(c, "NOT_FOUND", "job not found")
 		return
 	}
 
 	if !authorizeJobAccess(c, &job) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		response.NotFound(c, "NOT_FOUND", "job not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, job)
+	response.OK(c, "Job retrieved", job)
 }
 
 func DeleteJobByID(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, "INVALID_INPUT", err.Error())
 		return
 	}
 	jobID := c.Param("id")
 
 	var job database.ProcessingJob
 	if err := database.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		response.NotFound(c, "NOT_FOUND", "job not found")
 		return
 	}
 	if !authorizeJobAccess(c, &job) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		response.NotFound(c, "NOT_FOUND", "job not found")
 		return
 	}
 
@@ -369,39 +369,39 @@ func DeleteJobByID(c *gin.Context) {
 	}
 
 	if err := database.DB.Delete(&job).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete job"})
+		response.InternalError(c, "SERVER_ERROR", "failed to delete job")
 		return
 	}
 
 	removeGuestJob(c.Request.Context(), guestToken(c), job.ID)
-	c.Status(http.StatusNoContent)
+	response.NoContent(c)
 }
 
 func DownloadJobFile(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, "INVALID_INPUT", err.Error())
 		return
 	}
 	jobID := c.Param("id")
 
 	var job database.ProcessingJob
 	if err := database.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		response.NotFound(c, "NOT_FOUND", "job not found")
 		return
 	}
 	if !authorizeJobAccess(c, &job) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		response.NotFound(c, "NOT_FOUND", "job not found")
 		return
 	}
 	if job.Status != "completed" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file not ready"})
+		response.BadRequest(c, "NOT_READY", "file not ready")
 		return
 	}
 
 	var outputFile database.FileMetadata
 	if err := database.DB.First(&outputFile, "job_id = ? AND kind = ?", job.ID, "output").Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "output file not found"})
+		response.NotFound(c, "NOT_FOUND", "output file not found")
 		return
 	}
 
@@ -415,7 +415,7 @@ func DownloadJobFile(c *gin.Context) {
 func GetJobHistory(c *gin.Context) {
 	userID := authUserID(c)
 	if userID == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+		response.Unauthorized(c, "UNAUTHORIZED", "authentication required")
 		return
 	}
 
@@ -429,11 +429,11 @@ func GetJobHistory(c *gin.Context) {
 		Limit(limit).
 		Offset(offset).
 		Find(&jobs).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch job history"})
+		response.InternalError(c, "SERVER_ERROR", "failed to fetch job history")
 		return
 	}
 
-	c.JSON(http.StatusOK, jobs)
+	response.OKWithMeta(c, "Job history retrieved", jobs, &response.Meta{Page: page, Limit: limit})
 }
 
 type consumedUpload struct {

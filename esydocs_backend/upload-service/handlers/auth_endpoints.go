@@ -18,6 +18,7 @@ import (
 
 	"esydocs/shared/auth"
 	"esydocs/shared/database"
+	"esydocs/shared/response"
 )
 
 type authCredentials struct {
@@ -60,32 +61,32 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 	image := strings.TrimSpace(payload.Image)
 
 	if email == "" || strings.TrimSpace(payload.Password) == "" || fullName == "" || country == "" {
-		writeAuthError(c, http.StatusBadRequest, "INVALID_INPUT", "Email, password, full name, and country are required")
+		response.Err(c, http.StatusBadRequest, "INVALID_INPUT", "Email, password, full name, and country are required")
 		return
 	}
 
 	// Fix #5: Password length validation (8-128 characters)
 	if len(payload.Password) < 8 {
-		writeAuthError(c, http.StatusBadRequest, "WEAK_PASSWORD", "Password must be at least 8 characters")
+		response.Err(c, http.StatusBadRequest, "WEAK_PASSWORD", "Password must be at least 8 characters")
 		return
 	}
 	if len(payload.Password) > 128 {
-		writeAuthError(c, http.StatusBadRequest, "INVALID_INPUT", "Password must not exceed 128 characters")
+		response.Err(c, http.StatusBadRequest, "INVALID_INPUT", "Password must not exceed 128 characters")
 		return
 	}
 
 	var existing database.User
 	if err := database.DB.Where("email = ?", email).First(&existing).Error; err == nil {
-		writeAuthError(c, http.StatusConflict, "USER_ALREADY_EXISTS", "User already exists")
+		response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "User already exists")
 		return
 	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		writeAuthError(c, http.StatusInternalServerError, "SERVER_ERROR", "Unable to create user")
+		response.InternalError(c, "SERVER_ERROR", "Unable to create user")
 		return
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(payload.Password), bcrypt.DefaultCost)
 	if err != nil {
-		writeAuthError(c, http.StatusInternalServerError, "SERVER_ERROR", "Unable to create user")
+		response.InternalError(c, "SERVER_ERROR", "Unable to create user")
 		return
 	}
 
@@ -99,10 +100,10 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 	}
 	if err := database.DB.Create(&user).Error; err != nil {
 		if isDuplicateError(err) {
-			writeAuthError(c, http.StatusConflict, "USER_ALREADY_EXISTS", "User already exists")
+			response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "User already exists")
 			return
 		}
-		writeAuthError(c, http.StatusInternalServerError, "SERVER_ERROR", "Unable to create user")
+		response.InternalError(c, "SERVER_ERROR", "Unable to create user")
 		return
 	}
 
@@ -117,24 +118,24 @@ func (ae *AuthEndpoints) Login(c *gin.Context) {
 
 	email := normalizeEmail(payload.Email)
 	if email == "" || strings.TrimSpace(payload.Password) == "" {
-		writeAuthError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Invalid credentials")
+		response.Unauthorized(c, "INVALID_CREDENTIALS", "Invalid credentials")
 		return
 	}
 
 	// Fix #5: Also enforce max length on login to prevent bcrypt DoS
 	if len(payload.Password) > 128 {
-		writeAuthError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Invalid credentials")
+		response.Unauthorized(c, "INVALID_CREDENTIALS", "Invalid credentials")
 		return
 	}
 
 	var user database.User
 	if err := database.DB.Where("email = ?", email).First(&user).Error; err != nil {
-		writeAuthError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Invalid credentials")
+		response.Unauthorized(c, "INVALID_CREDENTIALS", "Invalid credentials")
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(payload.Password)); err != nil {
-		writeAuthError(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Invalid credentials")
+		response.Unauthorized(c, "INVALID_CREDENTIALS", "Invalid credentials")
 		return
 	}
 
@@ -142,7 +143,7 @@ func (ae *AuthEndpoints) Login(c *gin.Context) {
 }
 
 func (ae *AuthEndpoints) Refresh(c *gin.Context) {
-	writeAuthError(c, http.StatusGone, "ENDPOINT_DEPRECATED", "Refresh tokens are no longer supported. Please login again to get a new access token.")
+	response.Err(c, http.StatusGone, "ENDPOINT_DEPRECATED", "Refresh tokens are no longer supported. Please login again to get a new access token.")
 }
 
 func (ae *AuthEndpoints) Me(c *gin.Context) {
@@ -151,7 +152,7 @@ func (ae *AuthEndpoints) Me(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	response.OK(c, "User profile retrieved", gin.H{
 		"user": buildUserResponse(user, authCtx.Role),
 	})
 }
@@ -162,7 +163,7 @@ func (ae *AuthEndpoints) Profile(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	response.OK(c, "User profile retrieved", gin.H{
 		"profile": buildUserResponse(user, authCtx.Role),
 	})
 }
@@ -170,7 +171,7 @@ func (ae *AuthEndpoints) Profile(c *gin.Context) {
 func (ae *AuthEndpoints) Logout(c *gin.Context) {
 	authCtx, ok := auth.GetGinAuth(c)
 	if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-		writeAuthError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
+		response.Unauthorized(c, "UNAUTHORIZED", "Unauthorized")
 		return
 	}
 
@@ -184,20 +185,20 @@ func (ae *AuthEndpoints) Logout(c *gin.Context) {
 	}
 
 	clearAccessTokenCookie(c)
-	c.Status(http.StatusNoContent)
+	response.NoContent(c)
 }
 
 // Fix #15: Uses the cached issuer instead of creating a new one per request
 func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user database.User) {
 	accessToken, err := ae.Issuer.IssueAccessToken(user.ID.String(), "user", nil)
 	if err != nil {
-		writeAuthError(c, http.StatusInternalServerError, "SERVER_ERROR", "Unable to issue token")
+		response.InternalError(c, "SERVER_ERROR", "Unable to issue token")
 		return
 	}
 
 	setAccessTokenCookie(c, accessToken)
 
-	c.JSON(http.StatusOK, gin.H{
+	response.OK(c, "Authentication successful", gin.H{
 		"user": buildUserResponse(user, "user"),
 	})
 }
@@ -220,7 +221,7 @@ func (ae *AuthEndpoints) denyAccessToken(ctx context.Context, token string) erro
 func parseAuthPayload(c *gin.Context) (authCredentials, bool) {
 	var payload authCredentials
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		writeAuthError(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid request")
+		response.BadRequest(c, "INVALID_INPUT", "Invalid request")
 		return authCredentials{}, false
 	}
 	return payload, true
@@ -248,30 +249,23 @@ func normalizeEmail(raw string) string {
 func loadUserFromAuth(c *gin.Context) (database.User, auth.AuthContext, bool) {
 	authCtx, ok := auth.GetGinAuth(c)
 	if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-		writeAuthError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
+		response.Unauthorized(c, "UNAUTHORIZED", "Unauthorized")
 		return database.User{}, auth.AuthContext{}, false
 	}
 
 	parsedID, err := uuid.Parse(strings.TrimSpace(authCtx.UserID))
 	if err != nil {
-		writeAuthError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
+		response.Unauthorized(c, "UNAUTHORIZED", "Unauthorized")
 		return database.User{}, auth.AuthContext{}, false
 	}
 
 	var user database.User
 	if err := database.DB.First(&user, "id = ?", parsedID).Error; err != nil {
-		writeAuthError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
+		response.Unauthorized(c, "UNAUTHORIZED", "Unauthorized")
 		return database.User{}, auth.AuthContext{}, false
 	}
 
 	return user, authCtx, true
-}
-
-func writeAuthError(c *gin.Context, status int, code, message string) {
-	c.JSON(status, gin.H{
-		"code":    code,
-		"message": message,
-	})
 }
 
 func isDuplicateError(err error) bool {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"esydocs/shared/auth"
+	"esydocs/shared/logger"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 )
@@ -57,6 +58,7 @@ func validateJWTSecret() error {
 
 func main() {
 	loadEnv()
+	logger.Init("api-gateway", os.Getenv("LOG_MODE"))
 
 	if err := validateJWTSecret(); err != nil {
 		slog.Error("JWT secret validation failed", "error", err)
@@ -170,12 +172,12 @@ func main() {
 		Verifier:   verifier,
 		GuestStore: guestStore,
 	})
-	handler := withCORS(authMiddleware(mux), corsConfig{
+	handler := logger.HTTPRequestID(withCORS(authMiddleware(mux), corsConfig{
 		allowedOrigins:   corsOrigins,
 		allowedMethods:   corsMethods,
 		allowedHeaders:   corsHeaders,
 		allowCredentials: strings.EqualFold(corsAllowCredentials, "true"),
-	})
+	}))
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
