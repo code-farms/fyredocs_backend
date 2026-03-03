@@ -19,6 +19,7 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
+	"esydocs/shared/natsconn"
 	"esydocs/shared/queue"
 	"esydocs/shared/redisstore"
 	"esydocs/shared/response"
@@ -251,20 +252,22 @@ func CreateJobFromTool(c *gin.Context) {
 
 	assignGuestTokenIfNeeded(c, userID, jobID)
 
-	queueName, ok := toolQueueMap[toolType]
+	serviceName, ok := toolQueueMap[toolType]
 	if !ok {
 		response.BadRequest(c, "INVALID_INPUT", "unsupported tool")
 		return
 	}
-	payload := queue.JobPayload{
+	event := queue.JobEvent{
+		EventType:     "JobCreated",
 		JobID:         job.ID.String(),
 		ToolType:      toolType,
 		InputPaths:    inputPaths,
 		Options:       optionsPayload(optionsRaw),
-		Attempts:      0,
 		CorrelationID: correlationID,
+		Timestamp:     time.Now().UTC(),
 	}
-	if err := queue.Enqueue(c.Request.Context(), redisstore.Client, queue.QueueNameForWorker(queueName), payload); err != nil {
+	subject := queue.SubjectForDispatch(serviceName)
+	if err := queue.PublishJobEvent(c.Request.Context(), natsconn.JS, subject, event); err != nil {
 		response.InternalError(c, "SERVER_ERROR", "failed to enqueue job")
 		return
 	}

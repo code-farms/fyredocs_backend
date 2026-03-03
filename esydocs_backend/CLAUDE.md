@@ -186,7 +186,27 @@ After ANY code change, Claude MUST update all affected documentation. This is no
 - Missing documentation is treated as an incomplete task — Claude must not consider work done until docs are updated
 
 ────────────────────────────────────────
-# 9. CHANGE WORKFLOW RULES
+# 9. MANDATORY TEST UPDATES
+
+After ANY code change, Claude MUST update or create tests. This is non-negotiable.
+
+## Rules:
+- Every new function, handler, or method MUST have a corresponding test
+- If a code change modifies existing behavior, the related tests MUST be updated to match
+- If no test file exists for the changed package, Claude MUST create one (`*_test.go`)
+- Deleted or renamed functions MUST have their old tests removed or updated — never leave tests referencing non-existent code
+- Tests must be in the same package (or `_test` package) following Go conventions
+- Claude must run `go test ./...` for affected packages to verify tests pass
+- Missing or broken tests are treated as an incomplete task — Claude must not consider work done until tests are passing
+
+## Test file naming:
+```
+<filename>_test.go        (e.g., queue_test.go for queue.go)
+<handler>_test.go         (e.g., jobs_test.go for jobs.go)
+```
+
+────────────────────────────────────────
+# 10. CHANGE WORKFLOW RULES
 
 When applying any code change, Claude MUST follow this workflow in order:
 
@@ -204,14 +224,22 @@ When applying any code change, Claude MUST follow this workflow in order:
 - Update all dependent files consistently in the same response
 - Never leave partial updates — if multiple files must change together, change them all
 
-## Step 4: Document
+## Step 4: Test
+- Update existing test cases if the change modifies tested behavior
+- Create new test cases for new functions, handlers, or logic
+- If no tests exist for the changed code, create them
+- Run `go build ./...` and `go vet ./...` to verify compilation
+- Run `go test ./...` for affected packages
+
+## Step 5: Document
 - Update all affected documentation per Section 8
 - Update Mermaid diagrams if architecture or flow changed
 - Update Swagger/Postman if API changed
 
-## Step 5: Verify
+## Step 6: Verify
 - Review the changes for consistency
 - Confirm no broken imports, missing dependencies, or incomplete updates
+- Confirm all tests pass
 
 ## Claude must NEVER:
 - Make partial updates (changing one file but forgetting dependent files)
@@ -222,7 +250,7 @@ When applying any code change, Claude MUST follow this workflow in order:
 - Assume a change is safe without reading the affected code first
 
 ────────────────────────────────────────
-# 10. FINAL OVERRIDE RULE
+# 11. FINAL OVERRIDE RULE
 
 **This document (`CLAUDE.md`) is the highest authority.**
 

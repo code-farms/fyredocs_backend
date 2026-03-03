@@ -16,6 +16,7 @@ import (
 	"esydocs/shared/config"
 	"esydocs/shared/logger"
 	"esydocs/shared/metrics"
+	"esydocs/shared/natsconn"
 	"esydocs/shared/redisstore"
 	"esydocs/shared/telemetry"
 
@@ -73,6 +74,11 @@ func main() {
 	})
 	models.Migrate()
 	redisstore.Connect()
+	if err := natsconn.Connect(); err != nil {
+		slog.Error("NATS connection failed", "error", err)
+		os.Exit(1)
+	}
+	defer natsconn.Close()
 
 	// Fix #15: Initialize Issuer once at startup
 	issuer, err := token.NewIssuerFromEnv()
