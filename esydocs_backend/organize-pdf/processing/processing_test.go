@@ -54,3 +54,30 @@ func TestParsePageRangeInvalid(t *testing.T) {
 		t.Errorf("expected 0 pages for invalid range, got %d", len(pages))
 	}
 }
+
+func TestParsePageRangeSinglePage(t *testing.T) {
+	pages := parsePageRange("3", 10)
+	if len(pages) != 1 {
+		t.Fatalf("expected 1 page, got %d", len(pages))
+	}
+	if pages[0] != 3 {
+		t.Errorf("expected page 3, got %d", pages[0])
+	}
+}
+
+func TestParsePageRangeOutOfBounds(t *testing.T) {
+	pages := parsePageRange("1-20", 5)
+	// Pages beyond totalPages should be clamped or excluded
+	for _, p := range pages {
+		if p > 5 {
+			t.Errorf("page %d exceeds total page count 5", p)
+		}
+	}
+}
+
+func TestParsePageRangeMultipleRanges(t *testing.T) {
+	pages := parsePageRange("1-2,4-5", 10)
+	if len(pages) != 4 {
+		t.Errorf("expected 4 pages, got %d: %v", len(pages), pages)
+	}
+}

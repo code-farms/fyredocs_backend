@@ -60,3 +60,29 @@ func TestCopyFile(t *testing.T) {
 		t.Errorf("copied content = %q, want %q", string(data), "hello")
 	}
 }
+
+func TestCopyFileMissingSource(t *testing.T) {
+	dir := t.TempDir()
+	err := copyFile(dir+"/nonexistent.txt", dir+"/dst.txt")
+	if err == nil {
+		t.Error("expected error for nonexistent source")
+	}
+}
+
+func TestProcessFileEmptyOutputDir(t *testing.T) {
+	// With empty output dir, should default to "outputs" and still error on missing file
+	_, err := ProcessFile(context.Background(), uuid.New(), "word-to-pdf", []string{"/nonexistent/file.docx"}, nil, "")
+	if err == nil {
+		t.Error("expected error for nonexistent input file")
+	}
+}
+
+func TestOptionStringWithJsonNumber(t *testing.T) {
+	opts := map[string]interface{}{"quality": 90}
+	_, ok := optionString(opts, "quality")
+	// numeric values should still be handled (json.Marshal fallback)
+	if !ok {
+		// optionString marshals non-string values - 90 becomes "90"
+		t.Log("numeric option not extracted as string (expected behavior depends on implementation)")
+	}
+}

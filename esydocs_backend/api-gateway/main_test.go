@@ -1,0 +1,235 @@
+package main
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestValidateJWTSecret(t *testing.T) {
+	tests := []struct {
+		name      string
+		secret    string
+		wantError bool
+	}{
+		{"empty secret", "", true},
+		{"short secret", "tooshort", true},
+		{"dangerous secret - change-me", "change-me-padding-to-32-chars!!!", false}, // only exact "change-me" is blocked
+		{"exactly dangerous value", "change-me", true},
+		{"dangerous secret - secret", "secret", true},
+		{"dangerous secret - password", "password", true},
+		{"valid secret 32 chars", "abcdefghijklmnopqrstuvwxyz123456", false},
+		{"valid long secret", "a-very-long-and-secure-secret-that-is-definitely-more-than-32-characters", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("JWT_HS256_SECRET", tt.secret)
+			t.Setenv("JWT_SECRET", "")
+			err := validateJWTSecret()
+			if (err != nil) != tt.wantError {
+				t.Errorf("validateJWTSecret() error = %v, wantError %v", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestValidateJWTSecretFallbackToJWTSecret(t *testing.T) {
+	t.Setenv("JWT_HS256_SECRET", "")
+	t.Setenv("JWT_SECRET", "abcdefghijklmnopqrstuvwxyz123456")
+	if err := validateJWTSecret(); err != nil {
+		t.Errorf("expected no error with JWT_SECRET fallback, got %v", err)
+	}
+}
+
+func TestCorsAllowOrigin(t *testing.T) {
+	tests := []struct {
+		name             string
+		origin           string
+		allowed          []string
+		allowCredentials bool
+		want             string
+	}{
+		{"empty origin", "", []string{"http://example.com"}, false, ""},
+		{"wildcard without credentials", "http://any.com", []string{"*"}, false, "*"},
+		{"wildcard with credentials returns origin", "http://any.com", []string{"*"}, true, "http://any.com"},
+		{"matching origin", "http://localhost:5173", []string{"http://localhost:5173"}, false, "http://localhost:5173"},
+		{"non-matching origin", "http://evil.com", []string{"http://localhost:5173"}, false, ""},
+		{"case insensitive match", "HTTP://LOCALHOST:5173", []string{"http://localhost:5173"}, false, "HTTP://LOCALHOST:5173"},
+		{"multiple allowed origins", "http://example.com", []string{"http://localhost:5173", "http://example.com"}, false, "http://example.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := corsAllowOrigin(tt.origin, tt.allowed, tt.allowCredentials)
+			if got != tt.want {
+				t.Errorf("corsAllowOrigin(%q, %v, %v) = %q, want %q", tt.origin, tt.allowed, tt.allowCredentials, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestJoinPath(t *testing.T) {
+	tests := []struct {
+		basePath  string
+		extraPath string
+		want      string
+	}{
+		{"", "/hello", "/hello"},
+		{"/api", "/users", "/api/users"},
+		{"/api/", "/users", "/api/users"},
+		{"/api", "", "/api"},
+	}
+
+	for _, tt := range tests {
+		got := joinPath(tt.basePath, tt.extraPath)
+		if got != tt.want {
+			t.Errorf("joinPath(%q, %q) = %q, want %q", tt.basePath, tt.extraPath, got, tt.want)
+		}
+	}
+}
+
+func TestParseCommaList(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{"", 0},
+		{"http://localhost:5173", 1},
+		{"http://a.com, http://b.com, http://c.com", 3},
+	}
+
+	for _, tt := range tests {
+		got := parseCommaList(tt.input)
+		if tt.input == "" && got != nil {
+			t.Errorf("parseCommaList(%q) = %v, want nil", tt.input, got)
+			continue
+		}
+		if tt.input != "" && len(got) != tt.want {
+			t.Errorf("parseCommaList(%q) len = %d, want %d", tt.input, len(got), tt.want)
+		}
+	}
+}
+
+func TestUnquoteValue(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`"hello"`, "hello"},
+		{`'hello'`, "hello"},
+		{"hello", "hello"},
+		{`""`, ""},
+		{`''`, ""},
+		{"x", "x"},
+		{"", ""},
+		{`"mismatched'`, `"mismatched'`},
+	}
+
+	for _, tt := range tests {
+		got := unquoteValue(tt.input)
+		if got != tt.want {
+			t.Errorf("unquoteValue(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestGetEnvBool(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		fallback bool
+		want     bool
+	}{
+		{"true", "true", false, true},
+		{"TRUE", "TRUE", false, true},
+		{"1", "1", false, true},
+		{"yes", "yes", false, true},
+		{"y", "y", false, true},
+		{"false", "false", true, false},
+		{"FALSE", "FALSE", true, false},
+		{"0", "0", true, false},
+		{"no", "no", true, false},
+		{"n", "n", true, false},
+		{"empty uses fallback true", "", true, true},
+		{"empty uses fallback false", "", false, false},
+		{"unknown uses fallback", "maybe", true, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TEST_BOOL", tt.envValue)
+			got := getEnvBool("TEST_BOOL", tt.fallback)
+			if got != tt.want {
+				t.Errorf("getEnvBool(%q, %v) = %v, want %v", tt.envValue, tt.fallback, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWithCORSPreflight(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := withCORS(next, corsConfig{
+		allowedOrigins:   []string{"http://localhost:5173"},
+		allowedMethods:   "GET,POST",
+		allowedHeaders:   "Content-Type",
+		allowCredentials: true,
+	})
+
+	req := httptest.NewRequest(http.MethodOptions, "/", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("expected %d for preflight, got %d", http.StatusNoContent, rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Errorf("expected origin header 'http://localhost:5173', got %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("expected credentials header 'true', got %q", got)
+	}
+}
+
+func TestWithCORSNonMatchingOrigin(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := withCORS(next, corsConfig{
+		allowedOrigins: []string{"http://localhost:5173"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Origin", "http://evil.com")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("expected no CORS header for non-matching origin, got %q", got)
+	}
+}
+
+func TestWithCORSNoOriginHeader(t *testing.T) {
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := withCORS(next, corsConfig{
+		allowedOrigins: []string{"http://localhost:5173"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if !called {
+		t.Error("expected next handler to be called")
+	}
+}

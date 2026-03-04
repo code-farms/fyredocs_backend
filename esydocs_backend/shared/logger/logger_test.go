@@ -42,3 +42,8 @@ func TestRequestIDFromContextNil(t *testing.T) {
 		t.Errorf("expected empty string, got %q", got)
 	}
 }
+
+func TestInitDoesNotPanicEmptyMode(t *testing.T) {
+	Init("test-service", "")
+	slog.Info("test empty mode log")
+}
