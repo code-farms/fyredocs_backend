@@ -14,6 +14,9 @@ EsyDocs is a document conversion and PDF manipulation platform built with a micr
 | Convert From PDF | 8082 | PDF to document conversions |
 | Organize PDF | 8084 | PDF manipulation (merge, split, etc.) |
 | Optimize PDF | 8085 | PDF optimization (compress, OCR, repair) |
+| Auth Service | - | User registration, login, token management |
+| Job Service | - | Job creation, status tracking, dispatch routing |
+| Cleanup Worker | - | Background cleanup of expired files/jobs |
 
 ## Base URL
 
@@ -270,3 +273,29 @@ All services use structured logging via Go's `log/slog`:
 - **Production mode** (`LOG_MODE=prod` or unset): JSON structured logs
 
 Set `LOG_LEVEL` environment variable to control verbosity: `debug`, `info` (default), `warn`, `error`.
+
+---
+
+## Testing
+
+Run tests using the provided scripts from the `esydocs_backend/` directory:
+
+```bash
+# All services
+bash test.sh
+
+# Single service
+bash test.sh api-gateway
+
+# Multiple services
+bash test.sh shared auth-service
+
+# Verbose
+bash test.sh -v
+
+# Windows CMD
+test.bat
+test.bat -v api-gateway
+```
+
+Available services: `shared`, `api-gateway`, `auth-service`, `job-service`, `convert-to-pdf`, `convert-from-pdf`, `organize-pdf`, `optimize-pdf`, `cleanup-worker`

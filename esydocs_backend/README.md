@@ -43,10 +43,10 @@ Client -> API Gateway (:8080) -> Upload Service (:8081)
 
 ## Technology Stack
 
-- **Language**: Go 1.21+
+- **Language**: Go 1.25
 - **Web Framework**: Gin
 - **Database**: PostgreSQL 15
-- **Cache/Queue**: Redis 7
+- **Cache/Queue**: Redis 7 + NATS JetStream
 - **Document Processing**: LibreOffice, pdfcpu, Poppler, Ghostscript, Tesseract OCR
 - **Auth**: JWT (HS256) with HTTP-only cookies
 - **Containerization**: Docker Compose
@@ -72,6 +72,29 @@ cd upload-service && go run main.go
 ```
 
 See individual service docs in [`docs/services/`](docs/services/) for environment variables and configuration details.
+
+## Testing
+
+```bash
+# Run all tests across every service
+bash test.sh
+
+# Run tests for a specific service
+bash test.sh api-gateway
+
+# Run multiple services
+bash test.sh shared auth-service job-service
+
+# Verbose output
+bash test.sh -v
+bash test.sh -v api-gateway
+
+# Windows CMD
+test.bat
+test.bat -v api-gateway
+```
+
+Available services: `shared`, `api-gateway`, `auth-service`, `job-service`, `convert-to-pdf`, `convert-from-pdf`, `organize-pdf`, `optimize-pdf`, `cleanup-worker`
 
 ## License
 
