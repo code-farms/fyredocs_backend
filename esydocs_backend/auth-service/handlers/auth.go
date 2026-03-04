@@ -77,7 +77,7 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 	if err := models.DB.Where("email = ?", email).First(&existing).Error; err == nil {
 		response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "User already exists")
 		return
-	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		response.InternalError(c, "SERVER_ERROR", "Unable to create user")
 		return
 	}
