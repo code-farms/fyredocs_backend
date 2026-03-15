@@ -20,14 +20,14 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-REM Check if openssl is available (from Git Bash)
+REM Check if openssl is available
 where openssl >nul 2>nul
 if %ERRORLEVEL% NEQ 0 (
     echo %YELLOW%Warning: openssl not found in PATH%NC%
     echo %YELLOW%Trying to use Git Bash openssl...%NC%
     set "OPENSSL=C:\Program Files\Git\usr\bin\openssl.exe"
     if not exist "!OPENSSL!" (
-        echo %RED%Error: OpenSSL not found. Please install Git for Windows or OpenSSL%NC%
+        echo %RED%Error: OpenSSL not found. Please install Git for Windows%NC%
         exit /b 1
     )
 ) else (
@@ -36,7 +36,6 @@ if %ERRORLEVEL% NEQ 0 (
 
 REM Generate or load JWT secret
 set "JWT_SECRET_FILE=.jwt_secret"
-
 if exist "%JWT_SECRET_FILE%" (
     echo %YELLOW%Found existing JWT secret in %JWT_SECRET_FILE%%NC%
     set /p JWT_HS256_SECRET=<"%JWT_SECRET_FILE%"
@@ -46,22 +45,23 @@ if exist "%JWT_SECRET_FILE%" (
     for /f %%i in ('"%OPENSSL%" rand -hex 32') do set JWT_HS256_SECRET=%%i
     echo !JWT_HS256_SECRET!>"%JWT_SECRET_FILE%"
     echo %GREEN%Generated and saved new JWT secret to %JWT_SECRET_FILE%%NC%
-    echo %YELLOW%IMPORTANT: Keep this file secure and don't commit it to git!%NC%
 )
 
 REM Validate JWT secret length
 set "SECRET_LEN=0"
-for /l %%i in (0,1,100) do if "!JWT_HS256_SECRET:~%%i,1!" neq "" set /a SECRET_LEN+=1
-
+set "TEMP_SECRET=!JWT_HS256_SECRET!"
+:loop
+if not "!TEMP_SECRET!"=="" (
+    set /a SECRET_LEN+=1
+    set "TEMP_SECRET=!TEMP_SECRET:~1!"
+    goto loop
+)
 if %SECRET_LEN% LSS 32 (
-    echo %RED%Error: JWT secret is too short (must be at least 32 characters)%NC%
+    echo %RED%Error: JWT secret is too short%NC%
     exit /b 1
 )
 
 echo %GREEN%JWT secret validated (%SECRET_LEN% characters)%NC%
-
-REM Export the JWT secret for Docker Compose
-set JWT_HS256_SECRET=%JWT_HS256_SECRET%
 
 echo.
 echo %BLUE%==============================================================
@@ -72,9 +72,30 @@ echo %GREEN%Stopped existing containers%NC%
 
 echo.
 echo %BLUE%==============================================================
-echo ============== Building and starting all services...
+echo ============== Building services one-by-one (CPU Safety)
 echo ==============================================================%NC%
-docker compose up -d --build
+
+REM Set BuildKit for Windows
+set DOCKER_BUILDKIT=1
+
+REM List of services to build sequentially
+set "SERVICES=api-gateway auth-service job-service convert-from-pdf convert-to-pdf organize-pdf optimize-pdf cleanup-worker"
+
+for %%s in (%SERVICES%) do (
+    echo %YELLOW%🔨 Building %%s...%NC%
+    docker compose build %%s
+    if !ERRORLEVEL! NEQ 0 (
+        echo %RED%Error building %%s. Build aborted.%NC%
+        exit /b 1
+    )
+    echo %GREEN%✓ %%s build complete%NC%
+)
+
+echo.
+echo %BLUE%==============================================================
+echo ============== Starting all services...
+echo ==============================================================%NC%
+docker compose up -d
 
 echo.
 echo %BLUE%==============================================================
@@ -82,20 +103,11 @@ echo ============== Waiting for services to be ready...
 echo ==============================================================%NC%
 
 echo Waiting for database...
-timeout /t 10 /nobreak >nul
-echo %GREEN%Database should be ready%NC%
-
-echo Waiting for Redis...
-timeout /t 5 /nobreak >nul
-echo %GREEN%Redis should be ready%NC%
+timeout /t 15 /nobreak >nul
+docker compose exec -T db pg_isready -U user -d esydocs
 
 echo Waiting for API Gateway...
 timeout /t 10 /nobreak >nul
-echo %GREEN%API Gateway should be ready%NC%
-
-echo Waiting for Upload Service...
-timeout /t 10 /nobreak >nul
-echo %GREEN%Upload Service should be ready%NC%
 
 echo.
 echo %BLUE%==============================================================
@@ -110,25 +122,8 @@ echo ━━━━━━━━━━━━━━━━━━━━━━━━━
 echo 📋 Service Endpoints:
 echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 echo   🌐 API Gateway:        http://localhost:8080
-echo   📤 Upload Service:     http://localhost:8081
-echo   🗄️  PostgreSQL:         localhost:5432
-echo   🔴 Redis:              localhost:6379
-echo.
+echo   📤 Upload/Job Service: http://localhost:8081
+echo   📄 Worker Endpoints:   8082, 8083, 8084, 8085
 echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-echo 🔧 Useful Commands:
-echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-echo   View logs:             docker compose logs -f
-echo   View specific service: docker compose logs -f api-gateway
-echo   Restart services:      docker compose restart
-echo   Stop all:              docker compose down
-echo   Remove all data:       docker compose down -v
-echo.
-echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-echo 🔐 Security Info:
-echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-echo   JWT Secret stored in:  %JWT_SECRET_FILE%
-echo   ⚠️  Keep this file secure and never commit it!
-echo   ⚠️  For production, use proper secret management
-echo.
 
 pause
