@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Start the Global Timer
+GLOBAL_START_TIME=$SECONDS
+
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$ROOT_DIR"
 
@@ -31,9 +34,9 @@ print_error() {
     echo -e "${RED}✗ $1${NC}"
 }
 
-# Check if openssl is available
+# Check requirements
 if ! command -v openssl &> /dev/null; then
-    print_error "openssl is required but not installed. Please install openssl first."
+    print_error "openssl is required but not installed."
     exit 1
 fi
 
@@ -42,18 +45,17 @@ JWT_SECRET_FILE=".jwt_secret"
 if [ -f "$JWT_SECRET_FILE" ]; then
     print_warning "Found existing JWT secret in $JWT_SECRET_FILE"
     export JWT_HS256_SECRET=$(cat "$JWT_SECRET_FILE")
-    print_success "Loaded JWT secret from file"
 else
     print_step "Generating new JWT secret..."
     export JWT_HS256_SECRET=$(openssl rand -hex 32)
     echo "$JWT_HS256_SECRET" > "$JWT_SECRET_FILE"
     chmod 600 "$JWT_SECRET_FILE"
-    print_success "Generated and saved new JWT secret to $JWT_SECRET_FILE"
+    print_success "Generated new JWT secret"
 fi
 
 # Configuration Notice
 print_step "PDF Processing Configuration"
-print_success "Using pre-built base image: esydocs-base:latest"
+print_success "Using free open-source tools (pdfcpu, LibreOffice, Poppler)"
 print_success "Using Go Workspace caching for ultra-fast builds"
 
 # 1. Stop existing containers
@@ -64,7 +66,6 @@ print_success "Stopped existing containers"
 # 2. Sequential Build Stage (CPU-Safe Mode)
 print_step "Building Go Services sequentially..."
 
-# We build them one-by-one to keep the CPU Load Average low
 GO_SERVICES=(
   "api-gateway" 
   "auth-service" 
@@ -76,18 +77,16 @@ GO_SERVICES=(
   "cleanup-worker"
 )
 
-# Enable BuildKit for advanced caching
 export DOCKER_BUILDKIT=1
 
 for SERVICE in "${GO_SERVICES[@]}"; do
     echo -e "${YELLOW}🔨 Starting build for: $SERVICE...${NC}"
-    START_TIME=$SECONDS
+    STEP_START=$SECONDS
     
-    # We build one service at a time to prevent server freezing
     docker compose build "$SERVICE"
     
-    DURATION=$(( SECONDS - START_TIME ))
-    print_success "$SERVICE build complete (took ${DURATION}s)"
+    STEP_DURATION=$(( SECONDS - STEP_START ))
+    print_success "$SERVICE build complete (took ${STEP_DURATION}s)"
 done
 
 # 3. Start all services
@@ -98,7 +97,6 @@ print_success "All services are running!"
 # 4. Wait for services to be healthy
 print_step "Waiting for services to be ready..."
 
-# Database check
 echo -n "Waiting for Database... "
 for i in {1..30}; do
     if docker compose exec -T db pg_isready -U user -d esydocs &> /dev/null; then
@@ -109,7 +107,6 @@ for i in {1..30}; do
     sleep 1
 done
 
-# API Gateway check
 echo -n "Waiting for API Gateway... "
 for i in {1..30}; do
     if curl -s http://localhost:8080/healthz &> /dev/null; then
@@ -120,16 +117,46 @@ for i in {1..30}; do
     sleep 1
 done
 
-# 5. Summary and Endpoints
+# 5. Post-Deployment Cleanup
+print_step "Optimizing Disk Space"
+docker image prune -f
+print_success "Removed unused image layers"
+
+# 6. Final Summary and Endpoints
+GLOBAL_DURATION=$(( SECONDS - GLOBAL_START_TIME ))
+MINUTES=$(( GLOBAL_DURATION / 60 ))
+SECONDS_REM=$(( GLOBAL_DURATION % 60 ))
+
 print_step "Service Status"
 docker compose ps
 
 echo ""
-print_success "Deployment successful!"
+print_success "Deployment successful! (Total Time: ${MINUTES}m ${SECONDS_REM}s)"
+echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🌐 API Gateway:     http://localhost:8080"
-echo "📤 Upload/Job:      http://localhost:8081"
-echo "📄 Workers:         8082, 8083, 8084, 8085"
+echo "📋 Service Endpoints:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🔧 View all logs:   docker compose logs -f"
+echo "  🌐 API Gateway:        http://localhost:8080"
+echo "  📤 Upload Service:     http://localhost:8081"
+echo "  📄 Convert-From-PDF:   http://localhost:8082"
+echo "  📑 Convert-To-PDF:     http://localhost:8083"
+echo "  📋 Organize-PDF:       http://localhost:8084"
+echo "  🔧 Optimize-PDF:       http://localhost:8085"
+echo "  🗄️  PostgreSQL:         localhost:5432"
+echo "  🔴 Redis:              localhost:6379"
+echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔧 Useful Commands:"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  View logs:             docker compose logs -f"
+echo "  View specific service: docker compose logs -f api-gateway"
+echo "  Restart services:      docker compose restart"
+echo "  Stop all:              docker compose down"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔐 Security Info:"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  JWT Secret stored in:  $JWT_SECRET_FILE"
+echo "  ⏱️  Total Deploy Time:  ${MINUTES}m ${SECONDS_REM}s"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
