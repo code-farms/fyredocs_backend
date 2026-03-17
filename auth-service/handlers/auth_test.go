@@ -225,10 +225,12 @@ func TestBuildUserResponse(t *testing.T) {
 		Phone:    "1234567890",
 		Country:  "US",
 		ImageURL: "https://example.com/avatar.png",
+		PlanName: "free",
 	}
+	freePlan := models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
 
 	t.Run("normal user", func(t *testing.T) {
-		resp := buildUserResponse(user, "admin")
+		resp := buildUserResponse(user, "admin", freePlan)
 		if resp.ID != userID.String() {
 			t.Errorf("expected ID %q, got %q", userID.String(), resp.ID)
 		}
@@ -241,17 +243,20 @@ func TestBuildUserResponse(t *testing.T) {
 		if resp.FullName != "Test User" {
 			t.Errorf("expected fullName 'Test User', got %q", resp.FullName)
 		}
+		if resp.PlanName != "free" {
+			t.Errorf("expected planName 'free', got %q", resp.PlanName)
+		}
 	})
 
 	t.Run("empty role defaults to user", func(t *testing.T) {
-		resp := buildUserResponse(user, "")
+		resp := buildUserResponse(user, "", freePlan)
 		if resp.Role != "user" {
 			t.Errorf("expected role 'user' for empty role, got %q", resp.Role)
 		}
 	})
 
 	t.Run("whitespace role defaults to user", func(t *testing.T) {
-		resp := buildUserResponse(user, "  ")
+		resp := buildUserResponse(user, "  ", freePlan)
 		if resp.Role != "user" {
 			t.Errorf("expected role 'user' for whitespace role, got %q", resp.Role)
 		}

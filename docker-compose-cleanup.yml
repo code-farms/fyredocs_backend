@@ -15,8 +15,8 @@ services:
     env_file:
       - ./cleanup-worker/.env
     volumes:
-      - uploads_data:/app/uploads
-      - outputs_data:/app/outputs
+      - ./files/uploads:/app/uploads
+      - ./files/outputs:/app/outputs
     networks:
       - esydocs_net
 
@@ -24,6 +24,3 @@ networks:
   esydocs_net:
     external: true
 
-volumes:
-  uploads_data:
-  outputs_data:

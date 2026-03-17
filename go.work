@@ -9,6 +9,5 @@ use (
 	./optimize-pdf
 	./organize-pdf
 	./shared
-	./upload-service
 	./job-service
 )

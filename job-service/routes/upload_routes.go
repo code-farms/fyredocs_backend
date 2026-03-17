@@ -32,14 +32,14 @@ func SetupRouter(r *gin.Engine) {
 		uploads.GET("/:uploadId/status", handlers.GetUploadStatus)
 		uploads.POST("/:uploadId/complete", handlers.CompleteUpload)
 
-		convertFrom := api.Group("/convert-from-pdf", authverify.RequireAuthenticatedGin())
+		convertFrom := api.Group("/convert-from-pdf")
 		convertFrom.GET("/:tool", handlers.GetJobsByTool)
 		convertFrom.POST("/:tool", handlers.CreateJobFromTool)
 		convertFrom.GET("/:tool/:id", handlers.GetJobByID)
 		convertFrom.DELETE("/:tool/:id", handlers.DeleteJobByID)
 		convertFrom.GET("/:tool/:id/download", handlers.DownloadJobFile)
 
-		convertTo := api.Group("/convert-to-pdf", authverify.RequireAuthenticatedGin())
+		convertTo := api.Group("/convert-to-pdf")
 		convertTo.GET("/:tool", handlers.GetJobsByTool)
 		convertTo.POST("/:tool", handlers.CreateJobFromTool)
 		convertTo.GET("/:tool/:id", handlers.GetJobByID)

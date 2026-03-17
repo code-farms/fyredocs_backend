@@ -2,8 +2,22 @@ package authverify
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 )
+
+// anonymousPlan holds the limits applied to requests with no valid token.
+// These mirror the "anonymous" row in the subscription_plans table.
+// Override via ANON_MAX_FILE_MB and ANON_MAX_FILES env vars if needed.
+var anonymousPlan = struct {
+	Name           string
+	MaxFileSizeMB  int
+	MaxFilesPerJob int
+}{
+	Name:           "anonymous",
+	MaxFileSizeMB:  10,
+	MaxFilesPerJob: 5,
+}
 
 type HTTPMiddlewareOptions struct {
 	Verifier              *Verifier
@@ -78,7 +92,13 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 				return
 			}
 
-			next.ServeHTTP(w, r)
+			// No token — anonymous request. Apply anonymous plan limits.
+			anonCtx := AuthContext{
+				Plan:               anonymousPlan.Name,
+				PlanMaxFileSizeMB:  anonymousPlan.MaxFileSizeMB,
+				PlanMaxFilesPerJob: anonymousPlan.MaxFilesPerJob,
+			}
+			next.ServeHTTP(w, SetRequestAuth(r, anonCtx))
 		})
 	}
 }
@@ -120,10 +140,16 @@ func authContextFromGatewayHeaders(header http.Header) (AuthContext, bool) {
 	}
 	role := strings.TrimSpace(header.Get("X-User-Role"))
 	scope := splitScope(header.Get("X-User-Scope"))
+	plan := strings.TrimSpace(header.Get("X-User-Plan"))
+	maxFileMB, _ := strconv.Atoi(header.Get("X-User-Plan-Max-File-MB"))
+	maxFiles, _ := strconv.Atoi(header.Get("X-User-Plan-Max-Files"))
 	return AuthContext{
-		UserID: userID,
-		Role:   role,
-		Scope:  scope,
+		UserID:             userID,
+		Role:               role,
+		Scope:              scope,
+		Plan:               plan,
+		PlanMaxFileSizeMB:  maxFileMB,
+		PlanMaxFilesPerJob: maxFiles,
 	}, true
 }
 

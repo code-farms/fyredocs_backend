@@ -16,10 +16,11 @@ The Auth Service is a dedicated microservice responsible for user authentication
 2. **User Login** -- Authenticate users and issue JWT access tokens as HTTP-only cookies
 3. **User Profile** -- Return authenticated user profile data
 4. **Logout** -- Revoke access tokens via Redis denylist and clear cookies
-5. **Token Issuance** -- Generate HS256 JWT tokens with configurable TTL
-6. **Token Denylist** -- Maintain a Redis-backed denylist for revoked tokens
-7. **Rate Limiting** -- Protect auth endpoints from brute force attacks
-8. **Internal API** -- Expose `/internal/users/:id/plan` for service-to-service calls
+5. **Guest Sessions** -- Issue temporary guest tokens so users can use tools without signing up
+6. **Token Issuance** -- Generate HS256 JWT tokens with configurable TTL
+7. **Token Denylist** -- Maintain a Redis-backed denylist for revoked tokens
+8. **Rate Limiting** -- Protect auth endpoints from brute force attacks
+9. **Internal API** -- Expose `/internal/users/:id/plan` for service-to-service calls
 
 ## Design Constraints
 
@@ -52,6 +53,7 @@ Auth Service :8086
 | Package | Purpose |
 |---------|---------|
 | `handlers/auth.go` | Signup, Login, Me, Profile, Logout, Refresh endpoints |
+| `handlers/guest.go` | CreateGuestSession -- issues temporary Redis-backed guest tokens |
 | `handlers/internal_api.go` | GetUserPlan -- internal service-to-service endpoint |
 | `internal/token/` | JWT token issuance (HS256) |
 | `internal/authverify/` | JWT verification, denylist, guest store |
@@ -68,6 +70,8 @@ Auth Service :8086
 | POST | `/auth/signup` | `Signup` | 3/min per IP | Create a new user account |
 | POST | `/auth/login` | `Login` | 5/min per IP | Authenticate and get access token |
 | POST | `/auth/refresh` | `Refresh` | 10/min per IP | DEPRECATED (returns 410 Gone) |
+| POST | `/auth/guest` | `CreateGuestSession` | 20/min per IP | Create a temporary guest session token |
+| GET | `/auth/plans` | `GetPlans` | none | List all non-anonymous subscription plans with limits |
 
 ### Authenticated Endpoints
 
@@ -103,6 +107,7 @@ CREATE TABLE users (
     country       TEXT,
     image_url     TEXT,
     password_hash TEXT NOT NULL,
+    plan_name     TEXT NOT NULL DEFAULT 'free',
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -126,13 +131,22 @@ CREATE INDEX idx_auth_metadata_user_id ON auth_metadata(user_id);
 
 ```sql
 CREATE TABLE subscription_plans (
-    id              UUID PRIMARY KEY,
-    name            TEXT UNIQUE NOT NULL,
+    id               UUID PRIMARY KEY,
+    name             TEXT UNIQUE NOT NULL,
     max_file_size_mb INT NOT NULL,
+    max_files_per_job INT NOT NULL,
     retention_days   INT NOT NULL,
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+Three rows are seeded at startup:
+
+| name | max_file_size_mb | max_files_per_job | retention_days |
+|------|-----------------|-------------------|----------------|
+| `anonymous` | 10 | 5 | 0 |
+| `free` | 25 | 10 | 7 |
+| `pro` | 500 | 50 | 30 |
 
 ### Redis Keys
 
@@ -164,10 +178,11 @@ sequenceDiagram
         GW-->>C: 409 Conflict
     else User does not exist
         AS->>AS: bcrypt.GenerateFromPassword(password)
-        AS->>DB: INSERT INTO users (email, full_name, phone, country, image_url, password_hash)
-        AS->>AS: Issuer.IssueAccessToken(userId, "user")
-        AS-->>GW: 200 {user} + Set-Cookie: access_token=<jwt>
-        GW-->>C: 200 {user} + Set-Cookie
+        AS->>DB: INSERT INTO users (email, full_name, phone, country, image_url, password_hash, plan_name='free')
+        AS->>DB: SELECT * FROM subscription_plans WHERE name = 'free'
+        AS->>AS: Issuer.IssueAccessToken(userId, "user", PlanInfo{name, maxFileMB, maxFiles})
+        AS-->>GW: 200 {user, planName} + Set-Cookie: access_token=<jwt>
+        GW-->>C: 200 {user, planName} + Set-Cookie
     end
 ```
 
@@ -200,9 +215,10 @@ sequenceDiagram
             AS-->>GW: 401 {code: INVALID_CREDENTIALS}
             GW-->>C: 401 Unauthorized
         else Password matches
-            AS->>AS: Issuer.IssueAccessToken(userId, "user")
-            AS-->>GW: 200 {user} + Set-Cookie: access_token=<jwt>
-            GW-->>C: 200 {user} + Set-Cookie
+            AS->>DB: SELECT * FROM subscription_plans WHERE name = user.plan_name
+            AS->>AS: Issuer.IssueAccessToken(userId, "user", PlanInfo{name, maxFileMB, maxFiles})
+            AS-->>GW: 200 {user, planName} + Set-Cookie: access_token=<jwt>
+            GW-->>C: 200 {user, planName} + Set-Cookie
         end
     end
 ```
@@ -295,9 +311,14 @@ All errors follow the standard response format:
   "aud": "esydocs-api",
   "exp": 1705324800,
   "iat": 1705296000,
-  "jti": "unique-token-id"
+  "jti": "unique-token-id",
+  "plan": "free",
+  "plan_max_file_mb": 25,
+  "plan_max_files": 10
 }
 ```
+
+The `plan`, `plan_max_file_mb`, and `plan_max_files` claims are populated at login/signup by looking up the user's plan from the `subscription_plans` table. Downstream services (api-gateway, job-service, upload-service) read these claims to enforce per-plan limits without calling back to the auth service.
 
 - **Algorithm**: HS256 (HMAC-SHA256)
 - **Secret**: `JWT_HS256_SECRET` environment variable (min 32 characters)
@@ -475,7 +496,8 @@ Set-Cookie: access_token=eyJhbGc...; HttpOnly; Secure; SameSite=Lax; Max-Age=288
       "phone": "+1234567890",
       "country": "US",
       "image": "https://...",
-      "role": "user"
+      "role": "user",
+      "planName": "free"
     }
   }
 }
@@ -494,7 +516,7 @@ Content-Type: application/json
 }
 ```
 
-**Response** (200 OK): Same format as signup.
+**Response** (200 OK): Same format as signup (includes `planName` in the `user` object).
 
 ### GET /auth/me
 
@@ -515,7 +537,8 @@ Cookie: access_token=eyJhbGc...
       "email": "user@example.com",
       "fullName": "John Doe",
       "country": "US",
-      "role": "user"
+      "role": "user",
+      "planName": "free"
     }
   }
 }
@@ -550,12 +573,48 @@ GET /internal/users/550e8400-e29b-41d4-a716-446655440000/plan
     "userId": "550e8400-e29b-41d4-a716-446655440000",
     "plan": {
       "name": "free",
-      "maxFileSizeMb": 50,
+      "maxFileSizeMb": 25,
+      "maxFilesPerJob": 10,
       "retentionDays": 7
     }
   }
 }
 ```
+
+The response is populated from a real DB lookup of `subscription_plans` using the user's `plan_name` field.
+
+### GET /auth/plans
+
+**Request** (no authentication required):
+```http
+GET /auth/plans
+```
+
+**Response** (200 OK):
+```json
+{
+  "success": true,
+  "message": "Plans retrieved",
+  "data": {
+    "plans": [
+      {
+        "name": "free",
+        "maxFileSizeMb": 25,
+        "maxFilesPerJob": 10,
+        "retentionDays": 7
+      },
+      {
+        "name": "pro",
+        "maxFileSizeMb": 500,
+        "maxFilesPerJob": 50,
+        "retentionDays": 30
+      }
+    ]
+  }
+}
+```
+
+Returns all non-anonymous plans. The `anonymous` plan is excluded because it is an internal default used when no token is present, not a user-selectable tier.
 
 ## Related Documentation
 

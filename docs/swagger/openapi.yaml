@@ -176,6 +176,34 @@ paths:
   # ==========================================================================
   # Authentication
   # ==========================================================================
+  /auth/plans:
+    get:
+      tags: [Authentication]
+      summary: List subscription plans
+      description: |
+        Returns all non-anonymous subscription plans with their file size and
+        file count limits. No authentication required.
+      operationId: getPlans
+      responses:
+        "200":
+          description: Plans retrieved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          plans:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/SubscriptionPlan"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /auth/signup:
     post:
       tags: [Authentication]
@@ -369,6 +397,45 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /auth/guest:
+    post:
+      tags: [Authentication]
+      summary: Create a guest session
+      description: |
+        Generates a temporary guest token valid for 24 hours (configurable via
+        `GUEST_SESSION_TTL` env). The token is stored in Redis using the key
+        pattern `guest:{token}:jobs`. No authentication required.
+
+        Send the returned `guest_token` in the `X-Guest-Token` request header
+        (or `guest_token` cookie) to authenticate as a guest on subsequent
+        API calls. All basic tools are accessible to guests.
+      operationId: createGuestSession
+      security: []
+      responses:
+        "200":
+          description: Guest session created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          guest_token:
+                            type: string
+                            format: uuid
+                            description: Guest token to use in X-Guest-Token header
+                          expires_in:
+                            type: integer
+                            description: Token lifetime in seconds (default 86400)
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   # ==========================================================================
   # Uploads
   # ==========================================================================
@@ -379,6 +446,8 @@ paths:
       description: |
         Creates a new upload session and returns an `uploadId`.
         Use this ID to upload individual chunks and complete the upload.
+        The `fileSize` is validated against the caller's plan limit from the
+        `X-User-Plan-Max-File-MB` header (default: 10 MB for anonymous users).
       operationId: initUpload
       requestBody:
         required: true
@@ -404,6 +473,20 @@ paths:
                             format: uuid
         "400":
           $ref: "#/components/responses/BadRequest"
+        "413":
+          description: File exceeds plan size limit
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      error:
+                        $ref: "#/components/schemas/APIError"
+                        example:
+                          code: FILE_TOO_LARGE
+                          details: "file size exceeds your plan limit of 25 MB"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -537,6 +620,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/APIResponse"
+        "413":
+          description: Assembled file exceeds plan size limit
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      error:
+                        $ref: "#/components/schemas/APIError"
+                        example:
+                          code: FILE_TOO_LARGE
+                          details: "file size exceeds your plan limit of 25 MB"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -1479,6 +1576,31 @@ components:
           type: string
           enum: [user, admin]
           example: user
+        planName:
+          type: string
+          enum: [free, pro]
+          example: free
+          description: The user's current subscription plan name
+
+    # -- Subscription Plan Schema --
+    SubscriptionPlan:
+      type: object
+      properties:
+        name:
+          type: string
+          example: free
+        maxFileSizeMb:
+          type: integer
+          example: 25
+          description: Maximum file size in megabytes
+        maxFilesPerJob:
+          type: integer
+          example: 10
+          description: Maximum number of files per job
+        retentionDays:
+          type: integer
+          example: 7
+          description: Number of days job files are retained
 
     # -- Upload Schemas --
     UploadInitRequest:

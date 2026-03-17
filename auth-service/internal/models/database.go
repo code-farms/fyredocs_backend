@@ -6,8 +6,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var DB *gorm.DB
@@ -82,4 +84,20 @@ func Migrate() {
 		os.Exit(1)
 	}
 	slog.Info("Database migration completed")
+	seedPlans()
+}
+
+// seedPlans inserts the default subscription plans if they do not already exist.
+// Uses INSERT ... ON CONFLICT DO NOTHING so it is safe to run on every startup.
+func seedPlans() {
+	plans := []SubscriptionPlan{
+		{ID: uuid.New(), Name: "anonymous", MaxFileSizeMB: 10, MaxFilesPerJob: 5, RetentionDays: 0},
+		{ID: uuid.New(), Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7},
+		{ID: uuid.New(), Name: "pro", MaxFileSizeMB: 500, MaxFilesPerJob: 50, RetentionDays: 30},
+	}
+	if err := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&plans).Error; err != nil {
+		slog.Warn("Plan seeding encountered an error", "error", err)
+	} else {
+		slog.Info("Subscription plans seeded")
+	}
 }

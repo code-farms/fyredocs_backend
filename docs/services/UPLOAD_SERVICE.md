@@ -61,7 +61,19 @@ Content-Type: application/json
 }
 ```
 
-Creates a new upload session for chunked file upload.
+**Response** (413 Request Entity Too Large):
+```json
+{
+  "success": false,
+  "message": "File exceeds plan limit",
+  "error": {
+    "code": "FILE_TOO_LARGE",
+    "details": "file size exceeds your plan limit of 25 MB"
+  }
+}
+```
+
+Creates a new upload session for chunked file upload. The `fileSize` is validated against the caller's plan limit, read from the `X-User-Plan-Max-File-MB` header (forwarded by the API Gateway). If the header is absent, a default of 10 MB (anonymous limit) is applied.
 
 ---
 
@@ -121,7 +133,7 @@ POST /api/upload/{uploadId}/complete
 }
 ```
 
-Assembles all uploaded chunks into a single file. The upload is now ready to be used for conversion jobs.
+Assembles all uploaded chunks into a single file. The assembled file size is re-validated against the `X-User-Plan-Max-File-MB` limit (default 10 MB if absent). Returns HTTP 413 with `FILE_TOO_LARGE` if the assembled size exceeds the limit. The upload is now ready to be used for conversion jobs.
 
 **Note**: A completed upload is consumed when used in a conversion job and cannot be reused.
 
@@ -321,7 +333,7 @@ Jobs store metadata in PostgreSQL including:
 |----------|---------|-------------|
 | `UPLOAD_DIR` | `/app/uploads` | Directory for uploaded files |
 | `OUTPUT_DIR` | `/app/outputs` | Directory for conversion outputs |
-| `MAX_UPLOAD_MB` | `50` | Maximum file size in MB |
+| `MAX_UPLOAD_MB` | `50` | Maximum file size in MB (server-side hard cap; per-user plan limits are enforced via `X-User-Plan-Max-File-MB` header from the API Gateway) |
 | `UPLOAD_TTL` | `2h` | Upload expiration time |
 
 ### Job Processing
@@ -708,7 +720,7 @@ sequenceDiagram
 | `INVALID_INPUT` | 400 | Invalid or negative chunk index |
 | `NOT_FOUND` | 404 | Upload session expired or not found |
 | `BAD_REQUEST` | 400 | Attempting to complete an incomplete upload |
-| `FILE_TOO_LARGE` | 400 | Assembled file exceeds MAX_UPLOAD_MB |
+| `FILE_TOO_LARGE` | 413 | File size exceeds the caller's plan limit (read from `X-User-Plan-Max-File-MB`; default 10 MB) |
 | `SERVER_ERROR` | 500 | Redis unavailable or filesystem error |
 
 ### Job Errors

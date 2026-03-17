@@ -15,6 +15,7 @@ type User struct {
 	Country      string    `gorm:"type:text" json:"country,omitempty"`
 	ImageURL     string    `gorm:"type:text" json:"imageUrl,omitempty"`
 	PasswordHash string    `gorm:"type:text;not null" json:"-"`
+	PlanName     string    `gorm:"type:text;not null;default:'free'" json:"planName"`
 	CreatedAt    time.Time `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
 }
 
@@ -42,11 +43,12 @@ func (a *AuthMetadata) BeforeCreate(tx *gorm.DB) (err error) {
 }
 
 type SubscriptionPlan struct {
-	ID            uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
-	Name          string    `gorm:"type:text;unique;not null" json:"name"`
-	MaxFileSizeMB int       `gorm:"not null" json:"maxFileSizeMb"`
-	RetentionDays int       `gorm:"not null" json:"retentionDays"`
-	CreatedAt     time.Time `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
+	ID             uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	Name           string    `gorm:"type:text;unique;not null" json:"name"`
+	MaxFileSizeMB  int       `gorm:"not null" json:"maxFileSizeMb"`
+	MaxFilesPerJob int       `gorm:"not null" json:"maxFilesPerJob"`
+	RetentionDays  int       `gorm:"not null" json:"retentionDays"`
+	CreatedAt      time.Time `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
 }
 
 func (p *SubscriptionPlan) BeforeCreate(tx *gorm.DB) (err error) {

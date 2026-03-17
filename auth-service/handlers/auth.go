@@ -40,6 +40,7 @@ type authUser struct {
 	Country  string `json:"country"`
 	Image    string `json:"image,omitempty"`
 	Role     string `json:"role,omitempty"`
+	PlanName string `json:"planName,omitempty"`
 }
 
 type AuthEndpoints struct {
@@ -149,8 +150,13 @@ func (ae *AuthEndpoints) Me(c *gin.Context) {
 		return
 	}
 
+	var plan models.SubscriptionPlan
+	if err := models.DB.Where("name = ?", user.PlanName).First(&plan).Error; err != nil {
+		plan = models.SubscriptionPlan{Name: user.PlanName}
+	}
+
 	response.OK(c, "User profile retrieved", gin.H{
-		"user": buildUserResponse(user, authCtx.Role),
+		"user": buildUserResponse(user, authCtx.Role, plan),
 	})
 }
 
@@ -160,8 +166,13 @@ func (ae *AuthEndpoints) Profile(c *gin.Context) {
 		return
 	}
 
+	var plan models.SubscriptionPlan
+	if err := models.DB.Where("name = ?", user.PlanName).First(&plan).Error; err != nil {
+		plan = models.SubscriptionPlan{Name: user.PlanName}
+	}
+
 	response.OK(c, "User profile retrieved", gin.H{
-		"profile": buildUserResponse(user, authCtx.Role),
+		"profile": buildUserResponse(user, authCtx.Role, plan),
 	})
 }
 
@@ -186,7 +197,18 @@ func (ae *AuthEndpoints) Logout(c *gin.Context) {
 }
 
 func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
-	accessToken, err := ae.Issuer.IssueAccessToken(user.ID.String(), "user", nil)
+	var plan models.SubscriptionPlan
+	if err := models.DB.Where("name = ?", user.PlanName).First(&plan).Error; err != nil {
+		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
+	}
+
+	planInfo := token.PlanInfo{
+		Name:           plan.Name,
+		MaxFileSizeMB:  plan.MaxFileSizeMB,
+		MaxFilesPerJob: plan.MaxFilesPerJob,
+	}
+
+	accessToken, err := ae.Issuer.IssueAccessToken(user.ID.String(), "user", nil, planInfo)
 	if err != nil {
 		response.InternalError(c, "SERVER_ERROR", "Unable to issue token")
 		return
@@ -195,7 +217,7 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 	setAccessTokenCookie(c, accessToken)
 
 	response.OK(c, "Authentication successful", gin.H{
-		"user": buildUserResponse(user, "user"),
+		"user": buildUserResponse(user, "user", plan),
 	})
 }
 
@@ -222,9 +244,13 @@ func parseAuthPayload(c *gin.Context) (authCredentials, bool) {
 	return payload, true
 }
 
-func buildUserResponse(user models.User, role string) authUser {
+func buildUserResponse(user models.User, role string, plan models.SubscriptionPlan) authUser {
 	if strings.TrimSpace(role) == "" {
 		role = "user"
+	}
+	planName := plan.Name
+	if strings.TrimSpace(planName) == "" {
+		planName = user.PlanName
 	}
 	return authUser{
 		ID:       user.ID.String(),
@@ -234,6 +260,7 @@ func buildUserResponse(user models.User, role string) authUser {
 		Country:  user.Country,
 		Image:    user.ImageURL,
 		Role:     role,
+		PlanName: planName,
 	}
 }
 

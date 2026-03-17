@@ -1,10 +1,10 @@
 services:
   volume-init:
     image: alpine:3.19
-    command: ["sh", "-c", "chown -R 10001:10001 /app/uploads /app/outputs"]
+    command: ["sh", "-c", "chmod -R 777 /app/uploads /app/outputs"]
     volumes:
-      - uploads_data:/app/uploads
-      - outputs_data:/app/outputs
+      - ./files/uploads:/app/uploads
+      - ./files/outputs:/app/outputs
     networks:
       - esydocs_net
 
@@ -27,8 +27,8 @@ services:
     env_file:
       - ./convert-to-pdf/.env
     volumes:
-      - uploads_data:/app/uploads
-      - outputs_data:/app/outputs
+      - ./files/uploads:/app/uploads
+      - ./files/outputs:/app/outputs
     depends_on:
       volume-init:
         condition: service_completed_successfully
@@ -39,6 +39,3 @@ networks:
   esydocs_net:
     external: true
 
-volumes:
-  uploads_data:
-  outputs_data:

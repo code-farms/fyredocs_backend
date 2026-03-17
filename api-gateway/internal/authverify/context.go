@@ -3,14 +3,18 @@ package authverify
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
 type AuthContext struct {
-	UserID  string
-	Role    string
-	Scope   []string
-	IsGuest bool
+	UserID             string
+	Role               string
+	Scope              []string
+	Plan               string
+	PlanMaxFileSizeMB  int
+	PlanMaxFilesPerJob int
+	IsGuest            bool
 }
 
 type authContextKey struct{}
@@ -50,6 +54,15 @@ func ApplyUserHeaders(header http.Header, authCtx AuthContext) {
 	if len(authCtx.Scope) > 0 {
 		header.Set("X-User-Scope", strings.Join(authCtx.Scope, " "))
 	}
+	if strings.TrimSpace(authCtx.Plan) != "" {
+		header.Set("X-User-Plan", authCtx.Plan)
+	}
+	if authCtx.PlanMaxFileSizeMB > 0 {
+		header.Set("X-User-Plan-Max-File-MB", strconv.Itoa(authCtx.PlanMaxFileSizeMB))
+	}
+	if authCtx.PlanMaxFilesPerJob > 0 {
+		header.Set("X-User-Plan-Max-Files", strconv.Itoa(authCtx.PlanMaxFilesPerJob))
+	}
 }
 
 func ClearUserHeaders(header http.Header) {
@@ -59,4 +72,7 @@ func ClearUserHeaders(header http.Header) {
 	header.Del("X-User-ID")
 	header.Del("X-User-Role")
 	header.Del("X-User-Scope")
+	header.Del("X-User-Plan")
+	header.Del("X-User-Plan-Max-File-MB")
+	header.Del("X-User-Plan-Max-Files")
 }

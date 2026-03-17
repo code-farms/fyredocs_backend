@@ -57,10 +57,10 @@ services:
   # ==================== VOLUME INITIALIZATION ====================
   volume-init:
     image: alpine:3.19
-    command: ["sh", "-c", "chown -R 10001:10001 /app/uploads /app/outputs"]
+    command: ["sh", "-c", "chmod -R 777 /app/uploads /app/outputs"]
     volumes:
-      - uploads_data:/app/uploads
-      - outputs_data:/app/outputs
+      - ./files/uploads:/app/uploads
+      - ./files/outputs:/app/outputs
     networks:
       - esydocs_net
 
@@ -219,8 +219,8 @@ services:
       timeout: 5s
       retries: 3
     volumes:
-      - uploads_data:/app/uploads
-      - outputs_data:/app/outputs
+      - ./files/uploads:/app/uploads
+      - ./files/outputs:/app/outputs
     depends_on:
       db:
         condition: service_healthy
@@ -253,8 +253,8 @@ services:
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
-      - uploads_data:/app/uploads
-      - outputs_data:/app/outputs
+      - ./files/uploads:/app/uploads
+      - ./files/outputs:/app/outputs
     depends_on:
       db:
         condition: service_healthy
@@ -285,8 +285,8 @@ services:
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
-      - uploads_data:/app/uploads
-      - outputs_data:/app/outputs
+      - ./files/uploads:/app/uploads
+      - ./files/outputs:/app/outputs
     depends_on:
       db:
         condition: service_healthy
@@ -317,8 +317,8 @@ services:
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
-      - uploads_data:/app/uploads
-      - outputs_data:/app/outputs
+      - ./files/uploads:/app/uploads
+      - ./files/outputs:/app/outputs
     depends_on:
       db:
         condition: service_healthy
@@ -353,8 +353,8 @@ services:
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
-      - uploads_data:/app/uploads
-      - outputs_data:/app/outputs
+      - ./files/uploads:/app/uploads
+      - ./files/outputs:/app/outputs
     depends_on:
       db:
         condition: service_healthy
@@ -385,8 +385,8 @@ services:
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
-      - uploads_data:/app/uploads
-      - outputs_data:/app/outputs
+      - ./files/uploads:/app/uploads
+      - ./files/outputs:/app/outputs
     depends_on:
       db:
         condition: service_healthy
@@ -406,5 +406,3 @@ volumes:
   postgres_data:
   redis_data:
   nats_data:
-  uploads_data:
-  outputs_data:

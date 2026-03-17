@@ -162,3 +162,37 @@ sequenceDiagram
 
     AS-->>Client: 409 {code: "USER_ALREADY_EXISTS", message: "User already exists"}
 ```
+
+## Guest Session Creation
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant GW as api-gateway :8080
+    participant AS as auth-service :8086
+    participant Redis
+
+    Client->>GW: POST /auth/guest
+
+    GW->>GW: CORS check
+    GW->>AS: POST /auth/guest<br/>(proxied, no auth required)
+
+    Note over AS: Rate limit: 20 req/min per IP
+
+    AS->>AS: uuid.New() → guest_token
+
+    AS->>Redis: SET guest:{token}:jobs "1" EX 86400
+    Redis-->>AS: OK
+
+    AS-->>GW: 200 {guest_token, expires_in: 86400}
+    GW-->>Client: 200 {guest_token, expires_in: 86400}
+
+    Note over Client: Store token in localStorage<br/>Send as X-Guest-Token header on API calls
+
+    Client->>GW: POST /api/organize-pdf/merge-pdf<br/>X-Guest-Token: {token}
+
+    GW->>Redis: EXISTS guest:{token}:jobs
+    Redis-->>GW: 1 (valid)
+
+    GW->>GW: Set X-User-Role: guest<br/>Forward to job-service
+```

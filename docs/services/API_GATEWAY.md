@@ -132,7 +132,27 @@ The middleware:
 3. Checks token expiration
 4. Verifies issuer and audience (if configured)
 5. Checks token denylist (if logout was called)
-6. Sets `X-User-ID` header for downstream services
+6. Sets `X-User-ID`, `X-User-Plan`, `X-User-Plan-Max-File-MB`, and `X-User-Plan-Max-Files` headers for downstream services
+
+### Plan Headers Forwarded to Downstream Services
+
+For authenticated requests the gateway parses the JWT's plan claims and forwards:
+
+| Header | JWT Claim | Example |
+|--------|-----------|---------|
+| `X-User-Plan` | `plan` | `free` |
+| `X-User-Plan-Max-File-MB` | `plan_max_file_mb` | `25` |
+| `X-User-Plan-Max-Files` | `plan_max_files` | `10` |
+
+For anonymous requests (no valid token, no guest token), the gateway forwards anonymous-plan defaults:
+
+| Header | Default Value |
+|--------|---------------|
+| `X-User-Plan` | `anonymous` |
+| `X-User-Plan-Max-File-MB` | `10` |
+| `X-User-Plan-Max-Files` | `5` |
+
+These headers are cleared from incoming client requests before proxying (`ClearUserHeaders`) to prevent spoofing.
 
 ### Bypass Paths
 
@@ -140,6 +160,7 @@ The following paths skip authentication:
 - `/healthz` - Health check endpoint
 - `/auth/signup` - User registration
 - `/auth/login` - User login
+- `/auth/plans` - Public plan listing
 - OPTIONS requests (CORS preflight)
 
 ## CORS Configuration
@@ -391,8 +412,8 @@ sequenceDiagram
     alt Token is denied
         GW-->>C: 401 Unauthorized
     else Token is valid
-        GW->>GW: Set X-User-ID header from JWT claims
-        GW->>JS: Proxy request with X-User-ID header
+        GW->>GW: Set X-User-ID, X-User-Plan, X-User-Plan-Max-File-MB, X-User-Plan-Max-Files headers from JWT claims
+        GW->>JS: Proxy request with X-User-ID and plan headers
         JS-->>GW: 200 {jobs data}
         GW-->>C: 200 {jobs data}
     end
@@ -477,6 +498,7 @@ The following paths skip JWT authentication:
 - `/healthz` -- Health check endpoint
 - `/auth/signup` -- User registration
 - `/auth/login` -- User login
+- `/auth/plans` -- Public plan listing
 - `OPTIONS` requests -- CORS preflight
 
 ### Backend Service Failure Handling

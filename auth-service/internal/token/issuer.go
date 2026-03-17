@@ -9,12 +9,22 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// PlanInfo carries the plan name and limits to be embedded in the JWT.
+// Defined here to keep the token package free of model imports.
+type PlanInfo struct {
+	Name           string
+	MaxFileSizeMB  int
+	MaxFilesPerJob int
+}
+
 type Claims struct {
 	jwt.RegisteredClaims
-	Role    string   `json:"role,omitempty"`
-	Scope   []string `json:"scope,omitempty"`
-	Plan    string   `json:"plan,omitempty"`
-	IsGuest bool     `json:"is_guest,omitempty"`
+	Role               string   `json:"role,omitempty"`
+	Scope              []string `json:"scope,omitempty"`
+	Plan               string   `json:"plan,omitempty"`
+	PlanMaxFileSizeMB  int      `json:"plan_max_file_mb,omitempty"`
+	PlanMaxFilesPerJob int      `json:"plan_max_files,omitempty"`
+	IsGuest            bool     `json:"is_guest,omitempty"`
 }
 
 type Issuer struct {
@@ -41,7 +51,7 @@ func NewIssuerFromEnv() (*Issuer, error) {
 	}, nil
 }
 
-func (i *Issuer) IssueAccessToken(userID, role string, scope []string) (string, error) {
+func (i *Issuer) IssueAccessToken(userID, role string, scope []string, plan PlanInfo) (string, error) {
 	if i == nil || len(i.hmacSecret) == 0 {
 		return "", fmt.Errorf("issuer not configured")
 	}
@@ -52,8 +62,11 @@ func (i *Issuer) IssueAccessToken(userID, role string, scope []string) (string, 
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(i.accessTTL)),
 		},
-		Role:  strings.TrimSpace(role),
-		Scope: scope,
+		Role:               strings.TrimSpace(role),
+		Scope:              scope,
+		Plan:               plan.Name,
+		PlanMaxFileSizeMB:  plan.MaxFileSizeMB,
+		PlanMaxFilesPerJob: plan.MaxFilesPerJob,
 	}
 	if i.issuer != "" {
 		claims.Issuer = i.issuer
@@ -62,8 +75,8 @@ func (i *Issuer) IssueAccessToken(userID, role string, scope []string) (string, 
 		claims.Audience = []string{i.audience}
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(i.hmacSecret)
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return tok.SignedString(i.hmacSecret)
 }
 
 func (i *Issuer) AccessTTL() time.Duration {

@@ -111,6 +111,17 @@ These are registered under both `/api/convert-from-pdf` and `/api/convert-to-pdf
 | GET | `/healthz` | Health check (returns "ok") |
 | GET | `/metrics` | Prometheus metrics |
 
+## Plan-Based Limits Enforcement
+
+`CreateJobFromTool` enforces per-user plan limits using headers injected by the API Gateway:
+
+| Header | Default (absent) | Enforcement |
+|--------|-----------------|-------------|
+| `X-User-Plan-Max-Files` | `5` | Rejects jobs whose file count exceeds the limit; error code `TOO_MANY_FILES` |
+| `X-User-Plan-Max-File-MB` | `10` | Rejects individual files that exceed the size limit (multipart path only); error code `FILE_TOO_LARGE` |
+
+Both the JSON (uploadId) and multipart form paths check the file-count limit. The per-file size check (`X-User-Plan-Max-File-MB`) applies only to the multipart path, because the upload service already enforces size on the chunked upload path.
+
 ## NATS Events / Queues
 
 ### Published Events
@@ -333,7 +344,8 @@ sequenceDiagram
 | `INVALID_INPUT` | 400 | Unsupported tool |
 | `INVALID_INPUT` | 400 | No file uploaded or missing uploadId |
 | `INVALID_INPUT` | 400 | File type mismatch for tool (e.g., non-PDF for pdf-to-word) |
-| `FILE_TOO_LARGE` | 400 | File exceeds `MAX_UPLOAD_MB` (default 50 MB) |
+| `FILE_TOO_LARGE` | 413 | File size exceeds plan limit from `X-User-Plan-Max-File-MB` (multipart path; default 10 MB) |
+| `TOO_MANY_FILES` | 400 | Number of files exceeds plan limit from `X-User-Plan-Max-Files` (default 5 files) |
 | `SERVER_ERROR` | 500 | Failed to create upload directory |
 | `SERVER_ERROR` | 500 | Failed to save file |
 | `SERVER_ERROR` | 500 | Database insert failed |
@@ -397,7 +409,7 @@ When job creation fails partway through:
 |----------|---------|-------------|
 | `PORT` | `8081` | HTTP server port |
 | `UPLOAD_DIR` | `uploads` | Base directory for uploaded files |
-| `MAX_UPLOAD_MB` | `50` | Maximum file size in MB |
+| `MAX_UPLOAD_MB` | `50` | Server-side hard cap on file size in MB (per-user plan limits are enforced via `X-User-Plan-Max-File-MB` header) |
 | `UPLOAD_TTL` | `2h` | Upload session expiration |
 | `GUEST_JOB_TTL` | `2h` | Guest job expiration |
 | `RATE_LIMIT_UPLOAD` | `30` | Upload rate limit per window |

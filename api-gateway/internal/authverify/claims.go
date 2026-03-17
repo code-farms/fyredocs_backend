@@ -51,10 +51,12 @@ func splitScope(value string) []string {
 
 type Claims struct {
 	jwt.RegisteredClaims
-	Role    string    `json:"role,omitempty"`
-	Scope   ScopeList `json:"scope,omitempty"`
-	Plan    string    `json:"plan,omitempty"`
-	IsGuest bool      `json:"is_guest,omitempty"`
+	Role               string    `json:"role,omitempty"`
+	Scope              ScopeList `json:"scope,omitempty"`
+	Plan               string    `json:"plan,omitempty"`
+	PlanMaxFileSizeMB  int       `json:"plan_max_file_mb,omitempty"`
+	PlanMaxFilesPerJob int       `json:"plan_max_files,omitempty"`
+	IsGuest            bool      `json:"is_guest,omitempty"`
 }
 
 func (c Claims) ToAuthContext() AuthContext {
@@ -65,9 +67,12 @@ func (c Claims) ToAuthContext() AuthContext {
 		}
 	}
 	return AuthContext{
-		UserID:  strings.TrimSpace(c.Subject),
-		Role:    strings.TrimSpace(c.Role),
-		Scope:   scope,
-		IsGuest: c.IsGuest,
+		UserID:             strings.TrimSpace(c.Subject),
+		Role:               strings.TrimSpace(c.Role),
+		Scope:              scope,
+		Plan:               strings.TrimSpace(c.Plan),
+		PlanMaxFileSizeMB:  c.PlanMaxFileSizeMB,
+		PlanMaxFilesPerJob: c.PlanMaxFilesPerJob,
+		IsGuest:            c.IsGuest,
 	}
 }

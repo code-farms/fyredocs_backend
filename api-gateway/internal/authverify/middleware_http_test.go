@@ -43,6 +43,9 @@ func TestAuthContextFromGatewayHeaders(t *testing.T) {
 	header.Set("X-User-ID", "user-123")
 	header.Set("X-User-Role", "admin")
 	header.Set("X-User-Scope", "read write")
+	header.Set("X-User-Plan", "pro")
+	header.Set("X-User-Plan-Max-File-MB", "500")
+	header.Set("X-User-Plan-Max-Files", "50")
 
 	ctx, ok := authContextFromGatewayHeaders(header)
 	if !ok {
@@ -56,6 +59,45 @@ func TestAuthContextFromGatewayHeaders(t *testing.T) {
 	}
 	if len(ctx.Scope) != 2 {
 		t.Errorf("expected 2 scopes, got %d", len(ctx.Scope))
+	}
+	if ctx.Plan != "pro" {
+		t.Errorf("expected Plan 'pro', got %q", ctx.Plan)
+	}
+	if ctx.PlanMaxFileSizeMB != 500 {
+		t.Errorf("expected PlanMaxFileSizeMB 500, got %d", ctx.PlanMaxFileSizeMB)
+	}
+	if ctx.PlanMaxFilesPerJob != 50 {
+		t.Errorf("expected PlanMaxFilesPerJob 50, got %d", ctx.PlanMaxFilesPerJob)
+	}
+}
+
+func TestHTTPAuthMiddlewareAnonymousPlanDefaults(t *testing.T) {
+	secret := []byte("test-secret-key-32-chars-long!!")
+	v, _ := NewVerifier(VerifierConfig{AllowedAlgs: []string{"HS256"}, HMACSecret: secret})
+
+	var gotCtx AuthContext
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authCtx, ok := FromContext(r.Context()); ok {
+			gotCtx = authCtx
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	middleware := HTTPAuthMiddleware(HTTPMiddlewareOptions{Verifier: v})
+	handler := middleware(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if gotCtx.Plan != "anonymous" {
+		t.Errorf("expected anonymous plan for unauthenticated request, got %q", gotCtx.Plan)
+	}
+	if gotCtx.PlanMaxFileSizeMB != 10 {
+		t.Errorf("expected PlanMaxFileSizeMB 10 for anonymous, got %d", gotCtx.PlanMaxFileSizeMB)
+	}
+	if gotCtx.PlanMaxFilesPerJob != 5 {
+		t.Errorf("expected PlanMaxFilesPerJob 5 for anonymous, got %d", gotCtx.PlanMaxFilesPerJob)
 	}
 }
 

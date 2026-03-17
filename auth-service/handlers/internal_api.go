@@ -28,14 +28,18 @@ func GetUserPlan(c *gin.Context) {
 		return
 	}
 
-	// For now, return a default plan. When subscription logic is implemented,
-	// this will look up the user's plan from the subscription_plans table.
+	var plan models.SubscriptionPlan
+	if err := models.DB.Where("name = ?", user.PlanName).First(&plan).Error; err != nil {
+		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
+	}
+
 	response.OK(c, "User plan retrieved", gin.H{
 		"userId": user.ID.String(),
 		"plan": gin.H{
-			"name":          "free",
-			"maxFileSizeMb": 50,
-			"retentionDays": 7,
+			"name":           plan.Name,
+			"maxFileSizeMb":  plan.MaxFileSizeMB,
+			"maxFilesPerJob": plan.MaxFilesPerJob,
+			"retentionDays":  plan.RetentionDays,
 		},
 	})
 }

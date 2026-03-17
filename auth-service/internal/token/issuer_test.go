@@ -13,7 +13,7 @@ func TestIssueAccessTokenValid(t *testing.T) {
 		accessTTL:  time.Hour,
 	}
 
-	tokenStr, err := issuer.IssueAccessToken("user-123", "user", nil)
+	tokenStr, err := issuer.IssueAccessToken("user-123", "user", nil, PlanInfo{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -24,7 +24,7 @@ func TestIssueAccessTokenValid(t *testing.T) {
 
 func TestIssueAccessTokenNilIssuer(t *testing.T) {
 	var issuer *Issuer
-	_, err := issuer.IssueAccessToken("user-123", "user", nil)
+	_, err := issuer.IssueAccessToken("user-123", "user", nil, PlanInfo{})
 	if err == nil {
 		t.Error("expected error for nil issuer")
 	}
@@ -35,7 +35,7 @@ func TestIssueAccessTokenEmptySecret(t *testing.T) {
 		hmacSecret: nil,
 		accessTTL:  time.Hour,
 	}
-	_, err := issuer.IssueAccessToken("user-123", "user", nil)
+	_, err := issuer.IssueAccessToken("user-123", "user", nil, PlanInfo{})
 	if err == nil {
 		t.Error("expected error for empty secret")
 	}
@@ -50,7 +50,7 @@ func TestIssueAccessTokenClaims(t *testing.T) {
 		accessTTL:  2 * time.Hour,
 	}
 
-	tokenStr, err := issuer.IssueAccessToken("user-456", "admin", []string{"read", "write"})
+	tokenStr, err := issuer.IssueAccessToken("user-456", "admin", []string{"read", "write"}, PlanInfo{Name: "pro", MaxFileSizeMB: 500, MaxFilesPerJob: 50})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestIssueAccessTokenNoIssuerAudience(t *testing.T) {
 		accessTTL:  time.Hour,
 	}
 
-	tokenStr, err := issuer.IssueAccessToken("user-789", "user", nil)
+	tokenStr, err := issuer.IssueAccessToken("user-789", "user", nil, PlanInfo{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -110,6 +110,38 @@ func TestIssueAccessTokenNoIssuerAudience(t *testing.T) {
 	}
 	if len(claims.Audience) != 0 {
 		t.Errorf("expected no audience, got %v", claims.Audience)
+	}
+}
+
+func TestIssueAccessTokenEmbedsPlanInfo(t *testing.T) {
+	secret := []byte("test-secret-key-32-chars-long!!")
+	issuer := &Issuer{
+		hmacSecret: secret,
+		accessTTL:  time.Hour,
+	}
+
+	plan := PlanInfo{Name: "pro", MaxFileSizeMB: 500, MaxFilesPerJob: 50}
+	tokenStr, err := issuer.IssueAccessToken("user-pro", "user", nil, plan)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	parsed, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		return secret, nil
+	})
+	if err != nil {
+		t.Fatalf("failed to parse token: %v", err)
+	}
+
+	claims := parsed.Claims.(*Claims)
+	if claims.Plan != "pro" {
+		t.Errorf("expected plan 'pro', got %q", claims.Plan)
+	}
+	if claims.PlanMaxFileSizeMB != 500 {
+		t.Errorf("expected PlanMaxFileSizeMB 500, got %d", claims.PlanMaxFileSizeMB)
+	}
+	if claims.PlanMaxFilesPerJob != 50 {
+		t.Errorf("expected PlanMaxFilesPerJob 50, got %d", claims.PlanMaxFilesPerJob)
 	}
 }
 

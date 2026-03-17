@@ -63,9 +63,12 @@ func TestSetRequestAuthValid(t *testing.T) {
 func TestApplyUserHeaders(t *testing.T) {
 	header := http.Header{}
 	authCtx := AuthContext{
-		UserID: "user-123",
-		Role:   "admin",
-		Scope:  []string{"read", "write"},
+		UserID:             "user-123",
+		Role:               "admin",
+		Scope:              []string{"read", "write"},
+		Plan:               "pro",
+		PlanMaxFileSizeMB:  500,
+		PlanMaxFilesPerJob: 50,
 	}
 	ApplyUserHeaders(header, authCtx)
 
@@ -77,6 +80,15 @@ func TestApplyUserHeaders(t *testing.T) {
 	}
 	if got := header.Get("X-User-Scope"); got != "read write" {
 		t.Errorf("expected X-User-Scope 'read write', got %q", got)
+	}
+	if got := header.Get("X-User-Plan"); got != "pro" {
+		t.Errorf("expected X-User-Plan 'pro', got %q", got)
+	}
+	if got := header.Get("X-User-Plan-Max-File-MB"); got != "500" {
+		t.Errorf("expected X-User-Plan-Max-File-MB '500', got %q", got)
+	}
+	if got := header.Get("X-User-Plan-Max-Files"); got != "50" {
+		t.Errorf("expected X-User-Plan-Max-Files '50', got %q", got)
 	}
 }
 
@@ -98,18 +110,17 @@ func TestClearUserHeaders(t *testing.T) {
 	header.Set("X-User-ID", "user-123")
 	header.Set("X-User-Role", "admin")
 	header.Set("X-User-Scope", "read write")
+	header.Set("X-User-Plan", "pro")
+	header.Set("X-User-Plan-Max-File-MB", "500")
+	header.Set("X-User-Plan-Max-Files", "50")
 	header.Set("X-Other", "keep-me")
 
 	ClearUserHeaders(header)
 
-	if got := header.Get("X-User-ID"); got != "" {
-		t.Errorf("expected empty X-User-ID, got %q", got)
-	}
-	if got := header.Get("X-User-Role"); got != "" {
-		t.Errorf("expected empty X-User-Role, got %q", got)
-	}
-	if got := header.Get("X-User-Scope"); got != "" {
-		t.Errorf("expected empty X-User-Scope, got %q", got)
+	for _, h := range []string{"X-User-ID", "X-User-Role", "X-User-Scope", "X-User-Plan", "X-User-Plan-Max-File-MB", "X-User-Plan-Max-Files"} {
+		if got := header.Get(h); got != "" {
+			t.Errorf("expected empty %s, got %q", h, got)
+		}
 	}
 	if got := header.Get("X-Other"); got != "keep-me" {
 		t.Errorf("expected X-Other 'keep-me', got %q", got)

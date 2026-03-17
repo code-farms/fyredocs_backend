@@ -112,6 +112,14 @@ func CreateJobFromTool(c *gin.Context) {
 			response.BadRequest(c, "INVALID_INPUT", "uploadId is required")
 			return
 		}
+
+		maxFiles := planMaxFilesPerJob(c)
+		if len(uploadIDs) > maxFiles {
+			response.BadRequest(c, "TOO_MANY_FILES",
+				fmt.Sprintf("Your plan allows up to %d files per job", maxFiles))
+			return
+		}
+
 		optionsRaw = string(uploadReq.Options)
 
 		for idx, uploadID := range uploadIDs {
@@ -145,6 +153,14 @@ func CreateJobFromTool(c *gin.Context) {
 			response.BadRequest(c, "INVALID_INPUT", "no file uploaded")
 			return
 		}
+
+		maxFiles := planMaxFilesPerJob(c)
+		if len(files) > maxFiles {
+			response.BadRequest(c, "TOO_MANY_FILES",
+				fmt.Sprintf("Your plan allows up to %d files per job", maxFiles))
+			return
+		}
+
 		if len(form.Value["options"]) > 0 {
 			optionsRaw = form.Value["options"][0]
 		}
@@ -153,10 +169,12 @@ func CreateJobFromTool(c *gin.Context) {
 			originalName = "merged.pdf"
 		}
 
-		maxSize := maxUploadBytes()
+		maxFileSizeMB := planMaxFileSizeMB(c)
+		maxSize := int64(maxFileSizeMB) * 1024 * 1024
 		for _, file := range files {
 			if file.Size > maxSize {
-				response.BadRequest(c, "FILE_TOO_LARGE", "file exceeds maximum size")
+				response.Err(c, 413, "FILE_TOO_LARGE",
+					fmt.Sprintf("File size exceeds the %dMB limit for your plan", maxFileSizeMB))
 				return
 			}
 			if err := validateFileType(toolType, file.Filename); err != nil {
@@ -566,6 +584,34 @@ func maxUploadBytes() int64 {
 		return 50 * 1024 * 1024
 	}
 	return int64(mb) * 1024 * 1024
+}
+
+// planMaxFileSizeMB reads the per-plan file size limit from X-User-Plan-Max-File-MB.
+// Falls back to 10MB (anonymous limit) if the header is absent.
+func planMaxFileSizeMB(c *gin.Context) int {
+	val := c.GetHeader("X-User-Plan-Max-File-MB")
+	if val == "" {
+		return 10
+	}
+	mb, err := strconv.Atoi(val)
+	if err != nil || mb <= 0 {
+		return 10
+	}
+	return mb
+}
+
+// planMaxFilesPerJob reads the per-plan file count limit from X-User-Plan-Max-Files.
+// Falls back to 5 (anonymous limit) if the header is absent.
+func planMaxFilesPerJob(c *gin.Context) int {
+	val := c.GetHeader("X-User-Plan-Max-Files")
+	if val == "" {
+		return 5
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil || n <= 0 {
+		return 5
+	}
+	return n
 }
 
 func validateFileType(toolType string, fileName string) error {

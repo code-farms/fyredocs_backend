@@ -11,3 +11,9 @@
 
 # Compiled binaries
 **/bin/
+
+# Uploaded and converted files (local bind-mount storage)
+files/uploads/*
+!files/uploads/.gitkeep
+files/outputs/*
+!files/outputs/.gitkeep

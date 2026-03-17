@@ -17,7 +17,6 @@ COPY convert-from-pdf/go.mod* ./convert-from-pdf/
 COPY convert-to-pdf/go.mod* ./convert-to-pdf/
 COPY optimize-pdf/go.mod* ./optimize-pdf/
 COPY organize-pdf/go.mod* ./organize-pdf/
-COPY upload-service/go.mod* ./upload-service/
 COPY job-service/go.mod* ./job-service/
 
 # 2. Download dependencies once (cached via BuildKit)

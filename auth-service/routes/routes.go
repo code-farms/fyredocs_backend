@@ -51,6 +51,7 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 		authGroup.GET("/me", authEndpoints.Me)
 		authGroup.GET("/profile", authEndpoints.Profile)
 		authGroup.POST("/logout", authEndpoints.Logout)
+		authGroup.GET("/plans", handlers.GetAllPlans)
 	}
 
 	// Internal service-to-service API (not exposed via gateway)
