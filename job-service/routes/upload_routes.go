@@ -46,6 +46,20 @@ func SetupRouter(r *gin.Engine) {
 		convertTo.DELETE("/:tool/:id", handlers.DeleteJobByID)
 		convertTo.GET("/:tool/:id/download", handlers.DownloadJobFile)
 
+		organizePdf := api.Group("/organize-pdf")
+		organizePdf.GET("/:tool", handlers.GetJobsByTool)
+		organizePdf.POST("/:tool", handlers.CreateJobFromTool)
+		organizePdf.GET("/:tool/:id", handlers.GetJobByID)
+		organizePdf.DELETE("/:tool/:id", handlers.DeleteJobByID)
+		organizePdf.GET("/:tool/:id/download", handlers.DownloadJobFile)
+
+		optimizePdf := api.Group("/optimize-pdf")
+		optimizePdf.GET("/:tool", handlers.GetJobsByTool)
+		optimizePdf.POST("/:tool", handlers.CreateJobFromTool)
+		optimizePdf.GET("/:tool/:id", handlers.GetJobByID)
+		optimizePdf.DELETE("/:tool/:id", handlers.DeleteJobByID)
+		optimizePdf.GET("/:tool/:id/download", handlers.DownloadJobFile)
+
 		api.GET("/jobs/history", authverify.RequireAuthenticatedGin(), handlers.GetJobHistory)
 	}
 

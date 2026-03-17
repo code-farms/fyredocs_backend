@@ -190,6 +190,22 @@ func scanToPDFWithOCR(ctx context.Context, inputPaths []string, outputPath strin
 	return api.MergeCreateFile(pdfFiles, outputPath, false, nil)
 }
 
+func rotatePDF(inputPath string, outputPath string, rotation int, applyTo string) error {
+	slog.Info("rotating PDF", "input", inputPath, "rotation", rotation, "applyTo", applyTo)
+
+	var pageSelection []string
+	switch applyTo {
+	case "odd":
+		pageSelection = []string{"odd"}
+	case "even":
+		pageSelection = []string{"even"}
+	default: // "all" or empty
+		pageSelection = nil
+	}
+
+	return api.RotateFile(inputPath, outputPath, rotation, pageSelection, nil)
+}
+
 func parsePageRange(rangeStr string, maxPages int) []int {
 	rangeStr = strings.TrimSpace(rangeStr)
 	if rangeStr == "" || rangeStr == "all" {

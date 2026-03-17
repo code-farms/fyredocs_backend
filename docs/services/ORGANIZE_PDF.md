@@ -95,7 +95,26 @@ curl -X POST http://localhost:8080/api/organize-pdf/organize-pdf \
   -F 'options={"order":"3,1,2,4,5"}'
 ```
 
-### 6. Scan to PDF
+### 6. Rotate PDF
+
+Rotates pages in a PDF by a specified angle, with optional page selection.
+
+**Tool:** `rotate-pdf`
+**Input:** Single PDF file
+**Output:** PDF file with rotated pages
+**Options:**
+- `rotation`: Rotation angle — `90`, `180`, or `270` degrees (required)
+- `applyToPages`: Which pages to rotate — `all`, `odd`, or `even` (default: `all`)
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/organize-pdf/rotate-pdf \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "files=@document.pdf" \
+  -F 'options={"rotation":90,"applyToPages":"all"}'
+```
+
+### 7. Scan to PDF
 Converts images to PDF (similar to scanning documents).
 
 **Tool:** `scan-to-pdf`
@@ -124,7 +143,7 @@ POST /api/organize-pdf/:tool
 Creates a new processing job for the specified tool.
 
 **Parameters:**
-- `:tool` - One of: merge-pdf, split-pdf, remove-pages, extract-pages, organize-pdf, scan-to-pdf
+- `:tool` - One of: merge-pdf, split-pdf, rotate-pdf, remove-pages, extract-pages, organize-pdf, scan-to-pdf
 - Form data: `files` (multipart/form-data)
 - Form data: `options` (JSON string, optional)
 
@@ -459,6 +478,8 @@ sequenceDiagram
         W->>PC: pdfcpu remove pages [2,4,6] from input.pdf
     else extract-pages
         W->>PC: pdfcpu extract pages [1,3,5-7] from input.pdf
+    else rotate-pdf
+        W->>PC: pdfcpu rotate pages by 90/180/270 degrees
     else organize-pdf (reorder)
         W->>PC: pdfcpu reorder pages [3,1,2,4] in input.pdf
     else scan-to-pdf
@@ -571,7 +592,6 @@ NATS JetStream handles retries via `AckWait` and `MaxDeliver`:
 - Batch processing for multiple documents
 - Advanced OCR with multi-language support
 - PDF metadata editing
-- Page rotation during organization
 - Watermarking support
 - PDF compression options
 

@@ -36,6 +36,36 @@ sequenceDiagram
     Worker->>NATS: ACK message
 ```
 
+## Rotate PDF Processing
+
+```mermaid
+sequenceDiagram
+    participant NATS as NATS JetStream
+    participant Worker as organize-pdf worker
+    participant Processing as processing.ProcessFile()
+    participant PG as PostgreSQL
+    participant Disk as File System
+
+    NATS->>Worker: Fetch message from<br/>jobs.dispatch.organize-pdf
+
+    Worker->>Worker: Unmarshal JobPayload<br/>{toolType: "rotate-pdf", options: {rotation: 90, applyToPages: "all"}}
+
+    Worker->>PG: UPDATE processing_jobs SET status=processing, progress=20
+
+    Worker->>Processing: ProcessFile(ctx, jobId, "rotate-pdf", ["doc.pdf"], {rotation: 90, applyToPages: "all"}, outputDir)
+
+    Processing->>Processing: Parse rotation=90, applyToPages="all"
+    Processing->>Processing: Build pdfcpu page selection (nil = all pages)
+    Processing->>Processing: api.RotateFile(inputPath, outputPath, 90, nil, nil)
+    Processing->>Disk: Write rotated PDF
+
+    Processing-->>Worker: {OutputPath: "outputs/<jobId>.pdf"}
+
+    Worker->>PG: INSERT file_metadata (kind=output)
+    Worker->>PG: UPDATE status=completed, progress=100
+    Worker->>NATS: ACK message
+```
+
 ## Merge PDF Processing
 
 ```mermaid

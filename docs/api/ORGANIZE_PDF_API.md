@@ -12,6 +12,7 @@ Manipulate and organize PDF files - merge, split, reorder pages, and more.
 |------|-------------|
 | `merge-pdf` | Combine multiple PDFs into one |
 | `split-pdf` | Split PDF into separate pages or ranges |
+| `rotate-pdf` | Rotate pages by 90°, 180°, or 270° |
 | `remove-pages` | Remove specific pages from PDF |
 | `extract-pages` | Extract specific pages to new PDF |
 | `organize-pdf` | Reorder pages in PDF |
@@ -190,6 +191,7 @@ GET /api/organize-pdf/{tool}/{jobId}/download
 |------|--------------|--------|
 | merge-pdf | application/pdf | Single PDF |
 | split-pdf | application/zip | ZIP with individual PDFs |
+| rotate-pdf | application/pdf | Single PDF with rotated pages |
 | remove-pages | application/pdf | Single PDF |
 | extract-pages | application/pdf | Single PDF |
 | organize-pdf | application/pdf | Single PDF |
@@ -318,6 +320,49 @@ output.zip
 ├── page_2.pdf
 ├── page_3.pdf
 └── ...
+```
+
+---
+
+### rotate-pdf
+
+Rotate pages in a PDF by a specified angle.
+
+**Input:** Single PDF file
+
+**Output:** PDF with rotated pages
+
+**Conversion Engine:** pdfcpu
+
+**Options:**
+
+| Option | Type | Required | Values | Description |
+|--------|------|----------|--------|-------------|
+| rotation | integer | Yes | 90, 180, 270 | Rotation angle in degrees |
+| applyToPages | string | No | all, odd, even | Which pages to rotate (default: all) |
+
+**Request Examples:**
+
+Rotate all pages 90° clockwise:
+```json
+{
+  "uploadId": "upload-id",
+  "options": {
+    "rotation": 90,
+    "applyToPages": "all"
+  }
+}
+```
+
+Rotate only odd pages 180°:
+```json
+{
+  "uploadId": "upload-id",
+  "options": {
+    "rotation": 180,
+    "applyToPages": "odd"
+  }
+}
 ```
 
 ---

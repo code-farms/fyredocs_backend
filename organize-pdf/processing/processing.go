@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,6 +66,18 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 			return Result{}, fmt.Errorf("missing order option")
 		}
 		err = organizePDF(inputPaths[0], outputPath, order)
+	case "rotate-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		rotationStr, ok := optionString(options, "rotation")
+		if !ok {
+			return Result{}, fmt.Errorf("missing rotation option")
+		}
+		rotation, convErr := strconv.Atoi(rotationStr)
+		if convErr != nil || (rotation != 90 && rotation != 180 && rotation != 270) {
+			return Result{}, fmt.Errorf("invalid rotation value: must be 90, 180, or 270")
+		}
+		applyTo, _ := optionString(options, "applyToPages")
+		err = rotatePDF(inputPaths[0], outputPath, rotation, applyTo)
 	case "scan-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = scanToPDF(ctx, inputPaths, outputPath, options)

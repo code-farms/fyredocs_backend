@@ -71,9 +71,9 @@ The `routing.go` file contains the centralized mapping from tool types to their 
 | Service | Tools |
 |---------|-------|
 | `convert-from-pdf` | pdf-to-word, pdf-to-docx, pdf-to-excel, pdf-to-xlsx, pdf-to-powerpoint, pdf-to-ppt, pdf-to-pptx, pdf-to-image, pdf-to-img, pdf-to-html, pdf-to-text, pdf-to-txt, pdf-to-pdfa, ocr |
-| `convert-to-pdf` | word-to-pdf, excel-to-pdf, powerpoint-to-pdf, ppt-to-pdf, html-to-pdf, image-to-pdf, img-to-pdf, merge-pdf, split-pdf, compress-pdf, page-reorder, page-rotate, watermark-pdf, protect-pdf, unlock-pdf, sign-pdf, edit-pdf |
-| `organize-pdf` | remove-pages, extract-pages, organize-pdf, scan-to-pdf |
-| `optimize-pdf` | repair-pdf, ocr-pdf |
+| `convert-to-pdf` | word-to-pdf, excel-to-pdf, powerpoint-to-pdf, ppt-to-pdf, html-to-pdf, image-to-pdf, img-to-pdf, merge-pdf, page-reorder, page-rotate, watermark-pdf, protect-pdf, unlock-pdf, sign-pdf, edit-pdf |
+| `organize-pdf` | split-pdf, rotate-pdf, remove-pages, extract-pages, organize-pdf, scan-to-pdf |
+| `optimize-pdf` | compress-pdf, repair-pdf, ocr-pdf |
 
 ## Routes
 
@@ -88,7 +88,7 @@ The `routing.go` file contains the centralized mapping from tool types to their 
 
 ### Job Endpoints (per tool category)
 
-These are registered under both `/api/convert-from-pdf` and `/api/convert-to-pdf`:
+These are registered under `/api/convert-from-pdf`, `/api/convert-to-pdf`, `/api/organize-pdf`, and `/api/optimize-pdf`:
 
 | Method | Path | Handler | Description |
 |--------|------|---------|-------------|
@@ -97,6 +97,8 @@ These are registered under both `/api/convert-from-pdf` and `/api/convert-to-pdf
 | GET | `/api/{category}/:tool/:id` | `GetJobByID` | Get single job details |
 | DELETE | `/api/{category}/:tool/:id` | `DeleteJobByID` | Delete job and files |
 | GET | `/api/{category}/:tool/:id/download` | `DownloadJobFile` | Download completed output |
+
+Where `{category}` is one of: `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`.
 
 ### History Endpoint
 

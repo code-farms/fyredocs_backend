@@ -28,8 +28,8 @@ var ToolServiceMap = map[string]string{
 	"image-to-pdf":      "convert-to-pdf",
 	"img-to-pdf":        "convert-to-pdf",
 	"merge-pdf":         "convert-to-pdf",
-	"split-pdf":         "convert-to-pdf",
-	"compress-pdf":      "convert-to-pdf",
+	"split-pdf":         "organize-pdf",
+	"compress-pdf":      "optimize-pdf",
 	"page-reorder":      "convert-to-pdf",
 	"page-rotate":       "convert-to-pdf",
 	"watermark-pdf":     "convert-to-pdf",
@@ -39,6 +39,7 @@ var ToolServiceMap = map[string]string{
 	"edit-pdf":          "convert-to-pdf",
 
 	// organize-pdf tools
+	"rotate-pdf":    "organize-pdf",
 	"remove-pages":  "organize-pdf",
 	"extract-pages": "organize-pdf",
 	"organize-pdf":  "organize-pdf",
