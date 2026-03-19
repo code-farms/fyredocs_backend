@@ -25,9 +25,8 @@ import (
 	"esydocs/shared/redisstore"
 	"esydocs/shared/response"
 
-	"job-service/internal/routing"
-
 	"job-service/internal/models"
+	"job-service/internal/routing"
 )
 
 // allowedMIMETypes maps tool types to their expected MIME content types.
@@ -110,6 +109,7 @@ func CreateJobFromTool(c *gin.Context) {
 
 		maxFiles := planMaxFilesPerJob(c)
 		if len(uploadIDs) > maxFiles {
+			publishPlanLimitHit(c, "max_files", toolType)
 			response.BadRequest(c, "TOO_MANY_FILES",
 				fmt.Sprintf("Your plan allows up to %d files per job", maxFiles))
 			return
@@ -155,6 +155,7 @@ func CreateJobFromTool(c *gin.Context) {
 
 		maxFiles := planMaxFilesPerJob(c)
 		if len(files) > maxFiles {
+			publishPlanLimitHit(c, "max_files", toolType)
 			response.BadRequest(c, "TOO_MANY_FILES",
 				fmt.Sprintf("Your plan allows up to %d files per job", maxFiles))
 			return
@@ -172,6 +173,7 @@ func CreateJobFromTool(c *gin.Context) {
 		maxSize := int64(maxFileSizeMB) * 1024 * 1024
 		for _, file := range files {
 			if file.Size > maxSize {
+				publishPlanLimitHit(c, "max_file_size", toolType)
 				response.Err(c, 413, "FILE_TOO_LARGE",
 					fmt.Sprintf("File size exceeds the %dMB limit for your plan", maxFileSizeMB))
 				return
@@ -282,6 +284,7 @@ func CreateJobFromTool(c *gin.Context) {
 		redisstore.Client.Set(c.Request.Context(), redisKey, job.ID.String(), 10*time.Minute)
 	}
 
+	publishJobAnalyticsEvent(c.Request.Context(), "job.created", toolType, userID, totalSize)
 	slog.Info("job queued", "jobId", job.ID, "tool", toolType, "correlationId", correlationID)
 	response.Created(c, "Job created", job)
 }
@@ -838,4 +841,43 @@ func guestToken(c *gin.Context) string {
 		return value
 	}
 	return ""
+}
+
+func publishJobAnalyticsEvent(ctx context.Context, eventType string, toolType string, userID *uuid.UUID, fileSize int64) {
+	if natsconn.JS == nil {
+		return
+	}
+	event := queue.AnalyticsEvent{
+		EventType: eventType,
+		ToolType:  toolType,
+		FileSize:  fileSize,
+		IsGuest:   userID == nil,
+		Timestamp: time.Now().UTC(),
+	}
+	if userID != nil {
+		event.UserID = userID.String()
+	}
+	if err := queue.PublishAnalyticsEvent(ctx, natsconn.JS, event); err != nil {
+		slog.Warn("failed to publish analytics event", "eventType", eventType, "error", err)
+	}
+}
+
+func publishPlanLimitHit(c *gin.Context, limitType string, toolType string) {
+	if natsconn.JS == nil {
+		return
+	}
+	userID := authUserID(c)
+	event := queue.AnalyticsEvent{
+		EventType: "plan.limit_hit",
+		ToolType:  toolType,
+		IsGuest:   userID == nil,
+		Timestamp: time.Now().UTC(),
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"limitType":%q}`, limitType)),
+	}
+	if userID != nil {
+		event.UserID = userID.String()
+	}
+	if err := queue.PublishAnalyticsEvent(c.Request.Context(), natsconn.JS, event); err != nil {
+		slog.Warn("failed to publish plan limit event", "limitType", limitType, "error", err)
+	}
 }

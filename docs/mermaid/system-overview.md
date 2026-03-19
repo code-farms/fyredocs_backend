@@ -27,6 +27,10 @@ graph TB
         OPT["optimize-pdf :8085<br/>Gin + NATS worker"]
     end
 
+    subgraph Analytics["Analytics"]
+        AN["analytics-service :8087<br/>Gin + NATS consumer"]
+    end
+
     subgraph Background
         CW["cleanup-worker<br/>Ticker-based"]
     end
@@ -42,6 +46,7 @@ graph TB
 
     GW -->|/auth/*| AUTH
     GW -->|/api/*| JOB
+    GW -->|/admin/*| AN
 
     JOB -->|jobs.dispatch.*| NATS
     NATS -->|jobs.dispatch.convert-from-pdf| CFP
@@ -62,6 +67,10 @@ graph TB
     ORG --> RD
     OPT --> PG
     OPT --> RD
+    AN --> PG
+    AN --> NATS
+    AUTH -->|analytics events| NATS
+    JOB -->|analytics events| NATS
     CW --> PG
     CW --> RD
     GW --> RD
@@ -117,10 +126,25 @@ graph LR
     JS -->|Publish| D3
     JS -->|Publish| D4
 
+    subgraph ANALYTICS_STREAM["ANALYTICS (Interest)"]
+        A1["analytics.events.user.*"]
+        A2["analytics.events.job.*"]
+        A3["analytics.events.plan.*"]
+    end
+
     D1 -->|Consume| CFP[convert-from-pdf]
     D2 -->|Consume| CTP[convert-to-pdf]
     D3 -->|Consume| ORG[organize-pdf]
     D4 -->|Consume| OPT[optimize-pdf]
+
+    AUTH2[auth-service] -->|Publish| A1
+    JS -->|Publish| A2
+    JS -->|Publish| A3
+    A1 -->|Consume| AN[analytics-service]
+    A2 -->|Consume| AN
+    A3 -->|Consume| AN
+    E1 -->|Consume| AN
+    E2 -->|Consume| AN
 ```
 
 ## Authentication Flow

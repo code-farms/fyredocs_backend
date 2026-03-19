@@ -33,6 +33,7 @@ If a user request violates microservice boundaries, Claude must correct or rejec
 
 ## Current services:
 - `api-gateway/`
+- `analytics-service/`
 - `upload-service/`
 - `convert-from-pdf/`
 - `convert-to-pdf/`

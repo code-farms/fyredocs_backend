@@ -96,7 +96,19 @@ func EnsureStreams(ctx context.Context) error {
 		return fmt.Errorf("create JOBS_DLQ stream: %w", err)
 	}
 
-	slog.Info("NATS JetStream streams ensured", "streams", []string{"JOBS_DISPATCH", "JOBS_EVENTS", "JOBS_DLQ"})
+	// ANALYTICS: Captures analytics events for business metrics.
+	_, err = JS.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:      "ANALYTICS",
+		Subjects:  []string{"analytics.events.>"},
+		Storage:   jetstream.FileStorage,
+		Retention: jetstream.InterestPolicy,
+		MaxAge:    24 * time.Hour,
+	})
+	if err != nil {
+		return fmt.Errorf("create ANALYTICS stream: %w", err)
+	}
+
+	slog.Info("NATS JetStream streams ensured", "streams", []string{"JOBS_DISPATCH", "JOBS_EVENTS", "JOBS_DLQ", "ANALYTICS"})
 	return nil
 }
 

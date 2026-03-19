@@ -109,6 +109,7 @@ CREATE TABLE users (
     image_url     TEXT,
     password_hash TEXT NOT NULL,
     plan_name     TEXT NOT NULL DEFAULT 'free',
+    role          TEXT NOT NULL DEFAULT 'user',  -- 'user' or 'super-admin'
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```

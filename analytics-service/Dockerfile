@@ -1,0 +1,57 @@
+# ---- Builder Stage ----
+FROM golang:1.25-alpine AS builder
+
+# 1. Prepare system files and non-root user
+RUN apk add --no-cache ca-certificates tzdata && \
+    adduser -D -u 10001 appuser
+
+WORKDIR /app
+
+# 2. Copy workspace and blueprints for global dependency caching
+COPY go.work go.work.sum* ./
+COPY shared/go.mod shared/go.sum* ./shared/
+COPY api-gateway/go.mod* ./api-gateway/
+COPY auth-service/go.mod* ./auth-service/
+COPY cleanup-worker/go.mod* ./cleanup-worker/
+COPY convert-from-pdf/go.mod* ./convert-from-pdf/
+COPY convert-to-pdf/go.mod* ./convert-to-pdf/
+COPY optimize-pdf/go.mod* ./optimize-pdf/
+COPY organize-pdf/go.mod* ./organize-pdf/
+COPY job-service/go.mod* ./job-service/
+COPY analytics-service/go.mod* ./analytics-service/
+
+# 3. Download everything once (cached)
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+# 4. Copy source code
+COPY shared/ ./shared/
+COPY analytics-service/ ./analytics-service/
+
+# 5. Build the statically linked binary with high-performance caching
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    cd analytics-service && \
+    CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/analytics-service .
+
+# ---- Runtime Stage ----
+# 6. Use the ultimate empty base
+FROM scratch
+
+# 7. Bring over essential runtime metadata from builder
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=builder /etc/passwd /etc/passwd
+COPY --from=builder /etc/group /etc/group
+
+WORKDIR /app
+
+# 8. Copy the binary
+COPY --from=builder /app/bin/analytics-service .
+
+# 9. Run as the secure unprivileged user
+USER appuser
+
+EXPOSE 8087
+
+CMD ["./analytics-service"]

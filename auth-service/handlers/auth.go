@@ -20,6 +20,8 @@ import (
 	"auth-service/internal/models"
 	"auth-service/internal/token"
 
+	"esydocs/shared/natsconn"
+	"esydocs/shared/queue"
 	"esydocs/shared/response"
 )
 
@@ -106,6 +108,7 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 		return
 	}
 
+	publishAnalyticsEvent(c.Request.Context(), "user.signup", user.ID.String(), user.PlanName)
 	ae.respondWithTokens(c, user)
 }
 
@@ -137,6 +140,7 @@ func (ae *AuthEndpoints) Login(c *gin.Context) {
 		return
 	}
 
+	publishAnalyticsEvent(c.Request.Context(), "user.login", user.ID.String(), user.PlanName)
 	ae.respondWithTokens(c, user)
 }
 
@@ -208,7 +212,12 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 		MaxFilesPerJob: plan.MaxFilesPerJob,
 	}
 
-	accessToken, err := ae.Issuer.IssueAccessToken(user.ID.String(), "user", nil, planInfo)
+	role := user.Role
+	if role == "" {
+		role = "user"
+	}
+
+	accessToken, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, planInfo)
 	if err != nil {
 		response.InternalError(c, "SERVER_ERROR", "Unable to issue token")
 		return
@@ -217,7 +226,7 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 	setAccessTokenCookie(c, accessToken)
 
 	response.OK(c, "Authentication successful", gin.H{
-		"user": buildUserResponse(user, "user", plan),
+		"user": buildUserResponse(user, role, plan),
 	})
 }
 
@@ -245,6 +254,9 @@ func parseAuthPayload(c *gin.Context) (authCredentials, bool) {
 }
 
 func buildUserResponse(user models.User, role string, plan models.SubscriptionPlan) authUser {
+	if strings.TrimSpace(user.Role) != "" {
+		role = user.Role
+	}
 	if strings.TrimSpace(role) == "" {
 		role = "user"
 	}
@@ -410,4 +422,19 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func publishAnalyticsEvent(ctx context.Context, eventType string, userID string, planName string) {
+	if natsconn.JS == nil {
+		return
+	}
+	event := queue.AnalyticsEvent{
+		EventType: eventType,
+		UserID:    userID,
+		PlanName:  planName,
+		Timestamp: time.Now().UTC(),
+	}
+	if err := queue.PublishAnalyticsEvent(ctx, natsconn.JS, event); err != nil {
+		slog.Warn("failed to publish analytics event", "eventType", eventType, "error", err)
+	}
 }

@@ -20,6 +20,7 @@ COPY convert-to-pdf/go.mod* ./convert-to-pdf/
 COPY optimize-pdf/go.mod* ./optimize-pdf/
 COPY organize-pdf/go.mod* ./organize-pdf/
 COPY job-service/go.mod* ./job-service/
+COPY analytics-service/go.mod* ./analytics-service/
 
 # 4. Download dependencies ONCE using BuildKit cache
 RUN --mount=type=cache,target=/go/pkg/mod \

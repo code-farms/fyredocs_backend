@@ -109,6 +109,7 @@ func main() {
 	// Auth routes go to auth-service when it exists, otherwise job-service.
 	jobServiceURL := getEnv("JOB_SERVICE_URL", "http://job-service:8081")
 	authServiceURL := getEnv("AUTH_SERVICE_URL", jobServiceURL) // Phase 2: separate auth-service
+	analyticsServiceURL := getEnv("ANALYTICS_SERVICE_URL", "http://analytics-service:8087")
 
 	routes := []routeConfig{
 		{
@@ -145,6 +146,11 @@ func main() {
 			prefix:         "/api/jobs",
 			targetBasePath: "/api/jobs",
 			targetURL:      jobServiceURL,
+		},
+		{
+			prefix:         "/admin",
+			targetBasePath: "/admin",
+			targetURL:      analyticsServiceURL,
 		},
 	}
 

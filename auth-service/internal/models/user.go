@@ -16,6 +16,7 @@ type User struct {
 	ImageURL     string    `gorm:"type:text" json:"imageUrl,omitempty"`
 	PasswordHash string    `gorm:"type:text;not null" json:"-"`
 	PlanName     string    `gorm:"type:text;not null;default:'free'" json:"planName"`
+	Role         string    `gorm:"type:text;not null;default:'user'" json:"role"`
 	CreatedAt    time.Time `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
 }
 

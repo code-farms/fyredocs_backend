@@ -17,6 +17,7 @@ import (
 	"esydocs/shared/config"
 	"esydocs/shared/logger"
 	"esydocs/shared/metrics"
+	"esydocs/shared/natsconn"
 	"esydocs/shared/telemetry"
 
 	"auth-service/internal/authverify"
@@ -72,6 +73,15 @@ func main() {
 		MaxIdleConns: 5,
 	})
 	models.Migrate()
+
+	if err := natsconn.Connect(); err != nil {
+		slog.Warn("NATS connection failed, analytics events will be skipped", "error", err)
+	} else {
+		defer natsconn.Close()
+		if err := natsconn.EnsureStreams(context.Background()); err != nil {
+			slog.Warn("NATS stream setup failed", "error", err)
+		}
+	}
 
 	redisClient, err := authverify.NewRedisClientFromEnv()
 	if err != nil {

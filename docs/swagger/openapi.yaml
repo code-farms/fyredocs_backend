@@ -53,6 +53,8 @@ tags:
     description: Compress, repair, and OCR PDF files
   - name: Jobs
     description: Cross-tool job history and real-time status updates for authenticated users
+  - name: Admin Analytics
+    description: Admin dashboard metrics (requires super-admin role via JWT authentication)
 
 # ---------------------------------------------------------------------------
 # Reusable path parameter and query parameter components
@@ -1484,6 +1486,190 @@ paths:
         "400":
           description: Bad request (missing job ID)
 
+  # ==========================================================================
+  # Admin Analytics
+  # ==========================================================================
+  /admin/metrics/overview:
+    get:
+      tags: [Admin Analytics]
+      summary: Today's summary metrics
+      operationId: adminOverview
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          description: JWT cookie auth with super-admin role required
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Overview metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /admin/metrics/daily:
+    get:
+      tags: [Admin Analytics]
+      summary: Daily aggregated metrics
+      operationId: adminDaily
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          description: JWT cookie auth with super-admin role required
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Start date (YYYY-MM-DD, default 30 days ago)
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+          description: End date (YYYY-MM-DD, default today)
+      responses:
+        "200":
+          description: Daily metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /admin/metrics/tools:
+    get:
+      tags: [Admin Analytics]
+      summary: Tool usage breakdown
+      operationId: adminTools
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          description: JWT cookie auth with super-admin role required
+          schema:
+            type: string
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Tool usage metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /admin/metrics/users:
+    get:
+      tags: [Admin Analytics]
+      summary: User growth metrics
+      operationId: adminUsers
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          description: JWT cookie auth with super-admin role required
+          schema:
+            type: string
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 90
+      responses:
+        "200":
+          description: User growth metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /admin/metrics/plans:
+    get:
+      tags: [Admin Analytics]
+      summary: Plan distribution metrics
+      operationId: adminPlans
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          description: JWT cookie auth with super-admin role required
+          schema:
+            type: string
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Plan distribution
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /admin/metrics/realtime:
+    get:
+      tags: [Admin Analytics]
+      summary: Real-time metrics (last hour)
+      operationId: adminRealtime
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          description: JWT cookie auth with super-admin role required
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Real-time metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /admin/metrics/events:
+    get:
+      tags: [Admin Analytics]
+      summary: Raw analytics events (paginated)
+      operationId: adminEvents
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          description: JWT cookie auth with super-admin role required
+          schema:
+            type: string
+        - name: eventType
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+      responses:
+        "200":
+          description: Analytics events list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
 # =============================================================================
 # Components
 # =============================================================================
@@ -1669,8 +1855,9 @@ components:
           example: "https://example.com/avatar.jpg"
         role:
           type: string
-          enum: [user, admin]
+          enum: [user, super-admin]
           example: user
+          description: User role from database. 'super-admin' grants access to admin dashboard.
         planName:
           type: string
           enum: [free, pro]
