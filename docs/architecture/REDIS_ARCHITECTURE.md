@@ -41,47 +41,9 @@ Redis serves as the backbone for asynchronous job processing, caching, and sessi
 
 ## Data Structures & Key Patterns
 
-### 1. Job Queues (Lists)
+### 1. Job Queues (Deprecated)
 
-Redis Lists are used for FIFO job queues, processed by worker services.
-
-#### Key Format
-```
-queue:{tool-type}
-```
-
-#### Examples
-```
-queue:word-to-pdf
-queue:pdf-to-word
-queue:merge-pdf
-queue:split-pdf
-queue:compress-pdf
-queue:ocr-pdf
-queue:html-to-pdf
-queue:pdf-to-text
-```
-
-#### Operations
-```bash
-# Add job to queue (LPUSH)
-LPUSH queue:word-to-pdf '{"id":"job-uuid","userId":"user-uuid","filePath":"/uploads/file.docx"}'
-
-# Get job from queue (BRPOP - blocking pop)
-BRPOP queue:word-to-pdf 5
-
-# Check queue length
-LLEN queue:word-to-pdf
-
-# View all jobs in queue (without removing)
-LRANGE queue:word-to-pdf 0 -1
-```
-
-#### Queue Management
-- **Producer**: Upload Service, Processing Services (job creation)
-- **Consumer**: Worker threads in processing services
-- **Blocking**: Workers use `BRPOP` with 5-second timeout
-- **Persistence**: Jobs survive Redis restarts (AOF enabled)
+**Note:** Job dispatch has been migrated to NATS JetStream. Redis is no longer used for job queuing. See the Job Service and worker service documentation for NATS stream details (`JOBS_DISPATCH`, `JOBS_EVENTS`, `JOBS_DLQ`).
 
 ---
 
@@ -248,6 +210,36 @@ GET ratelimit:login:192.168.1.100:1705670400
 | POST /auth/login | 5 requests | 60 seconds |
 | POST /auth/signup | 3 requests | 60 seconds |
 | POST /auth/refresh | 10 requests | 60 seconds |
+
+---
+
+### 6. Idempotency Keys (Strings with TTL)
+
+Prevents duplicate job creation when clients retry requests.
+
+#### Key Format
+```
+idempotency:<key>
+```
+
+| Key Pattern | Type | TTL | Purpose |
+|---|---|---|---|
+| `idempotency:<key>` | String | 10 minutes | Maps client idempotency key to job ID to prevent duplicate job creation |
+
+---
+
+### 7. Distributed Locks (Strings with SETNX)
+
+Coordinates distributed worker processes.
+
+#### Key Format
+```
+cleanup-worker:lock
+```
+
+| Key Pattern | Type | TTL | Purpose |
+|---|---|---|---|
+| `cleanup-worker:lock` | String (SETNX) | 10 minutes | Distributed lock ensuring only one cleanup worker runs per cycle |
 
 ---
 
@@ -690,14 +682,14 @@ redis:
 
 ## Related Documentation
 
-- [Upload Service](upload-service/UPLOAD_SERVICE.md) - Upload session management
-- [Authentication](upload-service/AUTHENTICATION.md) - Token denylist usage
-- [Convert From PDF](convert-from-pdf/CONVERT_FROM_PDF.md) - Queue consumer
-- [Convert To PDF](convert-to-pdf/CONVERT_TO_PDF.md) - Queue consumer
-- [Organize PDF](organize-pdf/ORGANIZE_PDF.md) - Queue consumer
-- [Optimize PDF](optimize-pdf/OPTIMIZE_PDF.md) - Queue consumer
-- [Cleanup Worker](cleanup-worker/CLEANUP_WORKER.md) - Session cleanup
-- [Main README](README.md) - Overall architecture
+- [Job Service](../services/JOB_SERVICE.md) - Job management and upload session management
+- [Auth Service](../services/AUTH_SERVICE.md) - Token denylist usage
+- [Convert From PDF](../services/CONVERT_FROM_PDF.md) - Queue consumer
+- [Convert To PDF](../services/CONVERT_TO_PDF.md) - Queue consumer
+- [Organize PDF](../services/ORGANIZE_PDF.md) - Queue consumer
+- [Optimize PDF](../services/OPTIMIZE_PDF.md) - Queue consumer
+- [Cleanup Worker](../services/CLEANUP_WORKER.md) - Session cleanup
+- [Main README](../README.md) - Overall architecture
 
 ---
 

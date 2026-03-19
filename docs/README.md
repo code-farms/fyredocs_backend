@@ -9,13 +9,12 @@ EsyDocs is a document conversion and PDF manipulation platform built with a micr
 | Service | Internal Port | Description |
 |---------|---------------|-------------|
 | API Gateway | 8080 | Main entry point, authentication, routing |
-| Upload Service | 8081 | File uploads, user management, job tracking |
+| Job Service | 8081 | Job creation, file uploads, user management, job tracking |
 | Convert To PDF | 8083 | Document to PDF conversions |
 | Convert From PDF | 8082 | PDF to document conversions |
 | Organize PDF | 8084 | PDF manipulation (merge, split, etc.) |
 | Optimize PDF | 8085 | PDF optimization (compress, OCR, repair) |
-| Auth Service | - | User registration, login, token management |
-| Job Service | - | Job creation, status tracking, dispatch routing |
+| Auth Service | 8086 | User registration, login, token management |
 | Cleanup Worker | - | Background cleanup of expired files/jobs |
 
 ## Base URL
@@ -55,6 +54,7 @@ Authorization: Bearer <JWT_TOKEN>
   "scope": ["scope1", "scope2"],
   "plan": "plan_name",
   "is_guest": false,
+  "jti": "uuid-v4",
   "iat": 1234567890,
   "exp": 1234567890
 }
@@ -203,6 +203,8 @@ pending → processing → completed
 | `completed` | Job finished successfully |
 | `failed` | Job failed (see `failureReason`) |
 
+Jobs that fail permanently after all retries are preserved in a NATS Dead Letter Queue (`JOBS_DLQ`) for debugging and replay.
+
 ---
 
 ## API Documentation Files
@@ -222,8 +224,8 @@ pending → processing → completed
 | File | Description |
 |------|-------------|
 | [API_GATEWAY.md](./services/API_GATEWAY.md) | API Gateway service |
-| [UPLOAD_SERVICE.md](./services/UPLOAD_SERVICE.md) | Upload service |
-| [AUTHENTICATION.md](./services/AUTHENTICATION.md) | Authentication system |
+| [UPLOAD_SERVICE.md](./services/UPLOAD_SERVICE.md) | Upload service (deprecated — see [JOB_SERVICE.md](./services/JOB_SERVICE.md)) |
+| [AUTH_SERVICE.md](./services/AUTH_SERVICE.md) | Authentication system |
 | [CONVERT_TO_PDF.md](./services/CONVERT_TO_PDF.md) | Convert to PDF service |
 | [CONVERT_FROM_PDF.md](./services/CONVERT_FROM_PDF.md) | Convert from PDF service |
 | [ORGANIZE_PDF.md](./services/ORGANIZE_PDF.md) | Organize PDF service |
@@ -250,18 +252,30 @@ pending → processing → completed
 1. **Authenticate** → POST `/auth/login` or `/auth/signup`
 2. **Upload File** → Initialize upload, send chunks, complete upload
 3. **Create Job** → POST to appropriate service endpoint with `uploadId`
+   - Include an optional `Idempotency-Key` header to prevent duplicate job creation on retry.
 4. **Poll Status** → GET job status until `completed` or `failed`
+   - **SSE alternative:** Clients can subscribe to `GET /api/jobs/:id/events` for real-time status updates via Server-Sent Events instead of polling.
 5. **Download Result** → GET download endpoint to retrieve converted file
 
 ---
 
-## Health Check
+## Health Checks
+
+- `/healthz` — Liveness check (is the process running?)
+- `/readyz` — Readiness check (are all dependencies connected? Returns 200/503 with check details)
 
 ```
 GET /healthz
 ```
 
 **Response:** `{"status":"healthy"}` (200)
+
+```
+GET /readyz
+```
+
+**Response (200):** `{"status":"ready","checks":{"postgres":"ok","redis":"ok","nats":"ok"}}`
+**Response (503):** `{"status":"not_ready","checks":{"postgres":"ok","redis":"fail","nats":"ok"}}`
 
 ---
 

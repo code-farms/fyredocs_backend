@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"context"
+	"net/http"
 	"os"
 	"strconv"
 	"time"
@@ -10,6 +12,7 @@ import (
 
 	"auth-service/handlers"
 	"auth-service/internal/authverify"
+	"auth-service/internal/models"
 	"auth-service/internal/token"
 	"auth-service/middleware"
 )
@@ -62,6 +65,36 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.String(200, "ok")
+	})
+
+	r.GET("/readyz", func(c *gin.Context) {
+		checks := gin.H{}
+		ready := true
+
+		hctx, hcancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer hcancel()
+
+		// Check PostgreSQL
+		if err := models.DB.Exec("SELECT 1").Error; err != nil {
+			checks["postgres"] = err.Error()
+			ready = false
+		} else {
+			checks["postgres"] = "ok"
+		}
+
+		// Check Redis
+		if err := redisClient.Ping(hctx).Err(); err != nil {
+			checks["redis"] = err.Error()
+			ready = false
+		} else {
+			checks["redis"] = "ok"
+		}
+
+		if !ready {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not ready", "checks": checks})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ready", "checks": checks})
 	})
 }
 

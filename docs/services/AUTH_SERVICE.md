@@ -92,6 +92,7 @@ Auth Service :8086
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/healthz` | Health check (returns "ok") |
+| GET | `/readyz` | Readiness check (PostgreSQL + Redis), returns 200/503 with individual check results |
 | GET | `/metrics` | Prometheus metrics |
 
 ## DB Schema
@@ -318,6 +319,8 @@ All errors follow the standard response format:
 }
 ```
 
+Every token includes a `jti` claim -- a UUID v4 generated per token. It uniquely identifies each token for denylist matching and audit purposes.
+
 The `plan`, `plan_max_file_mb`, and `plan_max_files` claims are populated at login/signup by looking up the user's plan from the `subscription_plans` table. Downstream services (api-gateway, job-service, upload-service) read these claims to enforce per-plan limits without calling back to the auth service.
 
 - **Algorithm**: HS256 (HMAC-SHA256)
@@ -369,10 +372,12 @@ Rate limits are per IP address and enforced via Redis-backed middleware.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JWT_ACCESS_TTL` | `8h` | Access token lifetime |
-| `JWT_ISSUER` | `esydocs` | Token issuer claim |
-| `JWT_AUDIENCE` | `esydocs-api` | Token audience claim |
+| `JWT_ISSUER` | **Required** | Token issuer claim |
+| `JWT_AUDIENCE` | **Required** | Token audience claim |
 | `JWT_CLOCK_SKEW` | `60s` | Allowed clock skew for validation |
 | `JWT_ALLOWED_ALGS` | `HS256` | Allowed JWT algorithms |
+
+> **Note**: `JWT_ISSUER` and `JWT_AUDIENCE` are required. The service will fail to start if these are not set.
 
 ### Cookie Configuration
 

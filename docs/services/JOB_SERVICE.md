@@ -21,6 +21,8 @@ The Job Service is the central orchestration service for all file processing ope
 6. **Job History** -- Return full job history for authenticated users
 7. **Guest Job Tracking** -- Manage guest tokens in Redis to allow anonymous users to track their jobs
 8. **Tool-to-Service Routing** -- Use a centralized `ToolServiceMap` to dispatch jobs to the correct worker service
+9. **MIME-Type Validation** -- Validate uploaded file content types using `http.DetectContentType()` against an allowlist per tool category (pdf, word, excel, ppt, image)
+10. **Idempotency** -- Support `Idempotency-Key` header on job creation to prevent duplicate jobs within a 10-minute window
 
 ## Design Constraints
 
@@ -56,6 +58,7 @@ Job Service :8081
 | Package | Purpose |
 |---------|---------|
 | `handlers/jobs.go` | Job CRUD, file download, job history |
+| `handlers/sse.go` | SSE endpoint for real-time job status updates via NATS JetStream |
 | `handlers/uploads.go` | Chunked upload init, chunk receive, assembly |
 | `handlers/auth.go` | Extract authenticated user ID from auth context |
 | `internal/routing/routing.go` | `ToolServiceMap` -- single source of truth for tool-to-service mapping |
@@ -106,11 +109,28 @@ Where `{category}` is one of: `convert-from-pdf`, `convert-to-pdf`, `organize-pd
 |--------|------|---------|-------------|
 | GET | `/api/jobs/history` | `GetJobHistory` | Full job history for authenticated users |
 
+### SSE (Server-Sent Events) Endpoint
+
+| Method | Path | Handler | Description |
+|--------|------|---------|-------------|
+| GET | `/api/jobs/:id/events` | `SSEJobUpdates` | Stream real-time job status updates via SSE |
+
+The SSE endpoint creates an ephemeral NATS JetStream consumer on the `JOBS_EVENTS` stream and filters events server-side by job ID. The stream auto-closes when the job completes or fails, and has a 5-minute timeout to prevent zombie connections. A keepalive comment is sent every 15 seconds to prevent proxy timeouts.
+
+**SSE Event Types:**
+| Event | Description |
+|-------|-------------|
+| `connected` | Initial connection confirmation with jobId |
+| `job-update` | Job status change with jobId, status, progress, toolType |
+| `done` | Job completed or failed; stream will close |
+| `error` | Error condition (e.g., event stream unavailable) |
+
 ### Infrastructure Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/healthz` | Health check (returns "ok") |
+| GET | `/readyz` | Readiness check (PostgreSQL + Redis + NATS), returns 200/503 with individual check results |
 | GET | `/metrics` | Prometheus metrics |
 
 ## Plan-Based Limits Enforcement
@@ -146,6 +166,16 @@ When a job is created, the service publishes a `JobCreated` event to NATS JetStr
 ```
 
 The target service name is resolved via `routing.ServiceForTool(toolType)` and the subject is built with `queue.SubjectForDispatch(serviceName)`.
+
+### Dead Letter Queue (DLQ)
+
+The `JOBS_DLQ` stream provides a dead letter queue with 7-day retention for failed jobs.
+
+**Subjects**: `jobs.dlq.<serviceName>` (e.g., `jobs.dlq.convert-from-pdf`)
+
+**When messages are routed to DLQ**: When retries are exhausted (MaxDeliver exceeded), the failed job payload is published to the DLQ before the original message is acknowledged.
+
+**DLQ Payload**: Includes the original job data plus `EventType: "JobFailed"` and the delivery count.
 
 ### Stream Setup
 
@@ -204,6 +234,7 @@ CREATE INDEX idx_file_metadata_job_id ON file_metadata(job_id);
 | `upload:<uploadId>:chunks` | Set | `UPLOAD_TTL` (2h) | Set of received chunk indices |
 | `guest:<token>:jobs` | Set | `GUEST_JOB_TTL` (2h) | Job IDs belonging to a guest session |
 | `ratelimit:upload:<ip>` | String | Rate limit window | Upload rate limit counter |
+| `idempotency:<key>` | String | 10 minutes | Maps idempotency key to job ID for deduplication |
 
 ## Sequence Diagrams
 
@@ -233,6 +264,8 @@ sequenceDiagram
         GW-->>C: 200 {uploadId, receivedChunks, complete}
     end
 
+    Note over JS,R: The UploadChunk handler uses a Redis Lua script (uploadChunkLua) for atomic state updates — checking upload existence, recording the chunk index, and refreshing TTLs in a single round-trip, preventing TOCTOU race conditions.
+
     C->>GW: POST /api/upload/<id>/complete
     GW->>JS: Proxy request
     JS->>R: SCARD upload:<id>:chunks (verify all chunks received)
@@ -258,7 +291,17 @@ sequenceDiagram
     GW->>JS: Proxy (with X-User-ID header)
 
     JS->>JS: Normalize tool type
-    JS->>JS: Validate tool in allowed set
+    JS->>JS: Validate tool via routing.ServiceForTool()
+
+    alt Idempotency-Key header present
+        JS->>R: GET idempotency:<key>
+        R-->>JS: existing jobId (or nil)
+        alt Job already exists
+            JS->>DB: SELECT * FROM processing_jobs WHERE id=<jobId>
+            JS-->>GW: 201 {existing job}
+            GW-->>C: 201 {existing job}
+        end
+    end
 
     alt JSON body with uploadId
         JS->>R: HGETALL upload:<uploadId>
@@ -269,12 +312,18 @@ sequenceDiagram
         JS->>JS: Save uploaded files directly to uploads/<jobId>/
     end
 
+    JS->>JS: Validate MIME type (http.DetectContentType) against allowlist
+
     JS->>DB: INSERT processing_job (status=queued)
     JS->>DB: INSERT file_metadata (kind=input)
 
     JS->>JS: routing.ServiceForTool("pdf-to-word") => "convert-from-pdf"
     JS->>NATS: Publish JobCreated to dispatch.convert-from-pdf
     NATS-->>W: Deliver JobCreated event
+
+    opt Idempotency-Key header present
+        JS->>R: SET idempotency:<key> <jobId> EX 600
+    end
 
     JS-->>GW: 201 {job object}
     GW-->>C: 201 {job object}
@@ -346,6 +395,7 @@ sequenceDiagram
 | `INVALID_INPUT` | 400 | Unsupported tool |
 | `INVALID_INPUT` | 400 | No file uploaded or missing uploadId |
 | `INVALID_INPUT` | 400 | File type mismatch for tool (e.g., non-PDF for pdf-to-word) |
+| `INVALID_INPUT` | 400 | File MIME content type does not match the expected type for the tool |
 | `FILE_TOO_LARGE` | 413 | File size exceeds plan limit from `X-User-Plan-Max-File-MB` (multipart path; default 10 MB) |
 | `TOO_MANY_FILES` | 400 | Number of files exceeds plan limit from `X-User-Plan-Max-Files` (default 5 files) |
 | `SERVER_ERROR` | 500 | Failed to create upload directory |

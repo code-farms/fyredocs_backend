@@ -165,3 +165,45 @@ sequenceDiagram
     JS-->>GW: 200 {jobs: [...], meta: {page, limit}}
     GW-->>Client: 200 {jobs}
 ```
+
+## SSE Job Status Updates
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant GW as api-gateway
+    participant JS as job-service :8081
+    participant NATS as NATS JetStream
+    participant W as Worker Service
+
+    Client->>GW: GET /api/jobs/<jobId>/events<br/>Accept: text/event-stream
+    GW->>JS: Proxy request
+
+    JS->>JS: Set SSE headers<br/>(Content-Type: text/event-stream)
+
+    JS->>NATS: Create ephemeral consumer<br/>on JOBS_EVENTS stream<br/>filter: jobs.events.>
+
+    JS-->>Client: event: connected<br/>data: {"jobId": "<jobId>"}
+
+    loop Until job completes/fails or 5min timeout
+        W->>NATS: Publish job event<br/>(jobs.events.JobProgress)
+
+        JS->>NATS: Fetch messages (5s wait)
+        NATS-->>JS: JobEvent {jobId, eventType, progress}
+
+        alt Event matches requested jobId
+            JS-->>Client: event: job-update<br/>data: {"jobId","status","progress","toolType"}
+            JS->>NATS: ACK message
+        else Event for different job
+            JS->>NATS: ACK message (skip)
+        end
+
+        Note over JS,Client: Keepalive comment every 15s<br/>": keepalive"
+    end
+
+    W->>NATS: Publish JobCompleted/JobFailed
+    NATS-->>JS: Terminal event
+    JS-->>Client: event: job-update<br/>data: {final status}
+    JS-->>Client: event: done<br/>data: {"jobId": "<jobId>"}
+    Note over JS,Client: Connection closed
+```

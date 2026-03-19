@@ -16,6 +16,33 @@ import (
 	"esydocs/shared/response"
 )
 
+// uploadChunkLua atomically validates the upload exists, records the chunk index,
+// refreshes TTLs, and returns the upload state — all in one round-trip.
+var uploadChunkLua = redis.NewScript(`
+local stateKey = KEYS[1]
+local chunkKey = KEYS[2]
+local chunkIdx = ARGV[1]
+local ttl = tonumber(ARGV[2])
+
+-- Check upload exists
+local exists = redis.call('EXISTS', stateKey)
+if exists == 0 then
+    return redis.error_reply("NOT_FOUND")
+end
+
+-- Record chunk and refresh TTLs
+redis.call('SADD', chunkKey, chunkIdx)
+redis.call('EXPIRE', chunkKey, ttl)
+redis.call('EXPIRE', stateKey, ttl)
+
+-- Return state fields
+local state = redis.call('HGETALL', stateKey)
+local received = redis.call('SCARD', chunkKey)
+state[#state+1] = 'receivedChunks'
+state[#state+1] = tostring(received)
+return state
+`)
+
 type UploadInitRequest struct {
 	FileName    string `json:"fileName"`
 	FileSize    int64  `json:"fileSize"`
@@ -81,16 +108,6 @@ func UploadChunk(c *gin.Context) {
 		return
 	}
 
-	state, err := fetchUploadState(c.Request.Context(), uploadID)
-	if err != nil {
-		if err == redis.Nil {
-			response.NotFound(c, "NOT_FOUND", "upload not found")
-		} else {
-			response.InternalError(c, "SERVER_ERROR", "upload not found")
-		}
-		return
-	}
-
 	tmpDir := uploadTmpDir()
 	chunkDir := filepath.Join(tmpDir, uploadID)
 	// Fix #17: Use 0750 instead of os.ModePerm
@@ -105,17 +122,37 @@ func UploadChunk(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	chunkSetKey := uploadChunkSetKey(uploadID)
-	pipe := redisstore.Client.TxPipeline()
-	pipe.SAdd(ctx, chunkSetKey, index)
-	pipe.Expire(ctx, chunkSetKey, uploadTTL())
-	pipe.Expire(ctx, uploadStateKey(uploadID), uploadTTL())
-	if _, err := pipe.Exec(ctx); err != nil {
+	ttlSeconds := int(uploadTTL().Seconds())
+	result, err := uploadChunkLua.Run(ctx, redisstore.Client,
+		[]string{uploadStateKey(uploadID), uploadChunkSetKey(uploadID)},
+		index, ttlSeconds,
+	).StringSlice()
+	if err != nil {
+		if err.Error() == "NOT_FOUND" {
+			response.NotFound(c, "NOT_FOUND", "upload not found or expired")
+			return
+		}
 		response.InternalError(c, "SERVER_ERROR", "failed to update upload state")
 		return
 	}
 
-	status := uploadStatusFromState(uploadID, state, ctx)
+	// Parse Lua result (HGETALL-style key-value pairs + receivedChunks)
+	state := make(map[string]string)
+	for i := 0; i+1 < len(result); i += 2 {
+		state[result[i]] = result[i+1]
+	}
+
+	totalChunks, _ := strconv.Atoi(state["totalChunks"])
+	fileSize, _ := strconv.ParseInt(state["fileSize"], 10, 64)
+	receivedChunks, _ := strconv.ParseInt(state["receivedChunks"], 10, 64)
+	status := UploadStatus{
+		UploadID:       uploadID,
+		FileName:       state["fileName"],
+		FileSize:       fileSize,
+		TotalChunks:    totalChunks,
+		ReceivedChunks: receivedChunks,
+		Complete:        int(receivedChunks) == totalChunks && totalChunks > 0,
+	}
 	response.OK(c, "Chunk uploaded", status)
 }
 

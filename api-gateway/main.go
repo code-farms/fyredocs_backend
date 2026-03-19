@@ -9,8 +9,10 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"api-gateway/internal/authverify"
@@ -18,7 +20,6 @@ import (
 	"esydocs/shared/metrics"
 	"esydocs/shared/telemetry"
 	"github.com/joho/godotenv"
-	"github.com/redis/go-redis/v9"
 )
 
 type routeConfig struct {
@@ -149,8 +150,14 @@ func main() {
 
 	mux := http.NewServeMux()
 	for _, cfg := range routes {
-		mux.Handle(cfg.prefix, newProxy(cfg))
-		mux.Handle(cfg.prefix+"/", newProxy(cfg))
+		handler := newProxy(cfg)
+		// Apply body size limit to non-upload routes (1MB for JSON endpoints).
+		// Upload routes handle their own size limits.
+		if !strings.HasPrefix(cfg.prefix, "/api/upload") {
+			handler = withMaxBodySize(handler, 1<<20) // 1 MB
+		}
+		mux.Handle(cfg.prefix, handler)
+		mux.Handle(cfg.prefix+"/", handler)
 	}
 
 	mux.Handle("/metrics", metrics.HTTPMetricsHandler())
@@ -171,7 +178,15 @@ func main() {
 		_, _ = w.Write([]byte(`{"status":"healthy"}`))
 	})
 
-	slog.Info("api-gateway listening", "port", port)
+	// Warn about insecure CORS configuration
+	credentialsEnabled := strings.EqualFold(corsAllowCredentials, "true")
+	for _, origin := range corsOrigins {
+		if origin == "*" && credentialsEnabled {
+			slog.Warn("CORS_ALLOW_ORIGINS=* with CORS_ALLOW_CREDENTIALS=true effectively disables CORS protection — do not use in production")
+			break
+		}
+	}
+
 	authMiddleware := authverify.HTTPAuthMiddleware(authverify.HTTPMiddlewareOptions{
 		Verifier:   verifier,
 		GuestStore: guestStore,
@@ -179,19 +194,43 @@ func main() {
 	handler := telemetry.HTTPTraceMiddleware("api-gateway")(
 		metrics.HTTPMetricsMiddleware(
 			logger.HTTPRequestID(
-				withCORS(authMiddleware(mux), corsConfig{
-					allowedOrigins:   corsOrigins,
-					allowedMethods:   corsMethods,
-					allowedHeaders:   corsHeaders,
-					allowCredentials: strings.EqualFold(corsAllowCredentials, "true"),
-				}),
+				withSecurityHeaders(
+					withCORS(authMiddleware(mux), corsConfig{
+						allowedOrigins:   corsOrigins,
+						allowedMethods:   corsMethods,
+						allowedHeaders:   corsHeaders,
+						allowCredentials: credentialsEnabled,
+					}),
+				),
 			),
 		),
 	)
-	if err := http.ListenAndServe(":"+port, handler); err != nil {
-		slog.Error("server failed", "error", err)
-		os.Exit(1)
+
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: handler,
 	}
+
+	go func() {
+		slog.Info("api-gateway listening", "port", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("server failed", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	slog.Info("shutting down api-gateway...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		slog.Error("server forced to shutdown", "error", err)
+	}
+	redisClient.Close()
+	slog.Info("api-gateway exited")
 }
 
 func loadEnv() {
@@ -212,6 +251,14 @@ func loadEnv() {
 	normalizeEnv()
 }
 
+// proxyTransport is shared across all reverse proxies with sensible timeouts.
+var proxyTransport = &http.Transport{
+	ResponseHeaderTimeout: 5 * time.Minute, // allow long PDF conversions
+	IdleConnTimeout:       90 * time.Second,
+	MaxIdleConnsPerHost:   20,
+	MaxIdleConns:          100,
+}
+
 func newProxy(cfg routeConfig) http.Handler {
 	target, err := url.Parse(cfg.targetURL)
 	if err != nil {
@@ -220,6 +267,7 @@ func newProxy(cfg routeConfig) http.Handler {
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = proxyTransport
 	proxy.Director = func(req *http.Request) {
 		targetPath := strings.TrimPrefix(req.URL.Path, cfg.prefix)
 		if targetPath == "" {
@@ -355,5 +403,23 @@ func parseCommaList(value string) []string {
 	return parts
 }
 
-// redisClient is declared at package level for healthz, suppress unused import
-var _ redis.Client
+// withMaxBodySize limits request body size for non-upload routes.
+func withMaxBodySize(next http.Handler, maxBytes int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withSecurityHeaders adds standard security headers to every response.
+func withSecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		next.ServeHTTP(w, r)
+	})
+}
+

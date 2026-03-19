@@ -16,6 +16,9 @@ The API Gateway acts as a reverse proxy that:
 - Validates JWT tokens from cookies or Authorization headers
 - Manages guest access tokens
 - Provides centralized rate limiting
+- Adds security response headers (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy) via `withSecurityHeaders()` middleware
+- Enforces request body size limit (1MB for non-upload routes) via `withMaxBodySize()` middleware
+- Performs graceful shutdown with 30-second drain on SIGTERM/SIGINT
 
 ### Request Flow
 
@@ -51,8 +54,20 @@ Route to Backend Service
 | `/api/organize-pdf/*` | organize-pdf:8084 | PDF organization (merge, split, etc.) |
 | `/api/optimize-pdf/*` | optimize-pdf:8085 | PDF optimization (compress, repair, OCR) |
 | `/healthz` | api-gateway (local) | Health check |
+| `/readyz` | api-gateway (local) | Readiness probe — verifies Redis connectivity, returns 200/503 with check details |
 
 **Note**: The API Gateway routes requests directly to the appropriate processing service. Each service manages its own job creation, queuing, and processing through Redis queues.
+
+### Proxy Transport Configuration
+
+The reverse proxy uses a custom `http.Transport` tuned for long-running conversions:
+
+| Setting | Value | Rationale |
+|---------|-------|-----------|
+| `ResponseHeaderTimeout` | 5 minutes | Allows long PDF conversions to complete |
+| `IdleConnTimeout` | 90 seconds | Reclaim idle backend connections |
+| `MaxIdleConnsPerHost` | 20 | Connection pool per backend service |
+| `MaxIdleConns` | 100 | Global idle connection pool limit |
 
 ## Environment Variables
 
@@ -158,6 +173,7 @@ These headers are cleared from incoming client requests before proxying (`ClearU
 
 The following paths skip authentication:
 - `/healthz` - Health check endpoint
+- `/readyz` - Readiness check endpoint
 - `/auth/signup` - User registration
 - `/auth/login` - User login
 - `/auth/plans` - Public plan listing
@@ -192,6 +208,7 @@ environment:
 - **Credentials Required**: `CORS_ALLOW_CREDENTIALS` must be `true` for cookie-based authentication
 - **No Wildcards**: When credentials are enabled, origins cannot be `*`
 - **Exact Match**: Origins must exactly match (including protocol and port)
+- **Startup Warning**: A startup warning is logged if `CORS_ALLOW_ORIGINS=*` is used with `CORS_ALLOW_CREDENTIALS=true`, as this effectively disables CORS protection.
 
 ## Deployment
 
@@ -250,23 +267,38 @@ api-gateway:
 
 ## Health Check
 
-### Endpoint
+The API Gateway exposes two health endpoints:
+
+- `/healthz` = **liveness** (is the process alive?)
+- `/readyz` = **readiness** (can it serve traffic? checks all dependencies)
+
+### Liveness: `/healthz`
 
 ```http
 GET /healthz
 ```
 
-### Response
+**Response**: `OK` (200)
 
+### Readiness: `/readyz`
+
+```http
+GET /readyz
 ```
-OK
+
+**Response** (200 when all checks pass, 503 when any check fails):
+```json
+{
+  "status": "ready",
+  "checks": {
+    "redis": "ok"
+  }
+}
 ```
 
-**Status**: 200 OK
-
-Use this endpoint for:
-- Docker health checks
-- Load balancer health probes
+Use these endpoints for:
+- Docker health checks (`/healthz` for liveness probe)
+- Kubernetes / load balancer readiness probes (`/readyz`)
 - Monitoring system checks
 
 ## Troubleshooting
@@ -496,6 +528,7 @@ sequenceDiagram
 
 The following paths skip JWT authentication:
 - `/healthz` -- Health check endpoint
+- `/readyz` -- Readiness check endpoint
 - `/auth/signup` -- User registration
 - `/auth/login` -- User login
 - `/auth/plans` -- Public plan listing
@@ -510,8 +543,8 @@ When a backend service is unreachable:
 
 ## Related Documentation
 
-- [Authentication System](../upload-service/AUTHENTICATION.md) - Detailed authentication documentation
-- [Upload Service](../upload-service/UPLOAD_SERVICE.md) - Backend service documentation
+- [Auth Service](./AUTH_SERVICE.md) - Detailed authentication documentation
+- [Job Service](./JOB_SERVICE.md) - Backend service documentation
 - [Main README](../README.md) - Overall architecture and deployment
 
 ## Support

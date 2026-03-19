@@ -45,6 +45,27 @@ type JobPayload struct {
 	CorrelationID string          `json:"correlationId"`
 }
 
+// Structured error codes for worker failures.
+const (
+	ErrCodeUnsupportedTool  = "UNSUPPORTED_TOOL"
+	ErrCodeConversionFailed = "CONVERSION_FAILED"
+	ErrCodeInvalidPayload   = "INVALID_PAYLOAD"
+	ErrCodeOutputFailed     = "OUTPUT_FAILED"
+	ErrCodeTimeout          = "TIMEOUT"
+)
+
+// classifyError returns a structured error code for a processing failure.
+func classifyError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded") {
+		return ErrCodeTimeout
+	}
+	return ErrCodeConversionFailed
+}
+
 // backoff mirrors the consumer BackOff configuration so that NakWithDelay
 // can supply a sensible delay on each redelivery.
 var backoff = []time.Duration{10 * time.Second, 30 * time.Second, 2 * time.Minute}
@@ -109,7 +130,7 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, outDir string, logger *slog.Logger) {
 	var payload JobPayload
 	if err := json.Unmarshal(msg.Data(), &payload); err != nil {
-		logger.Error("invalid payload", "error", err)
+		logger.Error("invalid payload", "error", err, "code", ErrCodeInvalidPayload)
 		// Non-recoverable: ack to stop redelivery.
 		_ = msg.Ack()
 		return
@@ -117,7 +138,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 
 	if !cfg.AllowedTools[payload.ToolType] {
 		logger.Warn("unsupported tool", "tool", payload.ToolType, "jobId", payload.JobID)
-		updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, "unsupported tool")
+		updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, fmt.Sprintf("[%s] %s", ErrCodeUnsupportedTool, payload.ToolType))
 		// Non-recoverable: ack to stop redelivery.
 		_ = msg.Ack()
 		return
@@ -193,7 +214,22 @@ func handleFailure(cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err 
 		"correlationId", payload.CorrelationID,
 		"error", err,
 	)
-	updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, err.Error())
+	errCode := classifyError(err)
+	updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, fmt.Sprintf("[%s] %v", errCode, err))
+
+	// Publish to DLQ before acking
+	dlqSubject := "jobs.dlq." + cfg.ServiceName
+	if cfg.JS != nil {
+		dlqPayload := payload
+		dlqPayload.EventType = "JobFailed"
+		dlqPayload.Attempts = int(deliveryCount)
+		if dlqData, marshalErr := json.Marshal(dlqPayload); marshalErr == nil {
+			if _, pubErr := cfg.JS.Publish(context.Background(), dlqSubject, dlqData); pubErr != nil {
+				logger.Error("failed to publish to DLQ", "jobId", payload.JobID, "error", pubErr)
+			}
+		}
+	}
+
 	if ackErr := msg.Ack(); ackErr != nil {
 		logger.Error("failed to ack failed message", "jobId", payload.JobID, "error", ackErr)
 	}

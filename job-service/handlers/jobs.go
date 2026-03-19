@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,29 +30,13 @@ import (
 	"job-service/internal/models"
 )
 
-var convertFromTools = map[string]bool{
-	"pdf-to-word":       true,
-	"pdf-to-excel":      true,
-	"pdf-to-powerpoint": true,
-	"pdf-to-image":      true,
-	"ocr":               true,
-}
-
-var convertToTools = map[string]bool{
-	"word-to-pdf":       true,
-	"excel-to-pdf":      true,
-	"powerpoint-to-pdf": true,
-	"image-to-pdf":      true,
-	"merge-pdf":         true,
-	"split-pdf":         true,
-	"compress-pdf":      true,
-	"page-reorder":      true,
-	"page-rotate":       true,
-	"watermark-pdf":     true,
-	"protect-pdf":       true,
-	"unlock-pdf":        true,
-	"sign-pdf":          true,
-	"edit-pdf":          true,
+// allowedMIMETypes maps tool types to their expected MIME content types.
+var allowedMIMETypes = map[string][]string{
+	"pdf":   {"application/pdf"},
+	"word":  {"application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/zip"},
+	"excel": {"application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/zip"},
+	"ppt":   {"application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/zip"},
+	"image": {"image/png", "image/jpeg", "image/webp"},
 }
 
 type UploadJobRequest struct {
@@ -67,13 +52,23 @@ func CreateJobFromTool(c *gin.Context) {
 		return
 	}
 
-	allowed := convertFromTools
-	if convertToTools[toolType] {
-		allowed = convertToTools
-	}
-	if !allowed[toolType] {
+	if routing.ServiceForTool(toolType) == "" {
 		response.BadRequest(c, "INVALID_INPUT", "unsupported tool")
 		return
+	}
+
+	// Idempotency: check for Idempotency-Key header
+	idempotencyKey := c.GetHeader("Idempotency-Key")
+	if idempotencyKey != "" && redisstore.Client != nil {
+		redisKey := fmt.Sprintf("idempotency:%s", idempotencyKey)
+		existing, err := redisstore.Client.Get(c.Request.Context(), redisKey).Result()
+		if err == nil && existing != "" {
+			var existingJob models.ProcessingJob
+			if err := models.DB.First(&existingJob, "id = ?", existing).Error; err == nil {
+				response.Created(c, "Job created", existingJob)
+				return
+			}
+		}
 	}
 
 	jobID := uuid.New()
@@ -125,6 +120,10 @@ func CreateJobFromTool(c *gin.Context) {
 		for idx, uploadID := range uploadIDs {
 			consumed, size, err := consumeUpload(c.Request.Context(), toolType, uploadID, jobDir, idx)
 			if err != nil {
+				response.BadRequest(c, "INVALID_INPUT", err.Error())
+				return
+			}
+			if err := validateMIMEType(toolType, consumed.Path); err != nil {
 				response.BadRequest(c, "INVALID_INPUT", err.Error())
 				return
 			}
@@ -184,6 +183,10 @@ func CreateJobFromTool(c *gin.Context) {
 			dst := filepath.Join(jobDir, filepath.Base(file.Filename))
 			if err := c.SaveUploadedFile(file, dst); err != nil {
 				response.InternalError(c, "SERVER_ERROR", "failed to save uploaded file")
+				return
+			}
+			if err := validateMIMEType(toolType, dst); err != nil {
+				response.BadRequest(c, "INVALID_INPUT", err.Error())
 				return
 			}
 			totalSize += file.Size
@@ -272,6 +275,13 @@ func CreateJobFromTool(c *gin.Context) {
 	}
 
 	jobCreated = true
+
+	// Store idempotency key in Redis with 10-minute TTL
+	if idempotencyKey != "" && redisstore.Client != nil {
+		redisKey := fmt.Sprintf("idempotency:%s", idempotencyKey)
+		redisstore.Client.Set(c.Request.Context(), redisKey, job.ID.String(), 10*time.Minute)
+	}
+
 	slog.Info("job queued", "jobId", job.ID, "tool", toolType, "correlationId", correlationID)
 	response.Created(c, "Job created", job)
 }
@@ -640,6 +650,59 @@ func validateFileType(toolType string, fileName string) error {
 		}
 	}
 	return nil
+}
+
+// mimeCategory returns the MIME category key for the given tool type.
+func mimeCategory(toolType string) string {
+	switch toolType {
+	case "pdf-to-word", "pdf-to-excel", "pdf-to-powerpoint", "pdf-to-image",
+		"merge-pdf", "split-pdf", "compress-pdf", "page-reorder", "page-rotate",
+		"watermark-pdf", "protect-pdf", "unlock-pdf", "sign-pdf", "edit-pdf", "ocr":
+		return "pdf"
+	case "word-to-pdf":
+		return "word"
+	case "excel-to-pdf":
+		return "excel"
+	case "powerpoint-to-pdf":
+		return "ppt"
+	case "image-to-pdf":
+		return "image"
+	default:
+		return ""
+	}
+}
+
+// validateMIMEType reads the first 512 bytes of the file and checks that
+// the detected MIME type is in the allowlist for the given tool type.
+func validateMIMEType(toolType string, filePath string) error {
+	category := mimeCategory(toolType)
+	if category == "" {
+		return nil // unknown category, skip MIME check
+	}
+	allowed, ok := allowedMIMETypes[category]
+	if !ok {
+		return nil
+	}
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to open file for MIME detection")
+	}
+	defer f.Close()
+
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to read file for MIME detection")
+	}
+	detected := http.DetectContentType(buf[:n])
+
+	for _, a := range allowed {
+		if detected == a {
+			return nil
+		}
+	}
+	return fmt.Errorf("file content type %q is not allowed for this tool", detected)
 }
 
 func parseOptions(raw string) map[string]interface{} {

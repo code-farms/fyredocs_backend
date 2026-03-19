@@ -42,6 +42,7 @@ graph TB
             end
 
             HISTORY["GET /api/jobs/history"]
+            SSE_ROUTE["GET /api/jobs/:id/events"]
             HEALTHZ["/healthz"]
             METRICSEP["/metrics"]
         end
@@ -49,6 +50,7 @@ graph TB
         subgraph Handlers
             UH["Upload Handlers<br/>(chunked upload)"]
             JH["Job Handlers<br/>(CRUD + dispatch)"]
+            SSEH["SSE Handler<br/>(real-time job updates)"]
         end
 
         subgraph Internal
@@ -70,6 +72,7 @@ graph TB
     ConvertFromRoutes --> JH
     ConvertToRoutes --> JH
     HISTORY --> JH
+    SSE_ROUTE --> SSEH
 
     UH --> Redis[(Redis)]
     UH --> Disk[(File System)]
@@ -77,6 +80,7 @@ graph TB
     JH --> Redis
     JH --> ROUTING
     ROUTING --> NATS["NATS JetStream<br/>(PublishJobEvent)"]
+    SSEH --> NATS
     DENYLIST --> Redis
     GUESTSTORE --> Redis
     RateLimiting --> Redis

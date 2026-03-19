@@ -1,3 +1,5 @@
+> **DEPRECATED:** Upload functionality has been absorbed into the [Job Service](./JOB_SERVICE.md). This document is retained for historical reference. See JOB_SERVICE.md for current upload and job management documentation.
+
 # Upload Service
 
 ## Overview
@@ -14,7 +16,7 @@ The Upload Service is the core backend service that handles file uploads, job ma
 
 1. **File Upload Management** - Chunked file uploads with progress tracking
 2. **Job Orchestration** - Create and manage conversion jobs
-3. **User Authentication** - Handle user signup, login, logout (see [AUTHENTICATION.md](./AUTHENTICATION.md))
+3. **User Authentication** - Handle user signup, login, logout (see [AUTH_SERVICE.md](./AUTH_SERVICE.md))
 4. **Job Queue Management** - Enqueue jobs for worker processing
 5. **File Storage** - Temporary storage for uploaded files and conversion outputs
 
@@ -28,7 +30,7 @@ API Gateway :8080
 Upload Service :8081
   ├─ Chunked Upload Handler
   ├─ Job Management Handler
-  ├─ Auth Handlers (see AUTHENTICATION.md)
+  ├─ Auth Handlers (see AUTH_SERVICE.md)
   ├─ PostgreSQL (job metadata)
   └─ Redis (job queue & cache)
        ↓
@@ -38,7 +40,7 @@ Upload Service :8081
 
 ## API Endpoints
 
-For authentication endpoints, see [AUTHENTICATION.md](./AUTHENTICATION.md).
+For authentication endpoints, see [AUTH_SERVICE.md](./AUTH_SERVICE.md).
 
 ### Upload Endpoints
 
@@ -325,7 +327,7 @@ Jobs store metadata in PostgreSQL including:
 |----------|-------------|---------|
 | `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:password@db:5432/esydocs?sslmode=disable` |
 | `REDIS_ADDR` | Redis server address | `redis:6379` |
-| `JWT_HS256_SECRET` | JWT signing secret (32+ chars) | See [AUTHENTICATION.md](./AUTHENTICATION.md) |
+| `JWT_HS256_SECRET` | JWT signing secret (32+ chars) | See [AUTH_SERVICE.md](./AUTH_SERVICE.md) |
 
 ### File Storage
 
@@ -359,7 +361,7 @@ Jobs store metadata in PostgreSQL including:
 | `PORT` | `8081` | HTTP server port |
 | `TRUSTED_PROXIES` | `172.18.0.0/16,127.0.0.1,::1` | Trusted proxy IP ranges |
 
-For authentication-related environment variables, see [AUTHENTICATION.md](./AUTHENTICATION.md).
+For authentication-related environment variables, see [AUTH_SERVICE.md](./AUTH_SERVICE.md).
 
 ## Database Schema
 
@@ -749,7 +751,7 @@ sequenceDiagram
 
 ## Related Documentation
 
-- [AUTHENTICATION.md](./AUTHENTICATION.md) - Complete authentication system documentation
+- [AUTH_SERVICE.md](./AUTH_SERVICE.md) - Complete authentication system documentation
 - [API Gateway](../api-gateway/API_GATEWAY.md) - Request routing and CORS
 - [Convert From PDF](../convert-from-pdf/CONVERT_FROM_PDF.md) - PDF conversion worker
 - [Convert To PDF](../convert-to-pdf/CONVERT_TO_PDF.md) - Document conversion worker

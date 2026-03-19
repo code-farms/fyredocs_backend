@@ -52,7 +52,7 @@ tags:
   - name: Optimize PDF
     description: Compress, repair, and OCR PDF files
   - name: Jobs
-    description: Cross-tool job history for authenticated users
+    description: Cross-tool job history and real-time status updates for authenticated users
 
 # ---------------------------------------------------------------------------
 # Reusable path parameter and query parameter components
@@ -657,6 +657,15 @@ paths:
         - GuestToken: []
       parameters:
         - <<: *toolConvertFromParam
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: |
+            Optional idempotency key. If provided and a job was already created
+            with this key within the last 10 minutes, the existing job is returned
+            instead of creating a new one.
       requestBody:
         required: true
         content:
@@ -669,7 +678,7 @@ paths:
                   items:
                     type: string
                     format: binary
-                  description: PDF file(s) to convert
+                  description: PDF file(s) to convert. MIME content type is validated against the expected type for the tool.
                 options:
                   type: string
                   description: JSON-encoded options object
@@ -678,7 +687,7 @@ paths:
               $ref: "#/components/schemas/CreateJobRequest"
       responses:
         "201":
-          description: Job created and queued for processing
+          description: Job created and queued for processing (or existing job returned if Idempotency-Key matched)
           content:
             application/json:
               schema:
@@ -851,6 +860,15 @@ paths:
         - GuestToken: []
       parameters:
         - <<: *toolConvertToParam
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: |
+            Optional idempotency key. If provided and a job was already created
+            with this key within the last 10 minutes, the existing job is returned
+            instead of creating a new one.
       requestBody:
         required: true
         content:
@@ -863,7 +881,7 @@ paths:
                   items:
                     type: string
                     format: binary
-                  description: File(s) to convert to PDF
+                  description: File(s) to convert to PDF. MIME content type is validated against the expected type for the tool.
                 options:
                   type: string
                   description: JSON-encoded options object
@@ -872,7 +890,7 @@ paths:
               $ref: "#/components/schemas/CreateJobRequest"
       responses:
         "201":
-          description: Job created and queued for processing
+          description: Job created and queued for processing (or existing job returned if Idempotency-Key matched)
           content:
             application/json:
               schema:
@@ -1031,6 +1049,15 @@ paths:
         - GuestToken: []
       parameters:
         - <<: *toolOrganizeParam
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: |
+            Optional idempotency key. If provided and a job was already created
+            with this key within the last 10 minutes, the existing job is returned
+            instead of creating a new one.
       requestBody:
         required: true
         content:
@@ -1043,7 +1070,7 @@ paths:
                   items:
                     type: string
                     format: binary
-                  description: PDF file(s) to organize
+                  description: PDF file(s) to organize. MIME content type is validated.
                 options:
                   type: string
                   description: JSON-encoded options object
@@ -1052,7 +1079,7 @@ paths:
               $ref: "#/components/schemas/CreateJobRequest"
       responses:
         "201":
-          description: Job created
+          description: Job created (or existing job returned if Idempotency-Key matched)
           content:
             application/json:
               schema:
@@ -1203,6 +1230,15 @@ paths:
         - GuestToken: []
       parameters:
         - <<: *toolOptimizeParam
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: |
+            Optional idempotency key. If provided and a job was already created
+            with this key within the last 10 minutes, the existing job is returned
+            instead of creating a new one.
       requestBody:
         required: true
         content:
@@ -1215,7 +1251,7 @@ paths:
                   items:
                     type: string
                     format: binary
-                  description: PDF file(s) to optimize
+                  description: PDF file(s) to optimize. MIME content type is validated.
                 options:
                   type: string
                   description: JSON-encoded options object
@@ -1224,7 +1260,7 @@ paths:
               $ref: "#/components/schemas/CreateJobRequest"
       responses:
         "201":
-          description: Job created
+          description: Job created (or existing job returned if Idempotency-Key matched)
           content:
             application/json:
               schema:
@@ -1388,6 +1424,65 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  # Jobs (SSE real-time updates)
+  # ==========================================================================
+  /api/jobs/{id}/events:
+    get:
+      tags: [Jobs]
+      summary: Stream real-time job status updates (SSE)
+      description: |
+        Opens a Server-Sent Events (SSE) connection that streams real-time
+        status updates for a specific job. The server creates an ephemeral
+        NATS JetStream consumer and filters events by job ID.
+
+        **Event types:**
+        - `connected` -- Initial connection confirmation
+        - `job-update` -- Job status/progress change
+        - `done` -- Job completed or failed; stream closes
+        - `error` -- Error condition
+
+        **Behavior:**
+        - Connection auto-closes after 5 minutes (timeout)
+        - Keepalive comments sent every 15 seconds
+        - Stream auto-closes when job reaches terminal state (completed/failed)
+      operationId: sseJobUpdates
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The job UUID to subscribe to
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Server-Sent Events stream. Each event has the format:
+                  ```
+                  event: <event-type>
+                  data: <JSON payload>
+                  ```
+              example: |
+                event: connected
+                data: {"jobId":"550e8400-e29b-41d4-a716-446655440000"}
+
+                event: job-update
+                data: {"jobId":"550e8400-e29b-41d4-a716-446655440000","status":"JobProgress","progress":50,"toolType":"pdf-to-word"}
+
+                event: job-update
+                data: {"jobId":"550e8400-e29b-41d4-a716-446655440000","status":"JobCompleted","progress":100,"toolType":"pdf-to-word"}
+
+                event: done
+                data: {"jobId":"550e8400-e29b-41d4-a716-446655440000"}
+        "400":
+          description: Bad request (missing job ID)
 
 # =============================================================================
 # Components

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -193,6 +194,66 @@ func TestWithCORSPreflight(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
 		t.Errorf("expected credentials header 'true', got %q", got)
 	}
+}
+
+func TestWithSecurityHeaders(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := withSecurityHeaders(next)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	expectedHeaders := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":       "DENY",
+		"X-XSS-Protection":      "1; mode=block",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+		"Permissions-Policy":     "camera=(), microphone=(), geolocation=()",
+	}
+	for key, want := range expectedHeaders {
+		got := rec.Header().Get(key)
+		if got != want {
+			t.Errorf("header %s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestWithMaxBodySize(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Try to read the body — if over limit, Read returns an error
+		buf := make([]byte, 1024)
+		_, err := r.Body.Read(buf)
+		if err != nil && err.Error() == "http: request body too large" {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	t.Run("small body passes", func(t *testing.T) {
+		handler := withMaxBodySize(next, 1<<20) // 1MB
+		body := make([]byte, 100)
+		req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200 for small body, got %d", rec.Code)
+		}
+	})
+
+	t.Run("oversized body rejected", func(t *testing.T) {
+		handler := withMaxBodySize(next, 100) // 100 bytes limit
+		body := make([]byte, 200)
+		req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("expected 413 for oversized body, got %d", rec.Code)
+		}
+	})
 }
 
 func TestWithCORSNonMatchingOrigin(t *testing.T) {

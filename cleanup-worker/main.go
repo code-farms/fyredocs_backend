@@ -40,10 +40,22 @@ func main() {
 }
 
 func runCleanup(ctx context.Context) {
+	// Acquire distributed lock to prevent concurrent cleanup runs
+	lockKey := "cleanup-worker:lock"
+	lockTTL := 10 * time.Minute
+	ok, err := redisstore.Client.SetNX(ctx, lockKey, "1", lockTTL).Result()
+	if err != nil {
+		slog.Error("failed to acquire cleanup lock", "error", err)
+		return
+	}
+	if !ok {
+		slog.Debug("cleanup lock held by another instance, skipping")
+		return
+	}
+	defer redisstore.Client.Del(ctx, lockKey)
+
 	cleanupExpiredJobs(ctx)
 	cleanupUploadState(ctx)
-	// NATS JetStream handles redelivery via AckWait and MaxDeliver.
-	// requeueStaleJobs and requeueOrphanedJobs are no longer needed.
 }
 
 func cleanupExpiredJobs(ctx context.Context) {

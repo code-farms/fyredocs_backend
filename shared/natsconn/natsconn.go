@@ -84,7 +84,19 @@ func EnsureStreams(ctx context.Context) error {
 		return fmt.Errorf("create JOBS_EVENTS stream: %w", err)
 	}
 
-	slog.Info("NATS JetStream streams ensured", "streams", []string{"JOBS_DISPATCH", "JOBS_EVENTS"})
+	// JOBS_DLQ: Captures permanently failed messages for investigation.
+	_, err = JS.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:      "JOBS_DLQ",
+		Subjects:  []string{"jobs.dlq.>"},
+		Storage:   jetstream.FileStorage,
+		Retention: jetstream.LimitsPolicy,
+		MaxAge:    7 * 24 * time.Hour, // keep failed messages for 7 days
+	})
+	if err != nil {
+		return fmt.Errorf("create JOBS_DLQ stream: %w", err)
+	}
+
+	slog.Info("NATS JetStream streams ensured", "streams", []string{"JOBS_DISPATCH", "JOBS_EVENTS", "JOBS_DLQ"})
 	return nil
 }
 

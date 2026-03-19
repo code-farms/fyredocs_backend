@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 // PlanInfo carries the plan name and limits to be embedded in the JWT.
@@ -43,10 +44,19 @@ func NewIssuerFromEnv() (*Issuer, error) {
 		return nil, fmt.Errorf("hs256 secret not configured")
 	}
 
+	issuer := strings.TrimSpace(os.Getenv("JWT_ISSUER"))
+	if issuer == "" {
+		return nil, fmt.Errorf("JWT_ISSUER environment variable is required but not set")
+	}
+	audience := strings.TrimSpace(os.Getenv("JWT_AUDIENCE"))
+	if audience == "" {
+		return nil, fmt.Errorf("JWT_AUDIENCE environment variable is required but not set")
+	}
+
 	return &Issuer{
 		hmacSecret: []byte(secret),
-		issuer:     strings.TrimSpace(os.Getenv("JWT_ISSUER")),
-		audience:   strings.TrimSpace(os.Getenv("JWT_AUDIENCE")),
+		issuer:     issuer,
+		audience:   audience,
 		accessTTL:  getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour),
 	}, nil
 }
@@ -58,7 +68,10 @@ func (i *Issuer) IssueAccessToken(userID, role string, scope []string, plan Plan
 	now := time.Now()
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
 			Subject:   strings.TrimSpace(userID),
+			Issuer:    i.issuer,
+			Audience:  []string{i.audience},
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(i.accessTTL)),
 		},
@@ -67,12 +80,6 @@ func (i *Issuer) IssueAccessToken(userID, role string, scope []string, plan Plan
 		Plan:               plan.Name,
 		PlanMaxFileSizeMB:  plan.MaxFileSizeMB,
 		PlanMaxFilesPerJob: plan.MaxFilesPerJob,
-	}
-	if i.issuer != "" {
-		claims.Issuer = i.issuer
-	}
-	if i.audience != "" {
-		claims.Audience = []string{i.audience}
 	}
 
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

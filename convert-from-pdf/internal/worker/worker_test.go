@@ -72,6 +72,43 @@ func TestOutputDir(t *testing.T) {
 	}
 }
 
+func TestClassifyError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil error", nil, ""},
+		{"timeout error", errors.New("context deadline exceeded"), ErrCodeTimeout},
+		{"timeout keyword", errors.New("operation timeout"), ErrCodeTimeout},
+		{"generic error", errors.New("file not found"), ErrCodeConversionFailed},
+		{"libreoffice crash", errors.New("exit status 1"), ErrCodeConversionFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyError(tt.err)
+			if got != tt.want {
+				t.Errorf("classifyError(%v) = %q, want %q", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestErrorCodeConstants(t *testing.T) {
+	codes := map[string]string{
+		"UNSUPPORTED_TOOL":  ErrCodeUnsupportedTool,
+		"CONVERSION_FAILED": ErrCodeConversionFailed,
+		"INVALID_PAYLOAD":   ErrCodeInvalidPayload,
+		"OUTPUT_FAILED":     ErrCodeOutputFailed,
+		"TIMEOUT":           ErrCodeTimeout,
+	}
+	for expected, got := range codes {
+		if got != expected {
+			t.Errorf("expected %q, got %q", expected, got)
+		}
+	}
+}
+
 func TestJobPayloadUnmarshal(t *testing.T) {
 	data := []byte(`{"eventType":"JobCreated","jobId":"abc","toolType":"pdf-to-word","attempts":0,"correlationId":"c1"}`)
 	var payload JobPayload

@@ -10,6 +10,8 @@ import (
 func TestIssueAccessTokenValid(t *testing.T) {
 	issuer := &Issuer{
 		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
+		issuer:     "esydocs",
+		audience:   "esydocs-api",
 		accessTTL:  time.Hour,
 	}
 
@@ -85,10 +87,12 @@ func TestIssueAccessTokenClaims(t *testing.T) {
 	}
 }
 
-func TestIssueAccessTokenNoIssuerAudience(t *testing.T) {
+func TestIssueAccessTokenAlwaysSetsIssuerAudience(t *testing.T) {
 	secret := []byte("test-secret-key-32-chars-long!!")
 	issuer := &Issuer{
 		hmacSecret: secret,
+		issuer:     "esydocs",
+		audience:   "esydocs-api",
 		accessTTL:  time.Hour,
 	}
 
@@ -105,11 +109,42 @@ func TestIssueAccessTokenNoIssuerAudience(t *testing.T) {
 	}
 
 	claims := parsed.Claims.(*Claims)
-	if claims.Issuer != "" {
-		t.Errorf("expected empty issuer, got %q", claims.Issuer)
+	if claims.Issuer != "esydocs" {
+		t.Errorf("expected issuer 'esydocs', got %q", claims.Issuer)
 	}
-	if len(claims.Audience) != 0 {
-		t.Errorf("expected no audience, got %v", claims.Audience)
+	if len(claims.Audience) != 1 || claims.Audience[0] != "esydocs-api" {
+		t.Errorf("expected audience ['esydocs-api'], got %v", claims.Audience)
+	}
+	if claims.ID == "" {
+		t.Error("expected non-empty JTI (token ID)")
+	}
+}
+
+func TestNewIssuerFromEnvRequiresIssuerAndAudience(t *testing.T) {
+	t.Setenv("JWT_HS256_SECRET", "test-secret-key-32-chars-long!!")
+
+	t.Setenv("JWT_ISSUER", "")
+	t.Setenv("JWT_AUDIENCE", "esydocs-api")
+	_, err := NewIssuerFromEnv()
+	if err == nil {
+		t.Error("expected error when JWT_ISSUER is empty")
+	}
+
+	t.Setenv("JWT_ISSUER", "esydocs")
+	t.Setenv("JWT_AUDIENCE", "")
+	_, err = NewIssuerFromEnv()
+	if err == nil {
+		t.Error("expected error when JWT_AUDIENCE is empty")
+	}
+
+	t.Setenv("JWT_ISSUER", "esydocs")
+	t.Setenv("JWT_AUDIENCE", "esydocs-api")
+	issuer, err := NewIssuerFromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if issuer == nil {
+		t.Fatal("expected non-nil issuer")
 	}
 }
 
@@ -117,6 +152,8 @@ func TestIssueAccessTokenEmbedsPlanInfo(t *testing.T) {
 	secret := []byte("test-secret-key-32-chars-long!!")
 	issuer := &Issuer{
 		hmacSecret: secret,
+		issuer:     "esydocs",
+		audience:   "esydocs-api",
 		accessTTL:  time.Hour,
 	}
 

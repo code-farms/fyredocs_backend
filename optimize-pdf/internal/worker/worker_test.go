@@ -82,3 +82,36 @@ func TestJobPayloadUnmarshal(t *testing.T) {
 		t.Errorf("expected 'compress-pdf', got %q", payload.ToolType)
 	}
 }
+
+func TestClassifyError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil error", nil, ""},
+		{"timeout error", errors.New("context deadline exceeded"), ErrCodeTimeout},
+		{"timeout keyword", errors.New("operation timeout"), ErrCodeTimeout},
+		{"generic error", errors.New("file not found"), ErrCodeConversionFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyError(tt.err)
+			if got != tt.want {
+				t.Errorf("classifyError(%v) = %q, want %q", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestErrorCodeConstants(t *testing.T) {
+	if ErrCodeUnsupportedTool != "UNSUPPORTED_TOOL" {
+		t.Errorf("ErrCodeUnsupportedTool = %q", ErrCodeUnsupportedTool)
+	}
+	if ErrCodeConversionFailed != "CONVERSION_FAILED" {
+		t.Errorf("ErrCodeConversionFailed = %q", ErrCodeConversionFailed)
+	}
+	if ErrCodeTimeout != "TIMEOUT" {
+		t.Errorf("ErrCodeTimeout = %q", ErrCodeTimeout)
+	}
+}

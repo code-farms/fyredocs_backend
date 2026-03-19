@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -278,5 +280,90 @@ func TestUniqueUploadFileName(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("uniqueUploadFileName(%q, %q, %d) = %q, want %q", tt.uploadID, tt.fileName, tt.index, got, tt.want)
 		}
+	}
+}
+
+func TestMimeCategory(t *testing.T) {
+	tests := []struct {
+		toolType string
+		want     string
+	}{
+		{"pdf-to-word", "pdf"},
+		{"pdf-to-excel", "pdf"},
+		{"merge-pdf", "pdf"},
+		{"compress-pdf", "pdf"},
+		{"ocr", "pdf"},
+		{"word-to-pdf", "word"},
+		{"excel-to-pdf", "excel"},
+		{"powerpoint-to-pdf", "ppt"},
+		{"image-to-pdf", "image"},
+		{"unknown-tool", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.toolType, func(t *testing.T) {
+			got := mimeCategory(tt.toolType)
+			if got != tt.want {
+				t.Errorf("mimeCategory(%q) = %q, want %q", tt.toolType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateMIMEType(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a fake PDF file (starts with %PDF)
+	pdfPath := filepath.Join(tmpDir, "test.pdf")
+	if err := os.WriteFile(pdfPath, []byte("%PDF-1.4 fake content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a PNG file (starts with PNG magic bytes)
+	pngPath := filepath.Join(tmpDir, "test.png")
+	pngHeader := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+	if err := os.WriteFile(pngPath, pngHeader, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a ZIP file (Office docs detected as zip)
+	zipPath := filepath.Join(tmpDir, "test.docx")
+	zipHeader := []byte{0x50, 0x4B, 0x03, 0x04}
+	if err := os.WriteFile(zipPath, zipHeader, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a plain text file (wrong type for PDF tools)
+	txtPath := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(txtPath, []byte("hello world plain text"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		toolType string
+		filePath string
+		wantErr  bool
+	}{
+		{"PDF file for pdf-to-word", "pdf-to-word", pdfPath, false},
+		{"PNG file for image-to-pdf", "image-to-pdf", pngPath, false},
+		{"ZIP file for word-to-pdf (docx)", "word-to-pdf", zipPath, false},
+		{"text file for pdf-to-word", "pdf-to-word", txtPath, true},
+		{"PDF file for image-to-pdf", "image-to-pdf", pdfPath, true},
+		{"unknown tool skips check", "unknown-tool", txtPath, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMIMEType(tt.toolType, tt.filePath)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateMIMEType(%q, %q) error = %v, wantErr %v", tt.toolType, tt.filePath, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateMIMETypeNonexistentFile(t *testing.T) {
+	err := validateMIMEType("pdf-to-word", "/nonexistent/file.pdf")
+	if err == nil {
+		t.Error("expected error for nonexistent file")
 	}
 }

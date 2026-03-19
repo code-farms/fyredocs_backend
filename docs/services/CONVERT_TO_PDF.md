@@ -533,7 +533,25 @@ sequenceDiagram
     end
 ```
 
+### Readiness Probe
+
+`/readyz` -- Readiness check (PostgreSQL + Redis + NATS), returns 200/503 with individual check results. Unlike `/healthz` (liveness), `/readyz` verifies all dependencies are connected.
+
 ## Error Flows
+
+### Structured Error Codes
+
+Failure reasons use structured error codes prefixed in brackets. The `classifyError()` function categorizes failures automatically.
+
+| Code | Meaning |
+|------|---------|
+| `UNSUPPORTED_TOOL` | Tool type not handled by this service |
+| `CONVERSION_FAILED` | Processing failed (default for unclassified errors) |
+| `INVALID_PAYLOAD` | Malformed or unparseable job message |
+| `OUTPUT_FAILED` | Failed to write or record output file |
+| `TIMEOUT` | Processing exceeded deadline |
+
+Example: `[TIMEOUT] context deadline exceeded`
 
 ### Processing Errors
 
@@ -555,13 +573,16 @@ NATS JetStream handles retries via `AckWait` and `MaxDeliver` settings:
 - Messages are redelivered up to `MaxDeliver` times before being moved to a dead letter queue
 - Permanent failures (invalid input, unsupported format) are acked immediately to prevent infinite retry
 
+When retries are exhausted (MaxDeliver reached), the failed job payload is published to `jobs.dlq.convert-to-pdf` on the `JOBS_DLQ` stream (7-day retention) before the original message is acknowledged. This preserves failed jobs for debugging and replay.
+
 ## Related Documentation
 
-- [Convert From PDF](../convert-from-pdf/CONVERT_FROM_PDF.md) - Convert PDF to other formats
-- [Organize PDF](../organize-pdf/ORGANIZE_PDF.md) - PDF manipulation (merge, split, etc.)
-- [Optimize PDF](../optimize-pdf/OPTIMIZE_PDF.md) - PDF compression, repair, OCR
-- [Upload Service](../upload-service/UPLOAD_SERVICE.md) - Job creation and management
-- [API Gateway](../api-gateway/API_GATEWAY.md) - Request routing
+- [Convert From PDF](./CONVERT_FROM_PDF.md) - Convert PDF to other formats
+- [Organize PDF](./ORGANIZE_PDF.md) - PDF manipulation (merge, split, etc.)
+- [Optimize PDF](./OPTIMIZE_PDF.md) - PDF compression, repair, OCR
+- [Job Service](./JOB_SERVICE.md) - Job creation and management
+- [Auth Service](./AUTH_SERVICE.md) - Authentication and user management
+- [API Gateway](./API_GATEWAY.md) - Request routing
 
 ## Support
 

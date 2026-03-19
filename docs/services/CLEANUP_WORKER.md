@@ -46,6 +46,8 @@ Cleanup Worker (Background Loop)
       └──────────────┘
 ```
 
+When scaled to multiple replicas, a Redis distributed lock (`cleanup-worker:lock`, 10-minute TTL via SETNX) ensures only one instance runs cleanup at a time. If the lock is already held, the instance skips the cycle.
+
 ## Cleanup Operations
 
 ### 1. Expired Upload Cleanup
@@ -139,6 +141,12 @@ Cleanup Worker (Background Loop)
 | `MAX_RETRIES` | `3` | Max retries for failed jobs before cleanup |
 | `QUEUE_PREFIX` | `queue` | Redis queue key prefix |
 
+### Redis Keys
+
+| Key | Type | TTL | Purpose |
+|-----|------|-----|---------|
+| `cleanup-worker:lock` | String (SETNX) | 10 minutes | Distributed lock ensuring only one replica runs cleanup per cycle |
+
 ## Cleanup Schedule
 
 ### Default Schedule
@@ -230,7 +238,7 @@ cleanup-worker:
 
 **Best Practices**:
 
-1. **Single Instance**: Run only one cleanup worker to avoid race conditions
+1. **Multiple replicas supported**: A Redis distributed lock ensures only one instance runs cleanup at a time. Additional replicas provide high availability.
 2. **Resource Limits**: Minimal CPU/memory requirements (256MB sufficient)
 3. **Volume Access**: Must have read/write access to uploads and outputs volumes
 4. **Logging**: Enable structured logging for audit trail
@@ -594,10 +602,10 @@ The cleanup worker is designed for resilience:
 
 ## Related Documentation
 
-- [Upload Service](../upload-service/UPLOAD_SERVICE.md) - Upload and job management
-- [Convert From PDF](../convert-from-pdf/CONVERT_FROM_PDF.md) - PDF conversion worker
-- [Convert To PDF](../convert-to-pdf/CONVERT_TO_PDF.md) - Document conversion worker
-- [Main README](../README.md) - Overall architecture
+- [Job Service](./JOB_SERVICE.md) - Job orchestration and file management
+- [Convert From PDF](./CONVERT_FROM_PDF.md) - PDF conversion worker
+- [Convert To PDF](./CONVERT_TO_PDF.md) - Document conversion worker
+- [Main README](../../README.md) - Overall architecture
 
 ## Support
 

@@ -104,6 +104,44 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
 
+	r.GET("/readyz", func(c *gin.Context) {
+		checks := gin.H{}
+		ready := true
+
+		hctx, hcancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer hcancel()
+
+		// Check Redis
+		if err := redisstore.Client.Ping(hctx).Err(); err != nil {
+			checks["redis"] = err.Error()
+			ready = false
+		} else {
+			checks["redis"] = "ok"
+		}
+
+		// Check NATS
+		if natsconn.Conn == nil || !natsconn.Conn.IsConnected() {
+			checks["nats"] = "disconnected"
+			ready = false
+		} else {
+			checks["nats"] = "ok"
+		}
+
+		// Check DB
+		if err := models.DB.Exec("SELECT 1").Error; err != nil {
+			checks["postgres"] = err.Error()
+			ready = false
+		} else {
+			checks["postgres"] = "ok"
+		}
+
+		if !ready {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not ready", "checks": checks})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ready", "checks": checks})
+	})
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8083"

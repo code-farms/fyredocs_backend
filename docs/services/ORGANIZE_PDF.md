@@ -367,6 +367,20 @@ curl -O http://localhost:8080/api/organize-pdf/merge-pdf/$JOB_ID/download \
 - Recoverable errors (network issues, timeouts) trigger retries
 - Non-recoverable errors (invalid input) fail immediately
 
+### Structured Error Codes
+
+Failure reasons use structured error codes prefixed in brackets. The `classifyError()` function categorizes failures automatically.
+
+| Code | Meaning |
+|------|---------|
+| `UNSUPPORTED_TOOL` | Tool type not handled by this service |
+| `CONVERSION_FAILED` | Processing failed (default for unclassified errors) |
+| `INVALID_PAYLOAD` | Malformed or unparseable job message |
+| `OUTPUT_FAILED` | Failed to write or record output file |
+| `TIMEOUT` | Processing exceeded deadline |
+
+Example: `[TIMEOUT] context deadline exceeded`
+
 ### Common Errors
 - **"no file uploaded"** - No files provided in request
 - **"unsupported tool"** - Invalid tool type
@@ -563,6 +577,10 @@ sequenceDiagram
     end
 ```
 
+### Readiness Probe
+
+`/readyz` -- Readiness check (PostgreSQL + Redis + NATS), returns 200/503 with individual check results. Unlike `/healthz` (liveness), `/readyz` verifies all dependencies are connected.
+
 ## Error Flows (Detailed)
 
 ### Processing Error Matrix
@@ -585,6 +603,8 @@ sequenceDiagram
 NATS JetStream handles retries via `AckWait` and `MaxDeliver`:
 - Transient failures (worker crash, DB timeout) trigger redelivery
 - Permanent failures (invalid input, corrupted PDF) are acked to prevent infinite retry
+
+When retries are exhausted (MaxDeliver reached), the failed job payload is published to `jobs.dlq.organize-pdf` on the `JOBS_DLQ` stream (7-day retention) before the original message is acknowledged. This preserves failed jobs for debugging and replay.
 
 ## Future Enhancements
 

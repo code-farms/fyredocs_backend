@@ -557,7 +557,25 @@ sequenceDiagram
     end
 ```
 
+### Readiness Probe
+
+`/readyz` -- Readiness check (PostgreSQL + Redis + NATS), returns 200/503 with individual check results. Unlike `/healthz` (liveness), `/readyz` verifies all dependencies are connected.
+
 ## Error Flows
+
+### Structured Error Codes
+
+Failure reasons use structured error codes prefixed in brackets. The `classifyError()` function categorizes failures automatically.
+
+| Code | Meaning |
+|------|---------|
+| `UNSUPPORTED_TOOL` | Tool type not handled by this service |
+| `CONVERSION_FAILED` | Processing failed (default for unclassified errors) |
+| `INVALID_PAYLOAD` | Malformed or unparseable job message |
+| `OUTPUT_FAILED` | Failed to write or record output file |
+| `TIMEOUT` | Processing exceeded deadline |
+
+Example: `[TIMEOUT] context deadline exceeded`
 
 ### Processing Errors
 
@@ -588,13 +606,16 @@ NATS JetStream handles retries via `AckWait` and `MaxDeliver` settings:
 - If a worker crashes mid-processing, the message is redelivered after `AckWait` timeout
 - Messages are redelivered up to `MaxDeliver` times before being moved to a dead letter queue
 
+When retries are exhausted (MaxDeliver reached), the failed job payload is published to `jobs.dlq.convert-from-pdf` on the `JOBS_DLQ` stream (7-day retention) before the original message is acknowledged. This preserves failed jobs for debugging and replay.
+
 ## Related Documentation
 
-- [Convert To PDF](../convert-to-pdf/CONVERT_TO_PDF.md) - Convert files TO PDF
-- [Organize PDF](../organize-pdf/ORGANIZE_PDF.md) - PDF manipulation (merge, split, etc.)
-- [Optimize PDF](../optimize-pdf/OPTIMIZE_PDF.md) - PDF compression, repair, OCR
-- [Upload Service](../upload-service/UPLOAD_SERVICE.md) - Job creation and management
-- [API Gateway](../api-gateway/API_GATEWAY.md) - Request routing
+- [Convert To PDF](./CONVERT_TO_PDF.md) - Convert files TO PDF
+- [Organize PDF](./ORGANIZE_PDF.md) - PDF manipulation (merge, split, etc.)
+- [Optimize PDF](./OPTIMIZE_PDF.md) - PDF compression, repair, OCR
+- [Job Service](./JOB_SERVICE.md) - Job creation and management
+- [Auth Service](./AUTH_SERVICE.md) - Authentication and user management
+- [API Gateway](./API_GATEWAY.md) - Request routing
 
 ## Support
 
