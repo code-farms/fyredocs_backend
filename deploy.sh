@@ -40,6 +40,29 @@ if ! command -v openssl &> /dev/null; then
     exit 1
 fi
 
+# Load environment variables from .env file
+ENV_FILE=".env"
+if [ -f "$ENV_FILE" ]; then
+    print_success "Loading environment from $ENV_FILE"
+    set -a
+    source "$ENV_FILE"
+    set +a
+else
+    print_error "Missing .env file! Copy .env.example to .env and fill in your values."
+    exit 1
+fi
+
+# Validate required environment variables
+if [ -z "${POSTGRES_USER:-}" ] || [ -z "${POSTGRES_PASSWORD:-}" ]; then
+    print_error "POSTGRES_USER and POSTGRES_PASSWORD must be set in .env"
+    exit 1
+fi
+
+if [ -z "${REDIS_PASSWORD:-}" ]; then
+    print_error "REDIS_PASSWORD must be set in .env"
+    exit 1
+fi
+
 # Generate or load JWT secret
 JWT_SECRET_FILE=".jwt_secret"
 if [ -f "$JWT_SECRET_FILE" ]; then
@@ -99,9 +122,14 @@ print_step "Waiting for services to be ready..."
 
 echo -n "Waiting for Database... "
 for i in {1..30}; do
-    if docker compose exec -T db pg_isready -U user -d esydocs &> /dev/null; then
+    if docker compose exec -T db pg_isready -U "$POSTGRES_USER" -d "${POSTGRES_DB:-esydocs}" &> /dev/null; then
         print_success "Database ready!"
         break
+    fi
+    if [ $i -eq 30 ]; then
+        print_error "Database failed to start within 30s!"
+        docker compose logs db | tail -20
+        exit 1
     fi
     echo -n "."
     sleep 1
@@ -112,6 +140,11 @@ for i in {1..30}; do
     if curl -s http://localhost:8080/healthz &> /dev/null; then
         print_success "API Gateway ready!"
         break
+    fi
+    if [ $i -eq 30 ]; then
+        print_error "API Gateway failed to start within 30s!"
+        docker compose logs api-gateway | tail -20
+        exit 1
     fi
     echo -n "."
     sleep 1
