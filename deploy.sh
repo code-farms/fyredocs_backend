@@ -40,7 +40,7 @@ if ! command -v openssl &> /dev/null; then
     exit 1
 fi
 
-# Load environment variables from .env file
+# Load environment variables from .env file (optional — server env vars also accepted)
 ENV_FILE=".env"
 if [ -f "$ENV_FILE" ]; then
     print_success "Loading environment from $ENV_FILE"
@@ -48,18 +48,17 @@ if [ -f "$ENV_FILE" ]; then
     source "$ENV_FILE"
     set +a
 else
-    print_error "Missing .env file! Copy .env.example to .env and fill in your values."
-    exit 1
+    print_warning "No .env file found — using server environment variables"
 fi
 
 # Validate required environment variables
 if [ -z "${POSTGRES_USER:-}" ] || [ -z "${POSTGRES_PASSWORD:-}" ]; then
-    print_error "POSTGRES_USER and POSTGRES_PASSWORD must be set in .env"
+    print_error "POSTGRES_USER and POSTGRES_PASSWORD must be set (in .env or server environment)"
     exit 1
 fi
 
 if [ -z "${REDIS_PASSWORD:-}" ]; then
-    print_error "REDIS_PASSWORD must be set in .env"
+    print_error "REDIS_PASSWORD must be set (in .env or server environment)"
     exit 1
 fi
 
