@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     restart: always
     environment:
-      DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
+      DATABASE_URL: ${DATABASE_URL:-postgresql://neondb_owner:npg_K5jWhYGb7eJX@ep-wandering-glitter-anyd1fj9-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require}
       REDIS_ADDR: redis:6379
       QUEUE_PREFIX: queue
       UPLOAD_TTL: 2h

@@ -120,20 +120,27 @@ print_success "All services are running!"
 # 4. Wait for services to be healthy
 print_step "Waiting for services to be ready..."
 
-echo -n "Waiting for Database... "
-for i in {1..30}; do
-    if docker compose exec -T db pg_isready -U "$POSTGRES_USER" -d "${POSTGRES_DB:-esydocs}" &> /dev/null; then
-        print_success "Database ready!"
-        break
-    fi
-    if [ $i -eq 30 ]; then
-        print_error "Database failed to start within 30s!"
-        docker compose logs db | tail -20
-        exit 1
-    fi
-    echo -n "."
-    sleep 1
-done
+# --- Local PostgreSQL check commented out: using Neon cloud database ---
+# echo -n "Waiting for Database... "
+# for i in {1..30}; do
+#     if docker compose exec -T db pg_isready -U "$POSTGRES_USER" -d "${POSTGRES_DB:-esydocs}" &> /dev/null; then
+#         print_success "Database ready!"
+#         break
+#     fi
+#     if [ $i -eq 30 ]; then
+#         print_error "Database failed to start within 30s!"
+#         docker compose logs db | tail -20
+#         exit 1
+#     fi
+#     echo -n "."
+#     sleep 1
+# done
+echo -n "Checking Neon Database connectivity... "
+if psql "${DATABASE_URL}" -c "SELECT 1" &> /dev/null 2>&1; then
+    print_success "Neon Database reachable!"
+else
+    print_warning "Could not verify Neon Database (psql not installed or network issue) — continuing anyway"
+fi
 
 echo -n "Waiting for API Gateway... "
 for i in {1..30}; do
@@ -176,7 +183,7 @@ echo "  📑 Convert-To-PDF:     http://localhost:8083"
 echo "  📋 Organize-PDF:       http://localhost:8084"
 echo "  🔧 Optimize-PDF:       http://localhost:8085"
 echo "  📊 Analytics:          http://localhost:8087"
-echo "  🗄️  PostgreSQL:         localhost:5432"
+echo "  🗄️  PostgreSQL:         Neon (cloud)"
 echo "  🔴 Redis:              localhost:6379"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -17,7 +17,7 @@ services:
       - "8082:8082"
     environment:
       PORT: "8082"
-      DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
+      DATABASE_URL: ${DATABASE_URL:-postgresql://neondb_owner:npg_K5jWhYGb7eJX@ep-wandering-glitter-anyd1fj9-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require}
       REDIS_ADDR: redis:6379
       TRUSTED_PROXIES: 172.18.0.0/16,127.0.0.1,::1
       OUTPUT_DIR: /app/outputs
