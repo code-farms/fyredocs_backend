@@ -37,7 +37,7 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	switch toolType {
 	case "compress-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		metadata, err = compressPDF(inputPaths[0], outputPath, options)
+		metadata, err = compressPDF(ctx, inputPaths[0], outputPath, options)
 	case "repair-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = repairPDF(ctx, inputPaths[0], outputPath)

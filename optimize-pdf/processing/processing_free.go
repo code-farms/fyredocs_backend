@@ -12,10 +12,9 @@ import (
 	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
-	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
-func compressPDF(inputPath string, outputPath string, options map[string]interface{}) (map[string]interface{}, error) {
+func compressPDF(ctx context.Context, inputPath string, outputPath string, options map[string]interface{}) (map[string]interface{}, error) {
 	slog.Info("compressing PDF", "input", inputPath)
 
 	inputInfo, err := os.Stat(inputPath)
@@ -24,22 +23,56 @@ func compressPDF(inputPath string, outputPath string, options map[string]interfa
 	}
 	originalSize := inputInfo.Size()
 
-	conf := model.NewDefaultConfiguration()
-
 	quality, _ := optionString(options, "quality")
-	switch quality {
-	case "screen":
-		conf.OptimizeDuplicateContentStreams = true
-	case "ebook":
-		conf.OptimizeDuplicateContentStreams = true
-	case "printer", "prepress":
-		conf.OptimizeDuplicateContentStreams = false
-	default:
-		conf.OptimizeDuplicateContentStreams = true
+
+	gsPath, err := findGhostscript()
+	if err != nil {
+		return nil, err
 	}
 
-	if err := api.OptimizeFile(inputPath, outputPath, conf); err != nil {
-		return nil, fmt.Errorf("pdfcpu optimization failed: %w", err)
+	// Map frontend quality levels to Ghostscript compression settings
+	pdfSettings := "/ebook"
+	dpi := "150"
+	switch quality {
+	case "low":
+		pdfSettings = "/printer"
+		dpi = "300"
+	case "medium":
+		pdfSettings = "/ebook"
+		dpi = "150"
+	case "high":
+		pdfSettings = "/screen"
+		dpi = "72"
+	case "extreme":
+		pdfSettings = "/screen"
+		dpi = "36"
+	}
+
+	args := []string{
+		"-dNOPAUSE",
+		"-dBATCH",
+		"-dSAFER",
+		"-sDEVICE=pdfwrite",
+		"-dCompatibilityLevel=1.4",
+		"-dPDFSETTINGS=" + pdfSettings,
+		"-dDetectDuplicateImages=true",
+		"-dCompressFonts=true",
+		"-dDownsampleColorImages=true",
+		"-dColorImageResolution=" + dpi,
+		"-dDownsampleGrayImages=true",
+		"-dGrayImageResolution=" + dpi,
+		"-dDownsampleMonoImages=true",
+		"-dMonoImageResolution=" + dpi,
+		"-sOutputFile=" + outputPath,
+		inputPath,
+	}
+
+	cmd := exec.CommandContext(ctx, gsPath, args...)
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("ghostscript compression failed: %w", err)
 	}
 
 	outputInfo, err := os.Stat(outputPath)
