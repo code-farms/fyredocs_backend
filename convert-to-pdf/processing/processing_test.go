@@ -86,3 +86,49 @@ func TestOptionStringWithJsonNumber(t *testing.T) {
 		t.Log("numeric option not extracted as string (expected behavior depends on implementation)")
 	}
 }
+
+func TestProcessFileAddPageNumbersNoInput(t *testing.T) {
+	_, err := ProcessFile(context.Background(), uuid.New(), "add-page-numbers", nil, nil, "")
+	if err == nil {
+		t.Error("expected error for no input files")
+	}
+}
+
+func TestProcessFileSignPdfNoInput(t *testing.T) {
+	_, err := ProcessFile(context.Background(), uuid.New(), "sign-pdf", nil, nil, "")
+	if err == nil {
+		t.Error("expected error for no input files")
+	}
+}
+
+func TestProcessFileEditPdfNoInput(t *testing.T) {
+	_, err := ProcessFile(context.Background(), uuid.New(), "edit-pdf", nil, nil, "")
+	if err == nil {
+		t.Error("expected error for no input files")
+	}
+}
+
+func TestProcessFileEditPdfMissingAnnotations(t *testing.T) {
+	dir := t.TempDir()
+	// Create a dummy file (not a valid PDF, so it will fail at processing level)
+	src := dir + "/test.pdf"
+	if err := os.WriteFile(src, []byte("dummy"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ProcessFile(context.Background(), uuid.New(), "edit-pdf", []string{src}, nil, dir)
+	if err == nil {
+		t.Error("expected error for missing annotations option")
+	}
+}
+
+func TestProcessFileSignPdfMissingSignature(t *testing.T) {
+	dir := t.TempDir()
+	src := dir + "/test.pdf"
+	if err := os.WriteFile(src, []byte("dummy"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ProcessFile(context.Background(), uuid.New(), "sign-pdf", []string{src}, nil, dir)
+	if err == nil {
+		t.Error("expected error for missing signature data")
+	}
+}

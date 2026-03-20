@@ -83,9 +83,15 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 			watermarkText = "CONFIDENTIAL"
 		}
 		err = watermarkPDF(inputPaths[0], outputPath, watermarkText)
-	case "edit-pdf", "sign-pdf":
+	case "add-page-numbers":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = copyFile(inputPaths[0], outputPath)
+		err = addPageNumbers(inputPaths[0], outputPath, options)
+	case "sign-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = signPDF(inputPaths[0], outputPath, options)
+	case "edit-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = editPDF(inputPaths[0], outputPath, options)
 	default:
 		err = fmt.Errorf("unsupported tool type: %s", toolType)
 	}

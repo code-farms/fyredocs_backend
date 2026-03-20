@@ -35,8 +35,9 @@ var ToolServiceMap = map[string]string{
 	"watermark-pdf":     "convert-to-pdf",
 	"protect-pdf":       "convert-to-pdf",
 	"unlock-pdf":        "convert-to-pdf",
-	"sign-pdf":          "convert-to-pdf",
-	"edit-pdf":          "convert-to-pdf",
+	"sign-pdf":            "convert-to-pdf",
+	"edit-pdf":            "convert-to-pdf",
+	"add-page-numbers":    "convert-to-pdf",
 
 	// organize-pdf tools
 	"rotate-pdf":    "organize-pdf",

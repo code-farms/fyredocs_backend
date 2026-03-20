@@ -40,6 +40,15 @@ Convert-To-PDF Worker
 | `html-to-pdf` | .html, .htm | .pdf | LibreOffice Writer | ✅ Implemented |
 | `image-to-pdf` | .jpg, .png, .gif, .webp, .bmp | .pdf | pdfcpu | ✅ Implemented |
 | `img-to-pdf` | .jpg, .png, .gif, .webp, .bmp | .pdf | pdfcpu | ✅ Alias |
+| `merge-pdf` | .pdf | .pdf | pdfcpu | ✅ Implemented |
+| `split-pdf` | .pdf | .zip | pdfcpu | ✅ Implemented |
+| `compress-pdf` | .pdf | .pdf | pdfcpu | ✅ Implemented |
+| `protect-pdf` | .pdf | .pdf | pdfcpu | ✅ Implemented |
+| `unlock-pdf` | .pdf | .pdf | pdfcpu | ✅ Implemented |
+| `watermark-pdf` | .pdf | .pdf | pdfcpu | ✅ Implemented |
+| `add-page-numbers` | .pdf | .pdf | pdfcpu text stamps | ✅ Implemented |
+| `sign-pdf` | .pdf | .pdf | pdfcpu image stamps | ✅ Implemented |
+| `edit-pdf` | .pdf | .pdf | pdfcpu text stamps | ✅ Implemented |
 
 ## API Endpoints
 

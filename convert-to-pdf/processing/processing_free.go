@@ -3,12 +3,15 @@ package processing
 import (
 	"archive/zip"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
@@ -111,6 +114,247 @@ func watermarkPDF(inputPath string, outputPath string, watermarkText string) err
 	}
 
 	return api.AddWatermarksFile(inputPath, outputPath, nil, wm, nil)
+}
+
+func addPageNumbers(inputPath string, outputPath string, options map[string]interface{}) error {
+	slog.Info("adding page numbers to PDF", "input", inputPath)
+
+	position := "bc"
+	if pos, ok := options["position"].(string); ok && pos != "" {
+		position = pos
+	}
+
+	fontSize := 12
+	if fs, ok := options["fontSize"]; ok {
+		switch v := fs.(type) {
+		case float64:
+			fontSize = int(v)
+		case string:
+			if parsed, err := strconv.Atoi(v); err == nil {
+				fontSize = parsed
+			}
+		}
+	}
+
+	startNumber := 1
+	if sn, ok := options["startNumber"]; ok {
+		switch v := sn.(type) {
+		case float64:
+			startNumber = int(v)
+		case string:
+			if parsed, err := strconv.Atoi(v); err == nil {
+				startNumber = parsed
+			}
+		}
+	}
+
+	format := "{n}"
+	if f, ok := options["format"].(string); ok && f != "" {
+		format = f
+	}
+
+	// Map short position codes to pdfcpu position strings
+	posMap := map[string]string{
+		"bc": "bc", "bl": "bl", "br": "br",
+		"tc": "tc", "tl": "tl", "tr": "tr",
+		"c": "c",
+	}
+	pdfcpuPos, ok := posMap[position]
+	if !ok {
+		pdfcpuPos = "bc"
+	}
+
+	// Read page count
+	ctx, err := api.ReadContextFile(inputPath)
+	if err != nil {
+		return fmt.Errorf("failed to read PDF: %w", err)
+	}
+	pageCount := ctx.PageCount
+
+	// Copy input to output first, then stamp page by page
+	if err := copyFile(inputPath, outputPath); err != nil {
+		return fmt.Errorf("failed to copy input file: %w", err)
+	}
+
+	for i := 1; i <= pageCount; i++ {
+		pageNum := startNumber + i - 1
+		totalPages := startNumber + pageCount - 1
+
+		text := format
+		text = strings.ReplaceAll(text, "{n}", strconv.Itoa(pageNum))
+		text = strings.ReplaceAll(text, "{total}", strconv.Itoa(totalPages))
+
+		desc := fmt.Sprintf("font:Helvetica, points:%d, pos:%s, sc:1 abs, rot:0, color:0 0 0, opacity:1", fontSize, pdfcpuPos)
+
+		wm, err := pdfcpu.ParseTextWatermarkDetails(text, desc, true, types.POINTS)
+		if err != nil {
+			return fmt.Errorf("failed to parse page number stamp for page %d: %w", i, err)
+		}
+
+		pageSelection := []string{strconv.Itoa(i)}
+		if err := api.AddWatermarksFile(outputPath, "", pageSelection, wm, nil); err != nil {
+			return fmt.Errorf("failed to add page number to page %d: %w", i, err)
+		}
+	}
+
+	slog.Info("page numbers added", "pages", pageCount, "format", format)
+	return nil
+}
+
+func signPDF(inputPath string, outputPath string, options map[string]interface{}) error {
+	slog.Info("signing PDF", "input", inputPath)
+
+	position := "br"
+	if pos, ok := options["position"].(string); ok && pos != "" {
+		position = pos
+	}
+
+	page := -1 // -1 means last page
+	if p, ok := options["page"]; ok {
+		switch v := p.(type) {
+		case float64:
+			page = int(v)
+		case string:
+			if parsed, err := strconv.Atoi(v); err == nil {
+				page = parsed
+			}
+		}
+	}
+
+	signatureData, ok := options["signatureData"].(string)
+	if !ok || signatureData == "" {
+		return fmt.Errorf("missing signature data")
+	}
+
+	// Decode base64 signature image (data URL format: data:image/png;base64,...)
+	parts := strings.SplitN(signatureData, ",", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid signature data format")
+	}
+	imgBytes, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return fmt.Errorf("failed to decode signature image: %w", err)
+	}
+
+	// Write signature to temp file
+	tempDir, err := os.MkdirTemp("", "pdf-sign-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	sigPath := filepath.Join(tempDir, "signature.png")
+	if err := os.WriteFile(sigPath, imgBytes, 0600); err != nil {
+		return fmt.Errorf("failed to write signature image: %w", err)
+	}
+
+	// Read page count for "last page" handling
+	ctx, err := api.ReadContextFile(inputPath)
+	if err != nil {
+		return fmt.Errorf("failed to read PDF: %w", err)
+	}
+
+	targetPage := page
+	if targetPage <= 0 {
+		targetPage = ctx.PageCount
+	}
+
+	// Map short position codes to pdfcpu position strings
+	posMap := map[string]string{
+		"bc": "bc", "bl": "bl", "br": "br",
+		"tc": "tc", "tl": "tl", "tr": "tr",
+		"c": "c",
+	}
+	pdfcpuPos, ok := posMap[position]
+	if !ok {
+		pdfcpuPos = "br"
+	}
+
+	desc := fmt.Sprintf("pos:%s, sc:.25, rot:0, opacity:1", pdfcpuPos)
+
+	wm, err := pdfcpu.ParseImageWatermarkDetails(sigPath, desc, true, types.POINTS)
+	if err != nil {
+		return fmt.Errorf("failed to parse signature watermark: %w", err)
+	}
+
+	pageSelection := []string{strconv.Itoa(targetPage)}
+	if err := api.AddWatermarksFile(inputPath, outputPath, pageSelection, wm, nil); err != nil {
+		return fmt.Errorf("failed to add signature: %w", err)
+	}
+
+	slog.Info("PDF signed", "page", targetPage, "position", position)
+	return nil
+}
+
+func editPDF(inputPath string, outputPath string, options map[string]interface{}) error {
+	slog.Info("editing PDF with annotations", "input", inputPath)
+
+	annotationsRaw, ok := options["annotations"]
+	if !ok {
+		return fmt.Errorf("missing annotations option")
+	}
+
+	annotationsJSON, err := json.Marshal(annotationsRaw)
+	if err != nil {
+		return fmt.Errorf("failed to marshal annotations: %w", err)
+	}
+
+	var annotations []struct {
+		Type     string `json:"type"`
+		Content  string `json:"content"`
+		Page     int    `json:"page"`
+		Position string `json:"position"`
+		FontSize int    `json:"fontSize"`
+	}
+	if err := json.Unmarshal(annotationsJSON, &annotations); err != nil {
+		return fmt.Errorf("failed to parse annotations: %w", err)
+	}
+
+	if len(annotations) == 0 {
+		return fmt.Errorf("no annotations provided")
+	}
+
+	// Copy input to output first, then apply stamps
+	if err := copyFile(inputPath, outputPath); err != nil {
+		return fmt.Errorf("failed to copy input file: %w", err)
+	}
+
+	posMap := map[string]string{
+		"bc": "bc", "bl": "bl", "br": "br",
+		"tc": "tc", "tl": "tl", "tr": "tr",
+		"c": "c",
+	}
+
+	for i, ann := range annotations {
+		if ann.Type != "text" {
+			continue
+		}
+
+		fontSize := ann.FontSize
+		if fontSize <= 0 {
+			fontSize = 12
+		}
+
+		pdfcpuPos, ok := posMap[ann.Position]
+		if !ok {
+			pdfcpuPos = "bc"
+		}
+
+		desc := fmt.Sprintf("font:Helvetica, points:%d, pos:%s, sc:1 abs, rot:0, color:0 0 0, opacity:1", fontSize, pdfcpuPos)
+
+		wm, err := pdfcpu.ParseTextWatermarkDetails(ann.Content, desc, true, types.POINTS)
+		if err != nil {
+			return fmt.Errorf("failed to parse annotation %d: %w", i, err)
+		}
+
+		pageSelection := []string{strconv.Itoa(ann.Page)}
+		if err := api.AddWatermarksFile(outputPath, "", pageSelection, wm, nil); err != nil {
+			return fmt.Errorf("failed to add annotation %d: %w", i, err)
+		}
+	}
+
+	slog.Info("PDF edited", "annotationCount", len(annotations))
+	return nil
 }
 
 func zipDirectory(sourceDir string, zipPath string) error {

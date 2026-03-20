@@ -74,7 +74,7 @@ The `routing.go` file contains the centralized mapping from tool types to their 
 | Service | Tools |
 |---------|-------|
 | `convert-from-pdf` | pdf-to-word, pdf-to-docx, pdf-to-excel, pdf-to-xlsx, pdf-to-powerpoint, pdf-to-ppt, pdf-to-pptx, pdf-to-image, pdf-to-img, pdf-to-html, pdf-to-text, pdf-to-txt, pdf-to-pdfa, ocr |
-| `convert-to-pdf` | word-to-pdf, excel-to-pdf, powerpoint-to-pdf, ppt-to-pdf, html-to-pdf, image-to-pdf, img-to-pdf, merge-pdf, page-reorder, page-rotate, watermark-pdf, protect-pdf, unlock-pdf, sign-pdf, edit-pdf |
+| `convert-to-pdf` | word-to-pdf, excel-to-pdf, powerpoint-to-pdf, ppt-to-pdf, html-to-pdf, image-to-pdf, img-to-pdf, merge-pdf, page-reorder, page-rotate, watermark-pdf, protect-pdf, unlock-pdf, sign-pdf, edit-pdf, add-page-numbers |
 | `organize-pdf` | split-pdf, rotate-pdf, remove-pages, extract-pages, organize-pdf, scan-to-pdf |
 | `optimize-pdf` | compress-pdf, repair-pdf, ocr-pdf |
 
