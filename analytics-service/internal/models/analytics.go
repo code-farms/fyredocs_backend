@@ -10,15 +10,16 @@ import (
 
 // AnalyticsEvent stores individual analytics events for detailed querying.
 type AnalyticsEvent struct {
-	ID        uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	EventType string         `gorm:"type:text;not null;index:idx_event_type" json:"eventType"`
-	UserID    *uuid.UUID     `gorm:"type:uuid;index:idx_event_user" json:"userId,omitempty"`
-	IsGuest   bool           `gorm:"default:false" json:"isGuest"`
-	ToolType  string         `gorm:"type:text;index:idx_event_tool" json:"toolType,omitempty"`
-	PlanName  string         `gorm:"type:text" json:"planName,omitempty"`
-	FileSize  int64          `gorm:"default:0" json:"fileSize,omitempty"`
-	Metadata  datatypes.JSON `gorm:"type:jsonb" json:"metadata,omitempty"`
-	CreatedAt time.Time      `gorm:"index:idx_event_created;default:CURRENT_TIMESTAMP" json:"createdAt"`
+	ID          uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
+	EventType   string         `gorm:"type:text;not null;index:idx_event_type" json:"eventType"`
+	UserID      *uuid.UUID     `gorm:"type:uuid;index:idx_event_user" json:"userId,omitempty"`
+	IsGuest     bool           `gorm:"default:false" json:"isGuest"`
+	ToolType    string         `gorm:"type:text;index:idx_event_tool" json:"toolType,omitempty"`
+	PlanName    string         `gorm:"type:text" json:"planName,omitempty"`
+	FileSize    int64          `gorm:"default:0" json:"fileSize,omitempty"`
+	Metadata    datatypes.JSON `gorm:"type:jsonb" json:"metadata,omitempty"`
+	CreatedAt   time.Time      `gorm:"index:idx_event_created;default:CURRENT_TIMESTAMP" json:"createdAt"`
+	PersistedAt time.Time      `gorm:"default:CURRENT_TIMESTAMP" json:"persistedAt"`
 }
 
 func (e *AnalyticsEvent) BeforeCreate(tx *gorm.DB) error {

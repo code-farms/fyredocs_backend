@@ -13,6 +13,7 @@ import (
 type JobEvent struct {
 	EventType     string          `json:"eventType"`
 	JobID         string          `json:"jobId"`
+	UserID        string          `json:"userId,omitempty"`
 	ToolType      string          `json:"toolType"`
 	InputPaths    []string        `json:"inputPaths,omitempty"`
 	OutputPath    string          `json:"outputPath,omitempty"`

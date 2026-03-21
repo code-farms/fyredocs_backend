@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -422,6 +423,75 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
+	user, _, ok := loadUserFromAuth(c)
+	if !ok {
+		return
+	}
+
+	var body struct {
+		PlanName string `json:"planName" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		response.BadRequest(c, "INVALID_INPUT", "Please provide a valid plan name.")
+		return
+	}
+
+	planName := strings.TrimSpace(body.PlanName)
+	if planName == "" {
+		response.BadRequest(c, "INVALID_INPUT", "Please provide a valid plan name.")
+		return
+	}
+
+	var plan models.SubscriptionPlan
+	if err := models.DB.Where("name = ?", planName).First(&plan).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.BadRequest(c, "INVALID_PLAN", "The selected plan does not exist.")
+			return
+		}
+		response.InternalError(c, "SERVER_ERROR", "Could not update your plan. Please try again.")
+		return
+	}
+
+	oldPlan := user.PlanName
+	if oldPlan == planName {
+		response.BadRequest(c, "SAME_PLAN", "You are already on this plan.")
+		return
+	}
+
+	if err := models.DB.Model(&user).Update("plan_name", planName).Error; err != nil {
+		response.InternalError(c, "SERVER_ERROR", "Could not update your plan. Please try again.")
+		return
+	}
+
+	publishPlanChangedEvent(c.Request.Context(), user.ID.String(), oldPlan, planName)
+
+	user.PlanName = planName
+	response.OK(c, "Plan updated successfully", gin.H{
+		"user": buildUserResponse(user, user.Role, plan),
+	})
+}
+
+func publishPlanChangedEvent(ctx context.Context, userID, oldPlan, newPlan string) {
+	if natsconn.JS == nil {
+		return
+	}
+	metadata, _ := json.Marshal(map[string]string{
+		"oldPlan": oldPlan,
+		"newPlan": newPlan,
+	})
+	event := queue.AnalyticsEvent{
+		EventType: "plan.changed",
+		UserID:    userID,
+		PlanName:  newPlan,
+		Metadata:  metadata,
+		Timestamp: time.Now().UTC(),
+	}
+	if err := queue.PublishAnalyticsEvent(ctx, natsconn.JS, event); err != nil {
+		slog.Warn("failed to publish plan.changed event", "error", err)
+	}
 }
 
 func publishAnalyticsEvent(ctx context.Context, eventType string, userID string, planName string) {

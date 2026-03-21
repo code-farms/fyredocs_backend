@@ -23,14 +23,15 @@ Events are persisted to the `analytics_events` PostgreSQL table for querying.
 |-----------|--------|-------------|
 | `user.signup` | auth-service | New user registration |
 | `user.login` | auth-service | User login |
+| `plan.changed` | auth-service | User changed subscription plan (metadata: oldPlan, newPlan) |
 | `job.created` | job-service | New processing job created |
-| `job.completed` | worker services (via JOBS_EVENTS) | Job finished successfully |
-| `job.failed` | worker services (via JOBS_EVENTS) | Job processing failed |
+| `job.completed` | worker services (via JOBS_EVENTS) | Job finished successfully (includes UserID) |
+| `job.failed` | worker services (via JOBS_EVENTS) | Job processing failed (includes UserID) |
 | `plan.limit_hit` | job-service | User hit plan limit (file size or file count) |
 
 ## Routes
 
-### Admin Endpoints (require `X-Admin-Key` header or `?key=` query param)
+### Admin Endpoints (require `X-User-Role: super-admin` header)
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/admin/metrics/overview` | Today's summary (signups, DAU, jobs, errors) |
@@ -40,6 +41,13 @@ Events are persisted to the `analytics_events` PostgreSQL table for querying.
 | GET | `/admin/metrics/plans?days=30` | Plan distribution |
 | GET | `/admin/metrics/realtime` | Last hour's metrics |
 | GET | `/admin/metrics/events?eventType=&limit=&page=` | Raw events with pagination |
+| GET | `/admin/metrics/business?days=30&inactiveDays=30` | Business metrics (signups, plan changes, churn, conversion) |
+| GET | `/admin/metrics/growth?days=30` | Growth metrics (DAU/WAU/MAU, stickiness, activation, retention cohorts, funnel) |
+| GET | `/admin/metrics/engagement?days=30` | Engagement metrics (tool trends, jobs/user, file sizes, guest vs registered, power users) |
+| GET | `/admin/metrics/reliability?days=30` | Reliability metrics (success/failure rates, processing time p50/p95, tool errors, plan limit hits) |
+| GET | `/admin/metrics/system` | System health (ingestion rate, active users, processing lag, event breakdown) |
+| GET | `/admin/metrics/server-performance` | Server performance (CPU, memory, storage, uptime, service availability, Go runtime per service) |
+| GET | `/admin/metrics/api-performance` | API performance (per-endpoint latency p50/p95/p99, throughput, error rates, slowest/most-erroring endpoints) |
 
 ### Infrastructure
 | Method | Path | Description |
@@ -62,6 +70,14 @@ Events are persisted to the `analytics_events` PostgreSQL table for querying.
 | file_size | BIGINT | File size in bytes |
 | metadata | JSONB | Additional event data |
 | created_at | TIMESTAMP | Event timestamp (indexed) |
+| persisted_at | TIMESTAMP | When the event was written to DB (for lag measurement) |
+
+### Composite Indexes
+| Index | Columns | Purpose |
+|-------|---------|---------|
+| idx_event_user_type_created | (user_id, event_type, created_at) | Retention cohort and activation queries |
+| idx_event_created_user | (created_at, user_id) WHERE user_id IS NOT NULL AND is_guest = false | DAU/WAU/MAU distinct user counts |
+| idx_event_metadata_jobid | (metadata->>'jobId') WHERE metadata->>'jobId' IS NOT NULL | Processing time correlation |
 
 ### daily_metrics
 | Column | Type | Description |
@@ -81,6 +97,8 @@ Events are persisted to the `analytics_events` PostgreSQL table for querying.
 | DATABASE_URL | — | PostgreSQL connection string |
 | NATS_URL | nats://nats:4222 | NATS server URL |
 | TRUSTED_PROXIES | 127.0.0.1,::1 | Trusted proxy addresses |
+| SERVICE_URLS | api-gateway=http://api-gateway:8080,auth-service=http://auth-service:8086,job-service=http://job-service:8085 | Service name=URL pairs for performance scraping |
+| API_GATEWAY_METRICS_URL | http://api-gateway:8080/metrics | API gateway Prometheus metrics URL |
 | OTEL_EXPORTER_OTLP_ENDPOINT | http://localhost:4318 | OpenTelemetry collector |
 
 ## Authentication

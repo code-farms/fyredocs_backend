@@ -18,12 +18,14 @@ import (
 	"esydocs/shared/natsconn"
 	"esydocs/shared/telemetry"
 
+	"analytics-service/handlers"
 	"analytics-service/internal/models"
 	"analytics-service/routes"
 	"analytics-service/subscriber"
 )
 
 func main() {
+	handlers.ServiceStartTime = time.Now().UTC()
 	config.LoadConfig()
 	logger.Init("analytics-service", os.Getenv("LOG_MODE"))
 	shutdownTracer := telemetry.Init("analytics-service")

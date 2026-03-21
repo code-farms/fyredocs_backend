@@ -52,7 +52,7 @@ Auth Service :8086
 
 | Package | Purpose |
 |---------|---------|
-| `handlers/auth.go` | Signup, Login, Me, Profile, Logout, Refresh endpoints |
+| `handlers/auth.go` | Signup, Login, Me, Profile, Logout, Refresh, ChangePlan endpoints |
 | `handlers/guest.go` | CreateGuestSession -- issues temporary Redis-backed guest tokens |
 | `handlers/internal_api.go` | GetUserPlan -- internal service-to-service endpoint |
 | `internal/token/` | JWT token issuance (HS256) |
@@ -79,6 +79,7 @@ Auth Service :8086
 |--------|------|---------|-------------|
 | GET | `/auth/me` | `Me` | Get current user profile |
 | GET | `/auth/profile` | `Profile` | Alias for /auth/me |
+| PUT | `/auth/plan` | `ChangePlan` | Change user's subscription plan (publishes `plan.changed` analytics event) |
 | POST | `/auth/logout` | `Logout` | Revoke token and clear cookie |
 
 ### Internal Endpoints (not exposed via gateway)
@@ -562,6 +563,46 @@ Cookie: access_token=eyJhbGc...
 ```http
 Set-Cookie: access_token=; Max-Age=-1; Path=/
 ```
+
+### PUT /auth/plan
+
+**Request** (authenticated):
+```http
+PUT /auth/plan
+Cookie: access_token=eyJhbGc...
+Content-Type: application/json
+
+{
+  "planName": "pro"
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "success": true,
+  "message": "Plan updated successfully",
+  "data": {
+    "user": {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "email": "user@example.com",
+      "fullName": "John Doe",
+      "country": "US",
+      "role": "user",
+      "planName": "pro"
+    }
+  }
+}
+```
+
+**Error Responses**:
+- `400 INVALID_INPUT` — Missing or empty planName
+- `400 INVALID_PLAN` — Plan does not exist
+- `400 SAME_PLAN` — User is already on the requested plan
+- `401 UNAUTHORIZED` — Not authenticated
+- `500 SERVER_ERROR` — Database failure
+
+**Side Effect**: Publishes a `plan.changed` analytics event via NATS with metadata `{"oldPlan": "free", "newPlan": "pro"}`.
 
 ### GET /internal/users/:id/plan
 

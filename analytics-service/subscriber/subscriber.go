@@ -79,14 +79,15 @@ func handleAnalyticsEvent(msg jetstream.Msg) {
 	}
 
 	record := models.AnalyticsEvent{
-		EventType: event.EventType,
-		UserID:    userID,
-		IsGuest:   event.IsGuest,
-		ToolType:  event.ToolType,
-		PlanName:  event.PlanName,
-		FileSize:  event.FileSize,
-		Metadata:  datatypes.JSON(event.Metadata),
-		CreatedAt: event.Timestamp,
+		EventType:   event.EventType,
+		UserID:      userID,
+		IsGuest:     event.IsGuest,
+		ToolType:    event.ToolType,
+		PlanName:    event.PlanName,
+		FileSize:    event.FileSize,
+		Metadata:    datatypes.JSON(event.Metadata),
+		CreatedAt:   event.Timestamp,
+		PersistedAt: time.Now().UTC(),
 	}
 
 	if record.CreatedAt.IsZero() {
@@ -121,6 +122,14 @@ func handleJobEvent(msg jetstream.Msg) {
 		return
 	}
 
+	var userID *uuid.UUID
+	if event.UserID != "" {
+		parsed, err := uuid.Parse(event.UserID)
+		if err == nil {
+			userID = &parsed
+		}
+	}
+
 	metaBytes, _ := json.Marshal(map[string]interface{}{
 		"jobId":         event.JobID,
 		"failureReason": event.FailureReason,
@@ -129,11 +138,13 @@ func handleJobEvent(msg jetstream.Msg) {
 	})
 
 	record := models.AnalyticsEvent{
-		EventType: eventType,
-		ToolType:  event.ToolType,
-		FileSize:  event.FileSize,
-		Metadata:  datatypes.JSON(metaBytes),
-		CreatedAt: event.Timestamp,
+		EventType:   eventType,
+		UserID:      userID,
+		ToolType:    event.ToolType,
+		FileSize:    event.FileSize,
+		Metadata:    datatypes.JSON(metaBytes),
+		CreatedAt:   event.Timestamp,
+		PersistedAt: time.Now().UTC(),
 	}
 
 	if record.CreatedAt.IsZero() {

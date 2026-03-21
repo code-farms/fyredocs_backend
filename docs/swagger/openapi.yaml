@@ -1670,6 +1670,170 @@ paths:
               schema:
                 $ref: "#/components/schemas/APIResponse"
 
+  /auth/plan:
+    put:
+      tags: [Authentication]
+      summary: Change user subscription plan
+      description: |
+        Updates the authenticated user's subscription plan. Validates the plan exists
+        and publishes a `plan.changed` analytics event via NATS with oldPlan/newPlan metadata.
+      operationId: changePlan
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [planName]
+              properties:
+                planName:
+                  type: string
+                  example: pro
+      responses:
+        "200":
+          description: Plan updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "400":
+          description: Invalid plan name, same plan, or plan does not exist
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /admin/metrics/business:
+    get:
+      tags: [Admin Analytics]
+      summary: Business metrics (signups, plan changes, churn, conversion)
+      operationId: adminBusiness
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+        - name: inactiveDays
+          in: query
+          description: Days of inactivity to consider a user churned
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Business metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /admin/metrics/growth:
+    get:
+      tags: [Admin Analytics]
+      summary: Growth metrics (DAU/WAU/MAU, stickiness, activation, retention, funnel)
+      operationId: adminGrowth
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Growth metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /admin/metrics/engagement:
+    get:
+      tags: [Admin Analytics]
+      summary: Engagement metrics (tool trends, jobs/user, file sizes, power users)
+      operationId: adminEngagement
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Engagement metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /admin/metrics/reliability:
+    get:
+      tags: [Admin Analytics]
+      summary: Reliability metrics (success/failure rates, processing time, tool errors)
+      operationId: adminReliability
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Reliability metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /admin/metrics/system:
+    get:
+      tags: [Admin Analytics]
+      summary: System health (ingestion rate, active users, processing lag)
+      operationId: adminSystemHealth
+      responses:
+        "200":
+          description: System health metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /admin/metrics/server-performance:
+    get:
+      tags: [Admin Analytics]
+      summary: Server performance (CPU, memory, storage, uptime, service availability)
+      description: |
+        Returns system-level metrics (CPU usage, memory, disk, load averages, uptime)
+        and per-service Go runtime metrics (goroutines, heap, GC) by scraping each
+        service's Prometheus /metrics endpoint. Also reports service availability
+        via health checks.
+      operationId: adminServerPerformance
+      responses:
+        "200":
+          description: Server performance metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
+  /admin/metrics/api-performance:
+    get:
+      tags: [Admin Analytics]
+      summary: API performance (latency percentiles, throughput, error rates per endpoint)
+      description: |
+        Scrapes the API gateway's Prometheus metrics to compute per-endpoint
+        latency (p50/p95/p99), request count, and error rates. Also returns
+        the top 5 slowest and highest-error-rate endpoints.
+      operationId: adminAPIPerformance
+      responses:
+        "200":
+          description: API performance metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
 # =============================================================================
 # Components
 # =============================================================================
