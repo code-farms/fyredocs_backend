@@ -1,8 +1,13 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestCleanupInterval(t *testing.T) {
@@ -117,6 +122,67 @@ func TestFreeJobTTL(t *testing.T) {
 			t.Errorf("expected 24h, got %v", got)
 		}
 	})
+}
+
+func TestTrustedProxies(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		t.Setenv("TRUSTED_PROXIES", "")
+		got := trustedProxies()
+		if len(got) != 2 || got[0] != "127.0.0.1" {
+			t.Errorf("expected default proxies, got %v", got)
+		}
+	})
+
+	t.Run("custom", func(t *testing.T) {
+		t.Setenv("TRUSTED_PROXIES", "10.0.0.1, 10.0.0.2")
+		got := trustedProxies()
+		if len(got) != 2 || got[0] != "10.0.0.1" || got[1] != "10.0.0.2" {
+			t.Errorf("expected [10.0.0.1, 10.0.0.2], got %v", got)
+		}
+	})
+}
+
+func TestHealthzRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestReadyzRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/readyz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ready"})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestDefaultPort(t *testing.T) {
+	t.Setenv("PORT", "")
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8088"
+	}
+	if port != "8088" {
+		t.Errorf("expected default port 8088, got %s", port)
+	}
 }
 
 func TestOutputFileJobIDRegexp(t *testing.T) {

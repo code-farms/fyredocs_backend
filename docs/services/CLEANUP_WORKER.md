@@ -4,9 +4,9 @@
 
 The Cleanup Worker is a background service that maintains system hygiene by cleaning up expired uploads, jobs, and their associated files. It runs on a scheduled interval and ensures that temporary files and expired data don't accumulate over time.
 
-**Port**: None (background service only, no HTTP server)
-**Type**: Background Worker
-**Framework**: Go
+**Port**: 8088
+**Type**: Background Worker with HTTP health/metrics server
+**Framework**: Go (Gin)
 
 ## Responsibilities
 
@@ -135,10 +135,21 @@ When scaled to multiple replicas, a Redis distributed lock (`cleanup-worker:lock
 
 ---
 
+## HTTP Endpoints
+
+The cleanup worker exposes a lightweight HTTP server for health checks, readiness probes, and Prometheus metrics scraping.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/healthz` | Health check (checks Redis connectivity) |
+| GET | `/readyz` | Readiness check (checks Redis + PostgreSQL) |
+| GET | `/metrics` | Prometheus metrics endpoint |
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `PORT` | `8088` | HTTP server port for health checks and metrics |
 | `DATABASE_URL` | **Required** | PostgreSQL connection string |
 | `REDIS_ADDR` | **Required** | Redis server address |
 | `REDIS_PASSWORD` | `""` | Redis password (if required) |

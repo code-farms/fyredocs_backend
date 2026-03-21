@@ -44,11 +44,19 @@ func TestRoundMBf(t *testing.T) {
 func TestParseServiceURLs_Default(t *testing.T) {
 	t.Setenv("SERVICE_URLS", "")
 	urls := parseServiceURLs()
-	if len(urls) == 0 {
-		t.Error("expected default service URLs, got empty map")
+
+	expected := []string{
+		"api-gateway", "auth-service", "job-service",
+		"convert-from-pdf", "convert-to-pdf", "organize-pdf", "optimize-pdf",
+		"cleanup-worker",
 	}
-	if _, ok := urls["api-gateway"]; !ok {
-		t.Error("expected api-gateway in default URLs")
+	if len(urls) != len(expected) {
+		t.Errorf("expected %d default URLs, got %d", len(expected), len(urls))
+	}
+	for _, name := range expected {
+		if _, ok := urls[name]; !ok {
+			t.Errorf("expected %q in default URLs", name)
+		}
 	}
 }
 

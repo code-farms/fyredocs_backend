@@ -97,7 +97,7 @@ Events are persisted to the `analytics_events` PostgreSQL table for querying.
 | DATABASE_URL | — | PostgreSQL connection string |
 | NATS_URL | nats://nats:4222 | NATS server URL |
 | TRUSTED_PROXIES | 127.0.0.1,::1 | Trusted proxy addresses |
-| SERVICE_URLS | api-gateway=http://api-gateway:8080,auth-service=http://auth-service:8086,job-service=http://job-service:8085 | Service name=URL pairs for performance scraping |
+| SERVICE_URLS | api-gateway=http://api-gateway:8080,auth-service=http://auth-service:8086,job-service=http://job-service:8081,convert-from-pdf=http://convert-from-pdf:8082,convert-to-pdf=http://convert-to-pdf:8083,organize-pdf=http://organize-pdf:8084,optimize-pdf=http://optimize-pdf:8085,cleanup-worker=http://cleanup-worker:8088 | Service name=URL pairs for performance scraping |
 | API_GATEWAY_METRICS_URL | http://api-gateway:8080/metrics | API gateway Prometheus metrics URL |
 | OTEL_EXPORTER_OTLP_ENDPOINT | http://localhost:4318 | OpenTelemetry collector |
 

@@ -196,11 +196,16 @@ func scrapeServiceInfo(ctx context.Context, name, baseURL string) gin.H {
 func parseServiceURLs() map[string]string {
 	raw := strings.TrimSpace(os.Getenv("SERVICE_URLS"))
 	if raw == "" {
-		// Defaults matching docker-compose service names
+		// Defaults matching docker-compose service names and ports.
 		return map[string]string{
-			"api-gateway":  "http://api-gateway:8080",
-			"auth-service": "http://auth-service:8086",
-			"job-service":  "http://job-service:8085",
+			"api-gateway":      "http://api-gateway:8080",
+			"auth-service":     "http://auth-service:8086",
+			"job-service":      "http://job-service:8081",
+			"convert-from-pdf": "http://convert-from-pdf:8082",
+			"convert-to-pdf":   "http://convert-to-pdf:8083",
+			"organize-pdf":     "http://organize-pdf:8084",
+			"optimize-pdf":     "http://optimize-pdf:8085",
+			"cleanup-worker":   "http://cleanup-worker:8088",
 		}
 	}
 

@@ -52,5 +52,6 @@ RUN chown appuser:appuser cleanup-worker
 
 USER appuser
 
-# Cleanup workers usually don't need to EXPOSE a port
+EXPOSE 8088
+
 CMD ["./cleanup-worker"]
