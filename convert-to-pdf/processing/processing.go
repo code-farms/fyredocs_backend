@@ -18,7 +18,11 @@ type Result struct {
 	Metadata   map[string]interface{}
 }
 
-func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (Result, error) {
+// ProgressFunc is called by processing functions to report real progress.
+// current is the current item (1-based), total is the total number of items.
+type ProgressFunc func(current, total int)
+
+func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string, onProgress ProgressFunc) (Result, error) {
 	if outputDir == "" {
 		outputDir = "outputs"
 	}
@@ -61,7 +65,7 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		if !ok {
 			return Result{}, fmt.Errorf("missing range option")
 		}
-		err = splitPDF(inputPaths[0], outputPath, rangeValue)
+		err = splitPDF(inputPaths[0], outputPath, rangeValue, onProgress)
 	case "protect-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		password, ok := optionString(options, "password")
@@ -85,13 +89,13 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		err = watermarkPDF(inputPaths[0], outputPath, watermarkText)
 	case "add-page-numbers":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = addPageNumbers(inputPaths[0], outputPath, options)
+		err = addPageNumbers(inputPaths[0], outputPath, options, onProgress)
 	case "sign-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = signPDF(inputPaths[0], outputPath, options)
 	case "edit-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = editPDF(inputPaths[0], outputPath, options)
+		err = editPDF(inputPaths[0], outputPath, options, onProgress)
 	default:
 		err = fmt.Errorf("unsupported tool type: %s", toolType)
 	}

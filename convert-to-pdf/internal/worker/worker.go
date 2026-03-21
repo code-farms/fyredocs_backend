@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,7 +27,10 @@ type ProcessResult struct {
 	Metadata   map[string]interface{}
 }
 
-type ProcessFunc func(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (*ProcessResult, error)
+// ProgressFunc is called to report real progress (current item out of total).
+type ProgressFunc func(current, total int)
+
+type ProcessFunc func(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string, onProgress ProgressFunc) (*ProcessResult, error)
 
 type WorkerConfig struct {
 	ServiceName  string
@@ -80,9 +86,115 @@ func backoffDuration(attempt int) time.Duration {
 	return backoff[attempt]
 }
 
+// ─── Progress reporter ──────────────────────────────────────────────────────
+
+// progressReporter smoothly updates job progress in the background based on
+// estimated conversion time derived from input file size.
+type progressReporter struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// startProgressReporter launches a goroutine that increments progress from
+// startPct to maxPct over estimatedDuration, updating the DB every tick.
+// It uses a sqrt ease-out curve so progress feels natural (fast at first,
+// slows as it approaches maxPct).
+func startProgressReporter(db *gorm.DB, jobID uuid.UUID, startPct, maxPct int, estimatedDuration time.Duration) *progressReporter {
+	ctx, cancel := context.WithCancel(context.Background())
+	pr := &progressReporter{cancel: cancel, done: make(chan struct{})}
+
+	go func() {
+		defer close(pr.done)
+		ticker := time.NewTicker(1500 * time.Millisecond)
+		defer ticker.Stop()
+		start := time.Now()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ratio := float64(time.Since(start)) / float64(estimatedDuration)
+				if ratio > 1 {
+					ratio = 1
+				}
+				eased := math.Sqrt(ratio) // ease-out curve
+				pct := startPct + int(eased*float64(maxPct-startPct))
+				if pct > maxPct {
+					pct = maxPct
+				}
+				updateJobStatus(db, jobID, "processing", pct, "")
+			}
+		}
+	}()
+	return pr
+}
+
+// stop cancels the reporter goroutine and waits for it to exit.
+func (pr *progressReporter) stop() {
+	pr.cancel()
+	<-pr.done
+}
+
+// estimateConversionTime returns an estimated duration based on total input
+// file size and tool type. Office conversions are slower due to LibreOffice
+// overhead; pdfcpu operations are pure Go and much faster.
+func estimateConversionTime(toolType string, inputPaths []string) time.Duration {
+	var totalBytes int64
+	for _, p := range inputPaths {
+		if info, err := os.Stat(p); err == nil {
+			totalBytes += info.Size()
+		}
+	}
+	mb := float64(totalBytes) / (1024 * 1024)
+
+	if isOfficeConversion(toolType) {
+		secs := 2.0 + mb*1.5 // base 2s + 1.5s per MB
+		return time.Duration(secs * float64(time.Second))
+	}
+	// pdfcpu operations are fast
+	secs := 0.5 + mb*0.3 // base 0.5s + 0.3s per MB
+	return time.Duration(secs * float64(time.Second))
+}
+
+// isOfficeConversion returns true for tool types that use LibreOffice.
+func isOfficeConversion(toolType string) bool {
+	switch toolType {
+	case "word-to-pdf", "excel-to-pdf", "ppt-to-pdf", "html-to-pdf":
+		return true
+	}
+	return false
+}
+
+// hasRealProgress returns true for tool types that report real page-by-page
+// progress via the ProgressFunc callback (i.e., operations with internal loops).
+func hasRealProgress(toolType string) bool {
+	switch toolType {
+	case "split-pdf", "add-page-numbers", "edit-pdf":
+		return true
+	}
+	return false
+}
+
+// concurrencyFromEnv reads the WORKER_CONCURRENCY environment variable.
+// Falls back to 2 if unset or invalid.
+func concurrencyFromEnv() int {
+	if v := os.Getenv("WORKER_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 2
+}
+
 func Run(ctx context.Context, cfg WorkerConfig) {
 	outDir := outputDir()
 	logger := slog.Default().With("service", cfg.ServiceName)
+
+	maxConcurrency := concurrencyFromEnv()
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+
+	logger.Info("worker starting", "concurrency", maxConcurrency)
 
 	// ── Create / get durable pull consumer on JOBS_DISPATCH stream ──
 	cons, err := cfg.JS.CreateOrUpdateConsumer(ctx, "JOBS_DISPATCH", jetstream.ConsumerConfig{
@@ -101,15 +213,16 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("worker shutting down")
+			logger.Info("worker shutting down, waiting for in-flight jobs")
+			wg.Wait()
 			return
 		default:
 		}
 
-		// Pull one message at a time, blocking up to 30 s.
-		msgs, err := cons.Fetch(1, jetstream.FetchMaxWait(30*time.Second))
+		msgs, err := cons.Fetch(maxConcurrency, jetstream.FetchMaxWait(30*time.Second))
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				wg.Wait()
 				return
 			}
 			logger.Error("fetch failed", "error", err)
@@ -118,7 +231,13 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 		}
 
 		for msg := range msgs.Messages() {
-			processMessage(ctx, cfg, msg, outDir, logger)
+			sem <- struct{}{} // acquire semaphore slot
+			wg.Add(1)
+			go func(m jetstream.Msg) {
+				defer wg.Done()
+				defer func() { <-sem }() // release semaphore slot
+				processMessage(ctx, cfg, m, outDir, logger)
+			}(msg)
 		}
 
 		if msgs.Error() != nil && !errors.Is(msgs.Error(), jetstream.ErrNoMessages) {
@@ -160,7 +279,30 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 		}
 	}
 
-	result, procErr := cfg.Process(ctx, jobID, payload.ToolType, payload.InputPaths, options, outDir)
+	var result *ProcessResult
+	var procErr error
+
+	if hasRealProgress(payload.ToolType) {
+		// Real progress: callback updates DB with actual current/total.
+		onProgress := func(current, total int) {
+			if total <= 0 {
+				return
+			}
+			pct := 20 + int(float64(current)/float64(total)*70) // scale to 20%–90%
+			if pct > 90 {
+				pct = 90
+			}
+			updateJobStatus(cfg.DB, jobID, "processing", pct, "")
+		}
+		result, procErr = cfg.Process(ctx, jobID, payload.ToolType, payload.InputPaths, options, outDir, onProgress)
+	} else {
+		// Time-based estimation for office conversions and single-pass operations.
+		estimated := estimateConversionTime(payload.ToolType, payload.InputPaths)
+		reporter := startProgressReporter(cfg.DB, jobID, 20, 90, estimated)
+		result, procErr = cfg.Process(ctx, jobID, payload.ToolType, payload.InputPaths, options, outDir, nil)
+		reporter.stop()
+	}
+
 	if procErr != nil {
 		handleFailure(cfg, msg, payload, procErr, logger)
 		return

@@ -1,8 +1,11 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -157,6 +160,176 @@ func TestClassifyError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHasRealProgress(t *testing.T) {
+	tests := []struct {
+		toolType string
+		want     bool
+	}{
+		{"split-pdf", true},
+		{"add-page-numbers", true},
+		{"edit-pdf", true},
+		{"word-to-pdf", false},
+		{"excel-to-pdf", false},
+		{"merge-pdf", false},
+		{"compress-pdf", false},
+		{"image-to-pdf", false},
+		{"watermark-pdf", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.toolType, func(t *testing.T) {
+			got := hasRealProgress(tt.toolType)
+			if got != tt.want {
+				t.Errorf("hasRealProgress(%q) = %v, want %v", tt.toolType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsOfficeConversion(t *testing.T) {
+	tests := []struct {
+		toolType string
+		want     bool
+	}{
+		{"word-to-pdf", true},
+		{"excel-to-pdf", true},
+		{"ppt-to-pdf", true},
+		{"html-to-pdf", true},
+		{"image-to-pdf", false},
+		{"merge-pdf", false},
+		{"compress-pdf", false},
+		{"split-pdf", false},
+		{"watermark-pdf", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.toolType, func(t *testing.T) {
+			got := isOfficeConversion(tt.toolType)
+			if got != tt.want {
+				t.Errorf("isOfficeConversion(%q) = %v, want %v", tt.toolType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEstimateConversionTime(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a 1MB test file
+	path1MB := filepath.Join(dir, "test1mb.docx")
+	if err := os.WriteFile(path1MB, make([]byte, 1024*1024), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a 5MB test file
+	path5MB := filepath.Join(dir, "test5mb.docx")
+	if err := os.WriteFile(path5MB, make([]byte, 5*1024*1024), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("office 1MB", func(t *testing.T) {
+		d := estimateConversionTime("word-to-pdf", []string{path1MB})
+		// Expected: 2 + 1*1.5 = 3.5s
+		if d < 3*time.Second || d > 4*time.Second {
+			t.Errorf("expected ~3.5s, got %v", d)
+		}
+	})
+
+	t.Run("office 5MB", func(t *testing.T) {
+		d := estimateConversionTime("excel-to-pdf", []string{path5MB})
+		// Expected: 2 + 5*1.5 = 9.5s
+		if d < 9*time.Second || d > 10*time.Second {
+			t.Errorf("expected ~9.5s, got %v", d)
+		}
+	})
+
+	t.Run("pdfcpu 1MB", func(t *testing.T) {
+		d := estimateConversionTime("merge-pdf", []string{path1MB})
+		// Expected: 0.5 + 1*0.3 = 0.8s
+		if d < 700*time.Millisecond || d > 900*time.Millisecond {
+			t.Errorf("expected ~0.8s, got %v", d)
+		}
+	})
+
+	t.Run("nonexistent file", func(t *testing.T) {
+		d := estimateConversionTime("word-to-pdf", []string{"/nonexistent/file.docx"})
+		// 0 bytes → base time only: 2s
+		if d < 1900*time.Millisecond || d > 2100*time.Millisecond {
+			t.Errorf("expected ~2s, got %v", d)
+		}
+	})
+
+	t.Run("multiple files", func(t *testing.T) {
+		d := estimateConversionTime("image-to-pdf", []string{path1MB, path1MB})
+		// 2MB total, pdfcpu: 0.5 + 2*0.3 = 1.1s
+		if d < 1*time.Second || d > 1200*time.Millisecond {
+			t.Errorf("expected ~1.1s, got %v", d)
+		}
+	})
+}
+
+func TestProgressReporterStopsCleanly(t *testing.T) {
+	// Verify that stop() doesn't hang and the done channel closes.
+	pr := &progressReporter{done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	pr.cancel = cancel
+
+	go func() {
+		defer close(pr.done)
+		<-ctx.Done()
+	}()
+
+	pr.stop()
+
+	// If we get here, stop() returned successfully
+	select {
+	case <-pr.done:
+		// expected
+	default:
+		t.Error("done channel should be closed after stop()")
+	}
+}
+
+func TestConcurrencyFromEnv(t *testing.T) {
+	t.Run("default is 2", func(t *testing.T) {
+		t.Setenv("WORKER_CONCURRENCY", "")
+		got := concurrencyFromEnv()
+		if got != 2 {
+			t.Errorf("expected 2, got %d", got)
+		}
+	})
+
+	t.Run("custom value", func(t *testing.T) {
+		t.Setenv("WORKER_CONCURRENCY", "4")
+		got := concurrencyFromEnv()
+		if got != 4 {
+			t.Errorf("expected 4, got %d", got)
+		}
+	})
+
+	t.Run("invalid uses default", func(t *testing.T) {
+		t.Setenv("WORKER_CONCURRENCY", "abc")
+		got := concurrencyFromEnv()
+		if got != 2 {
+			t.Errorf("expected 2, got %d", got)
+		}
+	})
+
+	t.Run("zero uses default", func(t *testing.T) {
+		t.Setenv("WORKER_CONCURRENCY", "0")
+		got := concurrencyFromEnv()
+		if got != 2 {
+			t.Errorf("expected 2, got %d", got)
+		}
+	})
+
+	t.Run("negative uses default", func(t *testing.T) {
+		t.Setenv("WORKER_CONCURRENCY", "-1")
+		got := concurrencyFromEnv()
+		if got != 2 {
+			t.Errorf("expected 2, got %d", got)
+		}
+	})
 }
 
 func TestErrorCodeConstants(t *testing.T) {

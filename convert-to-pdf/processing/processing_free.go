@@ -28,7 +28,7 @@ func mergePDFs(inputPaths []string, outputPath string) error {
 	return api.MergeCreateFile(inputPaths, outputPath, false, nil)
 }
 
-func splitPDF(inputPath string, outputPath string, pageRange string) error {
+func splitPDF(inputPath string, outputPath string, pageRange string, onProgress ProgressFunc) error {
 	slog.Info("splitting PDF", "input", inputPath, "range", pageRange)
 
 	ctx, err := api.ReadContextFile(inputPath)
@@ -51,6 +51,9 @@ func splitPDF(inputPath string, outputPath string, pageRange string) error {
 		if err != nil {
 			slog.Warn("failed to extract page", "page", i, "error", err)
 			continue
+		}
+		if onProgress != nil {
+			onProgress(i, pageCount)
 		}
 	}
 
@@ -79,24 +82,48 @@ func decryptPDF(inputPath string, outputPath string, password string) error {
 	return api.DecryptFile(inputPath, outputPath, conf)
 }
 
+// unoserver connection settings (configurable via environment variables).
+var (
+	unoHost = envOrDefault("UNOSERVER_HOST", "127.0.0.1")
+	unoPort = envOrDefault("UNOSERVER_PORT", "2002")
+)
+
+func envOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 func officeToPDF(ctx context.Context, inputPath string, outputPath string, fileType string) error {
 	slog.Info("converting to PDF", "type", fileType, "input", inputPath)
 
-	outputDir := filepath.Dir(outputPath)
-
-	cmd := exec.CommandContext(ctx, "libreoffice", "--headless", "--convert-to", "pdf", "--outdir", outputDir, inputPath)
+	// Fast path: unoconvert via persistent LibreOffice daemon.
+	// unoconvert accepts an explicit output path, so no rename is needed.
+	cmd := exec.CommandContext(ctx, "unoconvert",
+		"--host", unoHost, "--port", unoPort,
+		"--convert-to", "pdf",
+		inputPath, outputPath)
 	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	slog.Warn("unoconvert failed, falling back to direct libreoffice",
+		"output", string(output), "error", err)
+
+	// Slow fallback: spawn a fresh LibreOffice process.
+	outputDir := filepath.Dir(outputPath)
+	cmd = exec.CommandContext(ctx, "libreoffice", "--headless", "--convert-to", "pdf", "--outdir", outputDir, inputPath)
+	output, err = cmd.CombinedOutput()
 	if err != nil {
-		slog.Error("libreoffice conversion failed", "output", string(output))
-		return fmt.Errorf("LibreOffice not available or conversion failed: %w", err)
+		slog.Error("libreoffice fallback failed", "output", string(output))
+		return fmt.Errorf("conversion failed: %w", err)
 	}
 
 	convertedFile := filepath.Join(outputDir, strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))+".pdf")
-
 	if convertedFile != outputPath {
 		return os.Rename(convertedFile, outputPath)
 	}
-
 	return nil
 }
 
@@ -116,7 +143,7 @@ func watermarkPDF(inputPath string, outputPath string, watermarkText string) err
 	return api.AddWatermarksFile(inputPath, outputPath, nil, wm, nil)
 }
 
-func addPageNumbers(inputPath string, outputPath string, options map[string]interface{}) error {
+func addPageNumbers(inputPath string, outputPath string, options map[string]interface{}, onProgress ProgressFunc) error {
 	slog.Info("adding page numbers to PDF", "input", inputPath)
 
 	position := "bc"
@@ -194,6 +221,9 @@ func addPageNumbers(inputPath string, outputPath string, options map[string]inte
 		pageSelection := []string{strconv.Itoa(i)}
 		if err := api.AddWatermarksFile(outputPath, "", pageSelection, wm, nil); err != nil {
 			return fmt.Errorf("failed to add page number to page %d: %w", i, err)
+		}
+		if onProgress != nil {
+			onProgress(i, pageCount)
 		}
 	}
 
@@ -286,7 +316,7 @@ func signPDF(inputPath string, outputPath string, options map[string]interface{}
 	return nil
 }
 
-func editPDF(inputPath string, outputPath string, options map[string]interface{}) error {
+func editPDF(inputPath string, outputPath string, options map[string]interface{}, onProgress ProgressFunc) error {
 	slog.Info("editing PDF with annotations", "input", inputPath)
 
 	annotationsRaw, ok := options["annotations"]
@@ -350,6 +380,9 @@ func editPDF(inputPath string, outputPath string, options map[string]interface{}
 		pageSelection := []string{strconv.Itoa(ann.Page)}
 		if err := api.AddWatermarksFile(outputPath, "", pageSelection, wm, nil); err != nil {
 			return fmt.Errorf("failed to add annotation %d: %w", i, err)
+		}
+		if onProgress != nil {
+			onProgress(i+1, len(annotations))
 		}
 	}
 

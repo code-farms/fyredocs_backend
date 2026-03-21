@@ -43,7 +43,9 @@ RUN mkdir -p uploads outputs && \
     chown -R appuser:appuser /app
 
 COPY --from=builder /app/bin/convert-to-pdf .
-RUN chown appuser:appuser convert-to-pdf
+COPY convert-to-pdf/entrypoint.sh .
+RUN chown appuser:appuser convert-to-pdf entrypoint.sh && \
+    chmod +x entrypoint.sh
 
 USER appuser
 
@@ -51,4 +53,4 @@ EXPOSE 8083
 
 VOLUME /app/uploads /app/outputs
 
-CMD ["./convert-to-pdf"]
+CMD ["sh", "entrypoint.sh"]

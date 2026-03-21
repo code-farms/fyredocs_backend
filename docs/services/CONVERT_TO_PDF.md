@@ -7,7 +7,7 @@ The Convert To PDF service converts various document and image formats to PDF. I
 **Port**: 8083 (internal, not exposed through API Gateway)
 **Type**: Background Worker + REST API
 **Framework**: Gin (Go)
-**Processing**: LibreOffice, pdfcpu
+**Processing**: LibreOffice (via unoserver daemon), pdfcpu
 
 ## Responsibilities
 
@@ -20,15 +20,21 @@ The Convert To PDF service converts various document and image formats to PDF. I
 ## Architecture
 
 ```
-Redis Queue (queue:word-to-pdf, queue:image-to-pdf, etc.)
+NATS JetStream (jobs.dispatch.convert-to-pdf)
   ↓
-Convert-To-PDF Worker
-  ├─ Poll Queue
-  ├─ Download Input File(s)
-  ├─ Process with LibreOffice/pdfcpu
-  ├─ Upload Output PDF
-  └─ Update Job Status (PostgreSQL)
+Convert-To-PDF Worker (concurrent, WORKER_CONCURRENCY=2)
+  ├─ Fetch up to N messages from NATS
+  ├─ Process concurrently via semaphore-limited goroutines
+  │   ├─ Office docs → unoconvert (persistent LibreOffice daemon)
+  │   │                 └─ Fallback: libreoffice --headless (cold start)
+  │   └─ Images/PDFs → pdfcpu (pure Go)
+  ├─ Record output in PostgreSQL
+  └─ Ack NATS message
 ```
+
+### unoserver Daemon
+
+The container runs a persistent LibreOffice instance via `unoserver` (started by `entrypoint.sh` before the Go binary). The `officeToPDF()` function connects to it via `unoconvert` over a local socket (port 2002), eliminating the 2-5s JVM cold start per conversion. If the daemon is unavailable, conversions fall back to spawning `libreoffice --headless` directly.
 
 ## Supported Tools
 
@@ -308,21 +314,31 @@ curl -X POST http://localhost:8080/api/convert-to-pdf/image-to-pdf \
 | `REDIS_DB` | `0` | Redis database number |
 | `UPLOAD_DIR` | `/app/uploads` | Input files directory |
 | `OUTPUT_DIR` | `/app/outputs` | Output files directory |
+| `WORKER_CONCURRENCY` | `2` | Max concurrent jobs processed in parallel |
+| `UNOSERVER_HOST` | `127.0.0.1` | unoserver daemon host |
+| `UNOSERVER_PORT` | `2002` | unoserver daemon port |
 | `QUEUE_PREFIX` | `queue` | Redis queue key prefix |
 | `MAX_RETRIES` | `3` | Max retry attempts for failed jobs |
 | `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing |
 
 ## Dependencies
 
-### LibreOffice
+### LibreOffice + unoserver
 
-Used for Office and HTML document conversions.
+Used for Office and HTML document conversions. LibreOffice runs as a persistent daemon via `unoserver`, and conversions are sent via `unoconvert`.
 
 **Installed Packages**:
 - `libreoffice` (full suite for all conversions)
 - `ttf-liberation` - Font support
+- `python3`, `py3-pip` - Python runtime for unoserver
+- `unoserver` (pip) - Persistent LibreOffice daemon + `unoconvert` CLI
 
-**Command Example**:
+**Fast path (via daemon)**:
+```bash
+unoconvert --host 127.0.0.1 --port 2002 --convert-to pdf input.docx output.pdf
+```
+
+**Fallback (direct invocation)**:
 ```bash
 libreoffice --headless --convert-to pdf --outdir /output /input/file.docx
 ```
@@ -389,15 +405,17 @@ convert-to-pdf:
 
 ## Performance
 
-### Processing Times (Typical)
+### Processing Times (Typical, with unoserver daemon)
 
 | Tool | Small File | Medium File | Large File |
 |------|-----------|-------------|------------|
-| word-to-pdf | 2-3s | 5-8s | 15-30s |
-| excel-to-pdf | 2-4s | 6-10s | 20-40s |
-| ppt-to-pdf | 3-5s | 8-12s | 25-45s |
-| html-to-pdf | 1-2s | 3-5s | 8-15s |
+| word-to-pdf | <1s | 1-3s | 5-15s |
+| excel-to-pdf | <1s | 2-4s | 8-20s |
+| ppt-to-pdf | 1-2s | 3-5s | 10-25s |
+| html-to-pdf | <1s | 1-2s | 3-8s |
 | image-to-pdf | <1s | 1-2s | 3-5s |
+
+Note: Without the unoserver daemon (fallback mode), office conversions add 2-5s overhead per request due to LibreOffice cold start.
 
 **File Sizes**:
 - Small: < 1 MB, < 10 pages
@@ -476,22 +494,34 @@ sequenceDiagram
     NATS->>W: Deliver JobCreated event
 
     W->>W: Validate toolType in AllowedTools
-    W->>DB: UPDATE processing_jobs SET status='processing'
+    W->>DB: UPDATE progress=20% (processing started)
 
-    W->>FS: Read input file(s) from inputPaths
-
-    alt Office document (word/excel/ppt/html)
-        W->>LO: libreoffice --headless --convert-to pdf --outdir /output input.docx
+    alt Looped pdfcpu operation (split, page numbers, edit)
+        Note over W: Real page-by-page progress via ProgressFunc callback
+        W->>LO: pdfcpu process page by page
+        loop Each page/annotation
+            LO-->>W: Page i of N done
+            W->>DB: UPDATE progress = 20% + (i/N × 70%)
+        end
+        LO-->>FS: output file
+    else Office document (word/excel/ppt/html)
+        W->>W: Start time-based progressReporter
+        Note over W: Estimates time from file size,<br/>smoothly increments 20%→90% with ease-out curve
+        W->>LO: unoconvert --host 127.0.0.1 --port 2002 --convert-to pdf input.docx output.pdf
+        Note over W,LO: Falls back to libreoffice --headless if unoserver is unavailable
         LO-->>FS: output.pdf
-    else Image to PDF
-        W->>LO: pdfcpu import images to PDF
-        LO-->>FS: output.pdf
+        W->>W: Stop progressReporter
+    else Single-pass pdfcpu (merge, compress, encrypt, etc.)
+        W->>W: Start time-based progressReporter
+        W->>LO: pdfcpu single operation
+        LO-->>FS: output file
+        W->>W: Stop progressReporter
     end
 
     alt Conversion succeeds
         W->>FS: Verify output file exists
         W->>DB: INSERT file_metadata (kind='output')
-        W->>DB: UPDATE processing_jobs SET status='completed', progress=100
+        W->>DB: UPDATE progress=100%, status='completed'
         W->>NATS: Ack message
     else Conversion fails
         W->>DB: UPDATE processing_jobs SET status='failed', failure_reason=error
@@ -544,7 +574,7 @@ sequenceDiagram
 
 ### Readiness Probe
 
-`/readyz` -- Readiness check (PostgreSQL + Redis + NATS), returns 200/503 with individual check results. Unlike `/healthz` (liveness), `/readyz` verifies all dependencies are connected.
+`/readyz` -- Readiness check (PostgreSQL + Redis + NATS + unoserver), returns 200/503 with individual check results. Unlike `/healthz` (liveness), `/readyz` verifies all dependencies are connected. The unoserver check is informational only — it does not affect readiness status since the fallback to direct LibreOffice invocation is always available.
 
 ## Error Flows
 

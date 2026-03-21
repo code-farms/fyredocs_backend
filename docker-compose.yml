@@ -355,6 +355,7 @@ services:
       UPLOAD_DIR: /app/uploads
       OUTPUT_DIR: /app/outputs
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      WORKER_CONCURRENCY: "2"
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"

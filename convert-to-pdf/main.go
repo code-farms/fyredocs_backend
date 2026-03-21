@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -47,8 +48,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	processFunc := func(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (*worker.ProcessResult, error) {
-		result, err := processing.ProcessFile(ctx, jobID, toolType, inputPaths, options, outputDir)
+	processFunc := func(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string, onProgress worker.ProgressFunc) (*worker.ProcessResult, error) {
+		// Adapt worker.ProgressFunc to processing.ProgressFunc (same signature).
+		var pf processing.ProgressFunc
+		if onProgress != nil {
+			pf = processing.ProgressFunc(onProgress)
+		}
+		result, err := processing.ProcessFile(ctx, jobID, toolType, inputPaths, options, outputDir, pf)
 		if err != nil {
 			return nil, err
 		}
@@ -134,6 +140,20 @@ func main() {
 			ready = false
 		} else {
 			checks["postgres"] = "ok"
+		}
+
+		// Check unoserver (informational — does not affect readiness since
+		// officeToPDF falls back to direct LibreOffice invocation).
+		unoPort := os.Getenv("UNOSERVER_PORT")
+		if unoPort == "" {
+			unoPort = "2002"
+		}
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:"+unoPort, 1*time.Second)
+		if err != nil {
+			checks["unoserver"] = "unavailable (fallback active)"
+		} else {
+			conn.Close()
+			checks["unoserver"] = "ok"
 		}
 
 		if !ready {

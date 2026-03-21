@@ -9,14 +9,14 @@ import (
 )
 
 func TestProcessFileNoInputs(t *testing.T) {
-	_, err := ProcessFile(context.Background(), uuid.New(), "word-to-pdf", nil, nil, "")
+	_, err := ProcessFile(context.Background(), uuid.New(), "word-to-pdf", nil, nil, "", nil)
 	if err == nil {
 		t.Error("expected error for no input files")
 	}
 }
 
 func TestProcessFileUnsupportedTool(t *testing.T) {
-	_, err := ProcessFile(context.Background(), uuid.New(), "unknown-tool", []string{"/tmp/test.pdf"}, nil, t.TempDir())
+	_, err := ProcessFile(context.Background(), uuid.New(), "unknown-tool", []string{"/tmp/test.pdf"}, nil, t.TempDir(), nil)
 	if err == nil {
 		t.Error("expected error for unsupported tool")
 	}
@@ -71,7 +71,7 @@ func TestCopyFileMissingSource(t *testing.T) {
 
 func TestProcessFileEmptyOutputDir(t *testing.T) {
 	// With empty output dir, should default to "outputs" and still error on missing file
-	_, err := ProcessFile(context.Background(), uuid.New(), "word-to-pdf", []string{"/nonexistent/file.docx"}, nil, "")
+	_, err := ProcessFile(context.Background(), uuid.New(), "word-to-pdf", []string{"/nonexistent/file.docx"}, nil, "", nil)
 	if err == nil {
 		t.Error("expected error for nonexistent input file")
 	}
@@ -88,21 +88,21 @@ func TestOptionStringWithJsonNumber(t *testing.T) {
 }
 
 func TestProcessFileAddPageNumbersNoInput(t *testing.T) {
-	_, err := ProcessFile(context.Background(), uuid.New(), "add-page-numbers", nil, nil, "")
+	_, err := ProcessFile(context.Background(), uuid.New(), "add-page-numbers", nil, nil, "", nil)
 	if err == nil {
 		t.Error("expected error for no input files")
 	}
 }
 
 func TestProcessFileSignPdfNoInput(t *testing.T) {
-	_, err := ProcessFile(context.Background(), uuid.New(), "sign-pdf", nil, nil, "")
+	_, err := ProcessFile(context.Background(), uuid.New(), "sign-pdf", nil, nil, "", nil)
 	if err == nil {
 		t.Error("expected error for no input files")
 	}
 }
 
 func TestProcessFileEditPdfNoInput(t *testing.T) {
-	_, err := ProcessFile(context.Background(), uuid.New(), "edit-pdf", nil, nil, "")
+	_, err := ProcessFile(context.Background(), uuid.New(), "edit-pdf", nil, nil, "", nil)
 	if err == nil {
 		t.Error("expected error for no input files")
 	}
@@ -115,10 +115,28 @@ func TestProcessFileEditPdfMissingAnnotations(t *testing.T) {
 	if err := os.WriteFile(src, []byte("dummy"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := ProcessFile(context.Background(), uuid.New(), "edit-pdf", []string{src}, nil, dir)
+	_, err := ProcessFile(context.Background(), uuid.New(), "edit-pdf", []string{src}, nil, dir, nil)
 	if err == nil {
 		t.Error("expected error for missing annotations option")
 	}
+}
+
+func TestEnvOrDefault(t *testing.T) {
+	t.Run("returns env value when set", func(t *testing.T) {
+		t.Setenv("TEST_ENVORD_KEY", "custom")
+		got := envOrDefault("TEST_ENVORD_KEY", "fallback")
+		if got != "custom" {
+			t.Errorf("expected 'custom', got %q", got)
+		}
+	})
+
+	t.Run("returns default when unset", func(t *testing.T) {
+		t.Setenv("TEST_ENVORD_KEY", "")
+		got := envOrDefault("TEST_ENVORD_KEY", "fallback")
+		if got != "fallback" {
+			t.Errorf("expected 'fallback', got %q", got)
+		}
+	})
 }
 
 func TestProcessFileSignPdfMissingSignature(t *testing.T) {
@@ -127,7 +145,7 @@ func TestProcessFileSignPdfMissingSignature(t *testing.T) {
 	if err := os.WriteFile(src, []byte("dummy"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := ProcessFile(context.Background(), uuid.New(), "sign-pdf", []string{src}, nil, dir)
+	_, err := ProcessFile(context.Background(), uuid.New(), "sign-pdf", []string{src}, nil, dir, nil)
 	if err == nil {
 		t.Error("expected error for missing signature data")
 	}

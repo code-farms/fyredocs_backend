@@ -104,15 +104,20 @@ sequenceDiagram
     Main->>Worker: go worker.Run(ctx, config)
 
     Worker->>NATS: CreateOrUpdateConsumer<br/>(durable: convert-to-pdf,<br/>filter: jobs.dispatch.convert-to-pdf,<br/>maxDeliver: 4, ackWait: 30m)
+    Worker->>Worker: Init semaphore (WORKER_CONCURRENCY=2)
 
     NATS-->>Worker: Consumer ready
 
     loop Until context cancelled
-        Worker->>Consumer: Fetch(1, maxWait=30s)
+        Worker->>Consumer: Fetch(maxConcurrency, maxWait=30s)
 
-        alt Message available
-            Consumer-->>Worker: Message
-            Worker->>Worker: processMessage(msg)
+        alt Messages available
+            Consumer-->>Worker: 1..N Messages
+            loop For each message
+                Worker->>Worker: Acquire semaphore slot
+                Worker->>Worker: go processMessage(msg)
+                Note over Worker: Release slot on completion
+            end
         else No messages (timeout)
             Consumer-->>Worker: ErrNoMessages
             Note over Worker: Continue loop
@@ -120,6 +125,6 @@ sequenceDiagram
     end
 
     Note over Worker: Context cancelled
-    Worker->>Worker: Log "worker shutting down"
+    Worker->>Worker: wg.Wait() (drain in-flight jobs)
     Worker-->>Main: Return
 ```
