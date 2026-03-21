@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
@@ -99,8 +100,10 @@ func officeToPDF(ctx context.Context, inputPath string, outputPath string, fileT
 	slog.Info("converting to PDF", "type", fileType, "input", inputPath)
 
 	// Fast path: unoconvert via persistent LibreOffice daemon.
-	// unoconvert accepts an explicit output path, so no rename is needed.
-	cmd := exec.CommandContext(ctx, "unoconvert",
+	// Use a 30s timeout so hung unoconvert falls back faster.
+	unoCtx, unoCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer unoCancel()
+	cmd := exec.CommandContext(unoCtx, "unoconvert",
 		"--host", unoHost, "--port", unoPort,
 		"--convert-to", "pdf",
 		inputPath, outputPath)

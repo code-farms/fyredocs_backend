@@ -17,6 +17,8 @@ import (
 	"gorm.io/gorm"
 
 	"convert-from-pdf/internal/models"
+
+	"esydocs/shared/queue"
 )
 
 type ProcessResult struct {
@@ -141,7 +143,11 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 
 	if !cfg.AllowedTools[payload.ToolType] {
 		logger.Warn("unsupported tool", "tool", payload.ToolType, "jobId", payload.JobID)
-		updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, fmt.Sprintf("[%s] %s", ErrCodeUnsupportedTool, payload.ToolType))
+		failMsg := fmt.Sprintf("[%s] %s", ErrCodeUnsupportedTool, payload.ToolType)
+		updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, failMsg)
+		if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
+			publishStatusEvent(cfg.JS, parsed, payload.ToolType, "failed", 0, failMsg)
+		}
 		// Non-recoverable: ack to stop redelivery.
 		_ = msg.Ack()
 		return
@@ -156,6 +162,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 
 	// Only increase progress, never decrease on re-entry (retries).
 	updateJobStatusNoRegress(cfg.DB, jobID, "processing", 20)
+	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "processing", 20, "")
 
 	options := map[string]interface{}{}
 	if len(payload.Options) > 0 && json.Valid(payload.Options) {
@@ -182,6 +189,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 			Update("progress", clamped).Error; err != nil {
 			logger.Warn("failed to update progress", "jobId", jobID, "error", err)
 		}
+		publishStatusEvent(cfg.JS, jobID, payload.ToolType, "processing", clamped, "")
 	}
 
 	result, procErr := cfg.Process(jobCtx, jobID, payload.ToolType, payload.InputPaths, options, outDir, onProgress)
@@ -198,6 +206,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 
 	mergeMetadata(cfg.DB, jobID, result.Metadata, logger)
 	updateJobStatus(cfg.DB, jobID, "completed", 100, "")
+	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "completed", 100, "")
 	clearFailure(cfg.DB, jobID)
 
 	if err := msg.Ack(); err != nil {
@@ -234,6 +243,9 @@ func handleFailure(cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err 
 			}).Error; updateErr != nil {
 			logger.Error("failed to update retry status", "jobId", payload.JobID, "error", updateErr)
 		}
+		if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
+			publishStatusEvent(cfg.JS, parsed, payload.ToolType, "processing", 0, retryReason)
+		}
 		delay := backoffDuration(int(deliveryCount) - 1)
 		if nakErr := msg.NakWithDelay(delay); nakErr != nil {
 			logger.Error("failed to nak message", "jobId", payload.JobID, "error", nakErr)
@@ -249,7 +261,11 @@ func handleFailure(cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err 
 		"error", err,
 	)
 	errCode := classifyError(err)
-	updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, fmt.Sprintf("[%s] %v", errCode, err))
+	failMsg := fmt.Sprintf("[%s] %v", errCode, err)
+	updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, failMsg)
+	if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
+		publishStatusEvent(cfg.JS, parsed, payload.ToolType, "failed", 0, failMsg)
+	}
 
 	// Publish to DLQ before acking
 	dlqSubject := "jobs.dlq." + cfg.ServiceName
@@ -396,4 +412,41 @@ func isRecoverable(err error) bool {
 		return true
 	}
 	return false
+}
+
+// statusToEventType maps a DB status string to a NATS event type.
+func statusToEventType(status string) string {
+	switch status {
+	case "processing":
+		return "JobProgress"
+	case "completed":
+		return "JobCompleted"
+	case "failed":
+		return "JobFailed"
+	case "queued":
+		return "JobQueued"
+	default:
+		return "JobProgress"
+	}
+}
+
+// publishStatusEvent publishes a job status update to NATS so that SSE
+// consumers receive real-time updates without polling.
+func publishStatusEvent(js jetstream.JetStream, jobID uuid.UUID, toolType, status string, progress int, failureReason string) {
+	if js == nil {
+		return
+	}
+	eventType := statusToEventType(status)
+	event := queue.JobEvent{
+		EventType:     eventType,
+		JobID:         jobID.String(),
+		ToolType:      toolType,
+		Progress:      progress,
+		FailureReason: failureReason,
+		Timestamp:     time.Now().UTC(),
+	}
+	subject := queue.SubjectForJobEvent(jobID.String(), eventType)
+	if err := queue.PublishJobEvent(context.Background(), js, subject, event); err != nil {
+		slog.Warn("failed to publish job event", "jobId", jobID, "event", eventType, "error", err)
+	}
 }

@@ -44,3 +44,10 @@ func SubjectForDispatch(serviceName string) string {
 func SubjectForEvent(eventType string) string {
 	return "jobs.events." + eventType
 }
+
+// SubjectForJobEvent returns a NATS subject scoped to a specific job,
+// e.g. "jobs.events.<jobID>.JobProgress". This allows SSE consumers to
+// subscribe with a per-job filter like "jobs.events.<jobID>.>".
+func SubjectForJobEvent(jobID, eventType string) string {
+	return "jobs.events." + jobID + "." + eventType
+}

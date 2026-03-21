@@ -20,6 +20,8 @@ import (
 	"gorm.io/gorm"
 
 	"convert-to-pdf/internal/models"
+
+	"esydocs/shared/queue"
 )
 
 type ProcessResult struct {
@@ -98,14 +100,15 @@ type progressReporter struct {
 // startProgressReporter launches a goroutine that increments progress from
 // startPct to maxPct over estimatedDuration, updating the DB every tick.
 // It uses a sqrt ease-out curve so progress feels natural (fast at first,
-// slows as it approaches maxPct).
-func startProgressReporter(db *gorm.DB, jobID uuid.UUID, startPct, maxPct int, estimatedDuration time.Duration) *progressReporter {
+// slows as it approaches maxPct). Both DB writes and NATS events are
+// published every 3s.
+func startProgressReporter(db *gorm.DB, js jetstream.JetStream, jobID uuid.UUID, toolType string, startPct, maxPct int, estimatedDuration time.Duration) *progressReporter {
 	ctx, cancel := context.WithCancel(context.Background())
 	pr := &progressReporter{cancel: cancel, done: make(chan struct{})}
 
 	go func() {
 		defer close(pr.done)
-		ticker := time.NewTicker(1500 * time.Millisecond)
+		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 		start := time.Now()
 		for {
@@ -123,6 +126,7 @@ func startProgressReporter(db *gorm.DB, jobID uuid.UUID, startPct, maxPct int, e
 					pct = maxPct
 				}
 				updateJobStatus(db, jobID, "processing", pct, "")
+				publishStatusEvent(js, jobID, toolType, "processing", pct, "")
 			}
 		}
 	}()
@@ -257,7 +261,11 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 
 	if !cfg.AllowedTools[payload.ToolType] {
 		logger.Warn("unsupported tool", "tool", payload.ToolType, "jobId", payload.JobID)
-		updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, fmt.Sprintf("[%s] %s", ErrCodeUnsupportedTool, payload.ToolType))
+		failMsg := fmt.Sprintf("[%s] %s", ErrCodeUnsupportedTool, payload.ToolType)
+		updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, failMsg)
+		if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
+			publishStatusEvent(cfg.JS, parsed, payload.ToolType, "failed", 0, failMsg)
+		}
 		// Non-recoverable: ack to stop redelivery.
 		_ = msg.Ack()
 		return
@@ -271,6 +279,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 	}
 
 	updateJobStatus(cfg.DB, jobID, "processing", 20, "")
+	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "processing", 20, "")
 
 	options := map[string]interface{}{}
 	if len(payload.Options) > 0 && json.Valid(payload.Options) {
@@ -293,12 +302,13 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 				pct = 90
 			}
 			updateJobStatus(cfg.DB, jobID, "processing", pct, "")
+			publishStatusEvent(cfg.JS, jobID, payload.ToolType, "processing", pct, "")
 		}
 		result, procErr = cfg.Process(ctx, jobID, payload.ToolType, payload.InputPaths, options, outDir, onProgress)
 	} else {
 		// Time-based estimation for office conversions and single-pass operations.
 		estimated := estimateConversionTime(payload.ToolType, payload.InputPaths)
-		reporter := startProgressReporter(cfg.DB, jobID, 20, 90, estimated)
+		reporter := startProgressReporter(cfg.DB, cfg.JS, jobID, payload.ToolType, 20, 90, estimated)
 		result, procErr = cfg.Process(ctx, jobID, payload.ToolType, payload.InputPaths, options, outDir, nil)
 		reporter.stop()
 	}
@@ -316,6 +326,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 
 	mergeMetadata(cfg.DB, jobID, result.Metadata, logger)
 	updateJobStatus(cfg.DB, jobID, "completed", 100, "")
+	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "completed", 100, "")
 	clearFailure(cfg.DB, jobID)
 
 	if err := msg.Ack(); err != nil {
@@ -342,6 +353,9 @@ func handleFailure(cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err 
 			"error", err,
 		)
 		updateJobStatusString(cfg.DB, payload.JobID, "queued", 0, fmt.Sprintf("retrying: %v", err))
+		if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
+			publishStatusEvent(cfg.JS, parsed, payload.ToolType, "queued", 0, fmt.Sprintf("retrying: %v", err))
+		}
 		delay := backoffDuration(int(deliveryCount) - 1)
 		if nakErr := msg.NakWithDelay(delay); nakErr != nil {
 			logger.Error("failed to nak message", "jobId", payload.JobID, "error", nakErr)
@@ -357,7 +371,11 @@ func handleFailure(cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err 
 		"error", err,
 	)
 	errCode := classifyError(err)
-	updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, fmt.Sprintf("[%s] %v", errCode, err))
+	failMsg := fmt.Sprintf("[%s] %v", errCode, err)
+	updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, failMsg)
+	if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
+		publishStatusEvent(cfg.JS, parsed, payload.ToolType, "failed", 0, failMsg)
+	}
 
 	// Publish to DLQ before acking
 	dlqSubject := "jobs.dlq." + cfg.ServiceName
@@ -484,4 +502,41 @@ func isRecoverable(err error) bool {
 		return true
 	}
 	return false
+}
+
+// statusToEventType maps a DB status string to a NATS event type.
+func statusToEventType(status string) string {
+	switch status {
+	case "processing":
+		return "JobProgress"
+	case "completed":
+		return "JobCompleted"
+	case "failed":
+		return "JobFailed"
+	case "queued":
+		return "JobQueued"
+	default:
+		return "JobProgress"
+	}
+}
+
+// publishStatusEvent publishes a job status update to NATS so that SSE
+// consumers receive real-time updates without polling.
+func publishStatusEvent(js jetstream.JetStream, jobID uuid.UUID, toolType, status string, progress int, failureReason string) {
+	if js == nil {
+		return
+	}
+	eventType := statusToEventType(status)
+	event := queue.JobEvent{
+		EventType:     eventType,
+		JobID:         jobID.String(),
+		ToolType:      toolType,
+		Progress:      progress,
+		FailureReason: failureReason,
+		Timestamp:     time.Now().UTC(),
+	}
+	subject := queue.SubjectForJobEvent(jobID.String(), eventType)
+	if err := queue.PublishJobEvent(context.Background(), js, subject, event); err != nil {
+		slog.Warn("failed to publish job event", "jobId", jobID, "event", eventType, "error", err)
+	}
 }

@@ -40,9 +40,9 @@ func SSEJobUpdates(c *gin.Context) {
 		return
 	}
 
-	// Create an ephemeral consumer for this SSE connection
+	// Create an ephemeral consumer for this SSE connection, filtered to this job only.
 	cons, err := natsconn.JS.CreateConsumer(ctx, "JOBS_EVENTS", jetstream.ConsumerConfig{
-		FilterSubject:     "jobs.events.>",
+		FilterSubject:     "jobs.events." + jobID + ".>",
 		DeliverPolicy:     jetstream.DeliverNewPolicy,
 		AckPolicy:         jetstream.AckExplicitPolicy,
 		InactiveThreshold: 1 * time.Minute,
@@ -81,12 +81,6 @@ func SSEJobUpdates(c *gin.Context) {
 			for msg := range msgs.Messages() {
 				var event queue.JobEvent
 				if err := json.Unmarshal(msg.Data(), &event); err != nil {
-					_ = msg.Ack()
-					continue
-				}
-
-				// Only forward events for the requested job
-				if event.JobID != jobID {
 					_ = msg.Ack()
 					continue
 				}
