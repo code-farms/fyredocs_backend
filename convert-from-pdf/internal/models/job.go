@@ -36,7 +36,7 @@ type FileMetadata struct {
 	JobID        uuid.UUID `gorm:"type:uuid;index;not null" json:"jobId"`
 	Kind         string    `gorm:"type:text;not null" json:"kind"`
 	OriginalName string    `gorm:"type:text;not null" json:"originalName"`
-	Path         string    `gorm:"type:text;not null" json:"path"`
+	Path         string    `gorm:"type:text;not null" json:"-"`
 	SizeBytes    int64     `gorm:"not null" json:"sizeBytes"`
 	CreatedAt    time.Time `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
 }

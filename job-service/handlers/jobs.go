@@ -52,7 +52,7 @@ func CreateJobFromTool(c *gin.Context) {
 	}
 
 	if routing.ServiceForTool(toolType) == "" {
-		response.BadRequest(c, "INVALID_INPUT", "unsupported tool")
+		response.BadRequest(c, "INVALID_INPUT", "This tool is not available.")
 		return
 	}
 
@@ -64,7 +64,7 @@ func CreateJobFromTool(c *gin.Context) {
 		if err == nil && existing != "" {
 			var existingJob models.ProcessingJob
 			if err := models.DB.First(&existingJob, "id = ?", existing).Error; err == nil {
-				response.Created(c, "Job created", existingJob)
+				response.Created(c, "Your file is being processed!",existingJob)
 				return
 			}
 		}
@@ -75,7 +75,7 @@ func CreateJobFromTool(c *gin.Context) {
 	jobDir := filepath.Join(uploadDir, jobID.String())
 	// Fix #17: Use 0750 instead of os.ModePerm
 	if err := os.MkdirAll(jobDir, 0750); err != nil {
-		response.InternalError(c, "SERVER_ERROR", "failed to create upload directory")
+		response.InternalError(c, "SERVER_ERROR", "Something went wrong. Please try again.")
 		return
 	}
 
@@ -95,7 +95,7 @@ func CreateJobFromTool(c *gin.Context) {
 	if strings.Contains(c.GetHeader("Content-Type"), "application/json") {
 		var uploadReq UploadJobRequest
 		if err := c.ShouldBindJSON(&uploadReq); err != nil {
-			response.BadRequest(c, "INVALID_INPUT", "invalid request body")
+			response.BadRequest(c, "INVALID_INPUT", "Invalid request. Please try again.")
 			return
 		}
 		uploadIDs := uploadReq.UploadIDs
@@ -103,7 +103,7 @@ func CreateJobFromTool(c *gin.Context) {
 			uploadIDs = []string{uploadReq.UploadID}
 		}
 		if len(uploadIDs) == 0 {
-			response.BadRequest(c, "INVALID_INPUT", "uploadId is required")
+			response.BadRequest(c, "INVALID_INPUT", "Please upload a file first.")
 			return
 		}
 
@@ -144,12 +144,12 @@ func CreateJobFromTool(c *gin.Context) {
 	} else {
 		form, err := c.MultipartForm()
 		if err != nil {
-			response.BadRequest(c, "INVALID_INPUT", "failed to parse form")
+			response.BadRequest(c, "INVALID_INPUT", "Invalid file upload. Please try again.")
 			return
 		}
 		files := form.File["files"]
 		if len(files) == 0 {
-			response.BadRequest(c, "INVALID_INPUT", "no file uploaded")
+			response.BadRequest(c, "INVALID_INPUT", "Please upload a file first.")
 			return
 		}
 
@@ -184,7 +184,7 @@ func CreateJobFromTool(c *gin.Context) {
 			}
 			dst := filepath.Join(jobDir, filepath.Base(file.Filename))
 			if err := c.SaveUploadedFile(file, dst); err != nil {
-				response.InternalError(c, "SERVER_ERROR", "failed to save uploaded file")
+				response.InternalError(c, "SERVER_ERROR", "Something went wrong. Please try again.")
 				return
 			}
 			if err := validateMIMEType(toolType, dst); err != nil {
@@ -215,13 +215,12 @@ func CreateJobFromTool(c *gin.Context) {
 	correlationID := uuid.NewString()
 
 	metaPayload := map[string]interface{}{
-		"inputPaths":    inputPaths,
 		"options":       parseOptions(optionsRaw),
 		"correlationId": correlationID,
 	}
 	metaBytes, err := json.Marshal(metaPayload)
 	if err != nil {
-		response.InternalError(c, "SERVER_ERROR", "failed to build job metadata")
+		response.InternalError(c, "SERVER_ERROR", "Something went wrong. Please try again.")
 		return
 	}
 
@@ -249,7 +248,7 @@ func CreateJobFromTool(c *gin.Context) {
 		}
 		return nil
 	}); err != nil {
-		response.InternalError(c, "SERVER_ERROR", "failed to create job")
+		response.InternalError(c, "SERVER_ERROR", "Something went wrong. Please try again.")
 		return
 	}
 
@@ -258,7 +257,7 @@ func CreateJobFromTool(c *gin.Context) {
 	// Use centralized tool-to-service mapping
 	serviceName := routing.ServiceForTool(toolType)
 	if serviceName == "" {
-		response.BadRequest(c, "INVALID_INPUT", "unsupported tool")
+		response.BadRequest(c, "INVALID_INPUT", "This tool is not available.")
 		return
 	}
 	event := queue.JobEvent{
@@ -272,7 +271,7 @@ func CreateJobFromTool(c *gin.Context) {
 	}
 	subject := queue.SubjectForDispatch(serviceName)
 	if err := queue.PublishJobEvent(c.Request.Context(), natsconn.JS, subject, event); err != nil {
-		response.InternalError(c, "SERVER_ERROR", "failed to enqueue job")
+		response.InternalError(c, "SERVER_ERROR", "Our servers are busy. Please try again in a moment.")
 		return
 	}
 
@@ -286,7 +285,7 @@ func CreateJobFromTool(c *gin.Context) {
 
 	publishJobAnalyticsEvent(c.Request.Context(), "job.created", toolType, userID, totalSize)
 	slog.Info("job queued", "jobId", job.ID, "tool", toolType, "correlationId", correlationID)
-	response.Created(c, "Job created", job)
+	response.Created(c, "Your file is being processed!",job)
 }
 
 // Fix #29: Add pagination to GetJobsByTool
@@ -305,7 +304,7 @@ func GetJobsByTool(c *gin.Context) {
 	if userID == nil {
 		jobIDs := guestJobIDs(c.Request.Context(), guestToken(c))
 		if len(jobIDs) == 0 {
-			response.OKWithMeta(c, "Jobs retrieved", []models.ProcessingJob{}, &response.Meta{Page: page, Limit: limit, Total: 0})
+			response.OKWithMeta(c, "Jobs loaded successfully", []models.ProcessingJob{}, &response.Meta{Page: page, Limit: limit, Total: 0})
 			return
 		}
 		var jobs []models.ProcessingJob
@@ -313,10 +312,10 @@ func GetJobsByTool(c *gin.Context) {
 			Order("created_at desc").
 			Limit(limit).Offset(offset).
 			Find(&jobs).Error; err != nil {
-			response.InternalError(c, "SERVER_ERROR", "failed to fetch jobs")
+			response.InternalError(c, "SERVER_ERROR", "Could not load your jobs. Please try again.")
 			return
 		}
-		response.OKWithMeta(c, "Jobs retrieved", jobs, &response.Meta{Page: page, Limit: limit})
+		response.OKWithMeta(c, "Jobs loaded successfully", jobs, &response.Meta{Page: page, Limit: limit})
 		return
 	}
 
@@ -325,10 +324,10 @@ func GetJobsByTool(c *gin.Context) {
 		Order("created_at desc").
 		Limit(limit).Offset(offset).
 		Find(&jobs).Error; err != nil {
-		response.InternalError(c, "SERVER_ERROR", "failed to fetch jobs")
+		response.InternalError(c, "SERVER_ERROR", "Could not load your jobs. Please try again.")
 		return
 	}
-	response.OKWithMeta(c, "Jobs retrieved", jobs, &response.Meta{Page: page, Limit: limit})
+	response.OKWithMeta(c, "Jobs loaded successfully", jobs, &response.Meta{Page: page, Limit: limit})
 }
 
 func GetJobByID(c *gin.Context) {
@@ -341,16 +340,16 @@ func GetJobByID(c *gin.Context) {
 
 	var job models.ProcessingJob
 	if err := models.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "job not found")
+		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
 		return
 	}
 
 	if !authorizeJobAccess(c, &job) {
-		response.NotFound(c, "NOT_FOUND", "job not found")
+		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
 		return
 	}
 
-	response.OK(c, "Job retrieved", job)
+	response.OK(c, "Job details loaded", job)
 }
 
 func DeleteJobByID(c *gin.Context) {
@@ -363,11 +362,11 @@ func DeleteJobByID(c *gin.Context) {
 
 	var job models.ProcessingJob
 	if err := models.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "job not found")
+		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
 		return
 	}
 	if !authorizeJobAccess(c, &job) {
-		response.NotFound(c, "NOT_FOUND", "job not found")
+		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
 		return
 	}
 
@@ -385,7 +384,7 @@ func DeleteJobByID(c *gin.Context) {
 	}
 
 	if err := models.DB.Delete(&job).Error; err != nil {
-		response.InternalError(c, "SERVER_ERROR", "failed to delete job")
+		response.InternalError(c, "SERVER_ERROR", "Could not delete the job. Please try again.")
 		return
 	}
 
@@ -403,21 +402,21 @@ func DownloadJobFile(c *gin.Context) {
 
 	var job models.ProcessingJob
 	if err := models.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "job not found")
+		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
 		return
 	}
 	if !authorizeJobAccess(c, &job) {
-		response.NotFound(c, "NOT_FOUND", "job not found")
+		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
 		return
 	}
 	if job.Status != "completed" {
-		response.BadRequest(c, "NOT_READY", "file not ready")
+		response.BadRequest(c, "NOT_READY", "Your file is still being processed. Please wait.")
 		return
 	}
 
 	var outputFile models.FileMetadata
 	if err := models.DB.First(&outputFile, "job_id = ? AND kind = ?", job.ID, "output").Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "output file not found")
+		response.NotFound(c, "NOT_FOUND", "This download link has expired. Please process your file again.")
 		return
 	}
 
@@ -431,7 +430,7 @@ func DownloadJobFile(c *gin.Context) {
 func GetJobHistory(c *gin.Context) {
 	userID := authUserID(c)
 	if userID == nil {
-		response.Unauthorized(c, "UNAUTHORIZED", "authentication required")
+		response.Unauthorized(c, "UNAUTHORIZED", "Please log in to view your job history.")
 		return
 	}
 
@@ -445,11 +444,11 @@ func GetJobHistory(c *gin.Context) {
 		Limit(limit).
 		Offset(offset).
 		Find(&jobs).Error; err != nil {
-		response.InternalError(c, "SERVER_ERROR", "failed to fetch job history")
+		response.InternalError(c, "SERVER_ERROR", "Could not load your job history. Please try again.")
 		return
 	}
 
-	response.OKWithMeta(c, "Job history retrieved", jobs, &response.Meta{Page: page, Limit: limit})
+	response.OKWithMeta(c, "Job history loaded", jobs, &response.Meta{Page: page, Limit: limit})
 }
 
 type consumedUpload struct {

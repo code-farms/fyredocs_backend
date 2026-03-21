@@ -61,11 +61,11 @@ type UploadStatus struct {
 func InitUpload(c *gin.Context) {
 	var req UploadInitRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_INPUT", "Invalid request body")
+		response.BadRequest(c, "INVALID_INPUT", "Invalid upload request. Please try again.")
 		return
 	}
 	if req.FileName == "" || req.FileSize <= 0 || req.TotalChunks <= 0 {
-		response.BadRequest(c, "INVALID_INPUT", "fileName, fileSize, and totalChunks are required")
+		response.BadRequest(c, "INVALID_INPUT", "Missing file information. Please try again.")
 		return
 	}
 
@@ -82,29 +82,29 @@ func InitUpload(c *gin.Context) {
 	})
 	pipe.Expire(ctx, uploadKey, uploadTTL())
 	if _, err := pipe.Exec(ctx); err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Failed to initialize upload")
+		response.InternalError(c, "SERVER_ERROR", "Could not start the upload. Please try again.")
 		return
 	}
 
-	response.Created(c, "Upload initialized", gin.H{"uploadId": uploadID})
+	response.Created(c, "Upload started successfully", gin.H{"uploadId": uploadID})
 }
 
 func UploadChunk(c *gin.Context) {
 	uploadID := c.Param("uploadId")
 	indexStr := c.Query("index")
 	if uploadID == "" || indexStr == "" {
-		response.BadRequest(c, "INVALID_INPUT", "uploadId and chunk index are required")
+		response.BadRequest(c, "INVALID_INPUT", "Upload information is missing. Please restart the upload.")
 		return
 	}
 	index, err := strconv.Atoi(indexStr)
 	if err != nil || index < 0 {
-		response.BadRequest(c, "INVALID_INPUT", "invalid chunk index")
+		response.BadRequest(c, "INVALID_INPUT", "Upload error. Please restart the upload.")
 		return
 	}
 
 	file, err := c.FormFile("chunk")
 	if err != nil {
-		response.BadRequest(c, "INVALID_INPUT", "chunk is required")
+		response.BadRequest(c, "INVALID_INPUT", "Upload data is missing. Please try again.")
 		return
 	}
 
@@ -112,12 +112,12 @@ func UploadChunk(c *gin.Context) {
 	chunkDir := filepath.Join(tmpDir, uploadID)
 	// Fix #17: Use 0750 instead of os.ModePerm
 	if err := os.MkdirAll(chunkDir, 0750); err != nil {
-		response.InternalError(c, "SERVER_ERROR", "failed to create chunk directory")
+		response.InternalError(c, "SERVER_ERROR", "Something went wrong during upload. Please try again.")
 		return
 	}
 	chunkPath := filepath.Join(chunkDir, fmt.Sprintf("%06d.part", index))
 	if err := c.SaveUploadedFile(file, chunkPath); err != nil {
-		response.InternalError(c, "SERVER_ERROR", "failed to save chunk")
+		response.InternalError(c, "SERVER_ERROR", "Upload interrupted. Please try again.")
 		return
 	}
 
@@ -129,10 +129,10 @@ func UploadChunk(c *gin.Context) {
 	).StringSlice()
 	if err != nil {
 		if err.Error() == "NOT_FOUND" {
-			response.NotFound(c, "NOT_FOUND", "upload not found or expired")
+			response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
 			return
 		}
-		response.InternalError(c, "SERVER_ERROR", "failed to update upload state")
+		response.InternalError(c, "SERVER_ERROR", "Something went wrong during upload. Please try again.")
 		return
 	}
 
@@ -153,13 +153,13 @@ func UploadChunk(c *gin.Context) {
 		ReceivedChunks: receivedChunks,
 		Complete:        int(receivedChunks) == totalChunks && totalChunks > 0,
 	}
-	response.OK(c, "Chunk uploaded", status)
+	response.OK(c, "Upload in progress", status)
 }
 
 func GetUploadStatus(c *gin.Context) {
 	uploadID := c.Param("uploadId")
 	if uploadID == "" {
-		response.BadRequest(c, "INVALID_INPUT", "uploadId is required")
+		response.BadRequest(c, "INVALID_INPUT", "Upload session not found. Please try again.")
 		return
 	}
 
@@ -167,21 +167,21 @@ func GetUploadStatus(c *gin.Context) {
 	state, err := fetchUploadState(ctx, uploadID)
 	if err != nil {
 		if err == redis.Nil {
-			response.NotFound(c, "NOT_FOUND", "upload not found")
+			response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
 		} else {
-			response.InternalError(c, "SERVER_ERROR", "upload not found")
+			response.InternalError(c, "SERVER_ERROR", "Upload session expired. Please upload your file again.")
 		}
 		return
 	}
 
 	status := uploadStatusFromState(uploadID, state, ctx)
-	response.OK(c, "Upload status retrieved", status)
+	response.OK(c, "Upload status loaded", status)
 }
 
 func CompleteUpload(c *gin.Context) {
 	uploadID := c.Param("uploadId")
 	if uploadID == "" {
-		response.BadRequest(c, "INVALID_INPUT", "uploadId is required")
+		response.BadRequest(c, "INVALID_INPUT", "Upload session not found. Please try again.")
 		return
 	}
 
@@ -189,16 +189,16 @@ func CompleteUpload(c *gin.Context) {
 	state, err := fetchUploadState(ctx, uploadID)
 	if err != nil {
 		if err == redis.Nil {
-			response.NotFound(c, "NOT_FOUND", "upload not found")
+			response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
 		} else {
-			response.InternalError(c, "SERVER_ERROR", "upload not found")
+			response.InternalError(c, "SERVER_ERROR", "Upload session expired. Please upload your file again.")
 		}
 		return
 	}
 
 	status := uploadStatusFromState(uploadID, state, ctx)
 	if !status.Complete {
-		response.BadRequest(c, "BAD_REQUEST", "upload is incomplete")
+		response.BadRequest(c, "BAD_REQUEST", "Upload is not complete yet. Please wait for all parts to finish.")
 		return
 	}
 
@@ -206,13 +206,13 @@ func CompleteUpload(c *gin.Context) {
 	jobDir := filepath.Join(uploadDir, uploadID)
 	// Fix #17: Use 0750 instead of os.ModePerm
 	if err := os.MkdirAll(jobDir, 0750); err != nil {
-		response.InternalError(c, "SERVER_ERROR", "failed to create upload directory")
+		response.InternalError(c, "SERVER_ERROR", "Something went wrong. Please try again.")
 		return
 	}
 
 	finalPath := filepath.Join(jobDir, status.FileName)
 	if err := assembleChunks(uploadID, status.TotalChunks, finalPath); err != nil {
-		response.InternalError(c, "SERVER_ERROR", "failed to assemble chunks")
+		response.InternalError(c, "SERVER_ERROR", "Could not process your upload. Please try again.")
 		return
 	}
 
@@ -220,13 +220,13 @@ func CompleteUpload(c *gin.Context) {
 		maxBytes := maxUploadBytes()
 		if info.Size() > maxBytes {
 			_ = os.Remove(finalPath)
-			response.BadRequest(c, "FILE_TOO_LARGE", "assembled file exceeds maximum size")
+			response.BadRequest(c, "FILE_TOO_LARGE", "File is too large. Please upload a smaller file.")
 			return
 		}
 	}
 
 	_ = cleanupChunks(uploadID)
-	response.OK(c, "Upload completed", gin.H{"uploadId": uploadID, "storedPath": finalPath})
+	response.OK(c, "File uploaded successfully!", gin.H{"uploadId": uploadID})
 }
 
 func assembleChunks(uploadID string, totalChunks int, outputPath string) error {

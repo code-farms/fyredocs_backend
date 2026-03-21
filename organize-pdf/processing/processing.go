@@ -40,11 +40,9 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		err = mergePDFs(inputPaths, outputPath)
 	case "split-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".zip")
-		rangeValue, ok := optionString(options, "range")
-		if !ok {
-			rangeValue = "all"
-		}
-		err = splitPDF(inputPaths[0], outputPath, rangeValue)
+		mode, _ := optionString(options, "mode")
+		rangeValue, _ := optionString(options, "range")
+		err = splitPDF(inputPaths[0], outputPath, mode, rangeValue)
 	case "remove-pages":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		pages, ok := optionString(options, "pages")
@@ -89,10 +87,7 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		return Result{}, err
 	}
 
-	meta := map[string]interface{}{
-		"outputFilePath": outputPath,
-		"inputPaths":     inputPaths,
-	}
+	meta := map[string]interface{}{}
 	return Result{
 		OutputPath: outputPath,
 		Metadata:   meta,

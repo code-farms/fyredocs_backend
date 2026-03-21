@@ -51,11 +51,11 @@ func RequireAuthenticatedGin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authCtx, ok := GetGinAuth(c)
 		if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-			response.AbortErr(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Invalid or expired token")
+			response.AbortErr(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Your session has expired. Please log in again.")
 			return
 		}
 		if authCtx.IsGuest {
-			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "Insufficient permissions")
+			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "You don't have permission to perform this action.")
 			return
 		}
 		c.Next()
@@ -66,15 +66,15 @@ func RequireRoleGin(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authCtx, ok := GetGinAuth(c)
 		if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-			response.AbortErr(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Invalid or expired token")
+			response.AbortErr(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Your session has expired. Please log in again.")
 			return
 		}
 		if authCtx.IsGuest {
-			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "Insufficient permissions")
+			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "You don't have permission to perform this action.")
 			return
 		}
 		if !HasRole(authCtx, roles...) {
-			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "Insufficient permissions")
+			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "You don't have permission to perform this action.")
 			return
 		}
 		c.Next()
@@ -85,15 +85,15 @@ func RequireScopeGin(scopes ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authCtx, ok := GetGinAuth(c)
 		if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-			response.AbortErr(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Invalid or expired token")
+			response.AbortErr(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Your session has expired. Please log in again.")
 			return
 		}
 		if authCtx.IsGuest {
-			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "Insufficient permissions")
+			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "You don't have permission to perform this action.")
 			return
 		}
 		if !HasScope(authCtx, scopes...) {
-			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "Insufficient permissions")
+			response.AbortErr(c, http.StatusForbidden, string(ErrCodeForbidden), "You don't have permission to perform this action.")
 			return
 		}
 		c.Next()

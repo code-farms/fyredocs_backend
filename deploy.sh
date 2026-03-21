@@ -136,7 +136,7 @@ print_step "Waiting for services to be ready..."
 #     sleep 1
 # done
 echo -n "Checking Neon Database connectivity... "
-if psql "${DATABASE_URL}" -c "SELECT 1" &> /dev/null 2>&1; then
+if [ -n "${DATABASE_URL:-}" ] && psql "${DATABASE_URL}" -c "SELECT 1" &> /dev/null 2>&1; then
     print_success "Neon Database reachable!"
 else
     print_warning "Could not verify Neon Database (psql not installed or network issue) — continuing anyway"

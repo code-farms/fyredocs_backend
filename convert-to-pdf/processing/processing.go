@@ -100,10 +100,7 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		return Result{}, err
 	}
 
-	meta := map[string]interface{}{
-		"outputFilePath": outputPath,
-		"inputPaths":     inputPaths,
-	}
+	meta := map[string]interface{}{}
 	return Result{
 		OutputPath: outputPath,
 		Metadata:   meta,

@@ -37,12 +37,12 @@ func adminAuth() gin.HandlerFunc {
 
 		userID := strings.TrimSpace(c.GetHeader("X-User-ID"))
 		if userID == "" {
-			response.Err(c, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication required")
+			response.Err(c, http.StatusUnauthorized, "UNAUTHORIZED", "Please log in to access this page.")
 			c.Abort()
 			return
 		}
 
-		response.Err(c, http.StatusForbidden, "FORBIDDEN", "Super-admin access required")
+		response.Err(c, http.StatusForbidden, "FORBIDDEN", "You don't have permission to access this page.")
 		c.Abort()
 	}
 }

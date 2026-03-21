@@ -25,8 +25,8 @@ func mergePDFs(inputPaths []string, outputPath string) error {
 	return api.MergeCreateFile(inputPaths, outputPath, false, nil)
 }
 
-func splitPDF(inputPath string, outputPath string, pageRange string) error {
-	slog.Info("splitting PDF", "input", inputPath, "range", pageRange)
+func splitPDF(inputPath string, outputPath string, mode string, rangeValue string) error {
+	slog.Info("splitting PDF", "input", inputPath, "mode", mode, "range", rangeValue)
 
 	ctx, err := api.ReadContextFile(inputPath)
 	if err != nil {
@@ -42,17 +42,67 @@ func splitPDF(inputPath string, outputPath string, pageRange string) error {
 	}
 	defer os.RemoveAll(tempDir)
 
-	pages := parsePageRange(pageRange, pageCount)
-	if len(pages) == 0 {
-		return fmt.Errorf("invalid page range: %s", pageRange)
-	}
+	switch mode {
+	case "range":
+		// Each range group becomes one multi-page PDF.
+		groups := parsePageRangeGroups(rangeValue, pageCount)
+		if len(groups) == 0 {
+			return fmt.Errorf("invalid page range: %s", rangeValue)
+		}
+		for i, group := range groups {
+			outFile := filepath.Join(tempDir, fmt.Sprintf("pages_%03d.pdf", i+1))
+			pageStrings := make([]string, len(group))
+			for j, p := range group {
+				pageStrings[j] = fmt.Sprintf("%d", p)
+			}
+			if err := api.CollectFile(inputPath, outFile, pageStrings, nil); err != nil {
+				return fmt.Errorf("failed to collect pages %v: %w", group, err)
+			}
+		}
 
-	for _, pageNum := range pages {
-		outputFile := filepath.Join(tempDir, fmt.Sprintf("page_%03d.pdf", pageNum))
-		err := api.ExtractPagesFile(inputPath, outputFile, []string{fmt.Sprintf("%d", pageNum)}, nil)
-		if err != nil {
-			slog.Warn("failed to extract page", "page", pageNum, "error", err)
-			continue
+	case "extract":
+		// Split into chunks of N pages each.
+		span, err := strconv.Atoi(strings.TrimSpace(rangeValue))
+		if err != nil || span < 1 {
+			return fmt.Errorf("invalid span value: %s", rangeValue)
+		}
+		if err := api.SplitFile(inputPath, tempDir, span, nil); err != nil {
+			return fmt.Errorf("failed to split PDF by span %d: %w", span, err)
+		}
+
+	case "equal":
+		// Divide into N equal parts.
+		parts, err := strconv.Atoi(strings.TrimSpace(rangeValue))
+		if err != nil || parts < 2 {
+			return fmt.Errorf("invalid number of parts: %s", rangeValue)
+		}
+		if parts > pageCount {
+			parts = pageCount
+		}
+		groups := splitEqualGroups(pageCount, parts)
+		for i, group := range groups {
+			outFile := filepath.Join(tempDir, fmt.Sprintf("part_%03d.pdf", i+1))
+			pageStrings := make([]string, len(group))
+			for j, p := range group {
+				pageStrings[j] = fmt.Sprintf("%d", p)
+			}
+			if err := api.CollectFile(inputPath, outFile, pageStrings, nil); err != nil {
+				return fmt.Errorf("failed to collect part %d: %w", i+1, err)
+			}
+		}
+
+	default:
+		// "all" or empty: extract each page as an individual PDF.
+		pages := parsePageRange(rangeValue, pageCount)
+		if len(pages) == 0 {
+			pages = parsePageRange("all", pageCount)
+		}
+		pageStrings := make([]string, len(pages))
+		for i, p := range pages {
+			pageStrings[i] = fmt.Sprintf("%d", p)
+		}
+		if err := api.ExtractPagesFile(inputPath, tempDir, pageStrings, nil); err != nil {
+			return fmt.Errorf("failed to extract pages: %w", err)
 		}
 	}
 
@@ -254,6 +304,79 @@ func parsePageRange(rangeStr string, maxPages int) []int {
 	return pages
 }
 
+// parsePageRangeGroups parses a range string like "1-3,5,7-10" into groups
+// of page numbers: [[1,2,3], [5], [7,8,9,10]]. Each group becomes one PDF.
+func parsePageRangeGroups(rangeStr string, maxPages int) [][]int {
+	rangeStr = strings.TrimSpace(rangeStr)
+	if rangeStr == "" || rangeStr == "all" {
+		// "all" as a single group containing every page.
+		pages := make([]int, maxPages)
+		for i := 0; i < maxPages; i++ {
+			pages[i] = i + 1
+		}
+		return [][]int{pages}
+	}
+
+	var groups [][]int
+	parts := strings.Split(rangeStr, ",")
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.Contains(part, "-") {
+			rangeParts := strings.Split(part, "-")
+			if len(rangeParts) != 2 {
+				continue
+			}
+			start, err1 := strconv.Atoi(strings.TrimSpace(rangeParts[0]))
+			end, err2 := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
+			if err1 != nil || err2 != nil || start < 1 || end > maxPages || start > end {
+				continue
+			}
+			group := make([]int, 0, end-start+1)
+			for i := start; i <= end; i++ {
+				group = append(group, i)
+			}
+			groups = append(groups, group)
+		} else {
+			page, err := strconv.Atoi(part)
+			if err != nil || page < 1 || page > maxPages {
+				continue
+			}
+			groups = append(groups, []int{page})
+		}
+	}
+
+	return groups
+}
+
+// splitEqualGroups divides pageCount pages into n roughly equal groups.
+// For example, splitEqualGroups(10, 4) returns [[1,2,3],[4,5,6],[7,8],[9,10]].
+func splitEqualGroups(pageCount int, n int) [][]int {
+	if n <= 0 {
+		return nil
+	}
+	if n > pageCount {
+		n = pageCount
+	}
+	groups := make([][]int, n)
+	base := pageCount / n
+	extra := pageCount % n
+	page := 1
+	for i := 0; i < n; i++ {
+		size := base
+		if i < extra {
+			size++
+		}
+		group := make([]int, size)
+		for j := 0; j < size; j++ {
+			group[j] = page
+			page++
+		}
+		groups[i] = group
+	}
+	return groups
+}
+
 func parsePageOrder(order string, maxPages int) []int {
 	return parsePageRange(order, maxPages)
 }
@@ -268,7 +391,8 @@ func zipDirectory(sourceDir string, zipPath string) error {
 	zipWriter := zip.NewWriter(zipFile)
 	defer zipWriter.Close()
 
-	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+	fileCount := 0
+	if err := filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -296,6 +420,14 @@ func zipDirectory(sourceDir string, zipPath string) error {
 		if copyErr != nil {
 			return copyErr
 		}
+		fileCount++
 		return closeErr
-	})
+	}); err != nil {
+		return err
+	}
+
+	if fileCount == 0 {
+		return fmt.Errorf("no files to archive in %s", sourceDir)
+	}
+	return nil
 }

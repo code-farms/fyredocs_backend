@@ -261,7 +261,7 @@ services:
       UPLOAD_DIR: /app/uploads
       OUTPUT_DIR: /app/outputs
       MAX_UPLOAD_MB: "50"
-      GUEST_JOB_TTL: 2h
+      GUEST_JOB_TTL: 30m
       UPLOAD_TTL: 2h
 
       # Observability
@@ -520,7 +520,7 @@ services:
       OUTPUT_DIR: /app/outputs
       UPLOAD_TTL: 2h
       CLEANUP_INTERVAL: 5m
-      GUEST_JOB_TTL: 2h
+      GUEST_JOB_TTL: 30m
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"

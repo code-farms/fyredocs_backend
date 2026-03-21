@@ -63,7 +63,7 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 	image := strings.TrimSpace(payload.Image)
 
 	if email == "" || strings.TrimSpace(payload.Password) == "" || fullName == "" || country == "" {
-		response.Err(c, http.StatusBadRequest, "INVALID_INPUT", "Email, password, full name, and country are required")
+		response.Err(c, http.StatusBadRequest, "INVALID_INPUT", "Please fill in all required fields.")
 		return
 	}
 
@@ -78,16 +78,16 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 
 	var existing models.User
 	if err := models.DB.Where("email = ?", email).First(&existing).Error; err == nil {
-		response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "User already exists")
+		response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "An account with this email already exists. Please log in instead.")
 		return
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		response.InternalError(c, "SERVER_ERROR", "Unable to create user")
+		response.InternalError(c, "SERVER_ERROR", "Could not create your account. Please try again.")
 		return
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(payload.Password), bcrypt.DefaultCost)
 	if err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Unable to create user")
+		response.InternalError(c, "SERVER_ERROR", "Could not create your account. Please try again.")
 		return
 	}
 
@@ -101,10 +101,10 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 	}
 	if err := models.DB.Create(&user).Error; err != nil {
 		if isDuplicateError(err) {
-			response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "User already exists")
+			response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "An account with this email already exists. Please log in instead.")
 			return
 		}
-		response.InternalError(c, "SERVER_ERROR", "Unable to create user")
+		response.InternalError(c, "SERVER_ERROR", "Could not create your account. Please try again.")
 		return
 	}
 
@@ -120,23 +120,23 @@ func (ae *AuthEndpoints) Login(c *gin.Context) {
 
 	email := normalizeEmail(payload.Email)
 	if email == "" || strings.TrimSpace(payload.Password) == "" {
-		response.Unauthorized(c, "INVALID_CREDENTIALS", "Invalid credentials")
+		response.Unauthorized(c, "INVALID_CREDENTIALS", "Incorrect email or password. Please try again.")
 		return
 	}
 
 	if len(payload.Password) > 128 {
-		response.Unauthorized(c, "INVALID_CREDENTIALS", "Invalid credentials")
+		response.Unauthorized(c, "INVALID_CREDENTIALS", "Incorrect email or password. Please try again.")
 		return
 	}
 
 	var user models.User
 	if err := models.DB.Where("email = ?", email).First(&user).Error; err != nil {
-		response.Unauthorized(c, "INVALID_CREDENTIALS", "Invalid credentials")
+		response.Unauthorized(c, "INVALID_CREDENTIALS", "Incorrect email or password. Please try again.")
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(payload.Password)); err != nil {
-		response.Unauthorized(c, "INVALID_CREDENTIALS", "Invalid credentials")
+		response.Unauthorized(c, "INVALID_CREDENTIALS", "Incorrect email or password. Please try again.")
 		return
 	}
 
@@ -145,7 +145,7 @@ func (ae *AuthEndpoints) Login(c *gin.Context) {
 }
 
 func (ae *AuthEndpoints) Refresh(c *gin.Context) {
-	response.Err(c, http.StatusGone, "ENDPOINT_DEPRECATED", "Refresh tokens are no longer supported. Please login again to get a new access token.")
+	response.Err(c, http.StatusGone, "ENDPOINT_DEPRECATED", "Your session has expired. Please log in again.")
 }
 
 func (ae *AuthEndpoints) Me(c *gin.Context) {
@@ -159,7 +159,7 @@ func (ae *AuthEndpoints) Me(c *gin.Context) {
 		plan = models.SubscriptionPlan{Name: user.PlanName}
 	}
 
-	response.OK(c, "User profile retrieved", gin.H{
+	response.OK(c, "Profile loaded", gin.H{
 		"user": buildUserResponse(user, authCtx.Role, plan),
 	})
 }
@@ -175,7 +175,7 @@ func (ae *AuthEndpoints) Profile(c *gin.Context) {
 		plan = models.SubscriptionPlan{Name: user.PlanName}
 	}
 
-	response.OK(c, "User profile retrieved", gin.H{
+	response.OK(c, "Profile loaded", gin.H{
 		"profile": buildUserResponse(user, authCtx.Role, plan),
 	})
 }
@@ -183,7 +183,7 @@ func (ae *AuthEndpoints) Profile(c *gin.Context) {
 func (ae *AuthEndpoints) Logout(c *gin.Context) {
 	authCtx, ok := authverify.GetGinAuth(c)
 	if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-		response.Unauthorized(c, "UNAUTHORIZED", "Unauthorized")
+		response.Unauthorized(c, "UNAUTHORIZED", "Your session has expired. Please log in again.")
 		return
 	}
 
@@ -219,13 +219,13 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 
 	accessToken, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, planInfo)
 	if err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Unable to issue token")
+		response.InternalError(c, "SERVER_ERROR", "Login failed. Please try again.")
 		return
 	}
 
 	setAccessTokenCookie(c, accessToken)
 
-	response.OK(c, "Authentication successful", gin.H{
+	response.OK(c, "Welcome back!", gin.H{
 		"user": buildUserResponse(user, role, plan),
 	})
 }
@@ -247,7 +247,7 @@ func (ae *AuthEndpoints) denyAccessToken(ctx context.Context, tokenStr string) e
 func parseAuthPayload(c *gin.Context) (authCredentials, bool) {
 	var payload authCredentials
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		response.BadRequest(c, "INVALID_INPUT", "Invalid request")
+		response.BadRequest(c, "INVALID_INPUT", "Invalid request. Please try again.")
 		return authCredentials{}, false
 	}
 	return payload, true
@@ -283,19 +283,19 @@ func normalizeEmail(raw string) string {
 func loadUserFromAuth(c *gin.Context) (models.User, authverify.AuthContext, bool) {
 	authCtx, ok := authverify.GetGinAuth(c)
 	if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-		response.Unauthorized(c, "UNAUTHORIZED", "Unauthorized")
+		response.Unauthorized(c, "UNAUTHORIZED", "Your session has expired. Please log in again.")
 		return models.User{}, authverify.AuthContext{}, false
 	}
 
 	parsedID, err := uuid.Parse(strings.TrimSpace(authCtx.UserID))
 	if err != nil {
-		response.Unauthorized(c, "UNAUTHORIZED", "Unauthorized")
+		response.Unauthorized(c, "UNAUTHORIZED", "Your session has expired. Please log in again.")
 		return models.User{}, authverify.AuthContext{}, false
 	}
 
 	var user models.User
 	if err := models.DB.First(&user, "id = ?", parsedID).Error; err != nil {
-		response.Unauthorized(c, "UNAUTHORIZED", "Unauthorized")
+		response.Unauthorized(c, "UNAUTHORIZED", "Your session has expired. Please log in again.")
 		return models.User{}, authverify.AuthContext{}, false
 	}
 
