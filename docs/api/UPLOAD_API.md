@@ -225,7 +225,7 @@ POST /api/upload/{uploadId}/complete
 | Constraint | Value |
 |------------|-------|
 | Max file size | 50 MB (configurable via `MAX_UPLOAD_MB`) |
-| Upload TTL | 2 hours (configurable via `UPLOAD_TTL`) |
+| Upload TTL | 30 minutes (configurable via `UPLOAD_TTL`) |
 
 ---
 

@@ -74,3 +74,76 @@ func TestUploadBaseDir(t *testing.T) {
 		}
 	})
 }
+
+func TestOutputBaseDir(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		t.Setenv("OUTPUT_DIR", "")
+		got := outputBaseDir()
+		if got != "outputs" {
+			t.Errorf("expected 'outputs', got %q", got)
+		}
+	})
+
+	t.Run("custom", func(t *testing.T) {
+		t.Setenv("OUTPUT_DIR", "/data/outputs")
+		got := outputBaseDir()
+		if got != "/data/outputs" {
+			t.Errorf("expected '/data/outputs', got %q", got)
+		}
+	})
+}
+
+func TestFreeJobTTL(t *testing.T) {
+	t.Run("default 24h", func(t *testing.T) {
+		t.Setenv("FREE_JOB_TTL", "")
+		got := freeJobTTL()
+		if got != 24*time.Hour {
+			t.Errorf("expected 24h, got %v", got)
+		}
+	})
+
+	t.Run("custom", func(t *testing.T) {
+		t.Setenv("FREE_JOB_TTL", "12h")
+		got := freeJobTTL()
+		if got != 12*time.Hour {
+			t.Errorf("expected 12h, got %v", got)
+		}
+	})
+
+	t.Run("invalid uses default", func(t *testing.T) {
+		t.Setenv("FREE_JOB_TTL", "invalid")
+		got := freeJobTTL()
+		if got != 24*time.Hour {
+			t.Errorf("expected 24h, got %v", got)
+		}
+	})
+}
+
+func TestOutputFileJobIDRegexp(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantID  string
+		wantOK  bool
+	}{
+		{"optimized file", "optimized_a7786d18-0ec1-43aa-ad71-9e1e7c7037ea_1774037055.pdf", "a7786d18-0ec1-43aa-ad71-9e1e7c7037ea", true},
+		{"processed file", "processed_3dae81f8-6546-4a4d-8f5b-8479396ba8a7_1774036934.zip", "3dae81f8-6546-4a4d-8f5b-8479396ba8a7", true},
+		{"converted file", "converted_3dae81f8-6546-4a4d-8f5b-8479396ba8a7_1774036934.docx", "3dae81f8-6546-4a4d-8f5b-8479396ba8a7", true},
+		{"gitkeep", ".gitkeep", "", false},
+		{"random file", "random.txt", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matches := outputFileJobIDRegexp.FindStringSubmatch(tt.input)
+			if tt.wantOK {
+				if len(matches) < 2 || matches[1] != tt.wantID {
+					t.Errorf("expected jobID %q, got matches %v", tt.wantID, matches)
+				}
+			} else {
+				if len(matches) >= 2 {
+					t.Errorf("expected no match, got %v", matches)
+				}
+			}
+		})
+	}
+}

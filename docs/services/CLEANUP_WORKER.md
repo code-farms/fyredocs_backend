@@ -52,7 +52,7 @@ When scaled to multiple replicas, a Redis distributed lock (`cleanup-worker:lock
 
 ### 1. Expired Upload Cleanup
 
-**Criteria**: Uploads older than `UPLOAD_TTL` (default: 2 hours)
+**Criteria**: Uploads older than `UPLOAD_TTL` (default: 30 minutes)
 
 **Process**:
 1. Query uploads table for expired uploads
@@ -80,48 +80,58 @@ When scaled to multiple replicas, a Redis distributed lock (`cleanup-worker:lock
 
 ### 2. Expired Job Cleanup
 
-**Criteria**: Jobs older than expiration time
+**Criteria**: Jobs where `expires_at` has passed (any user type)
 
-- **Guest Jobs**: `GUEST_JOB_TTL` (default: 2 hours) after completion
-- **User Jobs**: Based on `expires_at` field in database
+- **Guest Jobs** (no user): `GUEST_JOB_TTL` (default: 30 minutes)
+- **Free Plan Users**: `FREE_JOB_TTL` (default: 24 hours)
+- **Pro Plan Users**: Never expire (`expires_at = NULL`)
 
 **Process**:
 1. Query jobs table for expired jobs
    ```sql
-   SELECT id, file_path, output_path FROM processing_jobs
-   WHERE expires_at < NOW()
+   SELECT * FROM processing_jobs
+   WHERE expires_at IS NOT NULL AND expires_at <= NOW()
+   LIMIT 100
    ```
-2. Delete input file (if exists)
-3. Delete output file (if exists)
-4. Delete job record from database
+2. Delete each file referenced in `file_metadata`
+3. Remove the empty job upload directory (`/app/uploads/{job_id}/`)
+4. Remove the empty job output directory (`/app/outputs/{job_id}/`)
+5. Delete `file_metadata` records from database
+6. Delete `processing_jobs` record from database
 
 **Files Cleaned**:
 - Input files: `/app/uploads/{job_id}/{filename}`
 - Output files: `/app/outputs/{job_id}/{filename}`
+- Empty job directories: `/app/uploads/{job_id}/`, `/app/outputs/{job_id}/`
 
 ---
 
-### 3. Failed Job Cleanup
+### 3. Orphaned File/Directory Cleanup
 
-**Criteria**: Jobs in "failed" state for > 24 hours
+**Criteria**: Upload directories or output files on disk with no matching `processing_jobs` record
 
 **Process**:
-1. Query for old failed jobs
-2. Delete associated files
-3. Archive or delete job record
+1. Scan `/app/uploads/` for UUID-named directories (skip `tmp`, `.gitkeep`)
+2. For each directory, check if a matching `processing_jobs` record exists
+3. If no record exists → `os.RemoveAll(dir)` (removes directory and any leftover files)
+4. Scan `/app/outputs/` for files matching `{prefix}_{jobID}_{timestamp}.{ext}` pattern
+5. Extract job UUID from filename, check if matching record exists
+6. If no record exists → `os.Remove(file)`
+
+**When this triggers**: Catches directories/files left behind when the old cleanup code deleted DB records but not directories, or when files are left after incomplete processing.
 
 ---
 
-### 4. Orphaned File Cleanup (Future Enhancement)
+### 4. Expiry Backfill for Legacy Jobs
 
-**Criteria**: Files in uploads/outputs directories without corresponding database records
+**Criteria**: Jobs where `user_id IS NOT NULL` and `expires_at IS NULL` (created before plan-based expiration was added)
 
 **Process**:
-1. List all files in uploads/outputs directories
-2. Check if each file has a database record
-3. Delete files without records
+1. Query for authenticated-user jobs missing `expires_at`
+2. Set `expires_at = created_at + FREE_JOB_TTL` (default 24h)
+3. These jobs will then be cleaned up by the normal expired job cleanup in the next cycle
 
-**Status**: Not yet implemented
+**When this triggers**: One-time for any legacy jobs. Once all old jobs have been backfilled, this is a no-op.
 
 ---
 
@@ -135,8 +145,9 @@ When scaled to multiple replicas, a Redis distributed lock (`cleanup-worker:lock
 | `REDIS_DB` | `0` | Redis database number |
 | `UPLOAD_DIR` | `/app/uploads` | Directory for uploaded files |
 | `OUTPUT_DIR` | `/app/outputs` | Directory for output files |
-| `UPLOAD_TTL` | `2h` | Upload expiration time |
-| `GUEST_JOB_TTL` | `2h` | Guest job expiration time (after completion) |
+| `UPLOAD_TTL` | `30m` | Upload expiration time |
+| `GUEST_JOB_TTL` | `30m` | Guest job expiration time |
+| `FREE_JOB_TTL` | `24h` | Free plan user job expiration time (set in job-service) |
 | `CLEANUP_INTERVAL` | `5m` | How often to run cleanup |
 | `MAX_RETRIES` | `3` | Max retries for failed jobs before cleanup |
 | `QUEUE_PREFIX` | `queue` | Redis queue key prefix |
@@ -153,10 +164,10 @@ When scaled to multiple replicas, a Redis distributed lock (`cleanup-worker:lock
 
 ```
 Every 5 minutes:
-  ├─ Check for expired uploads
-  ├─ Check for expired jobs
-  ├─ Delete associated files
-  └─ Update database
+  ├─ Phase 1: Delete expired jobs (guest + free user) and their files/directories
+  ├─ Phase 2: Clean up expired upload sessions from Redis and temp chunks
+  ├─ Phase 3: Remove orphaned upload dirs and output files (no matching DB record)
+  └─ Phase 4: Backfill expires_at on legacy authenticated-user jobs
 ```
 
 ### Customizing Interval
@@ -189,8 +200,9 @@ The cleanup worker helps prevent disk space exhaustion by:
 
 **File Retention**:
 - Active uploads: Until expiration or consumption
-- Completed jobs (user): Configurable (default: no expiration)
-- Completed jobs (guest): 2 hours after completion
+- Completed jobs (pro user): No expiration
+- Completed jobs (free user): 24 hours (configurable via `FREE_JOB_TTL`)
+- Completed jobs (guest): 30 minutes (configurable via `GUEST_JOB_TTL`)
 - Failed jobs: 24 hours
 
 ## Deployment
@@ -206,9 +218,9 @@ cleanup-worker:
     REDIS_ADDR: redis:6379
     UPLOAD_DIR: /app/uploads
     OUTPUT_DIR: /app/outputs
-    UPLOAD_TTL: 2h
+    UPLOAD_TTL: 30m
     CLEANUP_INTERVAL: 5m
-    GUEST_JOB_TTL: 2h
+    GUEST_JOB_TTL: 30m
   volumes:
     - uploads_data:/app/uploads
     - outputs_data:/app/outputs
@@ -465,7 +477,7 @@ sequenceDiagram
     T->>CW: Tick (trigger cleanup cycle)
 
     Note over CW: Phase 1: Expired Job Cleanup
-    CW->>DB: SELECT * FROM processing_jobs WHERE user_id IS NULL AND expires_at <= NOW() LIMIT 100
+    CW->>DB: SELECT * FROM processing_jobs WHERE expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 100
 
     loop For each expired job (batched)
         CW->>DB: SELECT * FROM file_metadata WHERE job_id = <id>
@@ -488,6 +500,26 @@ sequenceDiagram
         end
     end
 
+    Note over CW: Phase 3: Orphaned Directory/File Cleanup
+    CW->>FS: ReadDir(uploads/)
+    loop For each UUID directory
+        CW->>DB: SELECT count(*) FROM processing_jobs WHERE id = <dirName>
+        alt No matching job
+            CW->>FS: os.RemoveAll(uploads/<dirName>/)
+        end
+    end
+    CW->>FS: ReadDir(outputs/)
+    loop For each output file
+        CW->>CW: Extract jobID from filename regex
+        CW->>DB: SELECT count(*) FROM processing_jobs WHERE id = <jobID>
+        alt No matching job
+            CW->>FS: os.Remove(outputs/<filename>)
+        end
+    end
+
+    Note over CW: Phase 4: Backfill Expiry for Legacy Jobs
+    CW->>DB: UPDATE processing_jobs SET expires_at = created_at + FREE_JOB_TTL WHERE user_id IS NOT NULL AND expires_at IS NULL
+
     Note over CW: Cycle complete, wait for next tick
 ```
 
@@ -499,7 +531,7 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant FS as File System
 
-    CW->>DB: SELECT * FROM processing_jobs WHERE user_id IS NULL AND expires_at <= NOW() LIMIT 100
+    CW->>DB: SELECT * FROM processing_jobs WHERE expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 100
     DB-->>CW: [job1, job2, ..., jobN]
 
     loop For each job
@@ -514,6 +546,8 @@ sequenceDiagram
         end
 
         CW->>FS: os.Remove(file2.Path)
+        CW->>FS: os.Remove(uploads/{job.ID}/) [remove empty dir]
+        CW->>FS: os.Remove(outputs/{job.ID}/) [remove empty dir]
         CW->>DB: DELETE FROM file_metadata WHERE job_id = job.ID
         CW->>DB: DELETE FROM processing_jobs WHERE id = job.ID
     end

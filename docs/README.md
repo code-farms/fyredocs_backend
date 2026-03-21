@@ -184,8 +184,8 @@ All API responses include an `X-Request-ID` header. You can also pass your own `
 | Constraint | Value |
 |------------|-------|
 | Max File Size | 50 MB (configurable via `MAX_UPLOAD_MB`) |
-| Upload TTL | 2 hours (configurable via `UPLOAD_TTL`) |
-| Guest Job TTL | 2 hours (configurable via `GUEST_JOB_TTL`) |
+| Upload TTL | 30 minutes (configurable via `UPLOAD_TTL`) |
+| Guest Job TTL | 30 minutes (configurable via `GUEST_JOB_TTL`) |
 
 ---
 

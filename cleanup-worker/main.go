@@ -5,10 +5,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"esydocs/shared/config"
 	"esydocs/shared/logger"
@@ -56,13 +58,15 @@ func runCleanup(ctx context.Context) {
 
 	cleanupExpiredJobs(ctx)
 	cleanupUploadState(ctx)
+	cleanupOrphanedDirs(ctx)
+	backfillExpiry(ctx)
 }
 
 func cleanupExpiredJobs(ctx context.Context) {
 	now := time.Now().UTC()
 	for {
 		var jobs []models.ProcessingJob
-		query := models.DB.Where("user_id IS NULL AND expires_at IS NOT NULL AND expires_at <= ?", now).Limit(100)
+		query := models.DB.Where("expires_at IS NOT NULL AND expires_at <= ?", now).Limit(100)
 		if err := query.Find(&jobs).Error; err != nil {
 			slog.Error("cleanup jobs query failed", "error", err)
 			return
@@ -81,6 +85,13 @@ func cleanupExpiredJobs(ctx context.Context) {
 					slog.Warn("failed to remove file", "path", file.Path, "error", err)
 				}
 			}
+			// Remove the now-empty job directories
+			jobID := job.ID.String()
+			uploadDir := filepath.Join(uploadBaseDir(), jobID)
+			os.Remove(uploadDir)
+			outputDir := filepath.Join(outputBaseDir(), jobID)
+			os.Remove(outputDir)
+
 			if err := models.DB.Where("job_id = ?", job.ID).Delete(&models.FileMetadata{}).Error; err != nil {
 				slog.Error("failed to delete file metadata", "jobId", job.ID, "error", err)
 			}
@@ -131,6 +142,94 @@ func cleanupUploadState(ctx context.Context) {
 	}
 }
 
+var outputFileJobIDRegexp = regexp.MustCompile(`^[a-z]+_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_`)
+
+func cleanupOrphanedDirs(ctx context.Context) {
+	// Phase 1: Remove upload directories with no matching DB record
+	uploadsDir := uploadBaseDir()
+	entries, err := os.ReadDir(uploadsDir)
+	if err != nil {
+		slog.Error("failed to read uploads directory", "error", err)
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == "tmp" {
+			continue
+		}
+		if _, err := uuid.Parse(entry.Name()); err != nil {
+			continue
+		}
+		var count int64
+		if err := models.DB.Model(&models.ProcessingJob{}).Where("id = ?", entry.Name()).Count(&count).Error; err != nil {
+			slog.Error("failed to check job existence", "jobId", entry.Name(), "error", err)
+			continue
+		}
+		if count == 0 {
+			dirPath := filepath.Join(uploadsDir, entry.Name())
+			if err := os.RemoveAll(dirPath); err != nil {
+				slog.Warn("failed to remove orphaned upload dir", "path", dirPath, "error", err)
+			} else {
+				slog.Info("removed orphaned upload dir", "jobId", entry.Name())
+			}
+		}
+	}
+
+	// Phase 2: Remove output files with no matching DB record
+	outputsDir := outputBaseDir()
+	outputEntries, err := os.ReadDir(outputsDir)
+	if err != nil {
+		slog.Error("failed to read outputs directory", "error", err)
+		return
+	}
+	for _, entry := range outputEntries {
+		if entry.IsDir() || entry.Name() == ".gitkeep" {
+			continue
+		}
+		matches := outputFileJobIDRegexp.FindStringSubmatch(entry.Name())
+		if len(matches) < 2 {
+			continue
+		}
+		jobID := matches[1]
+		var count int64
+		if err := models.DB.Model(&models.ProcessingJob{}).Where("id = ?", jobID).Count(&count).Error; err != nil {
+			slog.Error("failed to check job existence for output", "jobId", jobID, "error", err)
+			continue
+		}
+		if count == 0 {
+			filePath := filepath.Join(outputsDir, entry.Name())
+			if err := os.Remove(filePath); err != nil {
+				slog.Warn("failed to remove orphaned output file", "path", filePath, "error", err)
+			} else {
+				slog.Info("removed orphaned output file", "jobId", jobID, "file", entry.Name())
+			}
+		}
+	}
+}
+
+func backfillExpiry(ctx context.Context) {
+	ttl := freeJobTTL()
+	result := models.DB.Model(&models.ProcessingJob{}).
+		Where("user_id IS NOT NULL AND expires_at IS NULL").
+		Update("expires_at", gorm.Expr("created_at + interval '1 second' * ?", int(ttl.Seconds())))
+	if result.Error != nil {
+		slog.Error("backfill expiry failed", "error", result.Error)
+	} else if result.RowsAffected > 0 {
+		slog.Info("backfilled expires_at for old jobs", "count", result.RowsAffected)
+	}
+}
+
+func freeJobTTL() time.Duration {
+	value := os.Getenv("FREE_JOB_TTL")
+	if value == "" {
+		return 24 * time.Hour
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 24 * time.Hour
+	}
+	return parsed
+}
+
 func cleanupInterval() time.Duration {
 	value := os.Getenv("CLEANUP_INTERVAL")
 	if value == "" {
@@ -160,4 +259,11 @@ func uploadBaseDir() string {
 		return value
 	}
 	return "uploads"
+}
+
+func outputBaseDir() string {
+	if value := os.Getenv("OUTPUT_DIR"); value != "" {
+		return value
+	}
+	return "outputs"
 }

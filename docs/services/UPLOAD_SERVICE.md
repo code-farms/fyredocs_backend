@@ -272,7 +272,7 @@ The service uses a chunked upload mechanism to handle large files reliably:
 
 ### Upload Expiration
 
-- Uploads expire after `UPLOAD_TTL` (default: 2 hours)
+- Uploads expire after `UPLOAD_TTL` (default: 30 minutes)
 - Expired uploads are cleaned up by the cleanup-worker
 - Once used in a job, uploads are marked as consumed
 
@@ -336,7 +336,7 @@ Jobs store metadata in PostgreSQL including:
 | `UPLOAD_DIR` | `/app/uploads` | Directory for uploaded files |
 | `OUTPUT_DIR` | `/app/outputs` | Directory for conversion outputs |
 | `MAX_UPLOAD_MB` | `50` | Maximum file size in MB (server-side hard cap; per-user plan limits are enforced via `X-User-Plan-Max-File-MB` header from the API Gateway) |
-| `UPLOAD_TTL` | `2h` | Upload expiration time |
+| `UPLOAD_TTL` | `30m` | Upload expiration time |
 
 ### Job Processing
 

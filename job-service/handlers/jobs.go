@@ -211,7 +211,8 @@ func CreateJobFromTool(c *gin.Context) {
 	}
 
 	userID := authUserID(c)
-	expiresAt := guestExpiry(userID)
+	planName := c.GetHeader("X-User-Plan")
+	expiresAt := jobExpiry(userID, planName)
 	correlationID := uuid.NewString()
 
 	metaPayload := map[string]interface{}{
@@ -750,11 +751,16 @@ func clampInt(value int, min int, max int) int {
 	return value
 }
 
-func guestExpiry(userID *uuid.UUID) *time.Time {
-	if userID != nil {
+func jobExpiry(userID *uuid.UUID, planName string) *time.Time {
+	if userID == nil {
+		ttl := guestJobTTL()
+		expires := time.Now().UTC().Add(ttl)
+		return &expires
+	}
+	if planName == "pro" {
 		return nil
 	}
-	ttl := guestJobTTL()
+	ttl := freeJobTTL()
 	expires := time.Now().UTC().Add(ttl)
 	return &expires
 }
@@ -767,6 +773,18 @@ func guestJobTTL() time.Duration {
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
 		return 2 * time.Hour
+	}
+	return parsed
+}
+
+func freeJobTTL() time.Duration {
+	value := os.Getenv("FREE_JOB_TTL")
+	if value == "" {
+		return 24 * time.Hour
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 24 * time.Hour
 	}
 	return parsed
 }

@@ -95,7 +95,7 @@ stateDiagram-v2
     Initialized --> Uploading: PUT /chunk (first)
     Uploading --> Uploading: PUT /chunk (subsequent)
     Uploading --> Complete: POST /complete<br/>(all chunks received)
-    Uploading --> Expired: TTL exceeded (2h)
+    Uploading --> Expired: TTL exceeded (30m)
     Complete --> Consumed: Job created from uploadId
     Initialized --> Expired: TTL exceeded (2h)
     Expired --> [*]: cleanup-worker removes

@@ -30,7 +30,7 @@ graph TB
 
         subgraph UploadState["cleanupUploadState()"]
             SCAN["Redis SCAN upload:*"]
-            CHECK_TTL["Check createdAt > UPLOAD_TTL (2h)"]
+            CHECK_TTL["Check createdAt > UPLOAD_TTL (30m)"]
             DELETE_REDIS["DEL upload:<id>, upload:<id>:chunks"]
             DELETE_DIR["Remove uploads/tmp/<id>/ directory"]
         end
@@ -62,7 +62,7 @@ graph TB
 graph LR
     subgraph Targets["What Gets Cleaned Up"]
         A["Expired Guest Jobs<br/>(user_id IS NULL,<br/>expires_at <= now)"]
-        B["Stale Upload State<br/>(Redis keys older than<br/>UPLOAD_TTL / 2 hours)"]
+        B["Stale Upload State<br/>(Redis keys older than<br/>UPLOAD_TTL / 30 minutes)"]
         C["Orphaned Chunk Directories<br/>(uploads/tmp/<id>/)"]
     end
 
@@ -78,7 +78,7 @@ graph LR
 graph TD
     subgraph EnvVars["Environment Variables"]
         A["CLEANUP_INTERVAL<br/>Default: 15m<br/>How often the ticker fires"]
-        B["UPLOAD_TTL<br/>Default: 2h<br/>Max age for upload state in Redis"]
+        B["UPLOAD_TTL<br/>Default: 30m<br/>Max age for upload state in Redis"]
         C["UPLOAD_DIR<br/>Default: uploads<br/>Base directory for uploaded files"]
     end
 ```

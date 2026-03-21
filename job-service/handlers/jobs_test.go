@@ -243,10 +243,10 @@ func TestGuestJobTTL(t *testing.T) {
 	})
 }
 
-func TestGuestExpiry(t *testing.T) {
-	t.Run("nil userID sets expiry", func(t *testing.T) {
+func TestJobExpiry(t *testing.T) {
+	t.Run("guest user gets GUEST_JOB_TTL expiry", func(t *testing.T) {
 		t.Setenv("GUEST_JOB_TTL", "2h")
-		got := guestExpiry(nil)
+		got := jobExpiry(nil, "")
 		if got == nil {
 			t.Fatal("expected non-nil expiry for guest")
 		}
@@ -255,11 +255,58 @@ func TestGuestExpiry(t *testing.T) {
 		}
 	})
 
-	t.Run("non-nil userID returns nil", func(t *testing.T) {
+	t.Run("free plan user gets FREE_JOB_TTL expiry", func(t *testing.T) {
+		t.Setenv("FREE_JOB_TTL", "24h")
 		uid := uuid.New()
-		got := guestExpiry(&uid)
+		got := jobExpiry(&uid, "free")
+		if got == nil {
+			t.Fatal("expected non-nil expiry for free user")
+		}
+		if time.Until(*got) < 23*time.Hour || time.Until(*got) > 25*time.Hour {
+			t.Errorf("expected expiry ~24h from now, got %v", *got)
+		}
+	})
+
+	t.Run("empty plan name treated as free", func(t *testing.T) {
+		t.Setenv("FREE_JOB_TTL", "24h")
+		uid := uuid.New()
+		got := jobExpiry(&uid, "")
+		if got == nil {
+			t.Fatal("expected non-nil expiry for empty plan user")
+		}
+	})
+
+	t.Run("pro plan returns nil (never expires)", func(t *testing.T) {
+		uid := uuid.New()
+		got := jobExpiry(&uid, "pro")
 		if got != nil {
-			t.Errorf("expected nil expiry for authenticated user, got %v", got)
+			t.Errorf("expected nil expiry for pro user, got %v", got)
+		}
+	})
+}
+
+func TestFreeJobTTL(t *testing.T) {
+	t.Run("default 24h", func(t *testing.T) {
+		t.Setenv("FREE_JOB_TTL", "")
+		got := freeJobTTL()
+		if got != 24*time.Hour {
+			t.Errorf("expected 24h, got %v", got)
+		}
+	})
+
+	t.Run("custom", func(t *testing.T) {
+		t.Setenv("FREE_JOB_TTL", "12h")
+		got := freeJobTTL()
+		if got != 12*time.Hour {
+			t.Errorf("expected 12h, got %v", got)
+		}
+	})
+
+	t.Run("invalid uses default", func(t *testing.T) {
+		t.Setenv("FREE_JOB_TTL", "invalid")
+		got := freeJobTTL()
+		if got != 24*time.Hour {
+			t.Errorf("expected 24h, got %v", got)
 		}
 	})
 }

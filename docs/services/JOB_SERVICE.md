@@ -199,7 +199,7 @@ CREATE TABLE processing_jobs (
     created_at    TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
     completed_at  TIMESTAMP     NULL,
-    expires_at    TIMESTAMP     NULL        -- set for guest jobs (2h default)
+    expires_at    TIMESTAMP     NULL        -- guest: GUEST_JOB_TTL (30m), free: FREE_JOB_TTL (24h), pro: NULL (never)
 );
 
 -- Indexes
@@ -230,8 +230,8 @@ CREATE INDEX idx_file_metadata_job_id ON file_metadata(job_id);
 
 | Key Pattern | Type | TTL | Purpose |
 |-------------|------|-----|---------|
-| `upload:<uploadId>` | Hash | `UPLOAD_TTL` (2h) | Upload session state (fileName, fileSize, totalChunks, createdAt) |
-| `upload:<uploadId>:chunks` | Set | `UPLOAD_TTL` (2h) | Set of received chunk indices |
+| `upload:<uploadId>` | Hash | `UPLOAD_TTL` (30m) | Upload session state (fileName, fileSize, totalChunks, createdAt) |
+| `upload:<uploadId>:chunks` | Set | `UPLOAD_TTL` (30m) | Set of received chunk indices |
 | `guest:<token>:jobs` | Set | `GUEST_JOB_TTL` (2h) | Job IDs belonging to a guest session |
 | `ratelimit:upload:<ip>` | String | Rate limit window | Upload rate limit counter |
 | `idempotency:<key>` | String | 10 minutes | Maps idempotency key to job ID for deduplication |
@@ -371,7 +371,7 @@ sequenceDiagram
     Note over C: No JWT token -- anonymous user
     C->>JS: POST /api/convert-to-pdf/word-to-pdf {uploadId}
     JS->>JS: authUserID() returns nil (guest)
-    JS->>DB: INSERT processing_job (user_id=NULL, expires_at=NOW+2h)
+    JS->>DB: INSERT processing_job (user_id=NULL, expires_at=NOW+GUEST_JOB_TTL)
 
     JS->>R: SADD guest:<token>:jobs <jobId>
     JS->>R: EXPIRE guest:<token>:jobs 2h
@@ -462,8 +462,9 @@ When job creation fails partway through:
 | `PORT` | `8081` | HTTP server port |
 | `UPLOAD_DIR` | `uploads` | Base directory for uploaded files |
 | `MAX_UPLOAD_MB` | `50` | Server-side hard cap on file size in MB (per-user plan limits are enforced via `X-User-Plan-Max-File-MB` header) |
-| `UPLOAD_TTL` | `2h` | Upload session expiration |
-| `GUEST_JOB_TTL` | `2h` | Guest job expiration |
+| `UPLOAD_TTL` | `30m` | Upload session expiration |
+| `GUEST_JOB_TTL` | `30m` | Guest job expiration (no user) |
+| `FREE_JOB_TTL` | `24h` | Free plan user job expiration |
 | `RATE_LIMIT_UPLOAD` | `30` | Upload rate limit per window |
 | `RATE_LIMIT_WINDOW` | `60s` | Rate limit time window |
 | `TRUSTED_PROXIES` | `127.0.0.1,::1` | Trusted proxy IP addresses |
@@ -503,7 +504,8 @@ job-service:
     JWT_HS256_SECRET: ${JWT_HS256_SECRET}
     UPLOAD_DIR: /app/uploads
     MAX_UPLOAD_MB: "50"
-    GUEST_JOB_TTL: "2h"
+    GUEST_JOB_TTL: "30m"
+    FREE_JOB_TTL: "24h"
   volumes:
     - uploads_data:/app/uploads
   depends_on:

@@ -475,7 +475,7 @@ redis-cli TTL upload:YOUR-UPLOAD-ID
 ```
 
 **Solutions**:
-1. Increase `UPLOAD_TTL` (default 2h may be too short)
+1. Increase `UPLOAD_TTL` (default 30m may be too short)
 2. Verify upload ID is correct
 3. Check if Redis restarted (sessions are in-memory)
 4. Enable AOF persistence for durability
