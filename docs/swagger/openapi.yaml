@@ -2012,6 +2012,10 @@ components:
           format: date-time
           nullable: true
           description: Expiration timestamp for guest jobs
+        outputFileName:
+          type: string
+          description: Computed output file name with the correct extension for the tool type (e.g. "document.docx" for pdf-to-word, "photo.pdf" for image-to-pdf)
+          example: document.docx
 
   # ---------------------------------------------------------------------------
   # Reusable Responses

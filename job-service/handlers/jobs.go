@@ -286,7 +286,7 @@ func CreateJobFromTool(c *gin.Context) {
 
 	publishJobAnalyticsEvent(c.Request.Context(), "job.created", toolType, userID, totalSize)
 	slog.Info("job queued", "jobId", job.ID, "tool", toolType, "correlationId", correlationID)
-	response.Created(c, "Your file is being processed!",job)
+	response.Created(c, "Your file is being processed!", toJobResponse(job))
 }
 
 // Fix #29: Add pagination to GetJobsByTool
@@ -305,7 +305,7 @@ func GetJobsByTool(c *gin.Context) {
 	if userID == nil {
 		jobIDs := guestJobIDs(c.Request.Context(), guestToken(c))
 		if len(jobIDs) == 0 {
-			response.OKWithMeta(c, "Jobs loaded successfully", []models.ProcessingJob{}, &response.Meta{Page: page, Limit: limit, Total: 0})
+			response.OKWithMeta(c, "Jobs loaded successfully", []jobResponse{}, &response.Meta{Page: page, Limit: limit, Total: 0})
 			return
 		}
 		var jobs []models.ProcessingJob
@@ -316,7 +316,7 @@ func GetJobsByTool(c *gin.Context) {
 			response.InternalError(c, "SERVER_ERROR", "Could not load your jobs. Please try again.")
 			return
 		}
-		response.OKWithMeta(c, "Jobs loaded successfully", jobs, &response.Meta{Page: page, Limit: limit})
+		response.OKWithMeta(c, "Jobs loaded successfully", toJobResponses(jobs), &response.Meta{Page: page, Limit: limit})
 		return
 	}
 
@@ -328,7 +328,7 @@ func GetJobsByTool(c *gin.Context) {
 		response.InternalError(c, "SERVER_ERROR", "Could not load your jobs. Please try again.")
 		return
 	}
-	response.OKWithMeta(c, "Jobs loaded successfully", jobs, &response.Meta{Page: page, Limit: limit})
+	response.OKWithMeta(c, "Jobs loaded successfully", toJobResponses(jobs), &response.Meta{Page: page, Limit: limit})
 }
 
 func GetJobByID(c *gin.Context) {
@@ -350,7 +350,7 @@ func GetJobByID(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, "Job details loaded", job)
+	response.OK(c, "Job details loaded", toJobResponse(job))
 }
 
 func DeleteJobByID(c *gin.Context) {
@@ -449,7 +449,7 @@ func GetJobHistory(c *gin.Context) {
 		return
 	}
 
-	response.OKWithMeta(c, "Job history loaded", jobs, &response.Meta{Page: page, Limit: limit})
+	response.OKWithMeta(c, "Job history loaded", toJobResponses(jobs), &response.Meta{Page: page, Limit: limit})
 }
 
 type consumedUpload struct {
@@ -562,6 +562,26 @@ func normalizeToolType(toolType string) (string, error) {
 		return "", fmt.Errorf("tool is required")
 	}
 	return toolType, nil
+}
+
+// jobResponse wraps ProcessingJob with a computed output file name so that
+// API consumers do not have to replicate the extension-mapping logic.
+type jobResponse struct {
+	models.ProcessingJob
+	OutputFileName string `json:"outputFileName"`
+}
+
+func toJobResponse(job models.ProcessingJob) jobResponse {
+	name, _ := outputFileName(job.ToolType, job.FileName)
+	return jobResponse{ProcessingJob: job, OutputFileName: name}
+}
+
+func toJobResponses(jobs []models.ProcessingJob) []jobResponse {
+	out := make([]jobResponse, len(jobs))
+	for i, j := range jobs {
+		out[i] = toJobResponse(j)
+	}
+	return out
 }
 
 func outputFileName(toolType string, inputName string) (string, string) {

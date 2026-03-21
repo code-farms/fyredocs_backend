@@ -103,6 +103,10 @@ These are registered under `/api/convert-from-pdf`, `/api/convert-to-pdf`, `/api
 
 Where `{category}` is one of: `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`.
 
+### Job API Response
+
+All job endpoints (`CreateJobFromTool`, `GetJobByID`, `GetJobsByTool`, `GetJobHistory`) return a `jobResponse` wrapper that includes the original `ProcessingJob` fields plus a computed `outputFileName` field. This field contains the expected output file name with the correct extension for the tool type (e.g., `"photo.pdf"` for an image-to-pdf job with input `"photo.jpeg"`, or `"report.docx"` for pdf-to-word). Frontend clients should use `outputFileName` for display and download naming.
+
 ### History Endpoint
 
 | Method | Path | Handler | Description |

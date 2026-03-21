@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"job-service/internal/models"
 )
 
 func TestNormalizeToolType(t *testing.T) {
@@ -106,6 +108,7 @@ func TestOutputFileName(t *testing.T) {
 		{"pdf-to-image", "doc.pdf", "doc.zip", "application/zip"},
 		{"split-pdf", "doc.pdf", "doc.zip", "application/zip"},
 		{"word-to-pdf", "doc.docx", "doc.pdf", "application/pdf"},
+		{"image-to-pdf", "photo.jpeg", "photo.pdf", "application/pdf"},
 		{"compress-pdf", "doc.pdf", "doc.pdf", "application/pdf"},
 		{"merge-pdf", "doc.pdf", "doc.pdf", "application/pdf"},
 	}
@@ -405,6 +408,79 @@ func TestValidateMIMEType(t *testing.T) {
 				t.Errorf("validateMIMEType(%q, %q) error = %v, wantErr %v", tt.toolType, tt.filePath, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestToJobResponse(t *testing.T) {
+	tests := []struct {
+		toolType       string
+		inputFileName  string
+		wantOutputName string
+	}{
+		{"image-to-pdf", "poem.jpeg", "poem.pdf"},
+		{"image-to-pdf", "photo.png", "photo.pdf"},
+		{"pdf-to-word", "report.pdf", "report.docx"},
+		{"pdf-to-excel", "data.pdf", "data.xlsx"},
+		{"pdf-to-image", "doc.pdf", "doc.zip"},
+		{"compress-pdf", "file.pdf", "file.pdf"},
+		{"word-to-pdf", "essay.docx", "essay.pdf"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.toolType+"_"+tt.inputFileName, func(t *testing.T) {
+			job := models.ProcessingJob{
+				ID:       uuid.New(),
+				ToolType: tt.toolType,
+				FileName: tt.inputFileName,
+			}
+			resp := toJobResponse(job)
+			if resp.OutputFileName != tt.wantOutputName {
+				t.Errorf("toJobResponse() OutputFileName = %q, want %q", resp.OutputFileName, tt.wantOutputName)
+			}
+			if resp.FileName != tt.inputFileName {
+				t.Errorf("toJobResponse() FileName = %q, want %q (original preserved)", resp.FileName, tt.inputFileName)
+			}
+		})
+	}
+}
+
+func TestToJobResponses(t *testing.T) {
+	jobs := []models.ProcessingJob{
+		{ID: uuid.New(), ToolType: "image-to-pdf", FileName: "a.jpeg"},
+		{ID: uuid.New(), ToolType: "pdf-to-word", FileName: "b.pdf"},
+	}
+	responses := toJobResponses(jobs)
+	if len(responses) != 2 {
+		t.Fatalf("expected 2 responses, got %d", len(responses))
+	}
+	if responses[0].OutputFileName != "a.pdf" {
+		t.Errorf("responses[0].OutputFileName = %q, want %q", responses[0].OutputFileName, "a.pdf")
+	}
+	if responses[1].OutputFileName != "b.docx" {
+		t.Errorf("responses[1].OutputFileName = %q, want %q", responses[1].OutputFileName, "b.docx")
+	}
+}
+
+func TestToJobResponseJSON(t *testing.T) {
+	job := models.ProcessingJob{
+		ID:       uuid.New(),
+		ToolType: "image-to-pdf",
+		FileName: "photo.jpg",
+		Status:   "completed",
+	}
+	resp := toJobResponse(job)
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["outputFileName"] != "photo.pdf" {
+		t.Errorf("JSON outputFileName = %v, want %q", m["outputFileName"], "photo.pdf")
+	}
+	if m["fileName"] != "photo.jpg" {
+		t.Errorf("JSON fileName = %v, want %q (original preserved)", m["fileName"], "photo.jpg")
 	}
 }
 
