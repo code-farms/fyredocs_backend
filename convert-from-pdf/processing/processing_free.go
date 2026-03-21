@@ -10,9 +10,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 )
+
+// ProgressFunc reports progress as a percentage (0-100).
+type ProgressFunc func(percent int)
 
 // pdfToImages converts a PDF to PNG images. For single-page PDFs the output
 // is a single PNG file; for multi-page PDFs the output is a ZIP of PNGs.
@@ -109,8 +113,107 @@ func pdfToOffice(ctx context.Context, inputPath string, outputPath string, outpu
 		}
 	}
 
+	// Validate that LibreOffice actually produced output.
+	info, statErr := os.Stat(outputPath)
+	if statErr != nil || info.Size() == 0 {
+		return fmt.Errorf("LibreOffice produced no output for %s conversion", outputFormat)
+	}
+
 	slog.Info("PDF to office conversion completed", "format", outputFormat, "output", outputPath)
 	return nil
+}
+
+// pdfToPptImages converts a PDF to a PPTX where each page is an image slide.
+// This is more reliable than the LibreOffice writer_pdf_import approach because
+// it works with any PDF type (text, graphics, scanned docs).
+func pdfToPptImages(ctx context.Context, inputPath string, outputPath string, onProgress ProgressFunc) error {
+	slog.Info("converting PDF to PPTX (image-based)", "input", inputPath)
+
+	tempDir, err := os.MkdirTemp("", "pdf-ppt-images-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	pdfCtx, err := api.ReadContextFile(inputPath)
+	if err != nil {
+		return fmt.Errorf("failed to read PDF: %w", err)
+	}
+	pageCount := pdfCtx.PageCount
+	if pageCount == 0 {
+		return fmt.Errorf("PDF has no pages")
+	}
+
+	// Convert each page to PNG using pdftoppm and report progress.
+	for i := 1; i <= pageCount; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		cmd := exec.CommandContext(ctx, "pdftoppm", "-png",
+			"-f", fmt.Sprintf("%d", i),
+			"-l", fmt.Sprintf("%d", i),
+			inputPath,
+			filepath.Join(tempDir, fmt.Sprintf("page_%03d", i)),
+		)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("pdftoppm failed on page %d: %w", i, err)
+		}
+
+		// Report progress: pages use range 20-80%.
+		if onProgress != nil {
+			pct := 20 + int(float64(i)/float64(pageCount)*60)
+			onProgress(pct)
+		}
+	}
+
+	// Build the PPTX from the images.
+	if onProgress != nil {
+		onProgress(85)
+	}
+	if err := buildPptxFromImages(tempDir, outputPath); err != nil {
+		return fmt.Errorf("failed to build PPTX: %w", err)
+	}
+
+	slog.Info("PDF to PPTX conversion completed", "pages", pageCount, "output", outputPath)
+	return nil
+}
+
+// pdfToOfficeTicking wraps pdfToOffice with synthetic progress ticking for
+// conversion tools that call a single long-running subprocess (docx, xlsx).
+func pdfToOfficeTicking(ctx context.Context, inputPath string, outputPath string, outputFormat string, onProgress ProgressFunc) error {
+	if onProgress != nil {
+		onProgress(30)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- pdfToOffice(ctx, inputPath, outputPath, outputFormat)
+	}()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	progress := 30
+	for {
+		select {
+		case err := <-done:
+			if err == nil && onProgress != nil {
+				onProgress(85)
+			}
+			return err
+		case <-ticker.C:
+			if progress < 80 && onProgress != nil {
+				progress += 5
+				onProgress(progress)
+			}
+		case <-ctx.Done():
+			// Wait for the goroutine to finish so pdfToOffice's CommandContext
+			// handles cancellation properly.
+			return <-done
+		}
+	}
 }
 
 func pdfToHTML(ctx context.Context, inputPath string, outputPath string) error {

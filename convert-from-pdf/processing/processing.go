@@ -15,7 +15,7 @@ type Result struct {
 	Metadata   map[string]interface{}
 }
 
-func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (Result, error) {
+func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string, onProgress ProgressFunc) (Result, error) {
 	if outputDir == "" {
 		outputDir = "outputs"
 	}
@@ -38,13 +38,13 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		err = pdfToPdfa(ctx, inputPaths[0], outputPath)
 	case "pdf-to-word", "pdf-to-docx":
 		outputPath = filepath.Join(outputDir, outputFileName+".docx")
-		err = pdfToOffice(ctx, inputPaths[0], outputPath, "docx")
+		err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "docx", onProgress)
 	case "pdf-to-excel", "pdf-to-xlsx":
 		outputPath = filepath.Join(outputDir, outputFileName+".xlsx")
-		err = pdfToOffice(ctx, inputPaths[0], outputPath, "xlsx")
+		err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "xlsx", onProgress)
 	case "pdf-to-ppt", "pdf-to-powerpoint", "pdf-to-pptx":
 		outputPath = filepath.Join(outputDir, outputFileName+".pptx")
-		err = pdfToOffice(ctx, inputPaths[0], outputPath, "pptx")
+		err = pdfToPptImages(ctx, inputPaths[0], outputPath, onProgress)
 	case "pdf-to-html":
 		outputPath = filepath.Join(outputDir, outputFileName+".zip")
 		err = pdfToHTML(ctx, inputPaths[0], outputPath)

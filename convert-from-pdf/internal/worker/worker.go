@@ -24,7 +24,10 @@ type ProcessResult struct {
 	Metadata   map[string]interface{}
 }
 
-type ProcessFunc func(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (*ProcessResult, error)
+// ProgressFunc reports processing progress as a percentage (0-100).
+type ProgressFunc func(percent int)
+
+type ProcessFunc func(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string, onProgress ProgressFunc) (*ProcessResult, error)
 
 type WorkerConfig struct {
 	ServiceName  string
@@ -151,7 +154,8 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 		return
 	}
 
-	updateJobStatus(cfg.DB, jobID, "processing", 20, "")
+	// Only increase progress, never decrease on re-entry (retries).
+	updateJobStatusNoRegress(cfg.DB, jobID, "processing", 20)
 
 	options := map[string]interface{}{}
 	if len(payload.Options) > 0 && json.Valid(payload.Options) {
@@ -160,7 +164,27 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 		}
 	}
 
-	result, procErr := cfg.Process(ctx, jobID, payload.ToolType, payload.InputPaths, options, outDir)
+	// Per-job timeout prevents hung subprocesses from causing AckWait redelivery.
+	jobCtx, jobCancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer jobCancel()
+
+	// Progress callback that only increases, never decreases, the DB value.
+	onProgress := func(percent int) {
+		clamped := percent
+		if clamped < 20 {
+			clamped = 20
+		}
+		if clamped > 90 {
+			clamped = 90
+		}
+		if err := cfg.DB.Model(&models.ProcessingJob{}).
+			Where("id = ? AND progress < ?", jobID, clamped).
+			Update("progress", clamped).Error; err != nil {
+			logger.Warn("failed to update progress", "jobId", jobID, "error", err)
+		}
+	}
+
+	result, procErr := cfg.Process(jobCtx, jobID, payload.ToolType, payload.InputPaths, options, outDir, onProgress)
 	if procErr != nil {
 		handleFailure(cfg, msg, payload, procErr, logger)
 		return
@@ -199,7 +223,17 @@ func handleFailure(cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err 
 			"correlationId", payload.CorrelationID,
 			"error", err,
 		)
-		updateJobStatusString(cfg.DB, payload.JobID, "queued", 0, fmt.Sprintf("retrying: %v", err))
+		// Keep status as "processing" and do NOT reset progress — prevents
+		// the frontend from seeing a progress regression during retries.
+		retryReason := fmt.Sprintf("retrying (attempt %d): %v", deliveryCount, err)
+		if updateErr := cfg.DB.Model(&models.ProcessingJob{}).
+			Where("id = ?", payload.JobID).
+			Updates(map[string]interface{}{
+				"status":         "processing",
+				"failure_reason": retryReason,
+			}).Error; updateErr != nil {
+			logger.Error("failed to update retry status", "jobId", payload.JobID, "error", updateErr)
+		}
 		delay := backoffDuration(int(deliveryCount) - 1)
 		if nakErr := msg.NakWithDelay(delay); nakErr != nil {
 			logger.Error("failed to nak message", "jobId", payload.JobID, "error", nakErr)
@@ -250,6 +284,26 @@ func updateJobStatus(db *gorm.DB, jobID uuid.UUID, status string, progress int, 
 		updates["failure_reason"] = failureReason
 	}
 	if err := db.Model(&models.ProcessingJob{}).Where("id = ?", jobID).Updates(updates).Error; err != nil {
+		slog.Error("failed to update job status", "jobId", jobID, "error", err)
+	}
+}
+
+// updateJobStatusNoRegress sets status and progress but only if the new
+// progress is higher than the current value. This prevents visible regressions
+// during retries.
+func updateJobStatusNoRegress(db *gorm.DB, jobID uuid.UUID, status string, progress int) {
+	if err := db.Model(&models.ProcessingJob{}).
+		Where("id = ? AND progress < ?", jobID, progress).
+		Updates(map[string]interface{}{
+			"status":   status,
+			"progress": progress,
+		}).Error; err != nil {
+		slog.Error("failed to update job status (no-regress)", "jobId", jobID, "error", err)
+	}
+	// Also update status even if progress didn't change (e.g. re-entry at same progress).
+	if err := db.Model(&models.ProcessingJob{}).
+		Where("id = ?", jobID).
+		Update("status", status).Error; err != nil {
 		slog.Error("failed to update job status", "jobId", jobID, "error", err)
 	}
 }

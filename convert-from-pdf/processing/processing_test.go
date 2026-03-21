@@ -8,7 +8,7 @@ import (
 )
 
 func TestProcessFileNoInputs(t *testing.T) {
-	_, err := ProcessFile(context.Background(), uuid.New(), "pdf-to-text", nil, nil, "")
+	_, err := ProcessFile(context.Background(), uuid.New(), "pdf-to-text", nil, nil, "", nil)
 	if err == nil {
 		t.Error("expected error for no input files")
 	}
@@ -18,7 +18,7 @@ func TestProcessFileNoInputs(t *testing.T) {
 }
 
 func TestProcessFileUnsupportedTool(t *testing.T) {
-	_, err := ProcessFile(context.Background(), uuid.New(), "unknown-tool", []string{"/tmp/test.pdf"}, nil, t.TempDir())
+	_, err := ProcessFile(context.Background(), uuid.New(), "unknown-tool", []string{"/tmp/test.pdf"}, nil, t.TempDir(), nil)
 	if err == nil {
 		t.Error("expected error for unsupported tool")
 	}
@@ -27,6 +27,6 @@ func TestProcessFileUnsupportedTool(t *testing.T) {
 func TestProcessFileOutputDirCreation(t *testing.T) {
 	dir := t.TempDir() + "/subdir"
 	// This will fail because the input file doesn't exist, but the dir should be created
-	_, _ = ProcessFile(context.Background(), uuid.New(), "pdf-to-text", []string{"/nonexistent.pdf"}, nil, dir)
+	_, _ = ProcessFile(context.Background(), uuid.New(), "pdf-to-text", []string{"/nonexistent.pdf"}, nil, dir, nil)
 	// Just verifying no panic on dir creation
 }

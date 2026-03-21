@@ -47,8 +47,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	processFunc := func(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (*worker.ProcessResult, error) {
-		result, err := processing.ProcessFile(ctx, jobID, toolType, inputPaths, options, outputDir)
+	processFunc := func(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string, onProgress worker.ProgressFunc) (*worker.ProcessResult, error) {
+		// Adapt worker.ProgressFunc to processing.ProgressFunc.
+		var progressFn processing.ProgressFunc
+		if onProgress != nil {
+			progressFn = processing.ProgressFunc(onProgress)
+		}
+		result, err := processing.ProcessFile(ctx, jobID, toolType, inputPaths, options, outputDir, progressFn)
 		if err != nil {
 			return nil, err
 		}
