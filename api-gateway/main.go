@@ -274,6 +274,7 @@ func newProxy(cfg routeConfig) http.Handler {
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Transport = proxyTransport
+	proxy.FlushInterval = -1 // stream responses immediately (critical for file downloads)
 	proxy.Director = func(req *http.Request) {
 		targetPath := strings.TrimPrefix(req.URL.Path, cfg.prefix)
 		if targetPath == "" {

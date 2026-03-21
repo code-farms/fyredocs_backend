@@ -32,8 +32,7 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 
 	switch toolType {
 	case "pdf-to-image", "pdf-to-img":
-		outputPath = filepath.Join(outputDir, outputFileName+".zip")
-		err = pdfToImages(ctx, inputPaths[0], outputPath)
+		outputPath, err = pdfToImages(ctx, inputPaths[0], outputDir, outputFileName)
 	case "pdf-to-pdfa":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = pdfToPdfa(ctx, inputPaths[0], outputPath)
@@ -61,6 +60,11 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	}
 
 	meta := map[string]interface{}{}
+	// Store the actual output extension so downstream services (job-service)
+	// can determine the correct Content-Type and download filename.
+	if ext := filepath.Ext(outputPath); ext != "" {
+		meta["outputExt"] = ext
+	}
 	return Result{
 		OutputPath: outputPath,
 		Metadata:   meta,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"testing"
 )
 
@@ -272,6 +273,30 @@ func TestWithCORSNonMatchingOrigin(t *testing.T) {
 
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("expected no CORS header for non-matching origin, got %q", got)
+	}
+}
+
+func TestNewProxyStreamsResponses(t *testing.T) {
+	// Verify the proxy is configured to flush immediately (no buffering),
+	// which is critical for file download performance.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	handler := newProxy(routeConfig{
+		targetURL:      backend.URL,
+		prefix:         "/test",
+		targetBasePath: "",
+	})
+
+	// newProxy returns an *httputil.ReverseProxy wrapped as http.Handler.
+	proxy, ok := handler.(*httputil.ReverseProxy)
+	if !ok {
+		t.Fatal("newProxy did not return *httputil.ReverseProxy")
+	}
+	if proxy.FlushInterval != -1 {
+		t.Errorf("proxy.FlushInterval = %v, want -1 (immediate flush for streaming)", proxy.FlushInterval)
 	}
 }
 

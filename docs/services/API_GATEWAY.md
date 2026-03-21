@@ -69,6 +69,10 @@ The reverse proxy uses a custom `http.Transport` tuned for long-running conversi
 | `MaxIdleConnsPerHost` | 20 | Connection pool per backend service |
 | `MaxIdleConns` | 100 | Global idle connection pool limit |
 
+### Response Streaming
+
+The reverse proxy sets `FlushInterval = -1` to stream responses immediately to the client without buffering. This is critical for file download performance — without it, the proxy buffers the entire upstream response before forwarding, which can add significant latency for multi-megabyte files.
+
 ## Environment Variables
 
 ### Required

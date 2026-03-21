@@ -14,29 +14,46 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 )
 
-func pdfToImages(ctx context.Context, inputPath string, outputPath string) error {
+// pdfToImages converts a PDF to PNG images. For single-page PDFs the output
+// is a single PNG file; for multi-page PDFs the output is a ZIP of PNGs.
+// It returns the actual output path (which may end in .png or .zip).
+func pdfToImages(ctx context.Context, inputPath string, outputDir string, baseName string) (string, error) {
 	slog.Info("converting PDF to images", "input", inputPath)
 
 	tempDir, err := os.MkdirTemp("", "pdf-images-*")
 	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
+		return "", fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
 
 	pdfCtx, err := api.ReadContextFile(inputPath)
 	if err != nil {
-		return fmt.Errorf("failed to read PDF: %w", err)
+		return "", fmt.Errorf("failed to read PDF: %w", err)
 	}
 
 	for i := 1; i <= pdfCtx.PageCount; i++ {
 		cmd := exec.CommandContext(ctx, "pdftoppm", "-png", "-f", fmt.Sprintf("%d", i), "-l", fmt.Sprintf("%d", i), inputPath, filepath.Join(tempDir, fmt.Sprintf("page_%03d", i)))
 		if err := cmd.Run(); err != nil {
 			slog.Error("pdftoppm failed", "page", i, "error", err)
-			return fmt.Errorf("PDF to image conversion requires pdftoppm (poppler-utils): %w", err)
+			return "", fmt.Errorf("PDF to image conversion requires pdftoppm (poppler-utils): %w", err)
 		}
 	}
 
-	return zipDirectory(tempDir, outputPath)
+	// Single-page PDF: return the PNG directly instead of wrapping in ZIP.
+	if pdfCtx.PageCount == 1 {
+		pngFiles, _ := filepath.Glob(filepath.Join(tempDir, "*.png"))
+		if len(pngFiles) == 1 {
+			outputPath := filepath.Join(outputDir, baseName+".png")
+			if err := copyFile(pngFiles[0], outputPath); err != nil {
+				return "", fmt.Errorf("failed to copy single page image: %w", err)
+			}
+			return outputPath, nil
+		}
+	}
+
+	// Multi-page PDF: ZIP all PNGs.
+	outputPath := filepath.Join(outputDir, baseName+".zip")
+	return outputPath, zipDirectory(tempDir, outputPath)
 }
 
 func pdfToPdfa(ctx context.Context, inputPath string, outputPath string) error {
@@ -172,4 +189,27 @@ func zipDirectory(sourceDir string, zipPath string) error {
 		}
 		return closeErr
 	})
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if e := out.Close(); e != nil && err == nil {
+			err = e
+		}
+	}()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
 }

@@ -100,14 +100,19 @@ sequenceDiagram
 
     JS->>JS: authorizeJobAccess() -- OK
 
-    JS->>PG: SELECT * FROM file_metadata<br/>WHERE job_id = <jobId> AND kind = output
-    PG-->>JS: {path: "outputs/result.docx", size: 2048000}
+    alt FileMetadata cache hit
+        JS->>JS: Load from outputFileCache
+    else FileMetadata cache miss
+        JS->>PG: SELECT * FROM file_metadata<br/>WHERE job_id = <jobId> AND kind = output
+        PG-->>JS: {path: "outputs/result.docx", size: 2048000}
+        JS->>JS: Store in outputFileCache
+    end
 
     JS->>JS: Determine filename: "doc.docx"<br/>Determine Content-Type
 
     JS->>Disk: Read outputs/result.docx
 
-    JS-->>GW: 200 OK<br/>Content-Disposition: attachment; filename="doc.docx"<br/>Content-Type: application/vnd...wordprocessingml<br/>(file bytes)
+    JS-->>GW: 200 OK<br/>Content-Disposition: attachment; filename="doc.docx"<br/>Content-Type: application/vnd...wordprocessingml<br/>(streamed via FlushInterval=-1)
 ```
 
 ## Delete Job

@@ -36,8 +36,8 @@ Convert-From-PDF Worker
 
 | Tool | Input | Output | Implementation | Status |
 |------|-------|--------|----------------|--------|
-| `pdf-to-image` | .pdf | .zip (PNGs) | pdftoppm (Poppler) | ✅ Implemented |
-| `pdf-to-img` | .pdf | .zip (PNGs) | pdftoppm (Poppler) | ✅ Alias |
+| `pdf-to-image` | .pdf | .png (single page) or .zip (multi-page PNGs) | pdftoppm (Poppler) | ✅ Implemented |
+| `pdf-to-img` | .pdf | .png (single page) or .zip (multi-page PNGs) | pdftoppm (Poppler) | ✅ Alias |
 | `pdf-to-word` | .pdf | .docx | LibreOffice Writer | ✅ Implemented |
 | `pdf-to-docx` | .pdf | .docx | LibreOffice Writer | ✅ Alias |
 | `pdf-to-excel` | .pdf | .xlsx | LibreOffice Calc | ✅ Implemented |
@@ -137,15 +137,20 @@ Deletes the job and its associated files.
 Converts PDF pages to PNG images.
 
 **Input**: `.pdf`
-**Output**: `.zip` containing PNG files (one per page)
+**Output**: Single-page PDF → `.png` file directly; Multi-page PDF → `.zip` containing PNG files (one per page)
 **Implementation**: Poppler (pdftoppm)
 
-**Output Format**:
+**Output Format** (multi-page):
 ```
 output.zip
 ├── page_001-1.png
 ├── page_002-1.png
 └── page_003-1.png
+```
+
+**Output Format** (single-page):
+```
+output.png
 ```
 
 **Example**:

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 
 	"job-service/internal/models"
 )
@@ -99,22 +100,25 @@ func TestOutputFileName(t *testing.T) {
 	tests := []struct {
 		toolType    string
 		inputName   string
+		metadata    datatypes.JSON
 		wantName    string
 		wantType    string
 	}{
-		{"pdf-to-word", "report.pdf", "report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
-		{"pdf-to-excel", "data.pdf", "data.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
-		{"pdf-to-powerpoint", "slides.pdf", "slides.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
-		{"pdf-to-image", "doc.pdf", "doc.zip", "application/zip"},
-		{"split-pdf", "doc.pdf", "doc.zip", "application/zip"},
-		{"word-to-pdf", "doc.docx", "doc.pdf", "application/pdf"},
-		{"image-to-pdf", "photo.jpeg", "photo.pdf", "application/pdf"},
-		{"compress-pdf", "doc.pdf", "doc.pdf", "application/pdf"},
-		{"merge-pdf", "doc.pdf", "doc.pdf", "application/pdf"},
+		{"pdf-to-word", "report.pdf", nil, "report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+		{"pdf-to-excel", "data.pdf", nil, "data.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+		{"pdf-to-powerpoint", "slides.pdf", nil, "slides.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+		{"pdf-to-image", "doc.pdf", nil, "doc.zip", "application/zip"},
+		{"pdf-to-image", "doc.pdf", datatypes.JSON(`{"outputExt":".png"}`), "doc.png", "image/png"},
+		{"pdf-to-image", "doc.pdf", datatypes.JSON(`{"outputExt":".zip"}`), "doc.zip", "application/zip"},
+		{"split-pdf", "doc.pdf", nil, "doc.zip", "application/zip"},
+		{"word-to-pdf", "doc.docx", nil, "doc.pdf", "application/pdf"},
+		{"image-to-pdf", "photo.jpeg", nil, "photo.pdf", "application/pdf"},
+		{"compress-pdf", "doc.pdf", nil, "doc.pdf", "application/pdf"},
+		{"merge-pdf", "doc.pdf", nil, "doc.pdf", "application/pdf"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.toolType, func(t *testing.T) {
-			gotName, gotType := outputFileName(tt.toolType, tt.inputName)
+		t.Run(tt.toolType+"_"+tt.inputName, func(t *testing.T) {
+			gotName, gotType := outputFileName(tt.toolType, tt.inputName, tt.metadata)
 			if gotName != tt.wantName {
 				t.Errorf("outputFileName(%q, %q) name = %q, want %q", tt.toolType, tt.inputName, gotName, tt.wantName)
 			}
@@ -481,6 +485,41 @@ func TestToJobResponseJSON(t *testing.T) {
 	}
 	if m["fileName"] != "photo.jpg" {
 		t.Errorf("JSON fileName = %v, want %q (original preserved)", m["fileName"], "photo.jpg")
+	}
+}
+
+func TestOutputFileCacheStoreAndLoad(t *testing.T) {
+	// Reset cache state for test isolation.
+	outputFileCache.Range(func(key, value any) bool {
+		outputFileCache.Delete(key)
+		return true
+	})
+
+	jobID := uuid.New()
+	entry := models.FileMetadata{
+		JobID:        jobID,
+		Kind:         "output",
+		OriginalName: "test.png",
+		Path:         "/app/outputs/processed_test.png",
+	}
+
+	// Cache miss initially.
+	if _, ok := outputFileCache.Load(jobID); ok {
+		t.Fatal("expected cache miss for new jobID")
+	}
+
+	// Store and retrieve.
+	outputFileCache.Store(jobID, entry)
+	cached, ok := outputFileCache.Load(jobID)
+	if !ok {
+		t.Fatal("expected cache hit after store")
+	}
+	got := cached.(models.FileMetadata)
+	if got.Path != entry.Path {
+		t.Errorf("cached Path = %q, want %q", got.Path, entry.Path)
+	}
+	if got.OriginalName != entry.OriginalName {
+		t.Errorf("cached OriginalName = %q, want %q", got.OriginalName, entry.OriginalName)
 	}
 }
 

@@ -354,13 +354,18 @@ sequenceDiagram
     GW-->>C: 200 {job details}
 
     C->>GW: GET /api/convert-from-pdf/pdf-to-word/<jobId>/download
-    GW->>JS: Proxy request
+    GW->>JS: Proxy request (streamed via FlushInterval=-1)
     JS->>DB: SELECT * FROM processing_jobs WHERE id=<jobId>
     JS->>JS: Check status == 'completed'
-    JS->>DB: SELECT * FROM file_metadata WHERE job_id=<jobId> AND kind='output'
+    alt Cache hit
+        JS->>JS: Load FileMetadata from in-memory cache
+    else Cache miss
+        JS->>DB: SELECT * FROM file_metadata WHERE job_id=<jobId> AND kind='output'
+        JS->>JS: Store FileMetadata in cache
+    end
     JS->>FS: Read output file
     JS-->>GW: 200 [binary file] Content-Disposition: attachment
-    GW-->>C: 200 [binary file]
+    GW-->>C: 200 [binary file] (streamed)
 ```
 
 ### Guest User Flow

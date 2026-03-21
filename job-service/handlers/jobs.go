@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,10 @@ import (
 	"job-service/internal/models"
 	"job-service/internal/routing"
 )
+
+// outputFileCache caches FileMetadata lookups for completed job downloads.
+// Entries are immutable once a job is completed, so no TTL is needed.
+var outputFileCache sync.Map // uuid.UUID -> models.FileMetadata
 
 // allowedMIMETypes maps tool types to their expected MIME content types.
 var allowedMIMETypes = map[string][]string{
@@ -416,12 +421,16 @@ func DownloadJobFile(c *gin.Context) {
 	}
 
 	var outputFile models.FileMetadata
-	if err := models.DB.First(&outputFile, "job_id = ? AND kind = ?", job.ID, "output").Error; err != nil {
+	if cached, ok := outputFileCache.Load(job.ID); ok {
+		outputFile = cached.(models.FileMetadata)
+	} else if err := models.DB.First(&outputFile, "job_id = ? AND kind = ?", job.ID, "output").Error; err != nil {
 		response.NotFound(c, "NOT_FOUND", "This download link has expired. Please process your file again.")
 		return
+	} else {
+		outputFileCache.Store(job.ID, outputFile)
 	}
 
-	fileName, contentType := outputFileName(job.ToolType, job.FileName)
+	fileName, contentType := outputFileName(job.ToolType, job.FileName, job.Metadata)
 	// Fix #6: Use mime.FormatMediaType for safe Content-Disposition
 	c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": fileName}))
 	c.Header("Content-Type", contentType)
@@ -572,7 +581,7 @@ type jobResponse struct {
 }
 
 func toJobResponse(job models.ProcessingJob) jobResponse {
-	name, _ := outputFileName(job.ToolType, job.FileName)
+	name, _ := outputFileName(job.ToolType, job.FileName, job.Metadata)
 	return jobResponse{ProcessingJob: job, OutputFileName: name}
 }
 
@@ -584,7 +593,7 @@ func toJobResponses(jobs []models.ProcessingJob) []jobResponse {
 	return out
 }
 
-func outputFileName(toolType string, inputName string) (string, string) {
+func outputFileName(toolType string, inputName string, metadata datatypes.JSON) (string, string) {
 	contentType := "application/octet-stream"
 	fileName := inputName
 	switch toolType {
@@ -597,7 +606,11 @@ func outputFileName(toolType string, inputName string) (string, string) {
 	case "pdf-to-powerpoint":
 		fileName = strings.TrimSuffix(inputName, filepath.Ext(inputName)) + ".pptx"
 		contentType = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-	case "pdf-to-image", "split-pdf":
+	case "pdf-to-image":
+		ext, ct := resolveOutputExt(metadata, ".zip", "application/zip")
+		fileName = strings.TrimSuffix(inputName, filepath.Ext(inputName)) + ext
+		contentType = ct
+	case "split-pdf":
 		fileName = strings.TrimSuffix(inputName, filepath.Ext(inputName)) + ".zip"
 		contentType = "application/zip"
 	default:
@@ -605,6 +618,31 @@ func outputFileName(toolType string, inputName string) (string, string) {
 		contentType = "application/pdf"
 	}
 	return fileName, contentType
+}
+
+// resolveOutputExt reads the "outputExt" field from job metadata to determine
+// the actual output file extension and content type. Falls back to the provided
+// defaults if metadata is absent or does not contain the field.
+func resolveOutputExt(metadata datatypes.JSON, defaultExt string, defaultCT string) (string, string) {
+	if len(metadata) == 0 {
+		return defaultExt, defaultCT
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(metadata, &m); err != nil {
+		return defaultExt, defaultCT
+	}
+	ext, ok := m["outputExt"].(string)
+	if !ok || ext == "" {
+		return defaultExt, defaultCT
+	}
+	switch ext {
+	case ".png":
+		return ".png", "image/png"
+	case ".jpg", ".jpeg":
+		return ext, "image/jpeg"
+	default:
+		return defaultExt, defaultCT
+	}
 }
 
 func maxUploadBytes() int64 {

@@ -998,7 +998,7 @@ paths:
       description: |
         Downloads the output file for a completed job. Returns the file as
         a binary attachment. The Content-Type will be `application/pdf` for
-        most tools, or `application/zip` for split-pdf and pdf-to-image.
+        most tools, `application/zip` for split-pdf and multi-page pdf-to-image, or `image/png` for single-page pdf-to-image.
       operationId: downloadConvertToPdfJob
       security:
         - BearerAuth: []
