@@ -1825,10 +1825,36 @@ paths:
         Scrapes the API gateway's Prometheus metrics to compute per-endpoint
         latency (p50/p95/p99), request count, and error rates. Also returns
         the top 5 slowest and highest-error-rate endpoints.
+        The endpoints list supports server-side pagination, search, and sorting.
       operationId: adminAPIPerformance
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+          description: Page number for endpoints list
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 200 }
+          description: Items per page for endpoints list
+        - name: search
+          in: query
+          schema: { type: string }
+          description: Partial match on endpoint path (case-insensitive)
+        - name: method
+          in: query
+          schema: { type: string, enum: [GET, POST, PUT, PATCH, DELETE] }
+          description: Exact match on HTTP method
+        - name: sortBy
+          in: query
+          schema: { type: string, default: requests, enum: [requests, avgLatencyMs, p50LatencyMs, p95LatencyMs, p99LatencyMs, errorRate, path, method] }
+          description: Field to sort endpoints by
+        - name: sortDir
+          in: query
+          schema: { type: string, default: desc, enum: [asc, desc] }
+          description: Sort direction
       responses:
         "200":
-          description: API performance metrics
+          description: API performance metrics with paginated endpoints and meta
           content:
             application/json:
               schema:

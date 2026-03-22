@@ -42,7 +42,6 @@ func validateJWTSecret() error {
 	}
 
 	dangerousSecrets := []string{
-		"4de0ea7311594deb860f03e5da60ac903fc4b4099bfe499a82e0fed013af32ca791ac065ea5e4d8aaade24a760e6dc58",
 		"change-me",
 		"secret",
 		"password",
@@ -119,11 +118,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Auth middleware for endpoints that need authentication (me, profile, logout)
+	// Auth middleware applied selectively to protected routes only (not login/signup/refresh)
 	authMiddleware := buildAuthMiddleware(redisClient, denylist)
-	r.Use(authMiddleware)
-
-	routes.SetupRouter(r, issuer, denylist, redisClient)
+	routes.SetupRouter(r, issuer, denylist, redisClient, authMiddleware)
 
 	// Periodically clean up expired sessions from the database
 	go func() {

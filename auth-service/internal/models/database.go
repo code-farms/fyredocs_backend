@@ -96,7 +96,7 @@ func Migrate() {
 	}
 
 	checkConstraints := []string{
-		`DO $$ BEGIN ALTER TABLE users ADD CONSTRAINT chk_user_role CHECK (role IN ('user','admin')); EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+		`DO $$ BEGIN ALTER TABLE users ADD CONSTRAINT chk_user_role CHECK (role IN ('user','admin','super-admin')); EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
 	}
 	for _, chk := range checkConstraints {
 		if err := DB.Exec(chk).Error; err != nil {

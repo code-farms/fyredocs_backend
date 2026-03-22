@@ -314,7 +314,7 @@ func readMemInfo() (gin.H, error) {
 	totalKB := mem["MemTotal"]
 	freeKB := mem["MemFree"]
 	availKB := mem["MemAvailable"]
-	usedKB := totalKB - freeKB
+	usedKB := totalKB - availKB
 
 	var usagePercent float64
 	if totalKB > 0 {

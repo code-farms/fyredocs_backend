@@ -19,6 +19,9 @@ var anonymousPlan = struct {
 	MaxFilesPerJob: 5,
 }
 
+// PlanResolver resolves plan info for a user and enriches the AuthContext.
+type PlanResolver func(r *http.Request, authCtx *AuthContext)
+
 type HTTPMiddlewareOptions struct {
 	Verifier              *Verifier
 	GuestStore            GuestStore
@@ -26,6 +29,12 @@ type HTTPMiddlewareOptions struct {
 	GuestTokenHeaderName  string
 	GuestCookieName       string
 	AccessTokenCookieName string
+	ResolvePlan           PlanResolver
+	// PublicPaths lists URL paths that skip token verification entirely.
+	// Requests to these paths are always treated as anonymous, even if a
+	// stale access_token cookie is present. This prevents an authentication
+	// deadlock where expired cookies block login/signup/refresh endpoints.
+	PublicPaths []string
 }
 
 func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.Handler {
@@ -42,6 +51,11 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 		accessCookieName = "access_token"
 	}
 
+	publicSet := make(map[string]struct{}, len(options.PublicPaths))
+	for _, p := range options.PublicPaths {
+		publicSet[strings.TrimRight(p, "/")] = struct{}{}
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r == nil {
@@ -50,6 +64,17 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 			}
 			if r.Method == http.MethodOptions {
 				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Public paths bypass token verification to prevent stale-cookie deadlock.
+			if _, ok := publicSet[strings.TrimRight(r.URL.Path, "/")]; ok {
+				anonCtx := AuthContext{
+					Plan:               anonymousPlan.Name,
+					PlanMaxFileSizeMB:  anonymousPlan.MaxFileSizeMB,
+					PlanMaxFilesPerJob: anonymousPlan.MaxFilesPerJob,
+				}
+				next.ServeHTTP(w, SetRequestAuth(r, anonCtx))
 				return
 			}
 
@@ -83,7 +108,11 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 					WriteError(w, http.StatusUnauthorized, ErrCodeUnauthorized, "Invalid or expired token")
 					return
 				}
-				next.ServeHTTP(w, SetRequestAuth(r, claims.ToAuthContext()))
+				authCtx := claims.ToAuthContext()
+			if options.ResolvePlan != nil {
+				options.ResolvePlan(r, &authCtx)
+			}
+			next.ServeHTTP(w, SetRequestAuth(r, authCtx))
 				return
 			}
 

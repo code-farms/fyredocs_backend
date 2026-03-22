@@ -185,7 +185,7 @@ services:
 
       # Auth Cookie Settings
       AUTH_COOKIE_DOMAIN: ""
-      AUTH_COOKIE_SECURE: "true"
+      AUTH_COOKIE_SECURE: "false"
       AUTH_COOKIE_SAMESITE: "lax"
       AUTH_REFRESH_COOKIE: "refresh_token"
 

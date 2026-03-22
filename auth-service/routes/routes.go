@@ -17,10 +17,11 @@ import (
 	"auth-service/middleware"
 )
 
-func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenDenylist, redisClient *redis.Client) {
+func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenDenylist, redisClient *redis.Client, authMiddleware gin.HandlerFunc) {
 	authEndpoints := &handlers.AuthEndpoints{
-		Issuer:   issuer,
-		Denylist: denylist,
+		Issuer:      issuer,
+		Denylist:    denylist,
+		RedisClient: redisClient,
 	}
 
 	window := getEnvDuration("RATE_LIMIT_WINDOW", 60*time.Second)
@@ -46,16 +47,22 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 		Window:      window,
 	})
 
-	authGroup := r.Group("/auth")
+	// Public auth routes — no token verification needed
+	publicAuth := r.Group("/auth")
 	{
-		authGroup.POST("/signup", signupLimiter.RateLimitByIP(), authEndpoints.Signup)
-		authGroup.POST("/login", loginLimiter.RateLimitByIP(), authEndpoints.Login)
-		authGroup.POST("/refresh", refreshLimiter.RateLimitByIP(), authEndpoints.Refresh)
-		authGroup.GET("/me", authEndpoints.Me)
-		authGroup.GET("/profile", authEndpoints.Profile)
-		authGroup.POST("/logout", authEndpoints.Logout)
-		authGroup.PUT("/plan", authEndpoints.ChangePlan)
-		authGroup.GET("/plans", handlers.GetAllPlans)
+		publicAuth.POST("/signup", signupLimiter.RateLimitByIP(), authEndpoints.Signup)
+		publicAuth.POST("/login", loginLimiter.RateLimitByIP(), authEndpoints.Login)
+		publicAuth.POST("/refresh", refreshLimiter.RateLimitByIP(), authEndpoints.Refresh)
+		publicAuth.GET("/plans", handlers.GetAllPlans)
+	}
+
+	// Protected auth routes — require valid token
+	protectedAuth := r.Group("/auth", authMiddleware)
+	{
+		protectedAuth.GET("/me", authEndpoints.Me)
+		protectedAuth.GET("/profile", authEndpoints.Profile)
+		protectedAuth.POST("/logout", authEndpoints.Logout)
+		protectedAuth.PUT("/plan", authEndpoints.ChangePlan)
 	}
 
 	// Internal service-to-service API (not exposed via gateway)

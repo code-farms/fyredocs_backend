@@ -47,7 +47,7 @@ Events are persisted to the `analytics_events` PostgreSQL table for querying.
 | GET | `/admin/metrics/reliability?days=30` | Reliability metrics (success/failure rates, processing time p50/p95, tool errors, plan limit hits) |
 | GET | `/admin/metrics/system` | System health (ingestion rate, active users, processing lag, event breakdown) |
 | GET | `/admin/metrics/server-performance` | Server performance (CPU, memory, storage, uptime, service availability, Go runtime per service) |
-| GET | `/admin/metrics/api-performance` | API performance (per-endpoint latency p50/p95/p99, throughput, error rates, slowest/most-erroring endpoints) |
+| GET | `/admin/metrics/api-performance` | API performance (per-endpoint latency p50/p95/p99, throughput, error rates, slowest/most-erroring endpoints). Supports query params: `page` (default 1), `limit` (default 50, max 200), `search` (partial path match), `method` (exact HTTP method), `sortBy` (requests\|avgLatencyMs\|p50LatencyMs\|p95LatencyMs\|p99LatencyMs\|errorRate\|path\|method), `sortDir` (asc\|desc). Returns paginated endpoints with `meta` containing `page`, `limit`, `total`. |
 
 ### Infrastructure
 | Method | Path | Description |

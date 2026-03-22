@@ -220,6 +220,68 @@ func TestHTTPAuthMiddlewareNoToken(t *testing.T) {
 	}
 }
 
+func TestHTTPAuthMiddlewarePublicPathBypassesStaleCookie(t *testing.T) {
+	secret := []byte("test-secret-key-32-chars-long!!")
+	v, _ := NewVerifier(VerifierConfig{AllowedAlgs: []string{"HS256"}, HMACSecret: secret})
+
+	called := false
+	var gotCtx AuthContext
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if authCtx, ok := FromContext(r.Context()); ok {
+			gotCtx = authCtx
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	middleware := HTTPAuthMiddleware(HTTPMiddlewareOptions{
+		Verifier:    v,
+		PublicPaths: []string{"/auth/login", "/auth/signup", "/auth/refresh"},
+	})
+	handler := middleware(next)
+
+	// Request to public path with an invalid/stale access_token cookie
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	req.AddCookie(&http.Cookie{Name: "access_token", Value: "expired-invalid-token"})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if !called {
+		t.Fatal("expected public path to bypass token verification and call next handler")
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 for public path with stale cookie, got %d", rec.Code)
+	}
+	if gotCtx.Plan != "anonymous" {
+		t.Errorf("expected anonymous plan on public path, got %q", gotCtx.Plan)
+	}
+}
+
+func TestHTTPAuthMiddlewareNonPublicPathRejectsStaleCookie(t *testing.T) {
+	secret := []byte("test-secret-key-32-chars-long!!")
+	v, _ := NewVerifier(VerifierConfig{AllowedAlgs: []string{"HS256"}, HMACSecret: secret})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	middleware := HTTPAuthMiddleware(HTTPMiddlewareOptions{
+		Verifier:    v,
+		PublicPaths: []string{"/auth/login", "/auth/signup", "/auth/refresh"},
+	})
+	handler := middleware(next)
+
+	// Request to a non-public path with stale cookie — should still get 401
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
+	req.AddCookie(&http.Cookie{Name: "access_token", Value: "expired-invalid-token"})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for non-public path with stale cookie, got %d", rec.Code)
+	}
+}
+
 func TestSplitScopes(t *testing.T) {
 	got := SplitScopes("read write admin")
 	if len(got) != 3 {

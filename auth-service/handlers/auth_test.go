@@ -280,8 +280,8 @@ func TestSetRefreshTokenCookie(t *testing.T) {
 	for _, cookie := range cookies {
 		if cookie.Name == "refresh_token" {
 			found = true
-			if cookie.Path != "/auth/refresh" {
-				t.Errorf("expected path '/auth/refresh', got %q", cookie.Path)
+			if cookie.Path != "/auth" {
+				t.Errorf("expected path '/auth', got %q", cookie.Path)
 			}
 			if !cookie.HttpOnly {
 				t.Error("expected HttpOnly=true")

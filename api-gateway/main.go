@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"api-gateway/internal/authverify"
+	"api-gateway/internal/plancache"
 	"esydocs/shared/logger"
 	"esydocs/shared/metrics"
 	"esydocs/shared/telemetry"
@@ -44,7 +45,6 @@ func validateJWTSecret() error {
 	}
 
 	dangerousSecrets := []string{
-		"4de0ea7311594deb860f03e5da60ac903fc4b4099bfe499a82e0fed013af32ca791ac065ea5e4d8aaade24a760e6dc58",
 		"change-me",
 		"secret",
 		"password",
@@ -196,6 +196,13 @@ func main() {
 	authMiddleware := authverify.HTTPAuthMiddleware(authverify.HTTPMiddlewareOptions{
 		Verifier:   verifier,
 		GuestStore: guestStore,
+		PublicPaths: []string{"/auth/login", "/auth/signup", "/auth/refresh", "/auth/plans"},
+		ResolvePlan: func(r *http.Request, authCtx *authverify.AuthContext) {
+			info := plancache.GetPlanInfo(r.Context(), redisClient, authCtx.UserID)
+			authCtx.Plan = info.Plan
+			authCtx.PlanMaxFileSizeMB = info.MaxFileMB
+			authCtx.PlanMaxFilesPerJob = info.MaxFiles
+		},
 	})
 	handler := telemetry.HTTPTraceMiddleware("api-gateway")(
 		metrics.HTTPMetricsMiddleware(

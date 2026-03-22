@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
@@ -47,8 +48,9 @@ type authUser struct {
 }
 
 type AuthEndpoints struct {
-	Issuer   *token.Issuer
-	Denylist authverify.TokenDenylist
+	Issuer      *token.Issuer
+	Denylist    authverify.TokenDenylist
+	RedisClient *redis.Client
 }
 
 func (ae *AuthEndpoints) Signup(c *gin.Context) {
@@ -182,19 +184,17 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
 	}
 
-	planInfo := token.PlanInfo{
-		Name:           plan.Name,
-		MaxFileSizeMB:  plan.MaxFileSizeMB,
-		MaxFilesPerJob: plan.MaxFilesPerJob,
-	}
-
 	role := user.Role
 	if role == "" {
 		role = "user"
 	}
 
 	accessTTL := getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
-	accessToken, _, accessExpiresAt, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, planInfo, accessTTL)
+
+	// Refresh plan cache in Redis
+	ae.cachePlanInfo(c.Request.Context(), user.ID.String(), plan, accessTTL)
+
+	accessToken, _, accessExpiresAt, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, accessTTL)
 	if err != nil {
 		response.InternalError(c, "SERVER_ERROR", "Failed to refresh token. Please try again.")
 		return
@@ -209,7 +209,8 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 	setAccessTokenCookie(c, accessToken, accessTTL)
 
 	response.OK(c, "Token refreshed", gin.H{
-		"user": buildUserResponse(user, role, plan),
+		"user":            buildUserResponse(user, role, plan),
+		"accessExpiresAt": accessExpiresAt.UnixMilli(),
 	})
 }
 
@@ -261,6 +262,9 @@ func (ae *AuthEndpoints) Logout(c *gin.Context) {
 		}
 	}
 
+	// Delete plan cache from Redis
+	ae.deletePlanCache(ctx, authCtx.UserID)
+
 	clearAccessTokenCookie(c)
 	clearRefreshTokenCookie(c)
 	response.NoContent(c)
@@ -272,12 +276,6 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
 	}
 
-	planInfo := token.PlanInfo{
-		Name:           plan.Name,
-		MaxFileSizeMB:  plan.MaxFileSizeMB,
-		MaxFilesPerJob: plan.MaxFilesPerJob,
-	}
-
 	role := user.Role
 	if role == "" {
 		role = "user"
@@ -286,7 +284,10 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 	accessTTL := getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
 	refreshTTL := getEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour)
 
-	accessToken, jti, accessExpiresAt, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, planInfo, accessTTL)
+	// Cache plan info in Redis for the API gateway to read
+	ae.cachePlanInfo(c.Request.Context(), user.ID.String(), plan, accessTTL)
+
+	accessToken, jti, accessExpiresAt, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, accessTTL)
 	if err != nil {
 		response.InternalError(c, "SERVER_ERROR", "Login failed. Please try again.")
 		return
@@ -312,7 +313,8 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 	setRefreshTokenCookie(c, refreshToken, refreshTTL)
 
 	response.OK(c, "Welcome back!", gin.H{
-		"user": buildUserResponse(user, role, plan),
+		"user":            buildUserResponse(user, role, plan),
+		"accessExpiresAt": accessExpiresAt.UnixMilli(),
 	})
 }
 
@@ -439,7 +441,7 @@ func setRefreshTokenCookie(c *gin.Context, tokenStr string, ttl time.Duration) {
 
 	c.SetSameSite(parseSameSite(sameSite))
 	maxAge := int(ttl.Seconds())
-	c.SetCookie(name, tokenStr, maxAge, "/auth/refresh", domain, secure, true)
+	c.SetCookie(name, tokenStr, maxAge, "/auth", domain, secure, true)
 }
 
 func clearRefreshTokenCookie(c *gin.Context) {
@@ -449,7 +451,7 @@ func clearRefreshTokenCookie(c *gin.Context) {
 	sameSite := getEnv("AUTH_COOKIE_SAMESITE", "lax")
 
 	c.SetSameSite(parseSameSite(sameSite))
-	c.SetCookie(name, "", -1, "/auth/refresh", domain, secure, true)
+	c.SetCookie(name, "", -1, "/auth", domain, secure, true)
 }
 
 func parseSameSite(value string) http.SameSite {
@@ -578,12 +580,52 @@ func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 		return
 	}
 
+	// Update plan cache in Redis immediately
+	accessTTL := getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
+	ae.cachePlanInfo(c.Request.Context(), user.ID.String(), plan, accessTTL)
+
 	publishPlanChangedEvent(c.Request.Context(), user.ID.String(), oldPlan, planName)
 
 	user.PlanName = planName
 	response.OK(c, "Plan updated successfully", gin.H{
 		"user": buildUserResponse(user, user.Role, plan),
 	})
+}
+
+const planCacheKeyPrefix = "user:plan:"
+
+type planCacheEntry struct {
+	Plan       string `json:"plan"`
+	MaxFileMB  int    `json:"max_file_mb"`
+	MaxFiles   int    `json:"max_files"`
+}
+
+func (ae *AuthEndpoints) cachePlanInfo(ctx context.Context, userID string, plan models.SubscriptionPlan, ttl time.Duration) {
+	if ae.RedisClient == nil {
+		return
+	}
+	entry := planCacheEntry{
+		Plan:      plan.Name,
+		MaxFileMB: plan.MaxFileSizeMB,
+		MaxFiles:  plan.MaxFilesPerJob,
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		slog.Warn("failed to marshal plan cache entry", "error", err)
+		return
+	}
+	if err := ae.RedisClient.Set(ctx, planCacheKeyPrefix+userID, data, ttl).Err(); err != nil {
+		slog.Warn("failed to cache plan info in Redis", "error", err, "userID", userID)
+	}
+}
+
+func (ae *AuthEndpoints) deletePlanCache(ctx context.Context, userID string) {
+	if ae.RedisClient == nil {
+		return
+	}
+	if err := ae.RedisClient.Del(ctx, planCacheKeyPrefix+userID).Err(); err != nil {
+		slog.Warn("failed to delete plan cache from Redis", "error", err, "userID", userID)
+	}
 }
 
 func publishPlanChangedEvent(ctx context.Context, userID, oldPlan, newPlan string) {

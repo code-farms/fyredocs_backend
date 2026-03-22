@@ -14,7 +14,7 @@ func TestIssueAccessTokenValid(t *testing.T) {
 		audience:   "esydocs-api",
 	}
 
-	tokenStr, jti, expiresAt, err := issuer.IssueAccessToken("user-123", "user", nil, PlanInfo{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10}, time.Hour)
+	tokenStr, jti, expiresAt, err := issuer.IssueAccessToken("user-123", "user", nil, time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestIssueAccessTokenValid(t *testing.T) {
 
 func TestIssueAccessTokenNilIssuer(t *testing.T) {
 	var issuer *Issuer
-	_, _, _, err := issuer.IssueAccessToken("user-123", "user", nil, PlanInfo{}, time.Hour)
+	_, _, _, err := issuer.IssueAccessToken("user-123", "user", nil, time.Hour)
 	if err == nil {
 		t.Error("expected error for nil issuer")
 	}
@@ -41,7 +41,7 @@ func TestIssueAccessTokenEmptySecret(t *testing.T) {
 	issuer := &Issuer{
 		hmacSecret: nil,
 	}
-	_, _, _, err := issuer.IssueAccessToken("user-123", "user", nil, PlanInfo{}, time.Hour)
+	_, _, _, err := issuer.IssueAccessToken("user-123", "user", nil, time.Hour)
 	if err == nil {
 		t.Error("expected error for empty secret")
 	}
@@ -55,7 +55,7 @@ func TestIssueAccessTokenClaims(t *testing.T) {
 		audience:   "esydocs-api",
 	}
 
-	tokenStr, _, _, err := issuer.IssueAccessToken("user-456", "admin", []string{"read", "write"}, PlanInfo{Name: "pro", MaxFileSizeMB: 500, MaxFilesPerJob: 50}, 2*time.Hour)
+	tokenStr, _, _, err := issuer.IssueAccessToken("user-456", "admin", []string{"read", "write"}, 2*time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestIssueAccessTokenAlwaysSetsIssuerAudience(t *testing.T) {
 		audience:   "esydocs-api",
 	}
 
-	tokenStr, _, _, err := issuer.IssueAccessToken("user-789", "user", nil, PlanInfo{}, time.Hour)
+	tokenStr, _, _, err := issuer.IssueAccessToken("user-789", "user", nil, time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestNewIssuerFromEnvRequiresIssuerAndAudience(t *testing.T) {
 	}
 }
 
-func TestIssueAccessTokenEmbedsPlanInfo(t *testing.T) {
+func TestIssueAccessTokenNoPlanClaims(t *testing.T) {
 	secret := []byte("test-secret-key-32-chars-long!!")
 	issuer := &Issuer{
 		hmacSecret: secret,
@@ -158,8 +158,7 @@ func TestIssueAccessTokenEmbedsPlanInfo(t *testing.T) {
 		audience:   "esydocs-api",
 	}
 
-	plan := PlanInfo{Name: "pro", MaxFileSizeMB: 500, MaxFilesPerJob: 50}
-	tokenStr, _, _, err := issuer.IssueAccessToken("user-pro", "user", nil, plan, time.Hour)
+	tokenStr, _, _, err := issuer.IssueAccessToken("user-pro", "user", nil, time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -172,14 +171,11 @@ func TestIssueAccessTokenEmbedsPlanInfo(t *testing.T) {
 	}
 
 	claims := parsed.Claims.(*Claims)
-	if claims.Plan != "pro" {
-		t.Errorf("expected plan 'pro', got %q", claims.Plan)
+	if claims.Role != "user" {
+		t.Errorf("expected role 'user', got %q", claims.Role)
 	}
-	if claims.PlanMaxFileSizeMB != 500 {
-		t.Errorf("expected PlanMaxFileSizeMB 500, got %d", claims.PlanMaxFileSizeMB)
-	}
-	if claims.PlanMaxFilesPerJob != 50 {
-		t.Errorf("expected PlanMaxFilesPerJob 50, got %d", claims.PlanMaxFilesPerJob)
+	if claims.Subject != "user-pro" {
+		t.Errorf("expected subject 'user-pro', got %q", claims.Subject)
 	}
 }
 
@@ -191,7 +187,7 @@ func TestIssueAccessTokenReturnsTTLDrivenExpiry(t *testing.T) {
 	}
 
 	before := time.Now()
-	_, _, expiresAt, err := issuer.IssueAccessToken("user-ttl", "user", nil, PlanInfo{}, 4*time.Hour)
+	_, _, expiresAt, err := issuer.IssueAccessToken("user-ttl", "user", nil, 4*time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

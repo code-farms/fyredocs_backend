@@ -78,11 +78,8 @@ func TestClaimsToAuthContext(t *testing.T) {
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject: "user-123",
 		},
-		Role:               "admin",
-		Scope:              ScopeList{"read", "write"},
-		Plan:               "pro",
-		PlanMaxFileSizeMB:  500,
-		PlanMaxFilesPerJob: 50,
+		Role:  "admin",
+		Scope: ScopeList{"read", "write"},
 	}
 
 	ctx := claims.ToAuthContext()
@@ -95,14 +92,9 @@ func TestClaimsToAuthContext(t *testing.T) {
 	if len(ctx.Scope) != 2 {
 		t.Errorf("expected 2 scopes, got %d", len(ctx.Scope))
 	}
-	if ctx.Plan != "pro" {
-		t.Errorf("expected Plan 'pro', got %q", ctx.Plan)
-	}
-	if ctx.PlanMaxFileSizeMB != 500 {
-		t.Errorf("expected PlanMaxFileSizeMB 500, got %d", ctx.PlanMaxFileSizeMB)
-	}
-	if ctx.PlanMaxFilesPerJob != 50 {
-		t.Errorf("expected PlanMaxFilesPerJob 50, got %d", ctx.PlanMaxFilesPerJob)
+	// Plan fields are no longer in JWT claims — they come from Redis cache
+	if ctx.Plan != "" {
+		t.Errorf("expected empty Plan from claims, got %q", ctx.Plan)
 	}
 }
 

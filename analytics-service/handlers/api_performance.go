@@ -13,6 +13,14 @@ import (
 
 // APIPerformance returns per-endpoint latency, throughput, and error rate metrics
 // by scraping the API gateway's Prometheus /metrics endpoint.
+//
+// Query params for the endpoints list:
+//   - page     (int, default 1)
+//   - limit    (int, default 50, max 200)
+//   - search   (string) partial match on path, case-insensitive
+//   - method   (string) exact match on HTTP method
+//   - sortBy   (string, default "requests") one of: requests, avgLatencyMs, p50LatencyMs, p95LatencyMs, p99LatencyMs, errorRate, path, method
+//   - sortDir  (string, default "desc") asc or desc
 func APIPerformance(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -121,7 +129,79 @@ func APIPerformance(c *gin.Context) {
 		highestError = highestError[:5]
 	}
 
-	response.OK(c, "API performance retrieved", gin.H{
+	// --- Filter endpoints list ---
+	filtered := epList
+	if search := strings.TrimSpace(c.Query("search")); search != "" {
+		searchLower := strings.ToLower(search)
+		var matched []endpointInfo
+		for _, ep := range filtered {
+			if strings.Contains(strings.ToLower(ep.Path), searchLower) {
+				matched = append(matched, ep)
+			}
+		}
+		filtered = matched
+	}
+	if method := strings.TrimSpace(c.Query("method")); method != "" {
+		methodUpper := strings.ToUpper(method)
+		var matched []endpointInfo
+		for _, ep := range filtered {
+			if ep.Method == methodUpper {
+				matched = append(matched, ep)
+			}
+		}
+		filtered = matched
+	}
+
+	// --- Sort endpoints list ---
+	sortBy := c.DefaultQuery("sortBy", "requests")
+	sortDir := c.DefaultQuery("sortDir", "desc")
+	desc := sortDir != "asc"
+
+	sort.Slice(filtered, func(i, j int) bool {
+		var less bool
+		switch sortBy {
+		case "path":
+			less = filtered[i].Path < filtered[j].Path
+		case "method":
+			less = filtered[i].Method < filtered[j].Method
+		case "avgLatencyMs":
+			less = filtered[i].AvgMs < filtered[j].AvgMs
+		case "p50LatencyMs":
+			less = filtered[i].P50Ms < filtered[j].P50Ms
+		case "p95LatencyMs":
+			less = filtered[i].P95Ms < filtered[j].P95Ms
+		case "p99LatencyMs":
+			less = filtered[i].P99Ms < filtered[j].P99Ms
+		case "errorRate":
+			less = filtered[i].ErrorRate < filtered[j].ErrorRate
+		default: // "requests"
+			less = filtered[i].Requests < filtered[j].Requests
+		}
+		if desc {
+			return !less
+		}
+		return less
+	})
+
+	// --- Paginate endpoints list ---
+	total := int64(len(filtered))
+	limit := queryInt(c, "limit", 50)
+	if limit > 200 {
+		limit = 200
+	}
+	page := queryInt(c, "page", 1)
+	offset := (page - 1) * limit
+
+	if offset > len(filtered) {
+		offset = len(filtered)
+	}
+	end := offset + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	paged := filtered[offset:end]
+
+	response.OKWithMeta(c, "API performance retrieved", gin.H{
 		"summary": gin.H{
 			"totalRequests": totalRequests,
 			"avgLatencyMs":  avgLatencyMs,
@@ -130,8 +210,12 @@ func APIPerformance(c *gin.Context) {
 			"p99LatencyMs":  overallP99,
 			"errorRate":     errorRate,
 		},
-		"endpoints":             epList,
+		"endpoints":             paged,
 		"slowestEndpoints":      slowest,
 		"highestErrorEndpoints": highestError,
+	}, &response.Meta{
+		Page:  page,
+		Limit: limit,
+		Total: total,
 	})
 }

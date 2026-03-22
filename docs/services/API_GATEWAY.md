@@ -155,13 +155,15 @@ The middleware:
 
 ### Plan Headers Forwarded to Downstream Services
 
-For authenticated requests the gateway parses the JWT's plan claims and forwards:
+For authenticated requests the gateway reads the user's plan info from **Redis** (key `user:plan:{userID}`, written by auth-service) and forwards:
 
-| Header | JWT Claim | Example |
-|--------|-----------|---------|
-| `X-User-Plan` | `plan` | `free` |
-| `X-User-Plan-Max-File-MB` | `plan_max_file_mb` | `25` |
-| `X-User-Plan-Max-Files` | `plan_max_files` | `10` |
+| Header | Source | Example |
+|--------|--------|---------|
+| `X-User-Plan` | Redis cache `plan` | `free` |
+| `X-User-Plan-Max-File-MB` | Redis cache `max_file_mb` | `25` |
+| `X-User-Plan-Max-Files` | Redis cache `max_files` | `10` |
+
+If the Redis key is missing (e.g., cache expired), defaults to the free plan (25 MB, 10 files).
 
 For anonymous requests (no valid token, no guest token), the gateway forwards anonymous-plan defaults:
 
@@ -448,7 +450,7 @@ sequenceDiagram
     alt Token is denied
         GW-->>C: 401 Unauthorized
     else Token is valid
-        GW->>GW: Set X-User-ID, X-User-Plan, X-User-Plan-Max-File-MB, X-User-Plan-Max-Files headers from JWT claims
+        GW->>GW: Set X-User-ID from JWT, resolve plan from Redis cache, set X-User-Plan headers
         GW->>JS: Proxy request with X-User-ID and plan headers
         JS-->>GW: 200 {jobs data}
         GW-->>C: 200 {jobs data}

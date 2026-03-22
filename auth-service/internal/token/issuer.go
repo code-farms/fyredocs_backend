@@ -10,22 +10,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// PlanInfo carries the plan name and limits to be embedded in the JWT.
-// Defined here to keep the token package free of model imports.
-type PlanInfo struct {
-	Name           string
-	MaxFileSizeMB  int
-	MaxFilesPerJob int
-}
-
 type Claims struct {
 	jwt.RegisteredClaims
-	Role               string   `json:"role,omitempty"`
-	Scope              []string `json:"scope,omitempty"`
-	Plan               string   `json:"plan,omitempty"`
-	PlanMaxFileSizeMB  int      `json:"plan_max_file_mb,omitempty"`
-	PlanMaxFilesPerJob int      `json:"plan_max_files,omitempty"`
-	IsGuest            bool     `json:"is_guest,omitempty"`
+	Role    string   `json:"role,omitempty"`
+	Scope   []string `json:"scope,omitempty"`
+	IsGuest bool     `json:"is_guest,omitempty"`
 }
 
 type Issuer struct {
@@ -61,7 +50,7 @@ func NewIssuerFromEnv() (*Issuer, error) {
 
 // IssueAccessToken creates a signed JWT. The caller decides the TTL.
 // Returns the signed token string, the JTI (token ID), and the expiration time.
-func (i *Issuer) IssueAccessToken(userID, role string, scope []string, plan PlanInfo, ttl time.Duration) (tokenStr string, jti string, expiresAt time.Time, err error) {
+func (i *Issuer) IssueAccessToken(userID, role string, scope []string, ttl time.Duration) (tokenStr string, jti string, expiresAt time.Time, err error) {
 	if i == nil || len(i.hmacSecret) == 0 {
 		return "", "", time.Time{}, fmt.Errorf("issuer not configured")
 	}
@@ -77,11 +66,8 @@ func (i *Issuer) IssueAccessToken(userID, role string, scope []string, plan Plan
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
-		Role:               strings.TrimSpace(role),
-		Scope:              scope,
-		Plan:               plan.Name,
-		PlanMaxFileSizeMB:  plan.MaxFileSizeMB,
-		PlanMaxFilesPerJob: plan.MaxFilesPerJob,
+		Role:  strings.TrimSpace(role),
+		Scope: scope,
 	}
 
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

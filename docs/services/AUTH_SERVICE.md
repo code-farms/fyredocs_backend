@@ -315,15 +315,22 @@ All errors follow the standard response format:
   "exp": 1705324800,
   "iat": 1705296000,
   "jti": "unique-token-id",
-  "plan": "free",
-  "plan_max_file_mb": 25,
-  "plan_max_files": 10
+  "role": "user"
 }
 ```
 
 Every token includes a `jti` claim -- a UUID v4 generated per token. It uniquely identifies each token for denylist matching and audit purposes.
 
-The `plan`, `plan_max_file_mb`, and `plan_max_files` claims are populated at login/signup by looking up the user's plan from the `subscription_plans` table. Downstream services (api-gateway, job-service, upload-service) read these claims to enforce per-plan limits without calling back to the auth service.
+Plan info (`plan`, `max_file_mb`, `max_files`) is **not** embedded in the JWT. Instead, it is cached in Redis on login/refresh and read by the API gateway to forward as HTTP headers. This ensures plan changes take effect immediately without waiting for token expiry.
+
+### Plan Cache (Redis)
+
+- **Key**: `user:plan:{userID}` → JSON `{"plan":"free","max_file_mb":25,"max_files":10}`
+- **TTL**: Same as access token TTL (8 hours), refreshed on login/refresh
+- **Written by**: Auth-service on login, signup, refresh, and plan change
+- **Deleted on**: Logout
+- **Read by**: API gateway (populates `X-User-Plan`, `X-User-Plan-Max-File-MB`, `X-User-Plan-Max-Files` headers)
+- **Fallback**: If Redis key is missing, defaults to free plan (25 MB, 10 files)
 
 - **Algorithm**: HS256 (HMAC-SHA256)
 - **Secret**: `JWT_HS256_SECRET` environment variable (min 32 characters)
