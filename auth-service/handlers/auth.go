@@ -146,7 +146,71 @@ func (ae *AuthEndpoints) Login(c *gin.Context) {
 }
 
 func (ae *AuthEndpoints) Refresh(c *gin.Context) {
-	response.Err(c, http.StatusGone, "ENDPOINT_DEPRECATED", "Your session has expired. Please log in again.")
+	cookieName := getEnv("AUTH_REFRESH_COOKIE", "refresh_token")
+	refreshToken, err := c.Cookie(cookieName)
+	if err != nil || strings.TrimSpace(refreshToken) == "" {
+		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
+		return
+	}
+
+	userID, err := ae.Issuer.VerifyRefreshToken(refreshToken)
+	if err != nil {
+		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
+		return
+	}
+
+	session, err := models.FindSessionByRefreshHash(models.DB, models.HashToken(refreshToken))
+	if err != nil {
+		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
+		return
+	}
+
+	parsedID, err := uuid.Parse(strings.TrimSpace(userID))
+	if err != nil {
+		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
+		return
+	}
+
+	var user models.User
+	if err := models.DB.First(&user, "id = ?", parsedID).Error; err != nil {
+		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
+		return
+	}
+
+	var plan models.SubscriptionPlan
+	if err := models.DB.Where("name = ?", user.PlanName).First(&plan).Error; err != nil {
+		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
+	}
+
+	planInfo := token.PlanInfo{
+		Name:           plan.Name,
+		MaxFileSizeMB:  plan.MaxFileSizeMB,
+		MaxFilesPerJob: plan.MaxFilesPerJob,
+	}
+
+	role := user.Role
+	if role == "" {
+		role = "user"
+	}
+
+	accessTTL := getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
+	accessToken, _, accessExpiresAt, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, planInfo, accessTTL)
+	if err != nil {
+		response.InternalError(c, "SERVER_ERROR", "Failed to refresh token. Please try again.")
+		return
+	}
+
+	session.AccessTokenHash = models.HashToken(accessToken)
+	session.AccessExpiresAt = accessExpiresAt
+	if err := models.DB.Save(session).Error; err != nil {
+		slog.Warn("failed to update session in database", "error", err)
+	}
+
+	setAccessTokenCookie(c, accessToken, accessTTL)
+
+	response.OK(c, "Token refreshed", gin.H{
+		"user": buildUserResponse(user, role, plan),
+	})
 }
 
 func (ae *AuthEndpoints) Me(c *gin.Context) {
@@ -198,6 +262,7 @@ func (ae *AuthEndpoints) Logout(c *gin.Context) {
 	}
 
 	clearAccessTokenCookie(c)
+	clearRefreshTokenCookie(c)
 	response.NoContent(c)
 }
 
@@ -218,13 +283,33 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 		role = "user"
 	}
 
-	accessToken, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, planInfo)
+	accessTTL := getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
+	refreshTTL := getEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour)
+
+	accessToken, jti, accessExpiresAt, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, planInfo, accessTTL)
 	if err != nil {
 		response.InternalError(c, "SERVER_ERROR", "Login failed. Please try again.")
 		return
 	}
 
-	setAccessTokenCookie(c, accessToken)
+	refreshToken, _, refreshExpiresAt, err := ae.Issuer.IssueRefreshToken(user.ID.String(), refreshTTL)
+	if err != nil {
+		response.InternalError(c, "SERVER_ERROR", "Login failed. Please try again.")
+		return
+	}
+
+	sessionID, err := uuid.Parse(jti)
+	if err != nil {
+		response.InternalError(c, "SERVER_ERROR", "Login failed. Please try again.")
+		return
+	}
+
+	if err := models.StoreSession(models.DB, sessionID, user.ID, accessToken, accessExpiresAt, refreshToken, refreshExpiresAt); err != nil {
+		slog.Warn("failed to store session in database", "error", err, "userId", user.ID)
+	}
+
+	setAccessTokenCookie(c, accessToken, accessTTL)
+	setRefreshTokenCookie(c, refreshToken, refreshTTL)
 
 	response.OK(c, "Welcome back!", gin.H{
 		"user": buildUserResponse(user, role, plan),
@@ -232,6 +317,13 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 }
 
 func (ae *AuthEndpoints) denyAccessToken(ctx context.Context, tokenStr string) error {
+	// Delete the session from the database
+	hash := models.HashToken(tokenStr)
+	if err := models.RevokeSessionByAccessHash(models.DB, hash); err != nil {
+		slog.Warn("failed to revoke session from database", "error", err)
+	}
+
+	// Also add to Redis denylist for cross-service invalidation
 	if ae.Denylist == nil {
 		return nil
 	}
@@ -239,7 +331,7 @@ func (ae *AuthEndpoints) denyAccessToken(ctx context.Context, tokenStr string) e
 	ttl, err := getTokenRemainingTTL(tokenStr)
 	if err != nil {
 		slog.Warn("could not parse token expiration, using default TTL", "error", err)
-		ttl = 15 * time.Minute
+		ttl = getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
 	}
 
 	return ae.Denylist.DenyToken(ctx, tokenStr, ttl)
@@ -314,12 +406,11 @@ func isDuplicateError(err error) bool {
 	return strings.Contains(lower, "duplicate") || strings.Contains(lower, "unique")
 }
 
-func setAccessTokenCookie(c *gin.Context, tokenStr string) {
+func setAccessTokenCookie(c *gin.Context, tokenStr string, ttl time.Duration) {
 	name := getEnv("AUTH_ACCESS_COOKIE", "access_token")
 	domain := strings.TrimSpace(getEnv("AUTH_COOKIE_DOMAIN", ""))
 	secure := getEnvBool("AUTH_COOKIE_SECURE", true)
 	sameSite := getEnv("AUTH_COOKIE_SAMESITE", "lax")
-	ttl := getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
 
 	if !secure {
 		slog.Warn("AUTH_COOKIE_SECURE is disabled - insecure for production")
@@ -338,6 +429,27 @@ func clearAccessTokenCookie(c *gin.Context) {
 
 	c.SetSameSite(parseSameSite(sameSite))
 	c.SetCookie(name, "", -1, "/", domain, secure, true)
+}
+
+func setRefreshTokenCookie(c *gin.Context, tokenStr string, ttl time.Duration) {
+	name := getEnv("AUTH_REFRESH_COOKIE", "refresh_token")
+	domain := strings.TrimSpace(getEnv("AUTH_COOKIE_DOMAIN", ""))
+	secure := getEnvBool("AUTH_COOKIE_SECURE", true)
+	sameSite := getEnv("AUTH_COOKIE_SAMESITE", "lax")
+
+	c.SetSameSite(parseSameSite(sameSite))
+	maxAge := int(ttl.Seconds())
+	c.SetCookie(name, tokenStr, maxAge, "/auth/refresh", domain, secure, true)
+}
+
+func clearRefreshTokenCookie(c *gin.Context) {
+	name := getEnv("AUTH_REFRESH_COOKIE", "refresh_token")
+	domain := strings.TrimSpace(getEnv("AUTH_COOKIE_DOMAIN", ""))
+	secure := getEnvBool("AUTH_COOKIE_SECURE", true)
+	sameSite := getEnv("AUTH_COOKIE_SAMESITE", "lax")
+
+	c.SetSameSite(parseSameSite(sameSite))
+	c.SetCookie(name, "", -1, "/auth/refresh", domain, secure, true)
 }
 
 func parseSameSite(value string) http.SameSite {

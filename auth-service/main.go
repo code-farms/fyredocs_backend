@@ -125,6 +125,20 @@ func main() {
 
 	routes.SetupRouter(r, issuer, denylist, redisClient)
 
+	// Periodically clean up expired sessions from the database
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			deleted, err := models.DeleteExpiredSessions(models.DB)
+			if err != nil {
+				slog.Warn("expired session cleanup failed", "error", err)
+			} else if deleted > 0 {
+				slog.Info("cleaned up expired sessions", "count", deleted)
+			}
+		}
+	}()
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8086"

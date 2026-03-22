@@ -262,3 +262,61 @@ func TestBuildUserResponse(t *testing.T) {
 		}
 	})
 }
+
+func TestSetRefreshTokenCookie(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("AUTH_COOKIE_SECURE", "true")
+	t.Setenv("AUTH_COOKIE_SAMESITE", "lax")
+	t.Setenv("AUTH_REFRESH_COOKIE", "refresh_token")
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+
+	setRefreshTokenCookie(c, "test-refresh-token", 7*24*time.Hour)
+
+	cookies := rec.Result().Cookies()
+	found := false
+	for _, cookie := range cookies {
+		if cookie.Name == "refresh_token" {
+			found = true
+			if cookie.Path != "/auth/refresh" {
+				t.Errorf("expected path '/auth/refresh', got %q", cookie.Path)
+			}
+			if !cookie.HttpOnly {
+				t.Error("expected HttpOnly=true")
+			}
+			if cookie.MaxAge != int((7 * 24 * time.Hour).Seconds()) {
+				t.Errorf("expected MaxAge %d, got %d", int((7*24*time.Hour).Seconds()), cookie.MaxAge)
+			}
+		}
+	}
+	if !found {
+		t.Error("refresh_token cookie not found")
+	}
+}
+
+func TestClearRefreshTokenCookie(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("AUTH_COOKIE_SECURE", "true")
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+
+	clearRefreshTokenCookie(c)
+
+	cookies := rec.Result().Cookies()
+	found := false
+	for _, cookie := range cookies {
+		if cookie.Name == "refresh_token" {
+			found = true
+			if cookie.MaxAge != -1 {
+				t.Errorf("expected MaxAge -1, got %d", cookie.MaxAge)
+			}
+		}
+	}
+	if !found {
+		t.Error("refresh_token clear cookie not found")
+	}
+}

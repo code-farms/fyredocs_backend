@@ -32,7 +32,6 @@ type Issuer struct {
 	hmacSecret []byte
 	issuer     string
 	audience   string
-	accessTTL  time.Duration
 }
 
 func NewIssuerFromEnv() (*Issuer, error) {
@@ -57,23 +56,26 @@ func NewIssuerFromEnv() (*Issuer, error) {
 		hmacSecret: []byte(secret),
 		issuer:     issuer,
 		audience:   audience,
-		accessTTL:  getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour),
 	}, nil
 }
 
-func (i *Issuer) IssueAccessToken(userID, role string, scope []string, plan PlanInfo) (string, error) {
+// IssueAccessToken creates a signed JWT. The caller decides the TTL.
+// Returns the signed token string, the JTI (token ID), and the expiration time.
+func (i *Issuer) IssueAccessToken(userID, role string, scope []string, plan PlanInfo, ttl time.Duration) (tokenStr string, jti string, expiresAt time.Time, err error) {
 	if i == nil || len(i.hmacSecret) == 0 {
-		return "", fmt.Errorf("issuer not configured")
+		return "", "", time.Time{}, fmt.Errorf("issuer not configured")
 	}
 	now := time.Now()
+	jti = uuid.NewString()
+	expiresAt = now.Add(ttl)
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			ID:        uuid.NewString(),
+			ID:        jti,
 			Subject:   strings.TrimSpace(userID),
 			Issuer:    i.issuer,
 			Audience:  []string{i.audience},
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(i.accessTTL)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
 		Role:               strings.TrimSpace(role),
 		Scope:              scope,
@@ -83,11 +85,56 @@ func (i *Issuer) IssueAccessToken(userID, role string, scope []string, plan Plan
 	}
 
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return tok.SignedString(i.hmacSecret)
+	tokenStr, err = tok.SignedString(i.hmacSecret)
+	return tokenStr, jti, expiresAt, err
 }
 
-func (i *Issuer) AccessTTL() time.Duration {
-	return i.accessTTL
+// IssueRefreshToken creates a signed JWT with minimal claims (no role/plan).
+// The caller decides the TTL. Returns the signed token string, JTI, and expiration time.
+func (i *Issuer) IssueRefreshToken(userID string, ttl time.Duration) (tokenStr string, jti string, expiresAt time.Time, err error) {
+	if i == nil || len(i.hmacSecret) == 0 {
+		return "", "", time.Time{}, fmt.Errorf("issuer not configured")
+	}
+	now := time.Now()
+	jti = uuid.NewString()
+	expiresAt = now.Add(ttl)
+	claims := jwt.RegisteredClaims{
+		ID:        jti,
+		Subject:   strings.TrimSpace(userID),
+		Issuer:    i.issuer,
+		Audience:  []string{i.audience},
+		IssuedAt:  jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(expiresAt),
+	}
+
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenStr, err = tok.SignedString(i.hmacSecret)
+	return tokenStr, jti, expiresAt, err
+}
+
+// VerifyRefreshToken parses and validates a refresh token's signature and expiry.
+// Returns the subject (userID) if valid.
+func (i *Issuer) VerifyRefreshToken(tokenStr string) (userID string, err error) {
+	if i == nil || len(i.hmacSecret) == 0 {
+		return "", fmt.Errorf("issuer not configured")
+	}
+
+	parsed, err := jwt.ParseWithClaims(tokenStr, &jwt.RegisteredClaims{}, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return i.hmacSecret, nil
+	}, jwt.WithIssuer(i.issuer), jwt.WithAudience(i.audience))
+	if err != nil {
+		return "", err
+	}
+
+	claims, ok := parsed.Claims.(*jwt.RegisteredClaims)
+	if !ok || claims.Subject == "" {
+		return "", fmt.Errorf("invalid refresh token claims")
+	}
+
+	return claims.Subject, nil
 }
 
 func getEnvDuration(key string, fallback time.Duration) time.Duration {

@@ -100,7 +100,7 @@ func (d *RedisTokenDenylist) DenyToken(ctx context.Context, token string, ttl ti
 	}
 	key := d.key(token)
 	if ttl <= 0 {
-		ttl = 15 * time.Minute
+		ttl = 8 * time.Hour
 	}
 	return d.client.Set(ctx, key, "1", ttl).Err()
 }

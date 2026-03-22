@@ -180,14 +180,14 @@ services:
       JWT_ISSUER: "esydocs"
       JWT_AUDIENCE: "esydocs-api"
       JWT_CLOCK_SKEW: "60s"
-      JWT_ACCESS_TTL: "15m"
+      JWT_ACCESS_TTL: "8h"
+      JWT_REFRESH_TTL: "168h"
 
       # Auth Cookie Settings
-      AUTH_REFRESH_TTL: "720h"
-      AUTH_REFRESH_COOKIE: "refresh_token"
       AUTH_COOKIE_DOMAIN: ""
-      AUTH_COOKIE_SECURE: "false"
+      AUTH_COOKIE_SECURE: "true"
       AUTH_COOKIE_SAMESITE: "lax"
+      AUTH_REFRESH_COOKIE: "refresh_token"
 
       # Auth Denylist
       AUTH_DENYLIST_ENABLED: "true"

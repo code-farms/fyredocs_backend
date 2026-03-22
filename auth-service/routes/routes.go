@@ -62,6 +62,8 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 	internal := r.Group("/internal")
 	{
 		internal.GET("/users/:id/plan", handlers.GetUserPlan)
+		internal.POST("/users/:id/revoke-sessions", authEndpoints.RevokeUserSessions)
+		internal.DELETE("/sessions/:id", authEndpoints.RevokeSession)
 	}
 
 	r.GET("/healthz", func(c *gin.Context) {

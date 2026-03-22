@@ -12,21 +12,26 @@ func TestIssueAccessTokenValid(t *testing.T) {
 		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
 		issuer:     "esydocs",
 		audience:   "esydocs-api",
-		accessTTL:  time.Hour,
 	}
 
-	tokenStr, err := issuer.IssueAccessToken("user-123", "user", nil, PlanInfo{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10})
+	tokenStr, jti, expiresAt, err := issuer.IssueAccessToken("user-123", "user", nil, PlanInfo{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10}, time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if tokenStr == "" {
 		t.Fatal("expected non-empty token")
 	}
+	if jti == "" {
+		t.Fatal("expected non-empty jti")
+	}
+	if expiresAt.IsZero() {
+		t.Fatal("expected non-zero expiresAt")
+	}
 }
 
 func TestIssueAccessTokenNilIssuer(t *testing.T) {
 	var issuer *Issuer
-	_, err := issuer.IssueAccessToken("user-123", "user", nil, PlanInfo{})
+	_, _, _, err := issuer.IssueAccessToken("user-123", "user", nil, PlanInfo{}, time.Hour)
 	if err == nil {
 		t.Error("expected error for nil issuer")
 	}
@@ -35,9 +40,8 @@ func TestIssueAccessTokenNilIssuer(t *testing.T) {
 func TestIssueAccessTokenEmptySecret(t *testing.T) {
 	issuer := &Issuer{
 		hmacSecret: nil,
-		accessTTL:  time.Hour,
 	}
-	_, err := issuer.IssueAccessToken("user-123", "user", nil, PlanInfo{})
+	_, _, _, err := issuer.IssueAccessToken("user-123", "user", nil, PlanInfo{}, time.Hour)
 	if err == nil {
 		t.Error("expected error for empty secret")
 	}
@@ -49,10 +53,9 @@ func TestIssueAccessTokenClaims(t *testing.T) {
 		hmacSecret: secret,
 		issuer:     "esydocs",
 		audience:   "esydocs-api",
-		accessTTL:  2 * time.Hour,
 	}
 
-	tokenStr, err := issuer.IssueAccessToken("user-456", "admin", []string{"read", "write"}, PlanInfo{Name: "pro", MaxFileSizeMB: 500, MaxFilesPerJob: 50})
+	tokenStr, _, _, err := issuer.IssueAccessToken("user-456", "admin", []string{"read", "write"}, PlanInfo{Name: "pro", MaxFileSizeMB: 500, MaxFilesPerJob: 50}, 2*time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -93,10 +96,9 @@ func TestIssueAccessTokenAlwaysSetsIssuerAudience(t *testing.T) {
 		hmacSecret: secret,
 		issuer:     "esydocs",
 		audience:   "esydocs-api",
-		accessTTL:  time.Hour,
 	}
 
-	tokenStr, err := issuer.IssueAccessToken("user-789", "user", nil, PlanInfo{})
+	tokenStr, _, _, err := issuer.IssueAccessToken("user-789", "user", nil, PlanInfo{}, time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,11 +156,10 @@ func TestIssueAccessTokenEmbedsPlanInfo(t *testing.T) {
 		hmacSecret: secret,
 		issuer:     "esydocs",
 		audience:   "esydocs-api",
-		accessTTL:  time.Hour,
 	}
 
 	plan := PlanInfo{Name: "pro", MaxFileSizeMB: 500, MaxFilesPerJob: 50}
-	tokenStr, err := issuer.IssueAccessToken("user-pro", "user", nil, plan)
+	tokenStr, _, _, err := issuer.IssueAccessToken("user-pro", "user", nil, plan, time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -182,13 +183,107 @@ func TestIssueAccessTokenEmbedsPlanInfo(t *testing.T) {
 	}
 }
 
-func TestAccessTTL(t *testing.T) {
+func TestIssueAccessTokenReturnsTTLDrivenExpiry(t *testing.T) {
 	issuer := &Issuer{
-		hmacSecret: []byte("test"),
-		accessTTL:  4 * time.Hour,
+		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
+		issuer:     "esydocs",
+		audience:   "esydocs-api",
 	}
-	if got := issuer.AccessTTL(); got != 4*time.Hour {
-		t.Errorf("expected 4h, got %v", got)
+
+	before := time.Now()
+	_, _, expiresAt, err := issuer.IssueAccessToken("user-ttl", "user", nil, PlanInfo{}, 4*time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := before.Add(4 * time.Hour)
+	if expiresAt.Before(expected.Add(-time.Second)) || expiresAt.After(expected.Add(time.Second)) {
+		t.Errorf("expiresAt %v not within 1s of expected %v", expiresAt, expected)
+	}
+}
+
+func TestIssueRefreshTokenValid(t *testing.T) {
+	issuer := &Issuer{
+		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
+		issuer:     "esydocs",
+		audience:   "esydocs-api",
+	}
+
+	tokenStr, jti, expiresAt, err := issuer.IssueRefreshToken("user-123", 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tokenStr == "" {
+		t.Fatal("expected non-empty token")
+	}
+	if jti == "" {
+		t.Fatal("expected non-empty jti")
+	}
+
+	expected := time.Now().Add(7 * 24 * time.Hour)
+	if expiresAt.Before(expected.Add(-time.Second)) || expiresAt.After(expected.Add(time.Second)) {
+		t.Errorf("expiresAt %v not within 1s of expected %v", expiresAt, expected)
+	}
+}
+
+func TestIssueRefreshTokenNilIssuer(t *testing.T) {
+	var issuer *Issuer
+	_, _, _, err := issuer.IssueRefreshToken("user-123", time.Hour)
+	if err == nil {
+		t.Error("expected error for nil issuer")
+	}
+}
+
+func TestVerifyRefreshTokenValid(t *testing.T) {
+	issuer := &Issuer{
+		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
+		issuer:     "esydocs",
+		audience:   "esydocs-api",
+	}
+
+	tokenStr, _, _, err := issuer.IssueRefreshToken("user-456", time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	userID, err := issuer.VerifyRefreshToken(tokenStr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if userID != "user-456" {
+		t.Errorf("expected userID 'user-456', got %q", userID)
+	}
+}
+
+func TestVerifyRefreshTokenInvalid(t *testing.T) {
+	issuer := &Issuer{
+		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
+		issuer:     "esydocs",
+		audience:   "esydocs-api",
+	}
+
+	_, err := issuer.VerifyRefreshToken("invalid-token")
+	if err == nil {
+		t.Error("expected error for invalid token")
+	}
+}
+
+func TestVerifyRefreshTokenWrongSecret(t *testing.T) {
+	issuer1 := &Issuer{
+		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
+		issuer:     "esydocs",
+		audience:   "esydocs-api",
+	}
+	issuer2 := &Issuer{
+		hmacSecret: []byte("different-secret-key-32-chars!!!"),
+		issuer:     "esydocs",
+		audience:   "esydocs-api",
+	}
+
+	tokenStr, _, _, _ := issuer1.IssueRefreshToken("user-789", time.Hour)
+	_, err := issuer2.VerifyRefreshToken(tokenStr)
+	if err == nil {
+		t.Error("expected error for wrong secret")
 	}
 }
 
