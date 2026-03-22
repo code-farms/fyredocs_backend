@@ -32,7 +32,8 @@ COPY analytics-service/ ./analytics-service/
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     cd analytics-service && \
-    CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/analytics-service .
+    CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/analytics-service . && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/bin/healthcheck ../shared/healthcheck
 
 # ---- Runtime Stage ----
 # 6. Use the ultimate empty base
@@ -47,6 +48,7 @@ COPY --from=builder /etc/group /etc/group
 WORKDIR /app
 
 # 8. Copy the binary
+COPY --from=builder /app/bin/healthcheck .
 COPY --from=builder /app/bin/analytics-service .
 
 # 9. Run as the secure unprivileged user

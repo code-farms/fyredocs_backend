@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +12,7 @@ import (
 
 	"esydocs/shared/natsconn"
 	"esydocs/shared/queue"
+	"esydocs/shared/response"
 )
 
 // SSEJobUpdates streams real-time job status updates via Server-Sent Events.
@@ -20,7 +20,7 @@ import (
 func SSEJobUpdates(c *gin.Context) {
 	jobID := c.Param("id")
 	if jobID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "job ID required"})
+		response.BadRequest(c, "INVALID_INPUT", "job ID required")
 		return
 	}
 

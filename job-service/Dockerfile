@@ -32,7 +32,8 @@ COPY job-service/ ./job-service/
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     cd job-service && \
-    CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/job-service .
+    CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/job-service . && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/bin/healthcheck ../shared/healthcheck
 
 # ---- Runtime Stage ----
 # 5. Using the empty base for a tiny, secure image
@@ -50,6 +51,7 @@ WORKDIR /app
 VOLUME /app/uploads /app/outputs
 
 # 8. Copy the binary
+COPY --from=builder /app/bin/healthcheck .
 COPY --from=builder /app/bin/job-service .
 
 # 9. Run as the secure unprivileged user

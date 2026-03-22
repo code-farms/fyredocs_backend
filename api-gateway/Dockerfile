@@ -34,7 +34,8 @@ COPY api-gateway/ ./api-gateway/
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     cd api-gateway && \
-    CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/api-gateway .
+    CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/api-gateway . && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/bin/healthcheck ../shared/healthcheck
 
 # ---- Runtime Stage ----
 # 7. Start with an absolutely empty, 0MB container
@@ -49,6 +50,7 @@ COPY --from=builder /etc/group /etc/group
 WORKDIR /app
 
 # 9. Copy our optimized binary
+COPY --from=builder /app/bin/healthcheck .
 COPY --from=builder /app/bin/api-gateway .
 
 # 10. Switch to our secure user
