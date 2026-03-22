@@ -84,6 +84,26 @@ func Migrate() {
 		slog.Error("Database migration failed", "error", err)
 		os.Exit(1)
 	}
+
+	compositeIndexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_session_user_access_exp ON user_sessions (user_id, access_expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_session_access_refresh_exp ON user_sessions (access_expires_at) WHERE refresh_expires_at IS NOT NULL`,
+	}
+	for _, idx := range compositeIndexes {
+		if err := DB.Exec(idx).Error; err != nil {
+			slog.Warn("Failed to create composite index", "error", err)
+		}
+	}
+
+	checkConstraints := []string{
+		`DO $$ BEGIN ALTER TABLE users ADD CONSTRAINT chk_user_role CHECK (role IN ('user','admin')); EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+	}
+	for _, chk := range checkConstraints {
+		if err := DB.Exec(chk).Error; err != nil {
+			slog.Warn("Failed to add check constraint", "error", err)
+		}
+	}
+
 	slog.Info("Database migration completed")
 	seedPlans()
 }

@@ -13,6 +13,7 @@ type AnalyticsEvent struct {
 	ID          uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
 	EventType   string         `gorm:"type:text;not null;index:idx_event_type" json:"eventType"`
 	UserID      *uuid.UUID     `gorm:"type:uuid;index:idx_event_user" json:"userId,omitempty"`
+	JobID       *uuid.UUID     `gorm:"type:uuid;index:idx_event_job" json:"jobId,omitempty"`
 	IsGuest     bool           `gorm:"default:false" json:"isGuest"`
 	ToolType    string         `gorm:"type:text;index:idx_event_tool" json:"toolType,omitempty"`
 	PlanName    string         `gorm:"type:text" json:"planName,omitempty"`
@@ -24,7 +25,7 @@ type AnalyticsEvent struct {
 
 func (e *AnalyticsEvent) BeforeCreate(tx *gorm.DB) error {
 	if e.ID == uuid.Nil {
-		e.ID = uuid.New()
+		e.ID = uuid.Must(uuid.NewV7())
 	}
 	return nil
 }
@@ -42,7 +43,7 @@ type DailyMetric struct {
 
 func (d *DailyMetric) BeforeCreate(tx *gorm.DB) error {
 	if d.ID == uuid.Nil {
-		d.ID = uuid.New()
+		d.ID = uuid.Must(uuid.NewV7())
 	}
 	return nil
 }

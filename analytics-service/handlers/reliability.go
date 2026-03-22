@@ -69,9 +69,11 @@ func ReliabilityMetrics(c *gin.Context) {
 			COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed.created_at - created.created_at))), 0) as p95_seconds
 		FROM analytics_events created
 		JOIN analytics_events completed
-			ON completed.metadata->>'jobId' = created.metadata->>'jobId'
+			ON completed.job_id = created.job_id
 		WHERE created.event_type = 'job.created'
 			AND completed.event_type = 'job.completed'
+			AND created.job_id IS NOT NULL
+			AND completed.job_id IS NOT NULL
 			AND created.created_at >= ? AND created.created_at < ?
 	`, since, now).Scan(&processingTime)
 

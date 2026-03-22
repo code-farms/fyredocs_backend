@@ -22,14 +22,15 @@ type User struct {
 
 func (u *User) BeforeCreate(tx *gorm.DB) (err error) {
 	if u.ID == uuid.Nil {
-		u.ID = uuid.New()
+		u.ID = uuid.Must(uuid.NewV7())
 	}
 	return nil
 }
 
 type AuthMetadata struct {
 	ID          uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID      uuid.UUID  `gorm:"type:uuid;not null;index" json:"userId"`
+	UserID      uuid.UUID  `gorm:"type:uuid;not null;index;constraint:OnDelete:CASCADE" json:"userId"`
+	User        *User      `gorm:"foreignKey:UserID" json:"-"`
 	Provider    string     `gorm:"type:text;not null" json:"provider"`
 	Subject     string     `gorm:"type:text;not null" json:"subject"`
 	LastLoginAt *time.Time `gorm:"" json:"lastLoginAt,omitempty"`
@@ -38,7 +39,7 @@ type AuthMetadata struct {
 
 func (a *AuthMetadata) BeforeCreate(tx *gorm.DB) (err error) {
 	if a.ID == uuid.Nil {
-		a.ID = uuid.New()
+		a.ID = uuid.Must(uuid.NewV7())
 	}
 	return nil
 }
@@ -54,7 +55,7 @@ type SubscriptionPlan struct {
 
 func (p *SubscriptionPlan) BeforeCreate(tx *gorm.DB) (err error) {
 	if p.ID == uuid.Nil {
-		p.ID = uuid.New()
+		p.ID = uuid.Must(uuid.NewV7())
 	}
 	return nil
 }

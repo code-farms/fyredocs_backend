@@ -80,5 +80,25 @@ func Migrate() {
 		slog.Error("Database migration failed", "error", err)
 		os.Exit(1)
 	}
+
+	compositeIndexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_job_user_tool_created ON processing_jobs (user_id, tool_type, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_filemeta_job_kind ON file_metadata (job_id, kind)`,
+	}
+	for _, idx := range compositeIndexes {
+		if err := DB.Exec(idx).Error; err != nil {
+			slog.Warn("Failed to create composite index", "error", err)
+		}
+	}
+
+	checkConstraints := []string{
+		`DO $$ BEGIN ALTER TABLE processing_jobs ADD CONSTRAINT chk_job_status CHECK (status IN ('queued','processing','completed','failed')); EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+	}
+	for _, chk := range checkConstraints {
+		if err := DB.Exec(chk).Error; err != nil {
+			slog.Warn("Failed to add check constraint", "error", err)
+		}
+	}
+
 	slog.Info("Database migration completed")
 }

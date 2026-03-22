@@ -13,7 +13,8 @@ import (
 // One row = one login.
 type UserSession struct {
 	ID               uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID           uuid.UUID  `gorm:"type:uuid;not null;index:idx_user_sessions_user_id" json:"userId"`
+	UserID           uuid.UUID  `gorm:"type:uuid;not null;index:idx_user_sessions_user_id;constraint:OnDelete:CASCADE" json:"userId"`
+	User             *User      `gorm:"foreignKey:UserID" json:"-"`
 	AccessTokenHash  string     `gorm:"type:text;not null;uniqueIndex:idx_user_sessions_access_hash" json:"-"`
 	RefreshTokenHash string     `gorm:"type:text;uniqueIndex:idx_user_sessions_refresh_hash" json:"-"`
 	AccessExpiresAt  time.Time  `gorm:"not null" json:"accessExpiresAt"`
@@ -23,7 +24,7 @@ type UserSession struct {
 
 func (s *UserSession) BeforeCreate(tx *gorm.DB) (err error) {
 	if s.ID == uuid.Nil {
-		s.ID = uuid.New()
+		s.ID = uuid.Must(uuid.NewV7())
 	}
 	return nil
 }
@@ -66,13 +67,11 @@ func RevokeSessionByAccessHash(db *gorm.DB, accessTokenHash string) error {
 func RevokeAllUserSessions(db *gorm.DB, userID uuid.UUID) ([]UserSession, error) {
 	now := time.Now()
 	var sessions []UserSession
-	if err := db.Where("user_id = ? AND (access_expires_at > ? OR (refresh_expires_at IS NOT NULL AND refresh_expires_at > ?))", userID, now, now).Find(&sessions).Error; err != nil {
-		return nil, err
-	}
-	if len(sessions) == 0 {
-		return nil, nil
-	}
-	if err := db.Where("user_id = ? AND (access_expires_at > ? OR (refresh_expires_at IS NOT NULL AND refresh_expires_at > ?))", userID, now, now).Delete(&UserSession{}).Error; err != nil {
+	err := db.Raw(
+		`DELETE FROM user_sessions WHERE user_id = ? AND (access_expires_at > ? OR (refresh_expires_at IS NOT NULL AND refresh_expires_at > ?)) RETURNING *`,
+		userID, now, now,
+	).Scan(&sessions).Error
+	if err != nil {
 		return nil, err
 	}
 	return sessions, nil

@@ -130,6 +130,14 @@ func handleJobEvent(msg jetstream.Msg) {
 		}
 	}
 
+	var jobID *uuid.UUID
+	if event.JobID != "" {
+		parsed, err := uuid.Parse(event.JobID)
+		if err == nil {
+			jobID = &parsed
+		}
+	}
+
 	metaBytes, _ := json.Marshal(map[string]interface{}{
 		"jobId":         event.JobID,
 		"failureReason": event.FailureReason,
@@ -140,6 +148,7 @@ func handleJobEvent(msg jetstream.Msg) {
 	record := models.AnalyticsEvent{
 		EventType:   eventType,
 		UserID:      userID,
+		JobID:       jobID,
 		ToolType:    event.ToolType,
 		FileSize:    event.FileSize,
 		Metadata:    datatypes.JSON(metaBytes),

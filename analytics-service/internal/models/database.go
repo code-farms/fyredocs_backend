@@ -84,7 +84,7 @@ func Migrate() {
 	compositeIndexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_event_user_type_created ON analytics_events (user_id, event_type, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_event_created_user ON analytics_events (created_at, user_id) WHERE user_id IS NOT NULL AND is_guest = false`,
-		`CREATE INDEX IF NOT EXISTS idx_event_metadata_jobid ON analytics_events ((metadata->>'jobId')) WHERE metadata->>'jobId' IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_event_job_type ON analytics_events (job_id, event_type) WHERE job_id IS NOT NULL`,
 	}
 	for _, idx := range compositeIndexes {
 		if err := DB.Exec(idx).Error; err != nil {

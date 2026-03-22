@@ -168,12 +168,24 @@ func cleanupExpiredJobs(ctx context.Context) {
 			return
 		}
 
+		// Batch-fetch all file metadata for this batch of jobs (fixes N+1)
+		jobIDs := make([]uuid.UUID, len(jobs))
+		for i, j := range jobs {
+			jobIDs[i] = j.ID
+		}
+		var allFiles []models.FileMetadata
+		if err := models.DB.Where("job_id IN ?", jobIDs).Find(&allFiles).Error; err != nil {
+			slog.Error("failed to batch-fetch files for cleanup", "error", err)
+		}
+
+		// Group files by job ID
+		filesByJob := make(map[uuid.UUID][]models.FileMetadata, len(jobs))
+		for _, f := range allFiles {
+			filesByJob[f.JobID] = append(filesByJob[f.JobID], f)
+		}
+
 		for _, job := range jobs {
-			var files []models.FileMetadata
-			if err := models.DB.Where("job_id = ?", job.ID).Find(&files).Error; err != nil {
-				slog.Error("failed to find files for job", "jobId", job.ID, "error", err)
-			}
-			for _, file := range files {
+			for _, file := range filesByJob[job.ID] {
 				if err := os.Remove(file.Path); err != nil && !os.IsNotExist(err) {
 					slog.Warn("failed to remove file", "path", file.Path, "error", err)
 				}
@@ -184,13 +196,14 @@ func cleanupExpiredJobs(ctx context.Context) {
 			os.Remove(uploadDir)
 			outputDir := filepath.Join(outputBaseDir(), jobID)
 			os.Remove(outputDir)
+		}
 
-			if err := models.DB.Where("job_id = ?", job.ID).Delete(&models.FileMetadata{}).Error; err != nil {
-				slog.Error("failed to delete file metadata", "jobId", job.ID, "error", err)
-			}
-			if err := models.DB.Delete(&job).Error; err != nil {
-				slog.Error("failed to delete job", "jobId", job.ID, "error", err)
-			}
+		// Batch-delete file metadata and jobs
+		if err := models.DB.Where("job_id IN ?", jobIDs).Delete(&models.FileMetadata{}).Error; err != nil {
+			slog.Error("failed to batch-delete file metadata", "error", err)
+		}
+		if err := models.DB.Where("id IN ?", jobIDs).Delete(&models.ProcessingJob{}).Error; err != nil {
+			slog.Error("failed to batch-delete jobs", "error", err)
 		}
 
 		if len(jobs) < 100 {
@@ -245,24 +258,41 @@ func cleanupOrphanedDirs(ctx context.Context) {
 		slog.Error("failed to read uploads directory", "error", err)
 		return
 	}
+
+	// Collect all candidate UUIDs from upload dirs
+	candidateUploadIDs := make([]uuid.UUID, 0, len(entries))
+	candidateUploadNames := make(map[uuid.UUID]string, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() || entry.Name() == "tmp" {
 			continue
 		}
-		if _, err := uuid.Parse(entry.Name()); err != nil {
+		parsed, err := uuid.Parse(entry.Name())
+		if err != nil {
 			continue
 		}
-		var count int64
-		if err := models.DB.Model(&models.ProcessingJob{}).Where("id = ?", entry.Name()).Count(&count).Error; err != nil {
-			slog.Error("failed to check job existence", "jobId", entry.Name(), "error", err)
-			continue
-		}
-		if count == 0 {
-			dirPath := filepath.Join(uploadsDir, entry.Name())
-			if err := os.RemoveAll(dirPath); err != nil {
-				slog.Warn("failed to remove orphaned upload dir", "path", dirPath, "error", err)
-			} else {
-				slog.Info("removed orphaned upload dir", "jobId", entry.Name())
+		candidateUploadIDs = append(candidateUploadIDs, parsed)
+		candidateUploadNames[parsed] = entry.Name()
+	}
+
+	if len(candidateUploadIDs) > 0 {
+		// Single query to find which job IDs exist
+		var existingIDs []uuid.UUID
+		if err := models.DB.Model(&models.ProcessingJob{}).Where("id IN ?", candidateUploadIDs).Pluck("id", &existingIDs).Error; err != nil {
+			slog.Error("failed to batch-check job existence for uploads", "error", err)
+		} else {
+			existingSet := make(map[uuid.UUID]struct{}, len(existingIDs))
+			for _, id := range existingIDs {
+				existingSet[id] = struct{}{}
+			}
+			for _, id := range candidateUploadIDs {
+				if _, exists := existingSet[id]; !exists {
+					dirPath := filepath.Join(uploadsDir, candidateUploadNames[id])
+					if err := os.RemoveAll(dirPath); err != nil {
+						slog.Warn("failed to remove orphaned upload dir", "path", dirPath, "error", err)
+					} else {
+						slog.Info("removed orphaned upload dir", "jobId", id)
+					}
+				}
 			}
 		}
 	}
@@ -274,6 +304,14 @@ func cleanupOrphanedDirs(ctx context.Context) {
 		slog.Error("failed to read outputs directory", "error", err)
 		return
 	}
+
+	// Collect all candidate UUIDs from output files
+	type outputCandidate struct {
+		jobID    uuid.UUID
+		fileName string
+	}
+	var outputCandidates []outputCandidate
+	candidateOutputIDs := make([]uuid.UUID, 0)
 	for _, entry := range outputEntries {
 		if entry.IsDir() || entry.Name() == ".gitkeep" {
 			continue
@@ -282,18 +320,32 @@ func cleanupOrphanedDirs(ctx context.Context) {
 		if len(matches) < 2 {
 			continue
 		}
-		jobID := matches[1]
-		var count int64
-		if err := models.DB.Model(&models.ProcessingJob{}).Where("id = ?", jobID).Count(&count).Error; err != nil {
-			slog.Error("failed to check job existence for output", "jobId", jobID, "error", err)
+		parsed, err := uuid.Parse(matches[1])
+		if err != nil {
 			continue
 		}
-		if count == 0 {
-			filePath := filepath.Join(outputsDir, entry.Name())
-			if err := os.Remove(filePath); err != nil {
-				slog.Warn("failed to remove orphaned output file", "path", filePath, "error", err)
-			} else {
-				slog.Info("removed orphaned output file", "jobId", jobID, "file", entry.Name())
+		outputCandidates = append(outputCandidates, outputCandidate{jobID: parsed, fileName: entry.Name()})
+		candidateOutputIDs = append(candidateOutputIDs, parsed)
+	}
+
+	if len(candidateOutputIDs) > 0 {
+		var existingIDs []uuid.UUID
+		if err := models.DB.Model(&models.ProcessingJob{}).Where("id IN ?", candidateOutputIDs).Pluck("id", &existingIDs).Error; err != nil {
+			slog.Error("failed to batch-check job existence for outputs", "error", err)
+		} else {
+			existingSet := make(map[uuid.UUID]struct{}, len(existingIDs))
+			for _, id := range existingIDs {
+				existingSet[id] = struct{}{}
+			}
+			for _, oc := range outputCandidates {
+				if _, exists := existingSet[oc.jobID]; !exists {
+					filePath := filepath.Join(outputsDir, oc.fileName)
+					if err := os.Remove(filePath); err != nil {
+						slog.Warn("failed to remove orphaned output file", "path", filePath, "error", err)
+					} else {
+						slog.Info("removed orphaned output file", "jobId", oc.jobID, "file", oc.fileName)
+					}
+				}
 			}
 		}
 	}
