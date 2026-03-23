@@ -150,7 +150,7 @@ func extractPages(inputPath string, outputPath string, pages string) error {
 		pageStrings[i] = fmt.Sprintf("%d", p)
 	}
 
-	return api.ExtractPagesFile(inputPath, outputPath, pageStrings, nil)
+	return api.CollectFile(inputPath, outputPath, pageStrings, nil)
 }
 
 func organizePDF(inputPath string, outputPath string, order string) error {
