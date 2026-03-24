@@ -26,7 +26,7 @@ If a user request violates microservice boundaries, Claude must correct or rejec
 - `/docs/services/`
 - `/docs/mermaid/`
 - `/postman/`
-- `/infra/`
+- `/deployment/`
 - `/scripts/`
 - `README.md`
 - `CLAUDE.md`

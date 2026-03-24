@@ -1,7 +1,7 @@
 services:
   api-gateway:
     build:
-      context: ./api-gateway
+      context: ../api-gateway
       dockerfile: Dockerfile
     restart: always
     ports:
@@ -11,9 +11,9 @@ services:
       UPLOAD_SERVICE_URL: http://upload-service:8081
       REDIS_ADDR: redis:6379
     env_file:
-      - ./api-gateway/.env
+      - ../api-gateway/.env
     volumes:
-      - ./api-gateway/.env:/app/.env:ro
+      - ../api-gateway/.env:/app/.env:ro
     networks:
       - esydocs_net
 

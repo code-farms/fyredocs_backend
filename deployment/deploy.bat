@@ -1,6 +1,14 @@
 @echo off
 setlocal enabledelayedexpansion
 
+REM Resolve paths: script lives in deployment/, project root is one level up
+set "SCRIPT_DIR=%~dp0"
+set "ROOT_DIR=%SCRIPT_DIR%.."
+cd /d "%ROOT_DIR%"
+
+REM Set compose file path
+set "COMPOSE_FILE=%SCRIPT_DIR%docker-compose.yml"
+
 REM Colors for Windows (using ANSI escape codes)
 set "RED=[91m"
 set "GREEN=[92m"
@@ -82,13 +90,13 @@ REM List of services to build sequentially
 set "SERVICES=api-gateway auth-service job-service convert-from-pdf convert-to-pdf organize-pdf optimize-pdf cleanup-worker"
 
 for %%s in (%SERVICES%) do (
-    echo %YELLOW%🔨 Building %%s...%NC%
+    echo %YELLOW%Building %%s...%NC%
     docker compose build %%s
     if !ERRORLEVEL! NEQ 0 (
         echo %RED%Error building %%s. Build aborted.%NC%
         exit /b 1
     )
-    echo %GREEN%✓ %%s build complete%NC%
+    echo %GREEN%%%s build complete%NC%
 )
 
 echo.
@@ -102,10 +110,6 @@ echo %BLUE%==============================================================
 echo ============== Waiting for services to be ready...
 echo ==============================================================%NC%
 
-echo Waiting for database...
-timeout /t 15 /nobreak >nul
-docker compose exec -T db pg_isready -U user -d esydocs
-
 echo Waiting for API Gateway...
 timeout /t 10 /nobreak >nul
 
@@ -118,12 +122,9 @@ docker compose ps
 echo.
 echo %GREEN%All services started successfully!%NC%
 echo.
-echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-echo 📋 Service Endpoints:
-echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-echo   🌐 API Gateway:        http://localhost:8080
-echo   📤 Upload/Job Service: http://localhost:8081
-echo   📄 Worker Endpoints:   8082, 8083, 8084, 8085
-echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+echo Service Endpoints:
+echo   API Gateway:        http://localhost:8080
+echo   Upload/Job Service: http://localhost:8081
+echo   Worker Endpoints:   8082, 8083, 8084, 8085
 
 pause

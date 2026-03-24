@@ -1,7 +1,7 @@
 services:
   cleanup-worker:
     build:
-      context: ./cleanup-worker
+      context: ../cleanup-worker
       dockerfile: Dockerfile
     restart: always
     environment:
@@ -13,10 +13,10 @@ services:
       MAX_RETRIES: "3"
       CLEANUP_INTERVAL: 15m
     env_file:
-      - ./cleanup-worker/.env
+      - ../cleanup-worker/.env
     volumes:
-      - ./files/uploads:/app/uploads
-      - ./files/outputs:/app/outputs
+      - ../files/uploads:/app/uploads
+      - ../files/outputs:/app/outputs
     networks:
       - esydocs_net
 

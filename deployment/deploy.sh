@@ -4,7 +4,8 @@ set -euo pipefail
 # Start the Global Timer
 GLOBAL_START_TIME=$SECONDS
 
-ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 cd "$ROOT_DIR"
 
 # Colors for output
@@ -101,6 +102,8 @@ GO_SERVICES=(
 )
 
 export DOCKER_BUILDKIT=1
+export COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+export COMPOSE_ENV_FILES="$ROOT_DIR/.env"
 
 for SERVICE in "${GO_SERVICES[@]}"; do
     echo -e "${YELLOW}🔨 Starting build for: $SERVICE...${NC}"
@@ -189,10 +192,10 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🔧 Useful Commands:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  View logs:             docker compose logs -f"
-echo "  View specific service: docker compose logs -f api-gateway"
-echo "  Restart services:      docker compose restart"
-echo "  Stop all:              docker compose down"
+echo "  View logs:             docker compose -f deployment/docker-compose.yml --env-file .env logs -f"
+echo "  View specific service: docker compose -f deployment/docker-compose.yml --env-file .env logs -f api-gateway"
+echo "  Restart services:      docker compose -f deployment/docker-compose.yml --env-file .env restart"
+echo "  Stop all:              docker compose -f deployment/docker-compose.yml --env-file .env down"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🔐 Security Info:"

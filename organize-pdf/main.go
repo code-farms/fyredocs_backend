@@ -64,6 +64,7 @@ func main() {
 			"extract-pages": true,
 			"organize-pdf":  true,
 			"scan-to-pdf":   true,
+			"rotate-pdf":    true,
 		},
 		Process:     processFunc,
 		JS:          natsconn.JS,

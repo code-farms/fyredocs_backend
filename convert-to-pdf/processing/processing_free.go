@@ -214,7 +214,7 @@ func addPageNumbers(inputPath string, outputPath string, options map[string]inte
 		text = strings.ReplaceAll(text, "{n}", strconv.Itoa(pageNum))
 		text = strings.ReplaceAll(text, "{total}", strconv.Itoa(totalPages))
 
-		desc := fmt.Sprintf("font:Helvetica, points:%d, pos:%s, sc:1 abs, rot:0, color:0 0 0, opacity:1", fontSize, pdfcpuPos)
+		desc := fmt.Sprintf("font:Helvetica, points:%d, pos:%s, scale:1 abs, rot:0, color:0 0 0, opacity:1", fontSize, pdfcpuPos)
 
 		wm, err := pdfcpu.ParseTextWatermarkDetails(text, desc, true, types.POINTS)
 		if err != nil {
@@ -373,7 +373,7 @@ func editPDF(inputPath string, outputPath string, options map[string]interface{}
 			pdfcpuPos = "bc"
 		}
 
-		desc := fmt.Sprintf("font:Helvetica, points:%d, pos:%s, sc:1 abs, rot:0, color:0 0 0, opacity:1", fontSize, pdfcpuPos)
+		desc := fmt.Sprintf("font:Helvetica, points:%d, pos:%s, scale:1 abs, rot:0, color:0 0 0, opacity:1", fontSize, pdfcpuPos)
 
 		wm, err := pdfcpu.ParseTextWatermarkDetails(ann.Content, desc, true, types.POINTS)
 		if err != nil {

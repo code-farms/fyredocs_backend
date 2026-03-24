@@ -3,14 +3,14 @@ services:
     image: alpine:3.19
     command: ["sh", "-c", "chmod -R 777 /app/uploads /app/outputs"]
     volumes:
-      - ./files/uploads:/app/uploads
-      - ./files/outputs:/app/outputs
+      - ../files/uploads:/app/uploads
+      - ../files/outputs:/app/outputs
     networks:
       - esydocs_net
 
   job-service:
     build:
-      context: .
+      context: ..
       dockerfile: job-service/Dockerfile
     restart: always
     ports:
@@ -53,10 +53,10 @@ services:
       timeout: 5s
       retries: 3
     env_file:
-      - ./job-service/.env
+      - ../job-service/.env
     volumes:
-      - ./files/uploads:/app/uploads
-      - ./files/outputs:/app/outputs
+      - ../files/uploads:/app/uploads
+      - ../files/outputs:/app/outputs
     depends_on:
       volume-init:
         condition: service_completed_successfully

@@ -3,20 +3,20 @@ services:
     image: alpine:3.19
     command: ["sh", "-c", "chmod -R 777 /app/uploads /app/outputs"]
     volumes:
-      - ./files/uploads:/app/uploads
-      - ./files/outputs:/app/outputs
+      - ../files/uploads:/app/uploads
+      - ../files/outputs:/app/outputs
     networks:
       - esydocs_net
 
-  convert-from-pdf:
+  convert-to-pdf:
     build:
-      context: ./convert-from-pdf
+      context: ../convert-to-pdf
       dockerfile: Dockerfile
     restart: always
     ports:
-      - "8082:8082"
+      - "8083:8083"
     environment:
-      PORT: "8082"
+      PORT: "8083"
       DATABASE_URL: ${DATABASE_URL:-postgresql://neondb_owner:npg_K5jWhYGb7eJX@ep-wandering-glitter-anyd1fj9-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require}
       REDIS_ADDR: redis:6379
       TRUSTED_PROXIES: 172.18.0.0/16,127.0.0.1,::1
@@ -25,10 +25,10 @@ services:
       MAX_RETRIES: "3"
       PROCESSING_TIMEOUT: 30m
     env_file:
-      - ./convert-from-pdf/.env
+      - ../convert-to-pdf/.env
     volumes:
-      - ./files/uploads:/app/uploads
-      - ./files/outputs:/app/outputs
+      - ../files/uploads:/app/uploads
+      - ../files/outputs:/app/outputs
     depends_on:
       volume-init:
         condition: service_completed_successfully
@@ -38,3 +38,4 @@ services:
 networks:
   esydocs_net:
     external: true
+

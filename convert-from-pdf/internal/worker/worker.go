@@ -160,6 +160,16 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 		return
 	}
 
+	// Skip if job is already completed or being processed by another worker
+	var existingJob models.ProcessingJob
+	if err := cfg.DB.Select("status").Where("id = ?", jobID).First(&existingJob).Error; err == nil {
+		if existingJob.Status == "completed" || existingJob.Status == "processing" {
+			logger.Info("job already "+existingJob.Status+", skipping duplicate", "jobId", payload.JobID)
+			_ = msg.Ack()
+			return
+		}
+	}
+
 	// Only increase progress, never decrease on re-entry (retries).
 	updateJobStatusNoRegress(cfg.DB, jobID, "processing", 20)
 	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "processing", 20, "")

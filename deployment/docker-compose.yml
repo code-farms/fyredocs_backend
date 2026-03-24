@@ -88,15 +88,15 @@ services:
     image: alpine:3.19
     command: ["sh", "-c", "chown -R 10001:10001 /app/uploads /app/outputs && chmod -R 755 /app/uploads /app/outputs"]
     volumes:
-      - ./files/uploads:/app/uploads
-      - ./files/outputs:/app/outputs
+      - ../files/uploads:/app/uploads
+      - ../files/outputs:/app/outputs
     networks:
       - esydocs_net
 
   # ==================== API GATEWAY ====================
   api-gateway:
     build:
-      context: .
+      context: ..
       dockerfile: api-gateway/Dockerfile
     restart: always
     ports:
@@ -124,7 +124,7 @@ services:
       AUTH_DENYLIST_PREFIX: "denylist:jwt"
 
       # CORS Configuration
-      CORS_ALLOW_ORIGINS: "http://localhost:5173,http://localhost:3000"
+      CORS_ALLOW_ORIGINS: "http://localhost:5173,http://localhost:3000,http://161.97.119.194:5173"
       CORS_ALLOW_METHODS: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
       CORS_ALLOW_HEADERS: "Authorization,Content-Type,X-User-ID,X-Guest-Token"
       CORS_ALLOW_CREDENTIALS: "true"
@@ -163,7 +163,7 @@ services:
   # ==================== AUTH SERVICE ====================
   auth-service:
     build:
-      context: .
+      context: ..
       dockerfile: auth-service/Dockerfile
     restart: always
     environment:
@@ -231,7 +231,7 @@ services:
   # ==================== JOB SERVICE (formerly upload-service) ====================
   job-service:
     build:
-      context: .
+      context: ..
       dockerfile: job-service/Dockerfile
     restart: always
     environment:
@@ -285,8 +285,8 @@ services:
         max-size: "10m"
         max-file: "3"
     volumes:
-      - ./files/uploads:/app/uploads
-      - ./files/outputs:/app/outputs
+      - ../files/uploads:/app/uploads
+      - ../files/outputs:/app/outputs
     depends_on:
       redis:
         condition: service_healthy
@@ -300,7 +300,7 @@ services:
   # ==================== CONVERT FROM PDF (worker) ====================
   convert-from-pdf:
     build:
-      context: .
+      context: ..
       dockerfile: convert-from-pdf/Dockerfile
     restart: always
     environment:
@@ -334,8 +334,8 @@ services:
         max-size: "10m"
         max-file: "3"
     volumes:
-      - ./files/uploads:/app/uploads
-      - ./files/outputs:/app/outputs
+      - ../files/uploads:/app/uploads
+      - ../files/outputs:/app/outputs
     depends_on:
       nats:
         condition: service_healthy
@@ -347,7 +347,7 @@ services:
   # ==================== CONVERT TO PDF (worker) ====================
   convert-to-pdf:
     build:
-      context: .
+      context: ..
       dockerfile: convert-to-pdf/Dockerfile
     restart: always
     environment:
@@ -382,8 +382,8 @@ services:
         max-size: "10m"
         max-file: "3"
     volumes:
-      - ./files/uploads:/app/uploads
-      - ./files/outputs:/app/outputs
+      - ../files/uploads:/app/uploads
+      - ../files/outputs:/app/outputs
     depends_on:
       nats:
         condition: service_healthy
@@ -395,7 +395,7 @@ services:
   # ==================== ORGANIZE PDF (worker) ====================
   organize-pdf:
     build:
-      context: .
+      context: ..
       dockerfile: organize-pdf/Dockerfile
     restart: always
     environment:
@@ -429,8 +429,8 @@ services:
         max-size: "10m"
         max-file: "3"
     volumes:
-      - ./files/uploads:/app/uploads
-      - ./files/outputs:/app/outputs
+      - ../files/uploads:/app/uploads
+      - ../files/outputs:/app/outputs
     depends_on:
       nats:
         condition: service_healthy
@@ -442,7 +442,7 @@ services:
   # ==================== OPTIMIZE PDF (worker) ====================
   optimize-pdf:
     build:
-      context: .
+      context: ..
       dockerfile: optimize-pdf/Dockerfile
     restart: always
     environment:
@@ -476,8 +476,8 @@ services:
         max-size: "10m"
         max-file: "3"
     volumes:
-      - ./files/uploads:/app/uploads
-      - ./files/outputs:/app/outputs
+      - ../files/uploads:/app/uploads
+      - ../files/outputs:/app/outputs
     depends_on:
       nats:
         condition: service_healthy
@@ -489,7 +489,7 @@ services:
   # ==================== ANALYTICS SERVICE ====================
   analytics-service:
     build:
-      context: .
+      context: ..
       dockerfile: analytics-service/Dockerfile
     restart: always
     environment:
@@ -526,7 +526,7 @@ services:
   # ==================== CLEANUP WORKER ====================
   cleanup-worker:
     build:
-      context: .
+      context: ..
       dockerfile: cleanup-worker/Dockerfile
     restart: always
     environment:
@@ -562,8 +562,8 @@ services:
         max-size: "10m"
         max-file: "3"
     volumes:
-      - ./files/uploads:/app/uploads
-      - ./files/outputs:/app/outputs
+      - ../files/uploads:/app/uploads
+      - ../files/outputs:/app/outputs
     depends_on:
       redis:
         condition: service_healthy
