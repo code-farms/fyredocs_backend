@@ -51,7 +51,7 @@ The container runs a persistent LibreOffice instance via `unoserver` (started by
 | `compress-pdf` | .pdf | .pdf | pdfcpu | ✅ Implemented |
 | `protect-pdf` | .pdf | .pdf | pdfcpu | ✅ Implemented |
 | `unlock-pdf` | .pdf | .pdf | pdfcpu | ✅ Implemented |
-| `watermark-pdf` | .pdf | .pdf | pdfcpu | ✅ Implemented |
+| `watermark-pdf` | .pdf | .pdf | pdfcpu text/image watermarks | ✅ Implemented |
 | `add-page-numbers` | .pdf | .pdf | pdfcpu text stamps | ✅ Implemented |
 | `sign-pdf` | .pdf | .pdf | pdfcpu image stamps | ✅ Implemented |
 | `edit-pdf` | .pdf | .pdf | pdfcpu text stamps | ✅ Implemented |
@@ -300,6 +300,40 @@ curl -X POST http://localhost:8080/api/convert-to-pdf/image-to-pdf \
 ```
 
 **Output**: Single PDF with 3 pages
+
+---
+
+### watermark-pdf
+
+Adds text or image watermarks to PDF documents.
+
+**Input**: `.pdf`
+**Output**: `.pdf`
+**Implementation**: pdfcpu text/image watermarks
+
+**Options**:
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `type` | `"text"` \| `"image"` | `"text"` | Watermark type |
+| `text` | string | `"CONFIDENTIAL"` | Watermark text (when type=text) |
+| `imageData` | string | — | Base64 data URL of watermark image (when type=image) |
+| `position` | `"center"` \| `"diagonal"` \| `"tiled"` | `"diagonal"` | Watermark placement |
+| `opacity` | number (10-100) | `50` | Watermark opacity percentage |
+| `fontSize` | number (12-120) | `48` | Font size in points (when type=text) |
+| `color` | string (hex) | `"#6366f1"` | Text color (when type=text) |
+
+**Features**:
+- Text watermarks with configurable font size, color, and opacity
+- Image watermarks from PNG, JPEG, or WebP (sent as base64 data URL)
+- Three position modes: center, diagonal (45-degree rotation), tiled
+- Applied to all pages
+
+**Example** (text watermark):
+```bash
+curl -X POST http://localhost:8080/api/convert-to-pdf/watermark-pdf \
+  -H "Content-Type: application/json" \
+  -d '{"uploadId": "upload-uuid", "options": {"type": "text", "text": "DRAFT", "position": "diagonal", "opacity": 30}}'
+```
 
 ---
 

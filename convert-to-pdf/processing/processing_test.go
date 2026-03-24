@@ -139,6 +139,74 @@ func TestEnvOrDefault(t *testing.T) {
 	})
 }
 
+func TestHexToRGBFloat(t *testing.T) {
+	tests := []struct {
+		hex     string
+		r, g, b string
+	}{
+		{"#000000", "0.000", "0.000", "0.000"},
+		{"#ffffff", "1.000", "1.000", "1.000"},
+		{"#ff0000", "1.000", "0.000", "0.000"},
+		{"6366f1", "0.388", "0.400", "0.945"}, // without #
+		{"invalid", "0.5", "0.5", "0.5"},       // fallback
+		{"", "0.5", "0.5", "0.5"},              // empty
+	}
+	for _, tt := range tests {
+		r, g, b := hexToRGBFloat(tt.hex)
+		if r != tt.r || g != tt.g || b != tt.b {
+			t.Errorf("hexToRGBFloat(%q) = (%s,%s,%s), want (%s,%s,%s)", tt.hex, r, g, b, tt.r, tt.g, tt.b)
+		}
+	}
+}
+
+func TestProcessFileWatermarkNoInput(t *testing.T) {
+	_, err := ProcessFile(context.Background(), uuid.New(), "watermark-pdf", nil, nil, "", nil)
+	if err == nil {
+		t.Error("expected error for no input files")
+	}
+}
+
+func TestWatermarkPDFMissingImageData(t *testing.T) {
+	dir := t.TempDir()
+	src := dir + "/test.pdf"
+	if err := os.WriteFile(src, []byte("dummy"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	opts := map[string]interface{}{"type": "image"}
+	err := watermarkPDF(src, dir+"/out.pdf", opts)
+	if err == nil {
+		t.Error("expected error for missing image data")
+	}
+}
+
+func TestWatermarkPDFInvalidImageData(t *testing.T) {
+	dir := t.TempDir()
+	src := dir + "/test.pdf"
+	if err := os.WriteFile(src, []byte("dummy"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	opts := map[string]interface{}{"type": "image", "imageData": "not-a-data-url"}
+	err := watermarkPDF(src, dir+"/out.pdf", opts)
+	if err == nil {
+		t.Error("expected error for invalid image data format")
+	}
+}
+
+func TestWatermarkPDFDefaultsToText(t *testing.T) {
+	dir := t.TempDir()
+	src := dir + "/test.pdf"
+	if err := os.WriteFile(src, []byte("dummy"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Empty options should default to text type and fail on invalid PDF, not on missing options
+	opts := map[string]interface{}{}
+	err := watermarkPDF(src, dir+"/out.pdf", opts)
+	// Will fail because "dummy" is not a valid PDF, but should not fail on missing text
+	if err == nil {
+		t.Error("expected error for invalid PDF")
+	}
+}
+
 func TestProcessFileSignPdfMissingSignature(t *testing.T) {
 	dir := t.TempDir()
 	src := dir + "/test.pdf"

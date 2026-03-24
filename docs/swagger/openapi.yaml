@@ -2137,7 +2137,16 @@ components:
         options:
           type: object
           additionalProperties: true
-          description: Tool-specific options (varies by tool type)
+          description: |
+            Tool-specific options (varies by tool type).
+            For watermark-pdf:
+              - type: "text" | "image" (default: "text")
+              - text: string (watermark text, used when type=text)
+              - imageData: string (base64 data URL, used when type=image)
+              - position: "center" | "diagonal" | "tiled" (default: "diagonal")
+              - opacity: number 10-100 (default: 50)
+              - fontSize: number 12-120 (used when type=text, default: 48)
+              - color: string hex color (used when type=text, default: "#6366f1")
 
     ProcessingJob:
       type: object

@@ -82,11 +82,7 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		err = decryptPDF(inputPaths[0], outputPath, password)
 	case "watermark-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		watermarkText, ok := optionString(options, "text")
-		if !ok {
-			watermarkText = "CONFIDENTIAL"
-		}
-		err = watermarkPDF(inputPaths[0], outputPath, watermarkText)
+		err = watermarkPDF(inputPaths[0], outputPath, options)
 	case "add-page-numbers":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = addPageNumbers(inputPaths[0], outputPath, options, onProgress)

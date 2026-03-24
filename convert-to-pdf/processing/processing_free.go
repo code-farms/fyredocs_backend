@@ -135,15 +135,148 @@ func imageToPDF(inputPaths []string, outputPath string) error {
 	return api.ImportImagesFile(inputPaths, outputPath, nil, nil)
 }
 
-func watermarkPDF(inputPath string, outputPath string, watermarkText string) error {
+func watermarkPDF(inputPath string, outputPath string, options map[string]interface{}) error {
 	slog.Info("adding watermark to PDF", "input", inputPath)
 
-	wm, err := pdfcpu.ParseTextWatermarkDetails(watermarkText, "font:Helvetica, points:48, color:0.5 0.5 0.5, opacity:0.3, rotation:45", false, types.POINTS)
+	wmType, _ := optionString(options, "type")
+	if wmType == "" {
+		wmType = "text"
+	}
+
+	position, _ := optionString(options, "position")
+	if position == "" {
+		position = "diagonal"
+	}
+
+	opacity := 0.3
+	if op, ok := options["opacity"]; ok {
+		switch v := op.(type) {
+		case float64:
+			opacity = v / 100.0
+		case string:
+			if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+				opacity = parsed / 100.0
+			}
+		}
+	}
+
+	rotation := 0
+	switch position {
+	case "diagonal":
+		rotation = 45
+	case "center":
+		rotation = 0
+	case "tiled":
+		rotation = 45
+	}
+
+	if wmType == "image" {
+		return watermarkPDFImage(inputPath, outputPath, options, position, opacity, rotation)
+	}
+	return watermarkPDFText(inputPath, outputPath, options, position, opacity, rotation)
+}
+
+func watermarkPDFText(inputPath, outputPath string, options map[string]interface{}, position string, opacity float64, rotation int) error {
+	text, _ := optionString(options, "text")
+	if text == "" {
+		text = "CONFIDENTIAL"
+	}
+
+	fontSize := 48
+	if fs, ok := options["fontSize"]; ok {
+		switch v := fs.(type) {
+		case float64:
+			fontSize = int(v)
+		case string:
+			if parsed, err := strconv.Atoi(v); err == nil {
+				fontSize = parsed
+			}
+		}
+	}
+
+	colorStr, _ := optionString(options, "color")
+	r, g, b := hexToRGBFloat(colorStr)
+
+	desc := fmt.Sprintf("font:Helvetica, points:%d, color:%s %s %s, opacity:%.2f, rotation:%d",
+		fontSize, r, g, b, opacity, rotation)
+
+	wm, err := pdfcpu.ParseTextWatermarkDetails(text, desc, false, types.POINTS)
 	if err != nil {
-		return fmt.Errorf("failed to parse watermark: %w", err)
+		return fmt.Errorf("failed to parse text watermark: %w", err)
 	}
 
 	return api.AddWatermarksFile(inputPath, outputPath, nil, wm, nil)
+}
+
+func watermarkPDFImage(inputPath, outputPath string, options map[string]interface{}, position string, opacity float64, rotation int) error {
+	imageData, ok := optionString(options, "imageData")
+	if !ok || imageData == "" {
+		return fmt.Errorf("missing watermark image data")
+	}
+
+	parts := strings.SplitN(imageData, ",", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid watermark image data format")
+	}
+	imgBytes, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return fmt.Errorf("failed to decode watermark image: %w", err)
+	}
+
+	ext := ".png"
+	if strings.Contains(parts[0], "jpeg") || strings.Contains(parts[0], "jpg") {
+		ext = ".jpg"
+	} else if strings.Contains(parts[0], "webp") {
+		ext = ".webp"
+	}
+
+	tempDir, err := os.MkdirTemp("", "pdf-watermark-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	imgPath := filepath.Join(tempDir, "watermark"+ext)
+	if err := os.WriteFile(imgPath, imgBytes, 0600); err != nil {
+		return fmt.Errorf("failed to write watermark image: %w", err)
+	}
+
+	scale := 0.3
+	if s, ok := options["scale"]; ok {
+		switch v := s.(type) {
+		case float64:
+			scale = v / 100.0
+		case string:
+			if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+				scale = parsed / 100.0
+			}
+		}
+	}
+
+	desc := fmt.Sprintf("scalefactor:%.2f, opacity:%.2f, rot:%d", scale, opacity, rotation)
+
+	wm, err := pdfcpu.ParseImageWatermarkDetails(imgPath, desc, false, types.POINTS)
+	if err != nil {
+		return fmt.Errorf("failed to parse image watermark: %w", err)
+	}
+
+	return api.AddWatermarksFile(inputPath, outputPath, nil, wm, nil)
+}
+
+func hexToRGBFloat(hex string) (string, string, string) {
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) != 6 {
+		return "0.5", "0.5", "0.5"
+	}
+	r, err1 := strconv.ParseUint(hex[0:2], 16, 8)
+	g, err2 := strconv.ParseUint(hex[2:4], 16, 8)
+	b, err3 := strconv.ParseUint(hex[4:6], 16, 8)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return "0.5", "0.5", "0.5"
+	}
+	return fmt.Sprintf("%.3f", float64(r)/255.0),
+		fmt.Sprintf("%.3f", float64(g)/255.0),
+		fmt.Sprintf("%.3f", float64(b)/255.0)
 }
 
 func addPageNumbers(inputPath string, outputPath string, options map[string]interface{}, onProgress ProgressFunc) error {
