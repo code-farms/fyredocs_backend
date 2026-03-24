@@ -7,11 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
+	"golang.org/x/sync/errgroup"
 )
 
 func compressPDF(ctx context.Context, inputPath string, outputPath string, options map[string]interface{}) (map[string]interface{}, error) {
@@ -155,13 +158,31 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 		return nil, fmt.Errorf("tesseract not found. Install with: apk add tesseract-ocr")
 	}
 
+	// Map ISO 639-1 (frontend) to ISO 639-2/T (tesseract) language codes.
+	var langMap = map[string]string{
+		"en": "eng", "es": "spa", "fr": "fra", "de": "deu",
+		"it": "ita", "pt": "por", "zh": "chi_sim", "ja": "jpn",
+		"ko": "kor", "ar": "ara",
+	}
+
 	language, _ := optionString(options, "language")
 	if language == "" {
-		language = "eng"
+		language = os.Getenv("OCR_DEFAULT_LANGUAGE")
+		if language == "" {
+			language = "eng"
+		}
 	}
-	dpiStr, _ := optionString(options, "dpi")
-	dpi := 300
-	if dpiStr != "" {
+	if mapped, ok := langMap[language]; ok {
+		language = mapped
+	}
+
+	dpi := 150
+	if envDpi := os.Getenv("OCR_DEFAULT_DPI"); envDpi != "" {
+		if parsed, err := strconv.Atoi(envDpi); err == nil && parsed > 0 {
+			dpi = parsed
+		}
+	}
+	if dpiStr, _ := optionString(options, "dpi"); dpiStr != "" {
 		if parsed, err := strconv.Atoi(dpiStr); err == nil && parsed > 0 {
 			dpi = parsed
 		}
@@ -172,6 +193,8 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 		return nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
+
+	slog.Info("converting PDF to images for OCR", "dpi", dpi, "input", inputPath)
 
 	imagePrefix := filepath.Join(tempDir, "page")
 	cmd := exec.CommandContext(ctx, "pdftoppm",
@@ -193,29 +216,56 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 	}
 
 	sort.Strings(imageFiles)
+	slog.Info("PDF to image conversion complete", "imageCount", len(imageFiles))
 
-	var pdfFiles []string
+	// Process pages in parallel using a worker pool sized to available CPUs
+	// (capped at 4 to avoid excessive memory usage from concurrent tesseract).
+	workers := runtime.NumCPU()
+	if workers > 4 {
+		workers = 4
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	pdfFiles := make([]string, len(imageFiles))
+	var mu sync.Mutex // guards slog calls for cleaner output
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(workers)
+
 	for i, imgPath := range imageFiles {
-		baseName := filepath.Base(imgPath)
-		nameWithoutExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
-		outputBase := filepath.Join(tempDir, fmt.Sprintf("ocr_%d_%s", i, nameWithoutExt))
+		i, imgPath := i, imgPath
+		g.Go(func() error {
+			mu.Lock()
+			slog.Info("processing OCR page", "page", i+1, "total", len(imageFiles))
+			mu.Unlock()
 
-		cmd := exec.CommandContext(ctx, "tesseract",
-			imgPath,
-			outputBase,
-			"-l", language,
-			"pdf",
-		)
-		if err := cmd.Run(); err != nil {
-			slog.Warn("OCR failed for page, falling back", "page", i+1, "error", err)
-			pdfFile := outputBase + ".pdf"
-			if err := api.ImportImagesFile([]string{imgPath}, pdfFile, nil, nil); err != nil {
-				return nil, fmt.Errorf("failed to process page %d: %w", i+1, err)
+			baseName := filepath.Base(imgPath)
+			nameWithoutExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
+			outputBase := filepath.Join(tempDir, fmt.Sprintf("ocr_%d_%s", i, nameWithoutExt))
+
+			cmd := exec.CommandContext(gctx, "tesseract",
+				imgPath,
+				outputBase,
+				"-l", language,
+				"pdf",
+			)
+			if err := cmd.Run(); err != nil {
+				slog.Warn("OCR failed for page, falling back", "page", i+1, "error", err)
+				pdfFile := outputBase + ".pdf"
+				if err := api.ImportImagesFile([]string{imgPath}, pdfFile, nil, nil); err != nil {
+					return fmt.Errorf("failed to process page %d: %w", i+1, err)
+				}
+				pdfFiles[i] = pdfFile
+			} else {
+				pdfFiles[i] = outputBase + ".pdf"
 			}
-			pdfFiles = append(pdfFiles, pdfFile)
-		} else {
-			pdfFiles = append(pdfFiles, outputBase+".pdf")
-		}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	if len(pdfFiles) == 1 {

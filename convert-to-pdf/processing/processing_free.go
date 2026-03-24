@@ -48,7 +48,7 @@ func splitPDF(inputPath string, outputPath string, pageRange string, onProgress 
 
 	for i := 1; i <= pageCount; i++ {
 		outputFile := filepath.Join(tempDir, fmt.Sprintf("page_%03d.pdf", i))
-		err := api.ExtractPagesFile(inputPath, outputFile, []string{fmt.Sprintf("%d", i)}, nil)
+		err := api.CollectFile(inputPath, outputFile, []string{fmt.Sprintf("%d", i)}, nil)
 		if err != nil {
 			slog.Warn("failed to extract page", "page", i, "error", err)
 			continue

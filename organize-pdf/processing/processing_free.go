@@ -167,23 +167,12 @@ func organizePDF(inputPath string, outputPath string, order string) error {
 		return fmt.Errorf("invalid page order: %s", order)
 	}
 
-	tempDir, err := os.MkdirTemp("", "pdf-organize-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	tempFiles := make([]string, len(pageOrder))
-	for i, pageNum := range pageOrder {
-		tempFile := filepath.Join(tempDir, fmt.Sprintf("page_%03d.pdf", i))
-		err := api.ExtractPagesFile(inputPath, tempFile, []string{fmt.Sprintf("%d", pageNum)}, nil)
-		if err != nil {
-			return fmt.Errorf("failed to extract page %d: %w", pageNum, err)
-		}
-		tempFiles[i] = tempFile
+	pageStrings := make([]string, len(pageOrder))
+	for i, p := range pageOrder {
+		pageStrings[i] = fmt.Sprintf("%d", p)
 	}
 
-	return api.MergeCreateFile(tempFiles, outputPath, false, nil)
+	return api.CollectFile(inputPath, outputPath, pageStrings, nil)
 }
 
 func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, options map[string]interface{}) error {

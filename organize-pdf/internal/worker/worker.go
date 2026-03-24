@@ -167,7 +167,11 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 		}
 	}
 
-	result, procErr := cfg.Process(ctx, jobID, payload.ToolType, payload.InputPaths, options, outDir)
+	// Per-job timeout prevents hung subprocesses from causing AckWait redelivery.
+	jobCtx, jobCancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer jobCancel()
+
+	result, procErr := cfg.Process(jobCtx, jobID, payload.ToolType, payload.InputPaths, options, outDir)
 	if procErr != nil {
 		handleFailure(cfg, msg, payload, procErr, logger)
 		return

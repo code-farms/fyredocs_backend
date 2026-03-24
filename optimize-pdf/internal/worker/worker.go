@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/redis/go-redis/v9"
-	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
 	"optimize-pdf/internal/models"
@@ -167,7 +166,11 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 		}
 	}
 
-	result, procErr := cfg.Process(ctx, jobID, payload.ToolType, payload.InputPaths, options, outDir)
+	// Per-job timeout prevents hung subprocesses from causing AckWait redelivery.
+	jobCtx, jobCancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer jobCancel()
+
+	result, procErr := cfg.Process(jobCtx, jobID, payload.ToolType, payload.InputPaths, options, outDir)
 	if procErr != nil {
 		handleFailure(cfg, msg, payload, procErr, logger)
 		return
@@ -182,7 +185,6 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 	mergeMetadata(cfg.DB, jobID, result.Metadata, logger)
 	updateJobStatus(cfg.DB, jobID, "completed", 100, "")
 	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "completed", 100, "")
-	clearFailure(cfg.DB, jobID)
 
 	if err := msg.Ack(); err != nil {
 		logger.Error("failed to ack message", "jobId", payload.JobID, "error", err)
@@ -260,6 +262,9 @@ func updateJobStatus(db *gorm.DB, jobID uuid.UUID, status string, progress int, 
 	if status == "completed" {
 		now := time.Now().UTC()
 		updates["completed_at"] = &now
+		// Clear any previous failure reason in the same UPDATE to avoid an
+		// extra round trip (was previously done by a separate clearFailure call).
+		updates["failure_reason"] = nil
 	}
 	if failureReason != "" {
 		updates["failure_reason"] = failureReason
@@ -287,24 +292,20 @@ func mergeMetadata(db *gorm.DB, jobID uuid.UUID, meta map[string]interface{}, lo
 	if meta == nil {
 		return
 	}
-	var job models.ProcessingJob
-	if err := db.First(&job, "id = ?", jobID).Error; err != nil {
-		logger.Error("failed to load job for metadata merge", "jobId", jobID, "error", err)
+	data, err := json.Marshal(meta)
+	if err != nil {
+		logger.Error("failed to marshal metadata", "jobId", jobID, "error", err)
 		return
 	}
-	existing := map[string]interface{}{}
-	if len(job.Metadata) > 0 {
-		if err := json.Unmarshal(job.Metadata, &existing); err != nil {
-			logger.Error("failed to unmarshal existing metadata", "jobId", jobID, "error", err)
-		}
-	}
-	for key, value := range meta {
-		existing[key] = value
-	}
-	if data, err := json.Marshal(existing); err == nil {
-		if err := db.Model(&models.ProcessingJob{}).Where("id = ?", jobID).Update("metadata", datatypes.JSON(data)).Error; err != nil {
-			logger.Error("failed to update metadata", "jobId", jobID, "error", err)
-		}
+	// Single UPDATE using PostgreSQL JSONB merge operator (||) to avoid a
+	// separate SELECT round trip. COALESCE handles the case where metadata
+	// is NULL.
+	result := db.Exec(
+		`UPDATE processing_jobs SET metadata = COALESCE(metadata, '{}'::jsonb) || ?::jsonb, updated_at = NOW() WHERE id = ?`,
+		string(data), jobID,
+	)
+	if result.Error != nil {
+		logger.Error("failed to update metadata", "jobId", jobID, "error", result.Error)
 	}
 }
 

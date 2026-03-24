@@ -104,6 +104,25 @@ func TestClassifyError(t *testing.T) {
 	}
 }
 
+func TestStatusToEventType(t *testing.T) {
+	tests := []struct {
+		status string
+		want   string
+	}{
+		{"processing", "JobProgress"},
+		{"completed", "JobCompleted"},
+		{"failed", "JobFailed"},
+		{"queued", "JobQueued"},
+		{"unknown", "JobProgress"},
+	}
+	for _, tt := range tests {
+		got := statusToEventType(tt.status)
+		if got != tt.want {
+			t.Errorf("statusToEventType(%q) = %q, want %q", tt.status, got, tt.want)
+		}
+	}
+}
+
 func TestErrorCodeConstants(t *testing.T) {
 	if ErrCodeUnsupportedTool != "UNSUPPORTED_TOOL" {
 		t.Errorf("ErrCodeUnsupportedTool = %q", ErrCodeUnsupportedTool)

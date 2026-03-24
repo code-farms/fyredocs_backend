@@ -111,6 +111,7 @@ OCR_DEFAULT_DPI="300"
 - `github.com/pdfcpu/pdfcpu` - PDF manipulation
 - `gorm.io/gorm` - ORM
 - `github.com/redis/go-redis/v9` - Redis client
+- `golang.org/x/sync/errgroup` - Parallel OCR worker pool
 
 ### System Dependencies (Alpine)
 - `poppler-utils` - PDF to image conversion (pdftoppm)
@@ -235,17 +236,21 @@ sequenceDiagram
     participant W as Worker
     participant FS as File System
     participant PP as pdftoppm
+    participant Pool as errgroup Pool (N workers)
     participant TS as Tesseract
     participant PC as pdfcpu
 
     W->>FS: Read input PDF
-    W->>PP: Convert PDF pages to PNG images (300 DPI)
+    W->>PP: Convert PDF pages to PNG images (configurable DPI)
     PP-->>FS: page1.png, page2.png, ...
 
-    loop For each page
-        W->>TS: tesseract page_N.png page_N pdf (language=eng)
-        TS-->>FS: page_N.pdf (searchable PDF page)
+    W->>Pool: Launch parallel OCR (capped at NumCPU, max 4)
+    par Parallel OCR
+        Pool->>TS: tesseract page_1.png ... pdf
+        Pool->>TS: tesseract page_2.png ... pdf
+        Pool->>TS: tesseract page_N.png ... pdf
     end
+    TS-->>FS: page_N.pdf (searchable PDF pages)
 
     W->>PC: Merge all page PDFs into final output
     PC-->>FS: output.pdf (searchable PDF)
@@ -355,6 +360,6 @@ Uses Ghostscript to rebuild the PDF:
 ### OCR PDF
 Multi-step process:
 1. Convert PDF pages to PNG images (pdftoppm)
-2. Run Tesseract OCR on each image
+2. Run Tesseract OCR on pages **in parallel** (errgroup worker pool, capped at `min(NumCPU, 4)`)
 3. Generate searchable PDF pages
 4. Merge all pages into final PDF (pdfcpu)

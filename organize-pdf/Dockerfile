@@ -38,6 +38,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # 1. Grab our pre-built image (which already has Poppler built-in!)
 FROM esydocs-base:latest
 
+# 2. Install Tesseract OCR for scan-to-pdf with OCR support
+RUN apk add --no-cache \
+    tesseract-ocr \
+    tesseract-ocr-data-eng \
+    && rm -rf /var/cache/apk/*
+
 RUN adduser -D -u 10001 appuser
 
 WORKDIR /app

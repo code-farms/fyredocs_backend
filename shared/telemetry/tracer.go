@@ -3,8 +3,11 @@ package telemetry
 import (
 	"context"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -24,6 +27,15 @@ func Init(serviceName string) func(context.Context) error {
 	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	if endpoint == "" {
 		endpoint = "http://localhost:4318"
+	}
+
+	// Probe the collector endpoint before creating the exporter.
+	// If the host is unreachable (e.g. missing docker service), disable
+	// tracing instead of spamming logs with export timeouts.
+	if !probeEndpoint(endpoint) {
+		slog.Warn("OTLP collector unreachable, tracing disabled", "endpoint", endpoint)
+		Tracer = otel.Tracer(serviceName)
+		return func(context.Context) error { return nil }
 	}
 
 	ctx := context.Background()
@@ -64,4 +76,27 @@ func Init(serviceName string) func(context.Context) error {
 	return func(ctx context.Context) error {
 		return tp.Shutdown(ctx)
 	}
+}
+
+// probeEndpoint performs a quick TCP dial to the collector host to check
+// reachability. Returns false if the host cannot be reached within 2 seconds.
+func probeEndpoint(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	host := u.Host
+	if !strings.Contains(host, ":") {
+		if u.Scheme == "https" {
+			host += ":443"
+		} else {
+			host += ":80"
+		}
+	}
+	conn, err := net.DialTimeout("tcp", host, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
