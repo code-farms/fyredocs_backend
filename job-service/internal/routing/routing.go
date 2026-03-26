@@ -30,8 +30,6 @@ var ToolServiceMap = map[string]string{
 	"merge-pdf":         "convert-to-pdf",
 	"split-pdf":         "organize-pdf",
 	"compress-pdf":      "optimize-pdf",
-	"page-reorder":      "convert-to-pdf",
-	"page-rotate":       "convert-to-pdf",
 	"watermark-pdf":     "convert-to-pdf",
 	"protect-pdf":       "convert-to-pdf",
 	"unlock-pdf":        "convert-to-pdf",

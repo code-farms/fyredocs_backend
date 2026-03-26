@@ -698,7 +698,7 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: "#/components/schemas/ProcessingJob"
+                        $ref: "#/components/schemas/CreateJobResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -901,7 +901,7 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: "#/components/schemas/ProcessingJob"
+                        $ref: "#/components/schemas/CreateJobResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1090,7 +1090,7 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: "#/components/schemas/ProcessingJob"
+                        $ref: "#/components/schemas/CreateJobResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "500":
@@ -1271,7 +1271,7 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: "#/components/schemas/ProcessingJob"
+                        $ref: "#/components/schemas/CreateJobResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "500":
@@ -2215,6 +2215,25 @@ components:
           type: string
           description: Computed output file name with the correct extension for the tool type (e.g. "document.docx" for pdf-to-word, "photo.pdf" for image-to-pdf)
           example: document.docx
+
+    CreateJobResponse:
+      description: |
+        Extends ProcessingJob with an optional `guestToken` field. When present,
+        the frontend should store this token and send it as the `X-Guest-Token`
+        header on all subsequent API requests. This is necessary for cross-origin
+        setups where the `guest_token` cookie may not be sent automatically.
+      allOf:
+        - $ref: "#/components/schemas/ProcessingJob"
+        - type: object
+          properties:
+            guestToken:
+              type: string
+              format: uuid
+              description: |
+                Guest token for unauthenticated users. Store this value and include
+                it as the `X-Guest-Token` header on subsequent requests (polling,
+                download, delete). Only present when the job is created by a guest.
+              example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
 
   # ---------------------------------------------------------------------------
   # Reusable Responses

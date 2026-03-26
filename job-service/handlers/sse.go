@@ -85,12 +85,16 @@ func SSEJobUpdates(c *gin.Context) {
 					continue
 				}
 
-				data, _ := json.Marshal(gin.H{
+				ssePayload := gin.H{
 					"jobId":    event.JobID,
 					"status":   event.EventType,
 					"progress": event.Progress,
 					"toolType": event.ToolType,
-				})
+				}
+				if event.FileSize > 0 {
+					ssePayload["fileSize"] = event.FileSize
+				}
+				data, _ := json.Marshal(ssePayload)
 				fmt.Fprintf(c.Writer, "event: job-update\ndata: %s\n\n", data)
 				c.Writer.Flush()
 				_ = msg.Ack()

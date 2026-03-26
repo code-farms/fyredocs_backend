@@ -74,7 +74,7 @@ The `routing.go` file contains the centralized mapping from tool types to their 
 | Service | Tools |
 |---------|-------|
 | `convert-from-pdf` | pdf-to-word, pdf-to-docx, pdf-to-excel, pdf-to-xlsx, pdf-to-powerpoint, pdf-to-ppt, pdf-to-pptx, pdf-to-image, pdf-to-img, pdf-to-html, pdf-to-text, pdf-to-txt, pdf-to-pdfa, ocr |
-| `convert-to-pdf` | word-to-pdf, excel-to-pdf, powerpoint-to-pdf, ppt-to-pdf, html-to-pdf, image-to-pdf, img-to-pdf, merge-pdf, page-reorder, page-rotate, watermark-pdf, protect-pdf, unlock-pdf, sign-pdf, edit-pdf, add-page-numbers |
+| `convert-to-pdf` | word-to-pdf, excel-to-pdf, powerpoint-to-pdf, ppt-to-pdf, html-to-pdf, image-to-pdf, img-to-pdf, merge-pdf, watermark-pdf, protect-pdf, unlock-pdf, sign-pdf, edit-pdf, add-page-numbers |
 | `organize-pdf` | split-pdf, rotate-pdf, remove-pages, extract-pages, organize-pdf, scan-to-pdf |
 | `optimize-pdf` | compress-pdf, repair-pdf, ocr-pdf |
 
@@ -384,10 +384,11 @@ sequenceDiagram
 
     JS->>R: SADD guest:<token>:jobs <jobId>
     JS->>R: EXPIRE guest:<token>:jobs 2h
-    JS-->>C: 201 {job} + Set-Cookie: guest_token=<token>
+    JS-->>C: 201 {job, guestToken} + Set-Cookie: guest_token=<token>
+    Note over C: Frontend stores guestToken in localStorage
 
     C->>JS: GET /api/convert-to-pdf/word-to-pdf
-    Note over C: Cookie: guest_token=<token>
+    Note over C: X-Guest-Token: <token> (or Cookie: guest_token=<token>)
     JS->>R: SMEMBERS guest:<token>:jobs
     R-->>JS: [jobId1, jobId2]
     JS->>DB: SELECT FROM processing_jobs WHERE id IN (jobId1, jobId2)

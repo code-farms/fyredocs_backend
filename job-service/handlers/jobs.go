@@ -69,7 +69,11 @@ func CreateJobFromTool(c *gin.Context) {
 		if err == nil && existing != "" {
 			var existingJob models.ProcessingJob
 			if err := models.DB.First(&existingJob, "id = ?", existing).Error; err == nil {
-				response.Created(c, "Your file is being processed!",existingJob)
+				guestTok := assignGuestTokenIfNeeded(c, authUserID(c), existingJob.ID)
+				response.Created(c, "Your file is being processed!", createJobResponse{
+					jobResponse: toJobResponse(existingJob),
+					GuestToken:  guestTok,
+				})
 				return
 			}
 		}
@@ -258,7 +262,7 @@ func CreateJobFromTool(c *gin.Context) {
 		return
 	}
 
-	assignGuestTokenIfNeeded(c, userID, jobID)
+	guestTok := assignGuestTokenIfNeeded(c, userID, jobID)
 
 	// Use centralized tool-to-service mapping
 	serviceName := routing.ServiceForTool(toolType)
@@ -291,7 +295,10 @@ func CreateJobFromTool(c *gin.Context) {
 
 	publishJobAnalyticsEvent(c.Request.Context(), "job.created", toolType, userID, totalSize)
 	slog.Info("job queued", "jobId", job.ID, "tool", toolType, "correlationId", correlationID)
-	response.Created(c, "Your file is being processed!", toJobResponse(job))
+	response.Created(c, "Your file is being processed!", createJobResponse{
+		jobResponse: toJobResponse(job),
+		GuestToken:  guestTok,
+	})
 }
 
 // Fix #29: Add pagination to GetJobsByTool
@@ -580,6 +587,14 @@ type jobResponse struct {
 	OutputFileName string `json:"outputFileName"`
 }
 
+// createJobResponse extends jobResponse with an optional guest token so that
+// cross-origin frontends can store the token and send it back via
+// X-Guest-Token header on subsequent requests.
+type createJobResponse struct {
+	jobResponse
+	GuestToken string `json:"guestToken,omitempty"`
+}
+
 func toJobResponse(job models.ProcessingJob) jobResponse {
 	name, _ := outputFileName(job.ToolType, job.FileName, job.Metadata)
 	return jobResponse{ProcessingJob: job, OutputFileName: name}
@@ -610,9 +625,12 @@ func outputFileName(toolType string, inputName string, metadata datatypes.JSON) 
 		ext, ct := resolveOutputExt(metadata, ".zip", "application/zip")
 		fileName = strings.TrimSuffix(inputName, filepath.Ext(inputName)) + ext
 		contentType = ct
-	case "split-pdf":
+	case "split-pdf", "pdf-to-html":
 		fileName = strings.TrimSuffix(inputName, filepath.Ext(inputName)) + ".zip"
 		contentType = "application/zip"
+	case "pdf-to-text":
+		fileName = strings.TrimSuffix(inputName, filepath.Ext(inputName)) + ".txt"
+		contentType = "text/plain; charset=utf-8"
 	default:
 		fileName = strings.TrimSuffix(inputName, filepath.Ext(inputName)) + ".pdf"
 		contentType = "application/pdf"
@@ -689,9 +707,18 @@ func validateFileType(toolType string, fileName string) error {
 	ext := strings.ToLower(filepath.Ext(fileName))
 	isPDF := ext == ".pdf"
 	switch toolType {
-	case "pdf-to-word", "pdf-to-excel", "pdf-to-powerpoint", "pdf-to-image", "merge-pdf", "split-pdf", "compress-pdf", "page-reorder", "page-rotate", "watermark-pdf", "protect-pdf", "unlock-pdf", "sign-pdf", "edit-pdf", "ocr":
+	case "pdf-to-word", "pdf-to-excel", "pdf-to-powerpoint", "pdf-to-image",
+		"pdf-to-html", "pdf-to-text", "pdf-to-pdfa",
+		"merge-pdf", "split-pdf", "compress-pdf",
+		"rotate-pdf", "remove-pages", "extract-pages", "organize-pdf",
+		"watermark-pdf", "protect-pdf", "unlock-pdf", "sign-pdf", "edit-pdf",
+		"add-page-numbers", "repair-pdf", "ocr-pdf", "ocr":
 		if !isPDF {
 			return fmt.Errorf("only PDF files are supported for this tool")
+		}
+	case "scan-to-pdf":
+		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" && ext != ".pdf" {
+			return fmt.Errorf("only image or PDF files are supported for this tool")
 		}
 	case "word-to-pdf":
 		if ext != ".doc" && ext != ".docx" {
@@ -717,9 +744,14 @@ func validateFileType(toolType string, fileName string) error {
 func mimeCategory(toolType string) string {
 	switch toolType {
 	case "pdf-to-word", "pdf-to-excel", "pdf-to-powerpoint", "pdf-to-image",
-		"merge-pdf", "split-pdf", "compress-pdf", "page-reorder", "page-rotate",
-		"watermark-pdf", "protect-pdf", "unlock-pdf", "sign-pdf", "edit-pdf", "ocr":
+		"pdf-to-html", "pdf-to-text", "pdf-to-pdfa",
+		"merge-pdf", "split-pdf", "compress-pdf",
+		"rotate-pdf", "remove-pages", "extract-pages", "organize-pdf",
+		"watermark-pdf", "protect-pdf", "unlock-pdf", "sign-pdf", "edit-pdf",
+		"add-page-numbers", "repair-pdf", "ocr-pdf", "ocr":
 		return "pdf"
+	case "scan-to-pdf":
+		return "image"
 	case "word-to-pdf":
 		return "word"
 	case "excel-to-pdf":
@@ -847,12 +879,12 @@ func freeJobTTL() time.Duration {
 	return parsed
 }
 
-func assignGuestTokenIfNeeded(c *gin.Context, userID *uuid.UUID, jobID uuid.UUID) {
+func assignGuestTokenIfNeeded(c *gin.Context, userID *uuid.UUID, jobID uuid.UUID) string {
 	if userID != nil {
-		return
+		return ""
 	}
 	if redisstore.Client == nil {
-		return
+		return ""
 	}
 	token := guestToken(c)
 	if token == "" {
@@ -863,6 +895,7 @@ func assignGuestTokenIfNeeded(c *gin.Context, userID *uuid.UUID, jobID uuid.UUID
 	redisstore.Client.SAdd(ctx, key, jobID.String())
 	redisstore.Client.Expire(ctx, key, guestJobTTL())
 	c.SetCookie("guest_token", token, int(guestJobTTL().Seconds()), "/", "", false, true)
+	return token
 }
 
 func guestJobIDs(ctx context.Context, token string) []string {

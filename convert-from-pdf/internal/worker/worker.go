@@ -216,7 +216,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 
 	mergeMetadata(cfg.DB, jobID, result.Metadata, logger)
 	updateJobStatus(cfg.DB, jobID, "completed", 100, "")
-	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "completed", 100, "")
+	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "completed", 100, "", outputFileSize(result.OutputPath))
 	clearFailure(cfg.DB, jobID)
 
 	if err := msg.Ack(); err != nil {
@@ -440,9 +440,18 @@ func statusToEventType(status string) string {
 	}
 }
 
+// outputFileSize returns the size of the file at path, or 0 on error.
+func outputFileSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
 // publishStatusEvent publishes a job status update to NATS so that SSE
 // consumers receive real-time updates without polling.
-func publishStatusEvent(js jetstream.JetStream, jobID uuid.UUID, toolType, status string, progress int, failureReason string) {
+func publishStatusEvent(js jetstream.JetStream, jobID uuid.UUID, toolType, status string, progress int, failureReason string, fileSize ...int64) {
 	if js == nil {
 		return
 	}
@@ -454,6 +463,9 @@ func publishStatusEvent(js jetstream.JetStream, jobID uuid.UUID, toolType, statu
 		Progress:      progress,
 		FailureReason: failureReason,
 		Timestamp:     time.Now().UTC(),
+	}
+	if len(fileSize) > 0 {
+		event.FileSize = fileSize[0]
 	}
 	subject := queue.SubjectForJobEvent(jobID.String(), eventType)
 	if err := queue.PublishJobEvent(context.Background(), js, subject, event); err != nil {

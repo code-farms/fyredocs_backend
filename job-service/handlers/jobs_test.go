@@ -82,6 +82,25 @@ func TestValidateFileType(t *testing.T) {
 		{"image-to-pdf rejects .gif", "image-to-pdf", "photo.gif", true},
 		{"image-to-pdf rejects .bmp", "image-to-pdf", "photo.bmp", true},
 
+		// Previously missing PDF-only tools
+		{"rotate-pdf accepts PDF", "rotate-pdf", "doc.pdf", false},
+		{"rotate-pdf rejects Word", "rotate-pdf", "doc.docx", true},
+		{"remove-pages accepts PDF", "remove-pages", "doc.pdf", false},
+		{"extract-pages accepts PDF", "extract-pages", "doc.pdf", false},
+		{"repair-pdf accepts PDF", "repair-pdf", "doc.pdf", false},
+		{"ocr-pdf accepts PDF", "ocr-pdf", "doc.pdf", false},
+		{"add-page-numbers accepts PDF", "add-page-numbers", "doc.pdf", false},
+		{"organize-pdf accepts PDF", "organize-pdf", "doc.pdf", false},
+		{"pdf-to-html accepts PDF", "pdf-to-html", "doc.pdf", false},
+		{"pdf-to-text accepts PDF", "pdf-to-text", "doc.pdf", false},
+		{"pdf-to-pdfa accepts PDF", "pdf-to-pdfa", "doc.pdf", false},
+
+		// scan-to-pdf accepts images and PDF
+		{"scan-to-pdf accepts .png", "scan-to-pdf", "photo.png", false},
+		{"scan-to-pdf accepts .jpg", "scan-to-pdf", "photo.jpg", false},
+		{"scan-to-pdf accepts .pdf", "scan-to-pdf", "doc.pdf", false},
+		{"scan-to-pdf rejects .doc", "scan-to-pdf", "doc.doc", true},
+
 		// Case insensitive extension
 		{"accepts uppercase .PDF", "pdf-to-word", "doc.PDF", false},
 		{"accepts uppercase .DOCX", "word-to-pdf", "file.DOCX", false},
@@ -115,6 +134,8 @@ func TestOutputFileName(t *testing.T) {
 		{"image-to-pdf", "photo.jpeg", nil, "photo.pdf", "application/pdf"},
 		{"compress-pdf", "doc.pdf", nil, "doc.pdf", "application/pdf"},
 		{"merge-pdf", "doc.pdf", nil, "doc.pdf", "application/pdf"},
+		{"pdf-to-html", "doc.pdf", nil, "doc.zip", "application/zip"},
+		{"pdf-to-text", "doc.pdf", nil, "doc.txt", "text/plain; charset=utf-8"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.toolType+"_"+tt.inputName, func(t *testing.T) {
@@ -347,6 +368,15 @@ func TestMimeCategory(t *testing.T) {
 		{"merge-pdf", "pdf"},
 		{"compress-pdf", "pdf"},
 		{"ocr", "pdf"},
+		{"rotate-pdf", "pdf"},
+		{"remove-pages", "pdf"},
+		{"extract-pages", "pdf"},
+		{"repair-pdf", "pdf"},
+		{"ocr-pdf", "pdf"},
+		{"add-page-numbers", "pdf"},
+		{"pdf-to-html", "pdf"},
+		{"pdf-to-text", "pdf"},
+		{"scan-to-pdf", "image"},
 		{"word-to-pdf", "word"},
 		{"excel-to-pdf", "excel"},
 		{"powerpoint-to-pdf", "ppt"},
@@ -486,6 +516,54 @@ func TestToJobResponseJSON(t *testing.T) {
 	if m["fileName"] != "photo.jpg" {
 		t.Errorf("JSON fileName = %v, want %q (original preserved)", m["fileName"], "photo.jpg")
 	}
+}
+
+func TestCreateJobResponseJSON(t *testing.T) {
+	job := models.ProcessingJob{
+		ID:       uuid.New(),
+		ToolType: "edit-pdf",
+		FileName: "doc.pdf",
+		Status:   "queued",
+	}
+
+	t.Run("includes guestToken when set", func(t *testing.T) {
+		resp := createJobResponse{
+			jobResponse: toJobResponse(job),
+			GuestToken:  "tok-abc-123",
+		}
+		data, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatal(err)
+		}
+		if m["guestToken"] != "tok-abc-123" {
+			t.Errorf("guestToken = %v, want %q", m["guestToken"], "tok-abc-123")
+		}
+		if m["outputFileName"] != "doc.pdf" {
+			t.Errorf("outputFileName = %v, want %q", m["outputFileName"], "doc.pdf")
+		}
+	})
+
+	t.Run("omits guestToken when empty", func(t *testing.T) {
+		resp := createJobResponse{
+			jobResponse: toJobResponse(job),
+			GuestToken:  "",
+		}
+		data, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := m["guestToken"]; exists {
+			t.Errorf("guestToken should be omitted when empty, got %v", m["guestToken"])
+		}
+	})
 }
 
 func TestOutputFileCacheStoreAndLoad(t *testing.T) {
