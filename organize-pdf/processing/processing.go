@@ -79,6 +79,32 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	case "scan-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = scanToPDF(ctx, inputPaths, outputPath, options)
+	case "watermark-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = watermarkPDF(inputPaths[0], outputPath, options)
+	case "protect-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		password, ok := optionString(options, "password")
+		if !ok {
+			return Result{}, fmt.Errorf("missing password option")
+		}
+		err = encryptPDF(inputPaths[0], outputPath, password)
+	case "unlock-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		password, ok := optionString(options, "password")
+		if !ok {
+			return Result{}, fmt.Errorf("missing password option for decryption")
+		}
+		err = decryptPDF(inputPaths[0], outputPath, password)
+	case "sign-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = signPDF(inputPaths[0], outputPath, options)
+	case "edit-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = editPDF(inputPaths[0], outputPath, options)
+	case "add-page-numbers":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = addPageNumbers(inputPaths[0], outputPath, options)
 	default:
 		err = fmt.Errorf("unsupported tool type: %s", toolType)
 	}

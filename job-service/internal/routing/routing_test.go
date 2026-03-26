@@ -14,30 +14,34 @@ func TestServiceForTool(t *testing.T) {
 		{"pdf-to-excel", "convert-from-pdf"},
 		{"pdf-to-powerpoint", "convert-from-pdf"},
 		{"pdf-to-image", "convert-from-pdf"},
-		{"ocr", "convert-from-pdf"},
 		{"pdf-to-text", "convert-from-pdf"},
 		{"pdf-to-html", "convert-from-pdf"},
+		{"pdf-to-pdfa", "convert-from-pdf"},
 
-		// convert-to-pdf
+		// convert-to-pdf (office/image → PDF only)
 		{"word-to-pdf", "convert-to-pdf"},
 		{"excel-to-pdf", "convert-to-pdf"},
 		{"powerpoint-to-pdf", "convert-to-pdf"},
 		{"image-to-pdf", "convert-to-pdf"},
-		{"merge-pdf", "convert-to-pdf"},
-		{"split-pdf", "organize-pdf"},
-		{"compress-pdf", "optimize-pdf"},
-		{"protect-pdf", "convert-to-pdf"},
-		{"unlock-pdf", "convert-to-pdf"},
-		{"watermark-pdf", "convert-to-pdf"},
-		{"sign-pdf", "convert-to-pdf"},
-		{"edit-pdf", "convert-to-pdf"},
-		{"add-page-numbers", "convert-to-pdf"},
+		{"html-to-pdf", "convert-to-pdf"},
 
-		// organize-pdf
+		// organize-pdf (fast pdfcpu-based manipulation)
+		{"merge-pdf", "organize-pdf"},
+		{"split-pdf", "organize-pdf"},
+		{"rotate-pdf", "organize-pdf"},
 		{"remove-pages", "organize-pdf"},
 		{"extract-pages", "organize-pdf"},
+		{"organize-pdf", "organize-pdf"},
+		{"scan-to-pdf", "organize-pdf"},
+		{"watermark-pdf", "organize-pdf"},
+		{"protect-pdf", "organize-pdf"},
+		{"unlock-pdf", "organize-pdf"},
+		{"sign-pdf", "organize-pdf"},
+		{"edit-pdf", "organize-pdf"},
+		{"add-page-numbers", "organize-pdf"},
 
-		// optimize-pdf
+		// optimize-pdf (heavy processing)
+		{"compress-pdf", "optimize-pdf"},
 		{"repair-pdf", "optimize-pdf"},
 		{"ocr-pdf", "optimize-pdf"},
 

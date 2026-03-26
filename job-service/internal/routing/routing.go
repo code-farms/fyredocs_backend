@@ -2,8 +2,14 @@ package routing
 
 // ToolServiceMap maps tool types to their processing service names.
 // This is the single source of truth for queue routing.
+//
+// Classification principle: group by dependency/performance profile.
+//   - convert-to-pdf:  Office → PDF conversions (LibreOffice, heavy)
+//   - convert-from-pdf: PDF → other format conversions
+//   - organize-pdf:    Fast pdfcpu-based PDF manipulation
+//   - optimize-pdf:    Heavy Ghostscript/Tesseract processing
 var ToolServiceMap = map[string]string{
-	// convert-from-pdf tools
+	// convert-from-pdf tools (PDF → other formats)
 	"pdf-to-word":       "convert-from-pdf",
 	"pdf-to-docx":       "convert-from-pdf",
 	"pdf-to-excel":      "convert-from-pdf",
@@ -17,9 +23,8 @@ var ToolServiceMap = map[string]string{
 	"pdf-to-text":       "convert-from-pdf",
 	"pdf-to-txt":        "convert-from-pdf",
 	"pdf-to-pdfa":       "convert-from-pdf",
-	"ocr":               "convert-from-pdf",
 
-	// convert-to-pdf tools
+	// convert-to-pdf tools (other formats → PDF, LibreOffice-heavy)
 	"word-to-pdf":       "convert-to-pdf",
 	"excel-to-pdf":      "convert-to-pdf",
 	"powerpoint-to-pdf": "convert-to-pdf",
@@ -27,26 +32,26 @@ var ToolServiceMap = map[string]string{
 	"html-to-pdf":       "convert-to-pdf",
 	"image-to-pdf":      "convert-to-pdf",
 	"img-to-pdf":        "convert-to-pdf",
-	"merge-pdf":         "convert-to-pdf",
-	"split-pdf":         "organize-pdf",
-	"compress-pdf":      "optimize-pdf",
-	"watermark-pdf":     "convert-to-pdf",
-	"protect-pdf":       "convert-to-pdf",
-	"unlock-pdf":        "convert-to-pdf",
-	"sign-pdf":            "convert-to-pdf",
-	"edit-pdf":            "convert-to-pdf",
-	"add-page-numbers":    "convert-to-pdf",
 
-	// organize-pdf tools
-	"rotate-pdf":    "organize-pdf",
-	"remove-pages":  "organize-pdf",
-	"extract-pages": "organize-pdf",
-	"organize-pdf":  "organize-pdf",
-	"scan-to-pdf":   "organize-pdf",
+	// organize-pdf tools (fast pdfcpu-based PDF manipulation)
+	"merge-pdf":        "organize-pdf",
+	"split-pdf":        "organize-pdf",
+	"rotate-pdf":       "organize-pdf",
+	"remove-pages":     "organize-pdf",
+	"extract-pages":    "organize-pdf",
+	"organize-pdf":     "organize-pdf",
+	"scan-to-pdf":      "organize-pdf",
+	"watermark-pdf":    "organize-pdf",
+	"protect-pdf":      "organize-pdf",
+	"unlock-pdf":       "organize-pdf",
+	"sign-pdf":         "organize-pdf",
+	"edit-pdf":         "organize-pdf",
+	"add-page-numbers": "organize-pdf",
 
-	// optimize-pdf tools
-	"repair-pdf": "optimize-pdf",
-	"ocr-pdf":    "optimize-pdf",
+	// optimize-pdf tools (heavy Ghostscript/Tesseract processing)
+	"compress-pdf": "optimize-pdf",
+	"repair-pdf":   "optimize-pdf",
+	"ocr-pdf":      "optimize-pdf",
 }
 
 // ServiceForTool returns the processing service name for the given tool type.
