@@ -35,11 +35,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/organize-pdf .
 
 # ---- Runtime Stage ----
-# 1. Grab our pre-built image (which already has Poppler built-in!)
-FROM esydocs-base:latest
+# This service only uses pdfcpu (Go library) and Tesseract — no LibreOffice needed.
+FROM alpine:3.19
 
-# 2. Install Tesseract OCR for scan-to-pdf with OCR support
 RUN apk add --no-cache \
+    ca-certificates \
     tesseract-ocr \
     tesseract-ocr-data-eng \
     && rm -rf /var/cache/apk/*

@@ -6,15 +6,15 @@
 FROM alpine:3.19
 
 LABEL maintainer="esydocs"
-LABEL description="Alpine Linux with LibreOffice, Java, and PDF tools pre-installed"
+LABEL description="Alpine Linux with LibreOffice and PDF tools pre-installed"
 LABEL version="3.19"
 
 # Install LibreOffice, Python, and dependencies
+# Note: Java is NOT needed for headless PDF conversion via LibreOffice/unoserver
 RUN apk add --no-cache \
     ca-certificates \
     poppler-utils \
     libreoffice \
-    openjdk17-jre-headless \
     ttf-liberation \
     python3 \
     py3-pip
@@ -25,7 +25,6 @@ RUN pip3 install --break-system-packages unoserver
 
 # Verify installations
 RUN libreoffice --version && \
-    java -version && \
     pdftoppm -v && \
     unoconvert --help > /dev/null 2>&1
 

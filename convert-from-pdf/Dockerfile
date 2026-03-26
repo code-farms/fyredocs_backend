@@ -35,11 +35,16 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/convert-from-pdf .
 
 # ---- Runtime Stage ----
-# 1. Grab our pre-built image with LibreOffice and Poppler instantly
-FROM esydocs-base:latest
+# This service uses LibreOffice (pdf-to-office), poppler (pdftoppm/pdftohtml/pdftotext),
+# and Ghostscript (pdf-to-pdfa). Does NOT need unoserver/Python.
+FROM alpine:3.19
 
-# 2. Install ONLY Ghostscript (takes just a few seconds)
-RUN apk add --no-cache ghostscript \
+RUN apk add --no-cache \
+    ca-certificates \
+    libreoffice \
+    ttf-liberation \
+    poppler-utils \
+    ghostscript \
     && rm -rf /var/cache/apk/*
 
 RUN adduser -D -u 10001 appuser

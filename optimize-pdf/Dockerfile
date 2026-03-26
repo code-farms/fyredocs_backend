@@ -35,11 +35,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/optimize-pdf .
 
 # ---- Runtime Stage ----
-# 1. Grab our pre-built image (contains Poppler-utils)
-FROM esydocs-base:latest
+# This service uses Ghostscript, Tesseract, and pdftoppm — no LibreOffice needed.
+FROM alpine:3.19
 
-# 2. Install ONLY Ghostscript and Tesseract OCR (takes seconds)
 RUN apk add --no-cache \
+    ca-certificates \
+    poppler-utils \
     ghostscript \
     tesseract-ocr \
     tesseract-ocr-data-eng \
