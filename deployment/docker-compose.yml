@@ -123,14 +123,19 @@ services:
       AUTH_DENYLIST_ENABLED: "true"
       AUTH_DENYLIST_PREFIX: "denylist:jwt"
 
-      # CORS Configuration
-      CORS_ALLOW_ORIGINS: "http://localhost:5173,http://localhost:3000,http://161.97.119.194:5173"
+      # SPA static file serving (frontend served from same origin)
+      SPA_DIR: /app/frontend
+
+      # CORS Configuration (kept for local dev when frontend runs separately)
+      CORS_ALLOW_ORIGINS: "http://localhost:5173,http://localhost:3000"
       CORS_ALLOW_METHODS: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-      CORS_ALLOW_HEADERS: "Authorization,Content-Type,X-User-ID,X-Guest-Token"
+      CORS_ALLOW_HEADERS: "Authorization,Content-Type,X-User-ID"
       CORS_ALLOW_CREDENTIALS: "true"
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    volumes:
+      - ../../esydocs_frontend/dist:/app/frontend:ro
     healthcheck:
       test: ["CMD", "./healthcheck", "http://localhost:8080/healthz"]
       interval: 10s

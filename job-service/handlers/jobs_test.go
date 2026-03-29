@@ -246,27 +246,27 @@ func TestMaxUploadBytes(t *testing.T) {
 }
 
 func TestGuestJobTTL(t *testing.T) {
-	t.Run("default 2h", func(t *testing.T) {
+	t.Run("default 30m", func(t *testing.T) {
 		t.Setenv("GUEST_JOB_TTL", "")
-		got := guestJobTTL()
-		if got != 2*time.Hour {
-			t.Errorf("expected 2h, got %v", got)
-		}
-	})
-
-	t.Run("custom", func(t *testing.T) {
-		t.Setenv("GUEST_JOB_TTL", "30m")
 		got := guestJobTTL()
 		if got != 30*time.Minute {
 			t.Errorf("expected 30m, got %v", got)
 		}
 	})
 
+	t.Run("custom", func(t *testing.T) {
+		t.Setenv("GUEST_JOB_TTL", "1h")
+		got := guestJobTTL()
+		if got != 1*time.Hour {
+			t.Errorf("expected 1h, got %v", got)
+		}
+	})
+
 	t.Run("invalid uses default", func(t *testing.T) {
 		t.Setenv("GUEST_JOB_TTL", "invalid")
 		got := guestJobTTL()
-		if got != 2*time.Hour {
-			t.Errorf("expected 2h, got %v", got)
+		if got != 30*time.Minute {
+			t.Errorf("expected 30m, got %v", got)
 		}
 	})
 }

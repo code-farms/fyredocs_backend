@@ -378,7 +378,6 @@ func zipDirectory(sourceDir string, zipPath string) error {
 	defer zipFile.Close()
 
 	zipWriter := zip.NewWriter(zipFile)
-	defer zipWriter.Close()
 
 	fileCount := 0
 	if err := filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
@@ -412,11 +411,17 @@ func zipDirectory(sourceDir string, zipPath string) error {
 		fileCount++
 		return closeErr
 	}); err != nil {
+		zipWriter.Close()
 		return err
 	}
 
 	if fileCount == 0 {
+		zipWriter.Close()
 		return fmt.Errorf("no files to archive in %s", sourceDir)
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		return fmt.Errorf("failed to finalize zip: %w", err)
 	}
 	return nil
 }

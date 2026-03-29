@@ -73,7 +73,7 @@ func main() {
 	port := getEnv("PORT", "8080")
 	corsOrigins := parseCommaList(getEnv("CORS_ALLOW_ORIGINS", "http://localhost:5173"))
 	corsMethods := getEnv("CORS_ALLOW_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-	corsHeaders := getEnv("CORS_ALLOW_HEADERS", "Authorization,Content-Type,X-User-ID,X-Guest-Token")
+	corsHeaders := getEnv("CORS_ALLOW_HEADERS", "Authorization,Content-Type,X-User-ID")
 	corsAllowCredentials := getEnv("CORS_ALLOW_CREDENTIALS", "true")
 
 	redisClient, err := authverify.NewRedisClientFromEnv()
@@ -167,6 +167,18 @@ func main() {
 	}
 
 	mux.Handle("/metrics", metrics.HTTPMetricsHandler())
+
+	// SPA static file serving — serves the built frontend from the same origin
+	// so that httpOnly cookies (guest_token, auth) work without cross-origin hacks.
+	spaDir := getEnv("SPA_DIR", "")
+	if spaDir != "" {
+		if info, err := os.Stat(spaDir); err == nil && info.IsDir() {
+			mux.Handle("/", spaFileServer(spaDir))
+			slog.Info("SPA static files enabled", "dir", spaDir)
+		} else {
+			slog.Warn("SPA_DIR configured but not found, skipping static file serving", "dir", spaDir)
+		}
+	}
 
 	// Fix #28: Deep health check - ping Redis
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -434,6 +446,35 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		next.ServeHTTP(w, r)
+	})
+}
+
+// spaFileServer serves static files from dir and falls back to index.html
+// for any path that doesn't match a real file (SPA client-side routing).
+func spaFileServer(dir string) http.Handler {
+	fs := http.Dir(dir)
+	fileServer := http.FileServer(fs)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "/" {
+			path = "/index.html"
+		}
+		f, err := fs.Open(path)
+		if err != nil {
+			// File not found — serve index.html for SPA client-side routing
+			r.URL.Path = "/"
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		f.Close()
+
+		// Cache static assets (hashed filenames) aggressively
+		if strings.HasPrefix(path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
+
+		fileServer.ServeHTTP(w, r)
 	})
 }
 

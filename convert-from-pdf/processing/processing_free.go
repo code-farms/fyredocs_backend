@@ -260,9 +260,8 @@ func zipDirectory(sourceDir string, zipPath string) error {
 	defer zipFile.Close()
 
 	zipWriter := zip.NewWriter(zipFile)
-	defer zipWriter.Close()
 
-	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -291,7 +290,15 @@ func zipDirectory(sourceDir string, zipPath string) error {
 			return copyErr
 		}
 		return closeErr
-	})
+	}); err != nil {
+		zipWriter.Close()
+		return err
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		return fmt.Errorf("failed to finalize zip: %w", err)
+	}
+	return nil
 }
 
 func copyFile(src, dst string) error {

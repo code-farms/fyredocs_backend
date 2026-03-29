@@ -44,7 +44,7 @@ func compressPDF(ctx context.Context, inputPath string, outputPath string, optio
 		pdfSettings = "/ebook"
 		dpi = "150"
 	case "high":
-		pdfSettings = "/screen"
+		pdfSettings = "/ebook"
 		dpi = "72"
 	case "extreme":
 		pdfSettings = "/screen"

@@ -15,12 +15,12 @@ func TestAuthUserIDNilContext(t *testing.T) {
 	}
 }
 
-func TestGuestTokenFromHeader(t *testing.T) {
+func TestGuestTokenFromCookie(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
-	c.Request.Header.Set("X-Guest-Token", "guest-abc-123")
+	c.Request.AddCookie(&http.Cookie{Name: "guest_token", Value: "guest-abc-123"})
 
 	got := guestToken(c)
 	if got != "guest-abc-123" {

@@ -136,15 +136,13 @@ func SplitScopes(header string) []string {
 	return splitScope(strings.TrimSpace(header))
 }
 
-func guestContextFromRequest(r *http.Request, store GuestStore, headerName string, cookieName string) (*AuthContext, error) {
+func guestContextFromRequest(r *http.Request, store GuestStore, _ string, cookieName string) (*AuthContext, error) {
 	if r == nil || store == nil {
 		return nil, nil
 	}
-	token := strings.TrimSpace(r.Header.Get(headerName))
-	if token == "" {
-		if cookie, err := r.Cookie(cookieName); err == nil {
-			token = strings.TrimSpace(cookie.Value)
-		}
+	var token string
+	if cookie, err := r.Cookie(cookieName); err == nil {
+		token = strings.TrimSpace(cookie.Value)
 	}
 	if token == "" {
 		return nil, nil

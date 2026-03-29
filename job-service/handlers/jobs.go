@@ -858,11 +858,11 @@ func jobExpiry(userID *uuid.UUID, planName string) *time.Time {
 func guestJobTTL() time.Duration {
 	value := os.Getenv("GUEST_JOB_TTL")
 	if value == "" {
-		return 2 * time.Hour
+		return 30 * time.Minute
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
-		return 2 * time.Hour
+		return 30 * time.Minute
 	}
 	return parsed
 }
@@ -942,9 +942,6 @@ func authorizeJobAccess(c *gin.Context, job *models.ProcessingJob) bool {
 }
 
 func guestToken(c *gin.Context) string {
-	if value := c.GetHeader("X-Guest-Token"); value != "" {
-		return value
-	}
 	if value, err := c.Cookie("guest_token"); err == nil {
 		return value
 	}
