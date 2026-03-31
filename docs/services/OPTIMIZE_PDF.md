@@ -13,14 +13,14 @@ PDF optimization microservice providing compression, repair, and OCR capabilitie
 ## Supported Operations
 
 ### 1. Compress PDF (`compress-pdf`)
-Reduces PDF file size using pdfcpu optimization.
+Reduces PDF file size using Ghostscript optimization.
 
 **Options:**
-- `quality`: Compression level
-  - `screen` - Maximum compression (72dpi equivalent)
-  - `ebook` - Balanced compression (150dpi equivalent) [default]
-  - `printer` - High quality (300dpi)
-  - `prepress` - Maximum quality
+- `quality`: Compression level (frontend names → Ghostscript settings)
+  - `low` - Light compression (`/printer`, 300dpi)
+  - `medium` - Balanced compression (`/ebook`, 150dpi) [default]
+  - `high` - Aggressive compression (`/ebook`, 72dpi, forced downsampling, JPEG quality reduction)
+  - `extreme` - Maximum compression (`/screen`, 36dpi, forced downsampling, JPEG quality reduction, grayscale conversion)
 
 **Example:**
 ```bash
@@ -264,17 +264,19 @@ sequenceDiagram
 sequenceDiagram
     participant W as Worker
     participant FS as File System
-    participant PC as pdfcpu
+    participant GS as Ghostscript
 
     W->>FS: Read input PDF
-    W->>W: Parse quality option (screen/ebook/printer/prepress)
-    W->>PC: pdfcpu.OptimizeFile(input, output, config)
-    PC->>PC: Remove duplicate content streams
-    PC->>PC: Optimize object streams
-    PC->>PC: Compress embedded fonts
-    PC-->>FS: Optimized output.pdf
+    W->>W: Parse quality option (low/medium/high/extreme)
+    W->>W: Build Ghostscript args (DPI, threshold, QFactor, grayscale)
+    W->>GS: Execute gs with compression args
+    GS->>GS: Downsample images to target DPI
+    GS->>GS: Compress embedded fonts
+    GS->>GS: Apply JPEG quality (high/extreme only)
+    GS->>GS: Convert to grayscale (extreme only)
+    GS-->>FS: Compressed output.pdf
     W->>FS: Compare file sizes (log compression ratio)
-    W-->>W: Return outputPath
+    W-->>W: Return outputPath + metadata
 ```
 
 ### Health Check Flow
@@ -345,10 +347,11 @@ When retries are exhausted (MaxDeliver reached), the failed job payload is publi
 ## Processing Details
 
 ### Compress PDF
-Uses pdfcpu's `OptimizeFile` function with configurable settings:
-- Removes duplicate content streams
-- Optimizes object streams
-- Compresses embedded fonts
+Uses Ghostscript with quality-differentiated settings:
+- **low/medium**: Standard `-dPDFSETTINGS` with default downsample threshold (1.5x)
+- **high**: Forced downsample threshold (1.0x) + JPEG quality reduction via `setdistillerparams` (QFactor 0.76)
+- **extreme**: Forced downsample threshold (1.0x) + aggressive JPEG quality (QFactor 2.4) + grayscale conversion (`-dColorConversionStrategy=/Gray`)
+- All levels: duplicate image detection, font compression, image downsampling
 
 ### Repair PDF
 Uses Ghostscript to rebuild the PDF:

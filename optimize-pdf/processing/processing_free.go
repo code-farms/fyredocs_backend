@@ -33,42 +33,7 @@ func compressPDF(ctx context.Context, inputPath string, outputPath string, optio
 		return nil, err
 	}
 
-	// Map frontend quality levels to Ghostscript compression settings
-	pdfSettings := "/ebook"
-	dpi := "150"
-	switch quality {
-	case "low":
-		pdfSettings = "/printer"
-		dpi = "300"
-	case "medium":
-		pdfSettings = "/ebook"
-		dpi = "150"
-	case "high":
-		pdfSettings = "/ebook"
-		dpi = "72"
-	case "extreme":
-		pdfSettings = "/screen"
-		dpi = "36"
-	}
-
-	args := []string{
-		"-dNOPAUSE",
-		"-dBATCH",
-		"-dSAFER",
-		"-sDEVICE=pdfwrite",
-		"-dCompatibilityLevel=1.4",
-		"-dPDFSETTINGS=" + pdfSettings,
-		"-dDetectDuplicateImages=true",
-		"-dCompressFonts=true",
-		"-dDownsampleColorImages=true",
-		"-dColorImageResolution=" + dpi,
-		"-dDownsampleGrayImages=true",
-		"-dGrayImageResolution=" + dpi,
-		"-dDownsampleMonoImages=true",
-		"-dMonoImageResolution=" + dpi,
-		"-sOutputFile=" + outputPath,
-		inputPath,
-	}
+	args := buildCompressArgs(quality, outputPath, inputPath)
 
 	cmd := exec.CommandContext(ctx, gsPath, args...)
 	cmd.Stderr = os.Stderr
@@ -99,6 +64,68 @@ func compressPDF(ctx context.Context, inputPath string, outputPath string, optio
 	slog.Info("compression complete", "originalBytes", originalSize, "compressedBytes", compressedSize, "reduction", fmt.Sprintf("%.2f%%", compressionRatio))
 
 	return metadata, nil
+}
+
+// buildCompressArgs returns the Ghostscript arguments for the given quality level.
+func buildCompressArgs(quality, outputPath, inputPath string) []string {
+	pdfSettings := "/ebook"
+	dpi := "150"
+	threshold := "1.5"
+	qFactor := ""
+	var extraArgs []string
+
+	switch quality {
+	case "low":
+		pdfSettings = "/printer"
+		dpi = "300"
+	case "medium":
+		pdfSettings = "/ebook"
+		dpi = "150"
+	case "high":
+		pdfSettings = "/ebook"
+		dpi = "72"
+		threshold = "1.0"
+		qFactor = "0.76"
+	case "extreme":
+		pdfSettings = "/screen"
+		dpi = "36"
+		threshold = "1.0"
+		qFactor = "2.4"
+		extraArgs = []string{
+			"-dColorConversionStrategy=/Gray",
+			"-dProcessColorModel=/DeviceGray",
+		}
+	}
+
+	args := []string{
+		"-dNOPAUSE",
+		"-dBATCH",
+		"-dSAFER",
+		"-sDEVICE=pdfwrite",
+		"-dCompatibilityLevel=1.4",
+		"-dPDFSETTINGS=" + pdfSettings,
+		"-dDetectDuplicateImages=true",
+		"-dCompressFonts=true",
+		"-dDownsampleColorImages=true",
+		"-dColorImageResolution=" + dpi,
+		"-dColorImageDownsampleThreshold=" + threshold,
+		"-dDownsampleGrayImages=true",
+		"-dGrayImageResolution=" + dpi,
+		"-dGrayImageDownsampleThreshold=" + threshold,
+		"-dDownsampleMonoImages=true",
+		"-dMonoImageResolution=" + dpi,
+		"-dMonoImageDownsampleThreshold=" + threshold,
+	}
+	args = append(args, extraArgs...)
+	if qFactor != "" {
+		args = append(args,
+			"-c",
+			fmt.Sprintf("<< /ColorACSImageDict << /QFactor %s >> /GrayACSImageDict << /QFactor %s >> >> setdistillerparams", qFactor, qFactor),
+			"-f",
+		)
+	}
+	args = append(args, "-sOutputFile="+outputPath, inputPath)
+	return args
 }
 
 func repairPDF(ctx context.Context, inputPath string, outputPath string) error {

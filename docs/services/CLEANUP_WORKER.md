@@ -113,12 +113,15 @@ When scaled to multiple replicas, a Redis distributed lock (`cleanup-worker:lock
 **Process**:
 1. Scan `/app/uploads/` for UUID-named directories (skip `tmp`, `.gitkeep`)
 2. For each directory, check if a matching `processing_jobs` record exists
-3. If no record exists → `os.RemoveAll(dir)` (removes directory and any leftover files)
-4. Scan `/app/outputs/` for files matching `{prefix}_{jobID}_{timestamp}.{ext}` pattern
-5. Extract job UUID from filename, check if matching record exists
-6. If no record exists → `os.Remove(file)`
+3. If no job record exists, check Redis for an active upload session (`upload:<uuid>` key)
+4. If neither a job record nor an active upload exists → `os.RemoveAll(dir)` (removes directory and any leftover files)
+5. Scan `/app/outputs/` for files matching `{prefix}_{jobID}_{timestamp}.{ext}` pattern
+6. Extract job UUID from filename, check if matching record exists
+7. If no record exists → `os.Remove(file)`
 
 **When this triggers**: Catches directories/files left behind when the old cleanup code deleted DB records but not directories, or when files are left after incomplete processing.
+
+> **Note**: The Redis check in step 3 prevents a race condition where uploaded files waiting to be consumed by a job could be prematurely deleted. Upload directories use upload UUIDs (not job UUIDs), so they never match `processing_jobs` records until a job consumes them.
 
 ---
 

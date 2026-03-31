@@ -286,6 +286,13 @@ func cleanupOrphanedDirs(ctx context.Context) {
 			}
 			for _, id := range candidateUploadIDs {
 				if _, exists := existingSet[id]; !exists {
+					// Check if this is an active upload not yet consumed by a job
+					if redisstore.Client != nil {
+						uploadKey := "upload:" + id.String()
+						if exists, err := redisstore.Client.Exists(ctx, uploadKey).Result(); err == nil && exists > 0 {
+							continue
+						}
+					}
 					dirPath := filepath.Join(uploadsDir, candidateUploadNames[id])
 					if err := os.RemoveAll(dirPath); err != nil {
 						slog.Warn("failed to remove orphaned upload dir", "path", dirPath, "error", err)
