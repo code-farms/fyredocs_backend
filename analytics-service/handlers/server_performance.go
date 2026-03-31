@@ -181,9 +181,21 @@ func scrapeServiceInfo(ctx context.Context, name, baseURL string) gin.H {
 	stackInuse := promscrape.GaugeValue(families, "go_memstats_stack_inuse_bytes")
 	sysBytes := promscrape.GaugeValue(families, "go_memstats_sys_bytes")
 
+	// Extract uptime from standard process_start_time_seconds metric
+	uptime := ""
+	if startTimeSec := promscrape.GaugeValue(families, "process_start_time_seconds"); startTimeSec > 0 {
+		started := time.Unix(int64(startTimeSec), 0)
+		uptime = formatDuration(time.Since(started))
+	}
+
+	// Extract Go version from go_info{version="go1.25.8"} metric
+	goVersion := promscrape.GaugeLabelValue(families, "go_info", "version")
+
 	return gin.H{
 		"status":     "healthy",
 		"goroutines": goroutines,
+		"uptime":     uptime,
+		"goVersion":  goVersion,
 		"memory": gin.H{
 			"heapAllocMB":  roundMBf(heapBytes),
 			"heapInuseMB":  roundMBf(heapInuse),

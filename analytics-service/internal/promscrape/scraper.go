@@ -58,6 +58,22 @@ func GaugeValue(families map[string]*dto.MetricFamily, name string) float64 {
 	return metrics[0].GetGauge().GetValue()
 }
 
+// GaugeLabelValue returns the value of a label from a gauge metric. Returns "" if not found.
+func GaugeLabelValue(families map[string]*dto.MetricFamily, metricName, labelName string) string {
+	fam, ok := families[metricName]
+	if !ok {
+		return ""
+	}
+	for _, m := range fam.GetMetric() {
+		for _, l := range m.GetLabel() {
+			if l.GetName() == labelName {
+				return l.GetValue()
+			}
+		}
+	}
+	return ""
+}
+
 // HistogramEndpoint holds computed metrics for a single method+path+status combination.
 type HistogramEndpoint struct {
 	Method   string  `json:"method"`

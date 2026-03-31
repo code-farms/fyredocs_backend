@@ -3,6 +3,8 @@ package promscrape
 import (
 	"math"
 	"testing"
+
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestHistogramPercentile_EmptyBuckets(t *testing.T) {
@@ -50,4 +52,55 @@ func TestGaugeValue_Missing(t *testing.T) {
 	if result != 0 {
 		t.Errorf("expected 0 for missing metric, got %f", result)
 	}
+}
+
+func TestGaugeLabelValue(t *testing.T) {
+	gaugeType := dto.MetricType_GAUGE
+	metricName := "go_info"
+	labelName := "version"
+	labelValue := "go1.25.8"
+	gaugeVal := float64(1)
+
+	families := map[string]*dto.MetricFamily{
+		"go_info": {
+			Name: &metricName,
+			Type: &gaugeType,
+			Metric: []*dto.Metric{
+				{
+					Label: []*dto.LabelPair{
+						{Name: &labelName, Value: &labelValue},
+					},
+					Gauge: &dto.Gauge{Value: &gaugeVal},
+				},
+			},
+		},
+	}
+
+	t.Run("found", func(t *testing.T) {
+		got := GaugeLabelValue(families, "go_info", "version")
+		if got != "go1.25.8" {
+			t.Errorf("expected 'go1.25.8', got %q", got)
+		}
+	})
+
+	t.Run("missing metric", func(t *testing.T) {
+		got := GaugeLabelValue(families, "nonexistent", "version")
+		if got != "" {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
+
+	t.Run("missing label", func(t *testing.T) {
+		got := GaugeLabelValue(families, "go_info", "nonexistent")
+		if got != "" {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
+
+	t.Run("nil families", func(t *testing.T) {
+		got := GaugeLabelValue(nil, "go_info", "version")
+		if got != "" {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
 }
