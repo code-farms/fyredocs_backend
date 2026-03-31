@@ -22,9 +22,13 @@ If a user request violates microservice boundaries, Claude must correct or rejec
 ## Allowed top-level folders:
 - `/<service-name>/` (services live directly under `esydocs_backend/`, e.g., `upload-service/`, `convert-from-pdf/`)
 - `/shared/` (utility packages only — logging, tracing, metrics, config, queue clients, response helpers)
-- `/docs/`
-- `/docs/services/`
-- `/docs/mermaid/`
+- `/docs/` (documentation hub)
+- `/docs/developer/` (all developer documentation)
+- `/docs/developer/api/` (API endpoint documentation)
+- `/docs/developer/services/` (service architecture documentation)
+- `/docs/developer/mermaid/` (architecture and sequence diagrams)
+- `/docs/developer/architecture/` (infrastructure documentation)
+- `/docs/developer/swagger/` (OpenAPI specifications)
 - `/postman/`
 - `/deployment/`
 - `/scripts/`
@@ -88,13 +92,15 @@ Forbidden:
 - Must NOT contain service-specific details
 
 ## 5.2 `/docs/` folder
-Everything except the main README lives here.
+The docs folder is organized into two classifications:
+- `/docs/developer/` — All developer-facing documentation (API specs, service architecture, diagrams, best practices)
+- Feature documentation lives on the frontend at `/docs` route
 
-## 5.3 `/docs/services/`
+## 5.3 `/docs/developer/services/`
 - Each microservice must have its own dedicated architecture document:
 
 ```
-/docs/services/<service-name>.md
+/docs/developer/services/<service-name>.md
 ```
 
 These must describe:
@@ -109,7 +115,7 @@ These must describe:
 
 Claude must update these when code changes.
 
-## 5.4 `/docs/mermaid/`
+## 5.4 `/docs/developer/mermaid/`
 This folder stores **all Mermaid diagrams**, including:
 
 - System architecture diagrams
@@ -136,7 +142,7 @@ Claude must keep them synced with code & docs:
 
 - Update Swagger/OpenAPI whenever APIs change
 - Update Postman collections to reflect true routes & examples
-- Place Swagger specs under `/docs/swagger/`
+- Place Swagger specs under `/docs/developer/swagger/`
 
 ────────────────────────────────────────
 # 6. LOGGING & OBSERVABILITY
@@ -175,9 +181,9 @@ Every HTTP handler across services must return:
 After ANY code change, Claude MUST update all affected documentation. This is non-negotiable, even if the user does not explicitly ask for it.
 
 ## After every code change, Claude must review and update:
-- [ ] `/docs/services/<service-name>.md` — if routes, handlers, models, or logic changed
-- [ ] `/docs/mermaid/` diagrams — if architecture, flows, or service interactions changed
-- [ ] `/docs/swagger/` specs — if any API endpoint, request, or response changed
+- [ ] `/docs/developer/services/<service-name>.md` — if routes, handlers, models, or logic changed
+- [ ] `/docs/developer/mermaid/` diagrams — if architecture, flows, or service interactions changed
+- [ ] `/docs/developer/swagger/` specs — if any API endpoint, request, or response changed
 - [ ] Postman collections — if routes, methods, or payloads changed
 - [ ] Root `README.md` — if a new service was added/removed or major workflow changed
 
