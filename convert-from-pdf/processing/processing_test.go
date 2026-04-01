@@ -24,6 +24,19 @@ func TestProcessFileUnsupportedTool(t *testing.T) {
 	}
 }
 
+func TestProcessFileRecognizesODFTools(t *testing.T) {
+	tools := []string{"pdf-to-odt", "pdf-to-ods", "pdf-to-odp"}
+	for _, tool := range tools {
+		t.Run(tool, func(t *testing.T) {
+			_, err := ProcessFile(context.Background(), uuid.New(), tool, []string{"/nonexistent.pdf"}, nil, t.TempDir(), nil)
+			// Should fail on conversion (no LibreOffice), NOT on "unsupported tool type"
+			if err != nil && err.Error() == "unsupported tool type: "+tool {
+				t.Errorf("tool %q should be recognized but got unsupported error", tool)
+			}
+		})
+	}
+}
+
 func TestProcessFileOutputDirCreation(t *testing.T) {
 	dir := t.TempDir() + "/subdir"
 	// This will fail because the input file doesn't exist, but the dir should be created

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Convert To PDF service converts various document and image formats to PDF. It handles Word, Excel, PowerPoint, HTML, and image file conversions using LibreOffice and pdfcpu.
+The Convert To PDF service converts various document and image formats to PDF, and also handles cross-format Office-to-LibreOffice conversions. It handles Word, Excel, PowerPoint, HTML, image, and OpenDocument (ODT/ODS/ODP) file conversions using LibreOffice and pdfcpu.
 
 **Port**: 8083 (internal, not exposed through API Gateway)
 **Type**: Background Worker + REST API
@@ -12,10 +12,12 @@ The Convert To PDF service converts various document and image formats to PDF. I
 ## Responsibilities
 
 1. **Office to PDF** - Convert Word/Excel/PowerPoint documents to PDF
-2. **HTML to PDF** - Convert HTML documents to PDF
-3. **Image to PDF** - Convert images (JPG, PNG, etc.) to PDF
-4. **Job Processing** - Pick jobs from Redis queue and process them
-5. **Status Updates** - Update job status and progress in database
+2. **LibreOffice to PDF** - Convert ODT/ODS/ODP documents to PDF
+3. **Office to LibreOffice** - Convert Word/Excel/PowerPoint to ODT/ODS/ODP
+4. **HTML to PDF** - Convert HTML documents to PDF
+5. **Image to PDF** - Convert images (JPG, PNG, etc.) to PDF
+6. **Job Processing** - Pick jobs from Redis queue and process them
+7. **Status Updates** - Update job status and progress in database
 
 ## Architecture
 
@@ -46,6 +48,12 @@ The container runs a persistent LibreOffice instance via `unoserver` (started by
 | `html-to-pdf` | .html, .htm | .pdf | LibreOffice Writer | ✅ Implemented |
 | `image-to-pdf` | .jpg, .png, .gif, .webp, .bmp | .pdf | pdfcpu | ✅ Implemented |
 | `img-to-pdf` | .jpg, .png, .gif, .webp, .bmp | .pdf | pdfcpu | ✅ Alias |
+| `odt-to-pdf` | .odt | .pdf | LibreOffice Writer | ✅ Implemented |
+| `ods-to-pdf` | .ods | .pdf | LibreOffice Calc | ✅ Implemented |
+| `odp-to-pdf` | .odp | .pdf | LibreOffice Impress | ✅ Implemented |
+| `word-to-odt` | .doc, .docx | .odt | LibreOffice Writer | ✅ Implemented |
+| `excel-to-ods` | .xls, .xlsx | .ods | LibreOffice Calc | ✅ Implemented |
+| `powerpoint-to-odp` | .ppt, .pptx | .odp | LibreOffice Impress | ✅ Implemented |
 | `merge-pdf` | .pdf | .pdf | pdfcpu | ✅ Implemented |
 | `split-pdf` | .pdf | .zip | pdfcpu | ✅ Implemented |
 | `compress-pdf` | .pdf | .pdf | pdfcpu | ✅ Implemented |
@@ -300,6 +308,107 @@ curl -X POST http://localhost:8080/api/convert-to-pdf/image-to-pdf \
 ```
 
 **Output**: Single PDF with 3 pages
+
+---
+
+### odt-to-pdf
+
+Converts LibreOffice Writer documents to PDF.
+
+**Input**: `.odt`
+**Output**: `.pdf`
+**Implementation**: LibreOffice Writer (via unoconvert/fallback)
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-to-pdf/odt-to-pdf \
+  -F "file=@document.odt"
+```
+
+---
+
+### ods-to-pdf
+
+Converts LibreOffice Calc spreadsheets to PDF.
+
+**Input**: `.ods`
+**Output**: `.pdf`
+**Implementation**: LibreOffice Calc (via unoconvert/fallback)
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-to-pdf/ods-to-pdf \
+  -F "file=@spreadsheet.ods"
+```
+
+---
+
+### odp-to-pdf
+
+Converts LibreOffice Impress presentations to PDF.
+
+**Input**: `.odp`
+**Output**: `.pdf`
+**Implementation**: LibreOffice Impress (via unoconvert/fallback)
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-to-pdf/odp-to-pdf \
+  -F "file=@presentation.odp"
+```
+
+---
+
+### word-to-odt
+
+Converts Microsoft Word documents to LibreOffice Writer format.
+
+**Input**: `.doc`, `.docx`
+**Output**: `.odt`
+**Implementation**: LibreOffice Writer (via `officeToOffice()` using unoconvert/fallback)
+
+**Use Cases**:
+- Migrating from Microsoft Office to LibreOffice
+- Open-source document workflows
+- Cross-platform compatibility
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-to-pdf/word-to-odt \
+  -F "file=@document.docx"
+```
+
+---
+
+### excel-to-ods
+
+Converts Microsoft Excel spreadsheets to LibreOffice Calc format.
+
+**Input**: `.xls`, `.xlsx`
+**Output**: `.ods`
+**Implementation**: LibreOffice Calc (via `officeToOffice()` using unoconvert/fallback)
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-to-pdf/excel-to-ods \
+  -F "file=@spreadsheet.xlsx"
+```
+
+---
+
+### powerpoint-to-odp
+
+Converts Microsoft PowerPoint presentations to LibreOffice Impress format.
+
+**Input**: `.ppt`, `.pptx`
+**Output**: `.odp`
+**Implementation**: LibreOffice Impress (via `officeToOffice()` using unoconvert/fallback)
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-to-pdf/powerpoint-to-odp \
+  -F "file=@presentation.pptx"
+```
 
 ---
 

@@ -40,6 +40,12 @@ graph TB
             WATERMARK["watermark-pdf"]
             EDIT["edit-pdf"]
             SIGN["sign-pdf"]
+            ODT_PDF["odt-to-pdf"]
+            ODS_PDF["ods-to-pdf"]
+            ODP_PDF["odp-to-pdf"]
+            WORD_ODT["word-to-odt"]
+            EXCEL_ODS["excel-to-ods"]
+            PPT_ODP["powerpoint-to-odp"]
         end
 
         subgraph Models["internal/models"]
@@ -66,6 +72,12 @@ graph TB
     PROC --> WATERMARK
     PROC --> EDIT
     PROC --> SIGN
+    PROC --> ODT_PDF
+    PROC --> ODS_PDF
+    PROC --> ODP_PDF
+    PROC --> WORD_ODT
+    PROC --> EXCEL_ODS
+    PROC --> PPT_ODP
 
     DISPATCH -->|Update status| DB_CONN
     DB_CONN --> PG[(PostgreSQL)]
@@ -84,6 +96,15 @@ graph LR
         C["excel-to-pdf"]
         D["html-to-pdf"]
         E["image-to-pdf<br/>(img-to-pdf)"]
+        AA["odt-to-pdf"]
+        BB["ods-to-pdf"]
+        CC["odp-to-pdf"]
+    end
+
+    subgraph OdfTools["Office-to-LibreOffice Conversions"]
+        DD["word-to-odt"]
+        EE["excel-to-ods"]
+        FF["powerpoint-to-odp"]
     end
 
     subgraph PDFTools["PDF Manipulation Tools"]

@@ -23,6 +23,9 @@ var ToolServiceMap = map[string]string{
 	"pdf-to-text":       "convert-from-pdf",
 	"pdf-to-txt":        "convert-from-pdf",
 	"pdf-to-pdfa":       "convert-from-pdf",
+	"pdf-to-odt":        "convert-from-pdf",
+	"pdf-to-ods":        "convert-from-pdf",
+	"pdf-to-odp":        "convert-from-pdf",
 
 	// convert-to-pdf tools (other formats → PDF, LibreOffice-heavy)
 	"word-to-pdf":       "convert-to-pdf",
@@ -32,6 +35,12 @@ var ToolServiceMap = map[string]string{
 	"html-to-pdf":       "convert-to-pdf",
 	"image-to-pdf":      "convert-to-pdf",
 	"img-to-pdf":        "convert-to-pdf",
+	"odt-to-pdf":        "convert-to-pdf",
+	"ods-to-pdf":        "convert-to-pdf",
+	"odp-to-pdf":        "convert-to-pdf",
+	"word-to-odt":       "convert-to-pdf",
+	"excel-to-ods":      "convert-to-pdf",
+	"powerpoint-to-odp": "convert-to-pdf",
 
 	// organize-pdf tools (fast pdfcpu-based PDF manipulation)
 	"merge-pdf":        "organize-pdf",

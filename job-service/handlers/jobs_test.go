@@ -101,6 +101,34 @@ func TestValidateFileType(t *testing.T) {
 		{"scan-to-pdf accepts .pdf", "scan-to-pdf", "doc.pdf", false},
 		{"scan-to-pdf rejects .doc", "scan-to-pdf", "doc.doc", true},
 
+		// LibreOffice PDF-to-ODF tools
+		{"pdf-to-odt accepts PDF", "pdf-to-odt", "doc.pdf", false},
+		{"pdf-to-odt rejects Word", "pdf-to-odt", "doc.docx", true},
+		{"pdf-to-ods accepts PDF", "pdf-to-ods", "data.pdf", false},
+		{"pdf-to-ods rejects Excel", "pdf-to-ods", "data.xlsx", true},
+		{"pdf-to-odp accepts PDF", "pdf-to-odp", "slides.pdf", false},
+		{"pdf-to-odp rejects PPT", "pdf-to-odp", "slides.pptx", true},
+
+		// LibreOffice Office-to-ODF tools
+		{"word-to-odt accepts .doc", "word-to-odt", "file.doc", false},
+		{"word-to-odt accepts .docx", "word-to-odt", "file.docx", false},
+		{"word-to-odt rejects .pdf", "word-to-odt", "file.pdf", true},
+		{"excel-to-ods accepts .xls", "excel-to-ods", "file.xls", false},
+		{"excel-to-ods accepts .xlsx", "excel-to-ods", "file.xlsx", false},
+		{"excel-to-ods rejects .csv", "excel-to-ods", "file.csv", true},
+		{"powerpoint-to-odp accepts .ppt", "powerpoint-to-odp", "file.ppt", false},
+		{"powerpoint-to-odp accepts .pptx", "powerpoint-to-odp", "file.pptx", false},
+		{"powerpoint-to-odp rejects .pdf", "powerpoint-to-odp", "file.pdf", true},
+
+		// LibreOffice ODF-to-PDF tools
+		{"odt-to-pdf accepts .odt", "odt-to-pdf", "file.odt", false},
+		{"odt-to-pdf rejects .pdf", "odt-to-pdf", "file.pdf", true},
+		{"odt-to-pdf rejects .docx", "odt-to-pdf", "file.docx", true},
+		{"ods-to-pdf accepts .ods", "ods-to-pdf", "file.ods", false},
+		{"ods-to-pdf rejects .xlsx", "ods-to-pdf", "file.xlsx", true},
+		{"odp-to-pdf accepts .odp", "odp-to-pdf", "file.odp", false},
+		{"odp-to-pdf rejects .pptx", "odp-to-pdf", "file.pptx", true},
+
 		// Case insensitive extension
 		{"accepts uppercase .PDF", "pdf-to-word", "doc.PDF", false},
 		{"accepts uppercase .DOCX", "word-to-pdf", "file.DOCX", false},
@@ -136,6 +164,15 @@ func TestOutputFileName(t *testing.T) {
 		{"merge-pdf", "doc.pdf", nil, "doc.pdf", "application/pdf"},
 		{"pdf-to-html", "doc.pdf", nil, "doc.zip", "application/zip"},
 		{"pdf-to-text", "doc.pdf", nil, "doc.txt", "text/plain; charset=utf-8"},
+		{"pdf-to-odt", "report.pdf", nil, "report.odt", "application/vnd.oasis.opendocument.text"},
+		{"word-to-odt", "report.docx", nil, "report.odt", "application/vnd.oasis.opendocument.text"},
+		{"pdf-to-ods", "data.pdf", nil, "data.ods", "application/vnd.oasis.opendocument.spreadsheet"},
+		{"excel-to-ods", "data.xlsx", nil, "data.ods", "application/vnd.oasis.opendocument.spreadsheet"},
+		{"pdf-to-odp", "slides.pdf", nil, "slides.odp", "application/vnd.oasis.opendocument.presentation"},
+		{"powerpoint-to-odp", "slides.pptx", nil, "slides.odp", "application/vnd.oasis.opendocument.presentation"},
+		{"odt-to-pdf", "doc.odt", nil, "doc.pdf", "application/pdf"},
+		{"ods-to-pdf", "data.ods", nil, "data.pdf", "application/pdf"},
+		{"odp-to-pdf", "slides.odp", nil, "slides.pdf", "application/pdf"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.toolType+"_"+tt.inputName, func(t *testing.T) {
@@ -381,6 +418,15 @@ func TestMimeCategory(t *testing.T) {
 		{"excel-to-pdf", "excel"},
 		{"powerpoint-to-pdf", "ppt"},
 		{"image-to-pdf", "image"},
+		{"pdf-to-odt", "pdf"},
+		{"pdf-to-ods", "pdf"},
+		{"pdf-to-odp", "pdf"},
+		{"word-to-odt", "word"},
+		{"excel-to-ods", "excel"},
+		{"powerpoint-to-odp", "ppt"},
+		{"odt-to-pdf", "odt"},
+		{"ods-to-pdf", "ods"},
+		{"odp-to-pdf", "odp"},
 		{"unknown-tool", ""},
 	}
 	for _, tt := range tests {
@@ -458,6 +504,15 @@ func TestToJobResponse(t *testing.T) {
 		{"pdf-to-image", "doc.pdf", "doc.zip"},
 		{"compress-pdf", "file.pdf", "file.pdf"},
 		{"word-to-pdf", "essay.docx", "essay.pdf"},
+		{"pdf-to-odt", "report.pdf", "report.odt"},
+		{"word-to-odt", "report.docx", "report.odt"},
+		{"pdf-to-ods", "data.pdf", "data.ods"},
+		{"excel-to-ods", "data.xlsx", "data.ods"},
+		{"pdf-to-odp", "slides.pdf", "slides.odp"},
+		{"powerpoint-to-odp", "slides.pptx", "slides.odp"},
+		{"odt-to-pdf", "doc.odt", "doc.pdf"},
+		{"ods-to-pdf", "data.ods", "data.pdf"},
+		{"odp-to-pdf", "slides.odp", "slides.pdf"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.toolType+"_"+tt.inputFileName, func(t *testing.T) {

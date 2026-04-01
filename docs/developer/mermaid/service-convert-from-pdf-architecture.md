@@ -34,6 +34,9 @@ graph TB
             PDF_HTML["pdf-to-html"]
             PDF_TEXT["pdf-to-text / pdf-to-txt"]
             PDF_PDFA["pdf-to-pdfa"]
+            PDF_ODT["pdf-to-odt"]
+            PDF_ODS["pdf-to-ods"]
+            PDF_ODP["pdf-to-odp"]
         end
 
         subgraph Models["internal/models"]
@@ -54,6 +57,9 @@ graph TB
     PROC --> PDF_HTML
     PROC --> PDF_TEXT
     PROC --> PDF_PDFA
+    PROC --> PDF_ODT
+    PROC --> PDF_ODS
+    PROC --> PDF_ODP
 
     DISPATCH -->|Update status| DB_CONN
     DISPATCH -->|Record output| DB_CONN
@@ -77,6 +83,9 @@ graph LR
         E["pdf-to-ppt<br/>(pdf-to-powerpoint, pdf-to-pptx)"]
         F["pdf-to-html"]
         G["pdf-to-text<br/>(pdf-to-txt)"]
+        H["pdf-to-odt"]
+        I["pdf-to-ods"]
+        J["pdf-to-odp"]
     end
 ```
 

@@ -51,6 +51,15 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	case "pdf-to-text", "pdf-to-txt":
 		outputPath = filepath.Join(outputDir, outputFileName+".txt")
 		err = pdfToText(ctx, inputPaths[0], outputPath)
+	case "pdf-to-odt":
+		outputPath = filepath.Join(outputDir, outputFileName+".odt")
+		err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "odt", onProgress)
+	case "pdf-to-ods":
+		outputPath = filepath.Join(outputDir, outputFileName+".ods")
+		err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "ods", onProgress)
+	case "pdf-to-odp":
+		outputPath = filepath.Join(outputDir, outputFileName+".odp")
+		err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "odp", onProgress)
 	default:
 		err = fmt.Errorf("unsupported tool type: %s", toolType)
 	}

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Convert From PDF service converts PDF files to other formats including images, Office documents (Word, Excel, PowerPoint), HTML, plain text, and PDF/A archival format.
+The Convert From PDF service converts PDF files to other formats including images, Office documents (Word, Excel, PowerPoint), LibreOffice/OpenDocument formats (ODT, ODS, ODP), HTML, plain text, and PDF/A archival format.
 
 **Port**: 8082 (internal, not exposed through API Gateway)
 **Type**: Background Worker + REST API
@@ -13,9 +13,10 @@ The Convert From PDF service converts PDF files to other formats including image
 
 1. **PDF to Image** - Convert PDF pages to PNG images
 2. **PDF to Office** - Convert PDF to Word/Excel/PowerPoint formats
-3. **PDF to HTML** - Convert PDF to HTML format
-4. **PDF to Text** - Extract plain text from PDF
-5. **PDF to PDF/A** - Convert PDF to archival PDF/A format
+3. **PDF to LibreOffice** - Convert PDF to ODT/ODS/ODP (OpenDocument) formats
+4. **PDF to HTML** - Convert PDF to HTML format
+5. **PDF to Text** - Extract plain text from PDF
+6. **PDF to PDF/A** - Convert PDF to archival PDF/A format
 6. **Job Processing** - Pick jobs from Redis queue and process them
 7. **Status Updates** - Update job status and progress in database
 
@@ -49,6 +50,9 @@ Convert-From-PDF Worker
 | `pdf-to-text` | .pdf | .txt | pdftotext (Poppler) | ✅ Implemented |
 | `pdf-to-txt` | .pdf | .txt | pdftotext (Poppler) | ✅ Alias |
 | `pdf-to-pdfa` | .pdf | .pdf (PDF/A-2b) | Ghostscript | ✅ Implemented |
+| `pdf-to-odt` | .pdf | .odt | LibreOffice Writer | ✅ Implemented |
+| `pdf-to-ods` | .pdf | .ods | LibreOffice Calc | ✅ Implemented |
+| `pdf-to-odp` | .pdf | .odp | LibreOffice Impress | ✅ Implemented |
 
 ## API Endpoints
 
@@ -305,6 +309,67 @@ PDF/A is an ISO-standardized version of PDF designed for long-term archival:
 **Example**:
 ```bash
 curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-pdfa \
+  -F "file=@document.pdf"
+```
+
+---
+
+### pdf-to-odt
+
+Converts PDF to LibreOffice Writer (.odt) format.
+
+**Input**: `.pdf`
+**Output**: `.odt`
+**Implementation**: LibreOffice Writer (PDF import filter)
+
+**Use Cases**:
+- Users who prefer LibreOffice/OpenOffice over Microsoft Office
+- Open-source document editing workflows
+- Cross-platform document compatibility
+
+**Limitations**:
+- Same as pdf-to-word (complex layouts may not convert perfectly)
+- Scanned PDFs will contain images, not editable text
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-odt \
+  -F "file=@document.pdf"
+```
+
+---
+
+### pdf-to-ods
+
+Converts PDF to LibreOffice Calc (.ods) format.
+
+**Input**: `.pdf`
+**Output**: `.ods`
+**Implementation**: LibreOffice Calc
+
+**Best For**: PDFs containing tables or structured data for editing in LibreOffice Calc
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-ods \
+  -F "file=@document.pdf"
+```
+
+---
+
+### pdf-to-odp
+
+Converts PDF to LibreOffice Impress (.odp) format.
+
+**Input**: `.pdf`
+**Output**: `.odp`
+**Implementation**: LibreOffice Impress
+
+**Behavior**: Each PDF page is converted to an Impress slide
+
+**Example**:
+```bash
+curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-odp \
   -F "file=@document.pdf"
 ```
 

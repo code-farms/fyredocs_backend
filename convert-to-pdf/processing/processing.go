@@ -53,6 +53,24 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	case "image-to-pdf", "img-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = imageToPDF(inputPaths, outputPath)
+	case "odt-to-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = officeToPDF(ctx, inputPaths[0], outputPath, "odt")
+	case "ods-to-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = officeToPDF(ctx, inputPaths[0], outputPath, "ods")
+	case "odp-to-pdf":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = officeToPDF(ctx, inputPaths[0], outputPath, "odp")
+	case "word-to-odt":
+		outputPath = filepath.Join(outputDir, outputFileName+".odt")
+		err = officeToOffice(ctx, inputPaths[0], outputPath, "odt")
+	case "excel-to-ods":
+		outputPath = filepath.Join(outputDir, outputFileName+".ods")
+		err = officeToOffice(ctx, inputPaths[0], outputPath, "ods")
+	case "powerpoint-to-odp":
+		outputPath = filepath.Join(outputDir, outputFileName+".odp")
+		err = officeToOffice(ctx, inputPaths[0], outputPath, "odp")
 	default:
 		err = fmt.Errorf("unsupported tool type: %s", toolType)
 	}

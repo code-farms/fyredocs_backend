@@ -65,7 +65,7 @@ x-path-tool-convert-from: &toolConvertFromParam
   required: true
   schema:
     type: string
-    enum: [pdf-to-word, pdf-to-excel, pdf-to-powerpoint, pdf-to-image, ocr]
+    enum: [pdf-to-word, pdf-to-excel, pdf-to-powerpoint, pdf-to-image, pdf-to-odt, pdf-to-ods, pdf-to-odp, ocr]
   description: The conversion tool to use
 
 x-path-tool-convert-to: &toolConvertToParam
@@ -79,6 +79,12 @@ x-path-tool-convert-to: &toolConvertToParam
       - excel-to-pdf
       - powerpoint-to-pdf
       - image-to-pdf
+      - odt-to-pdf
+      - ods-to-pdf
+      - odp-to-pdf
+      - word-to-odt
+      - excel-to-ods
+      - powerpoint-to-odp
       - merge-pdf
       - split-pdf
       - compress-pdf

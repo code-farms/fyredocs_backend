@@ -22,6 +22,29 @@ func TestProcessFileUnsupportedTool(t *testing.T) {
 	}
 }
 
+func TestProcessFileRecognizesODFTools(t *testing.T) {
+	tools := []struct {
+		name  string
+		input string
+	}{
+		{"odt-to-pdf", "/nonexistent.odt"},
+		{"ods-to-pdf", "/nonexistent.ods"},
+		{"odp-to-pdf", "/nonexistent.odp"},
+		{"word-to-odt", "/nonexistent.docx"},
+		{"excel-to-ods", "/nonexistent.xlsx"},
+		{"powerpoint-to-odp", "/nonexistent.pptx"},
+	}
+	for _, tt := range tools {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ProcessFile(context.Background(), uuid.New(), tt.name, []string{tt.input}, nil, t.TempDir(), nil)
+			// Should fail on conversion (no LibreOffice), NOT on "unsupported tool type"
+			if err != nil && err.Error() == "unsupported tool type: "+tt.name {
+				t.Errorf("tool %q should be recognized but got unsupported error", tt.name)
+			}
+		})
+	}
+}
+
 func TestOptionString(t *testing.T) {
 	opts := map[string]interface{}{"key": "value", "empty": ""}
 	val, ok := optionString(opts, "key")

@@ -41,6 +41,9 @@ var allowedMIMETypes = map[string][]string{
 	"excel": {"application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/zip"},
 	"ppt":   {"application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/zip"},
 	"image": {"image/png", "image/jpeg", "image/webp"},
+	"odt":   {"application/vnd.oasis.opendocument.text", "application/zip"},
+	"ods":   {"application/vnd.oasis.opendocument.spreadsheet", "application/zip"},
+	"odp":   {"application/vnd.oasis.opendocument.presentation", "application/zip"},
 }
 
 type UploadJobRequest struct {
@@ -631,6 +634,15 @@ func outputFileName(toolType string, inputName string, metadata datatypes.JSON) 
 	case "pdf-to-text":
 		fileName = strings.TrimSuffix(inputName, filepath.Ext(inputName)) + ".txt"
 		contentType = "text/plain; charset=utf-8"
+	case "pdf-to-odt", "word-to-odt":
+		fileName = strings.TrimSuffix(inputName, filepath.Ext(inputName)) + ".odt"
+		contentType = "application/vnd.oasis.opendocument.text"
+	case "pdf-to-ods", "excel-to-ods":
+		fileName = strings.TrimSuffix(inputName, filepath.Ext(inputName)) + ".ods"
+		contentType = "application/vnd.oasis.opendocument.spreadsheet"
+	case "pdf-to-odp", "powerpoint-to-odp":
+		fileName = strings.TrimSuffix(inputName, filepath.Ext(inputName)) + ".odp"
+		contentType = "application/vnd.oasis.opendocument.presentation"
 	default:
 		fileName = strings.TrimSuffix(inputName, filepath.Ext(inputName)) + ".pdf"
 		contentType = "application/pdf"
@@ -709,6 +721,7 @@ func validateFileType(toolType string, fileName string) error {
 	switch toolType {
 	case "pdf-to-word", "pdf-to-excel", "pdf-to-powerpoint", "pdf-to-image",
 		"pdf-to-html", "pdf-to-text", "pdf-to-pdfa",
+		"pdf-to-odt", "pdf-to-ods", "pdf-to-odp",
 		"merge-pdf", "split-pdf", "compress-pdf",
 		"rotate-pdf", "remove-pages", "extract-pages", "organize-pdf",
 		"watermark-pdf", "protect-pdf", "unlock-pdf", "sign-pdf", "edit-pdf",
@@ -720,21 +733,33 @@ func validateFileType(toolType string, fileName string) error {
 		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" && ext != ".pdf" {
 			return fmt.Errorf("only image or PDF files are supported for this tool")
 		}
-	case "word-to-pdf":
+	case "word-to-pdf", "word-to-odt":
 		if ext != ".doc" && ext != ".docx" {
 			return fmt.Errorf("only Word files are supported")
 		}
-	case "excel-to-pdf":
+	case "excel-to-pdf", "excel-to-ods":
 		if ext != ".xls" && ext != ".xlsx" {
 			return fmt.Errorf("only Excel files are supported")
 		}
-	case "powerpoint-to-pdf":
+	case "powerpoint-to-pdf", "powerpoint-to-odp":
 		if ext != ".ppt" && ext != ".pptx" {
 			return fmt.Errorf("only PowerPoint files are supported")
 		}
 	case "image-to-pdf":
 		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" {
 			return fmt.Errorf("only image files are supported")
+		}
+	case "odt-to-pdf":
+		if ext != ".odt" {
+			return fmt.Errorf("only ODT files are supported")
+		}
+	case "ods-to-pdf":
+		if ext != ".ods" {
+			return fmt.Errorf("only ODS files are supported")
+		}
+	case "odp-to-pdf":
+		if ext != ".odp" {
+			return fmt.Errorf("only ODP files are supported")
 		}
 	}
 	return nil
@@ -745,6 +770,7 @@ func mimeCategory(toolType string) string {
 	switch toolType {
 	case "pdf-to-word", "pdf-to-excel", "pdf-to-powerpoint", "pdf-to-image",
 		"pdf-to-html", "pdf-to-text", "pdf-to-pdfa",
+		"pdf-to-odt", "pdf-to-ods", "pdf-to-odp",
 		"merge-pdf", "split-pdf", "compress-pdf",
 		"rotate-pdf", "remove-pages", "extract-pages", "organize-pdf",
 		"watermark-pdf", "protect-pdf", "unlock-pdf", "sign-pdf", "edit-pdf",
@@ -752,14 +778,20 @@ func mimeCategory(toolType string) string {
 		return "pdf"
 	case "scan-to-pdf":
 		return "image"
-	case "word-to-pdf":
+	case "word-to-pdf", "word-to-odt":
 		return "word"
-	case "excel-to-pdf":
+	case "excel-to-pdf", "excel-to-ods":
 		return "excel"
-	case "powerpoint-to-pdf":
+	case "powerpoint-to-pdf", "powerpoint-to-odp":
 		return "ppt"
 	case "image-to-pdf":
 		return "image"
+	case "odt-to-pdf":
+		return "odt"
+	case "ods-to-pdf":
+		return "ods"
+	case "odp-to-pdf":
+		return "odp"
 	default:
 		return ""
 	}
