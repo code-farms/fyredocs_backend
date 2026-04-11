@@ -123,14 +123,3 @@ func (i *Issuer) VerifyRefreshToken(tokenStr string) (userID string, err error) 
 	return claims.Subject, nil
 }
 
-func getEnvDuration(key string, fallback time.Duration) time.Duration {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}

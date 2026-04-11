@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -26,43 +24,13 @@ import (
 	"auth-service/routes"
 )
 
-func validateJWTSecret() error {
-	secret := os.Getenv("JWT_HS256_SECRET")
-	if secret == "" {
-		secret = os.Getenv("JWT_SECRET")
-	}
-
-	secret = strings.TrimSpace(secret)
-	if secret == "" {
-		return fmt.Errorf("JWT_HS256_SECRET environment variable is required but not set")
-	}
-
-	if len(secret) < 32 {
-		return fmt.Errorf("JWT_HS256_SECRET must be at least 32 characters (256 bits), got %d characters", len(secret))
-	}
-
-	dangerousSecrets := []string{
-		"change-me",
-		"secret",
-		"password",
-	}
-	for _, dangerous := range dangerousSecrets {
-		if secret == dangerous {
-			return fmt.Errorf("JWT_HS256_SECRET appears to be a default/example value - use a cryptographically random secret")
-		}
-	}
-
-	slog.Info("JWT secret validation passed")
-	return nil
-}
-
 func main() {
 	config.LoadConfig()
 	logger.Init("auth-service", os.Getenv("LOG_MODE"))
 	shutdownTracer := telemetry.Init("auth-service")
 	defer shutdownTracer(context.Background())
 
-	if err := validateJWTSecret(); err != nil {
+	if err := config.ValidateJWTSecret(); err != nil {
 		slog.Error("JWT secret validation failed", "error", err)
 		os.Exit(1)
 	}
@@ -96,7 +64,7 @@ func main() {
 	}
 
 	var denylist authverify.TokenDenylist
-	if getEnvBool("AUTH_DENYLIST_ENABLED", true) {
+	if config.GetEnvBool("AUTH_DENYLIST_ENABLED", true) {
 		denylist = authverify.NewRedisTokenDenylist(redisClient, os.Getenv("AUTH_DENYLIST_PREFIX"))
 		if denylist == nil {
 			slog.Warn("Token denylist enabled but Redis unavailable")
@@ -113,7 +81,7 @@ func main() {
 	r.Use(logger.GinRequestID())
 	r.Use(logger.GinRequestLogger())
 	r.GET("/metrics", metrics.MetricsHandler())
-	if err := r.SetTrustedProxies(trustedProxies()); err != nil {
+	if err := r.SetTrustedProxies(config.TrustedProxies()); err != nil {
 		slog.Error("failed to set trusted proxies", "error", err)
 		os.Exit(1)
 	}
@@ -167,29 +135,8 @@ func main() {
 	slog.Info("server exited")
 }
 
-func trustedProxies() []string {
-	raw := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES"))
-	if raw == "" {
-		return []string{"127.0.0.1", "::1"}
-	}
-
-	parts := strings.Split(raw, ",")
-	proxies := make([]string, 0, len(parts))
-	for _, part := range parts {
-		proxy := strings.TrimSpace(part)
-		if proxy != "" {
-			proxies = append(proxies, proxy)
-		}
-	}
-	if len(proxies) == 0 {
-		return []string{"127.0.0.1", "::1"}
-	}
-
-	return proxies
-}
-
 func buildAuthMiddleware(redisClient *redis.Client, denylist authverify.TokenDenylist) gin.HandlerFunc {
-	trustGateway := getEnvBool("AUTH_TRUST_GATEWAY_HEADERS", false)
+	trustGateway := config.GetEnvBool("AUTH_TRUST_GATEWAY_HEADERS", false)
 
 	verifier, err := authverify.NewVerifierFromEnv(denylist)
 	if err != nil {
@@ -207,19 +154,4 @@ func buildAuthMiddleware(redisClient *redis.Client, denylist authverify.TokenDen
 		GuestStore:          guestStore,
 		TrustGatewayHeaders: trustGateway,
 	})
-}
-
-func getEnvBool(key string, fallback bool) bool {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	switch strings.ToLower(value) {
-	case "1", "true", "yes", "y":
-		return true
-	case "0", "false", "no", "n":
-		return false
-	default:
-		return fallback
-	}
 }

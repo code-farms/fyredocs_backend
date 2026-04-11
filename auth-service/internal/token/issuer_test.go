@@ -283,24 +283,3 @@ func TestVerifyRefreshTokenWrongSecret(t *testing.T) {
 	}
 }
 
-func TestIssuerGetEnvDuration(t *testing.T) {
-	tests := []struct {
-		name     string
-		value    string
-		fallback time.Duration
-		want     time.Duration
-	}{
-		{"valid", "30m", time.Hour, 30 * time.Minute},
-		{"empty uses fallback", "", 8 * time.Hour, 8 * time.Hour},
-		{"invalid uses fallback", "invalid", 5 * time.Minute, 5 * time.Minute},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("TEST_DUR", tt.value)
-			got := getEnvDuration("TEST_DUR", tt.fallback)
-			if got != tt.want {
-				t.Errorf("getEnvDuration(%q) = %v, want %v", tt.value, got, tt.want)
-			}
-		})
-	}
-}

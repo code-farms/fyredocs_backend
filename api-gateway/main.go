@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -28,52 +27,22 @@ type routeConfig struct {
 	targetURL      string
 }
 
-func validateJWTSecret() error {
-	secret := os.Getenv("JWT_HS256_SECRET")
-	if secret == "" {
-		secret = os.Getenv("JWT_SECRET")
-	}
-
-	secret = strings.TrimSpace(secret)
-	if secret == "" {
-		return fmt.Errorf("JWT_HS256_SECRET environment variable is required but not set")
-	}
-
-	if len(secret) < 32 {
-		return fmt.Errorf("JWT_HS256_SECRET must be at least 32 characters (256 bits), got %d characters", len(secret))
-	}
-
-	dangerousSecrets := []string{
-		"change-me",
-		"secret",
-		"password",
-	}
-	for _, dangerous := range dangerousSecrets {
-		if secret == dangerous {
-			return fmt.Errorf("JWT_HS256_SECRET appears to be a default/example value - use a cryptographically random secret")
-		}
-	}
-
-	slog.Info("JWT secret validation passed")
-	return nil
-}
-
 func main() {
 	config.LoadConfig()
 	logger.Init("api-gateway", os.Getenv("LOG_MODE"))
 	shutdownTracer := telemetry.Init("api-gateway")
 	defer shutdownTracer(context.Background())
 
-	if err := validateJWTSecret(); err != nil {
+	if err := config.ValidateJWTSecret(); err != nil {
 		slog.Error("JWT secret validation failed", "error", err)
 		os.Exit(1)
 	}
 
-	port := getEnv("PORT", "8080")
-	corsOrigins := parseCommaList(getEnv("CORS_ALLOW_ORIGINS", "http://localhost:5173"))
-	corsMethods := getEnv("CORS_ALLOW_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-	corsHeaders := getEnv("CORS_ALLOW_HEADERS", "Authorization,Content-Type,X-User-ID")
-	corsAllowCredentials := getEnv("CORS_ALLOW_CREDENTIALS", "true")
+	port := config.GetEnv("PORT", "8080")
+	corsOrigins := parseCommaList(config.GetEnv("CORS_ALLOW_ORIGINS", "http://localhost:5173"))
+	corsMethods := config.GetEnv("CORS_ALLOW_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+	corsHeaders := config.GetEnv("CORS_ALLOW_HEADERS", "Authorization,Content-Type,X-User-ID")
+	corsAllowCredentials := config.GetEnv("CORS_ALLOW_CREDENTIALS", "true")
 
 	redisClient, err := authverify.NewRedisClientFromEnv()
 	if err != nil {
@@ -87,7 +56,7 @@ func main() {
 		KeySuffix: os.Getenv("AUTH_GUEST_SUFFIX"),
 	})
 	var denylist authverify.TokenDenylist
-	if getEnvBool("AUTH_DENYLIST_ENABLED", true) {
+	if config.GetEnvBool("AUTH_DENYLIST_ENABLED", true) {
 		if d := authverify.NewRedisTokenDenylist(redisClient, os.Getenv("AUTH_DENYLIST_PREFIX")); d != nil {
 			denylist = d
 			slog.Info("Token denylist enabled")
@@ -106,9 +75,9 @@ func main() {
 
 	// Job service owns all job CRUD, uploads, and tool endpoints.
 	// Auth routes go to auth-service when it exists, otherwise job-service.
-	jobServiceURL := getEnv("JOB_SERVICE_URL", "http://job-service:8081")
-	authServiceURL := getEnv("AUTH_SERVICE_URL", jobServiceURL) // Phase 2: separate auth-service
-	analyticsServiceURL := getEnv("ANALYTICS_SERVICE_URL", "http://analytics-service:8087")
+	jobServiceURL := config.GetEnv("JOB_SERVICE_URL", "http://job-service:8081")
+	authServiceURL := config.GetEnv("AUTH_SERVICE_URL", jobServiceURL) // Phase 2: separate auth-service
+	analyticsServiceURL := config.GetEnv("ANALYTICS_SERVICE_URL", "http://analytics-service:8087")
 
 	routes := []routeConfig{
 		{
@@ -169,7 +138,7 @@ func main() {
 
 	// SPA static file serving — serves the built frontend from the same origin
 	// so that httpOnly cookies (guest_token, auth) work without cross-origin hacks.
-	spaDir := getEnv("SPA_DIR", "")
+	spaDir := config.GetEnv("SPA_DIR", "")
 	if spaDir != "" {
 		if info, err := os.Stat(spaDir); err == nil && info.IsDir() {
 			mux.Handle("/", spaFileServer(spaDir))
@@ -301,29 +270,6 @@ func joinPath(basePath, extraPath string) string {
 		return strings.TrimSuffix(basePath, "/") + extraPath
 	}
 	return basePath + extraPath
-}
-
-func getEnv(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
-}
-
-
-func getEnvBool(key string, fallback bool) bool {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	switch strings.ToLower(value) {
-	case "1", "true", "yes", "y":
-		return true
-	case "0", "false", "no", "n":
-		return false
-	default:
-		return fallback
-	}
 }
 
 type corsConfig struct {

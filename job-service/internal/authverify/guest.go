@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
 	"time"
 
+	"esydocs/shared/config"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -111,9 +111,9 @@ func (d *RedisTokenDenylist) key(token string) string {
 }
 
 func NewRedisClientFromEnv() (*redis.Client, error) {
-	addr := getEnv("REDIS_ADDR", "redis:6379")
+	addr := config.GetEnv("REDIS_ADDR", "redis:6379")
 	password := os.Getenv("REDIS_PASSWORD")
-	dbIndex := getEnvInt("REDIS_DB", 0)
+	dbIndex := config.GetEnvInt("REDIS_DB", 0)
 
 	client := redis.NewClient(&redis.Options{
 		Addr:     addr,
@@ -130,14 +130,3 @@ func NewRedisClientFromEnv() (*redis.Client, error) {
 	return client, nil
 }
 
-func getEnvInt(key string, fallback int) int {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}

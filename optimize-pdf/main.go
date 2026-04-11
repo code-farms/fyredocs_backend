@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -75,7 +74,7 @@ func main() {
 	r.Use(logger.GinRequestLogger())
 	r.Use(gin.Recovery())
 	r.GET("/metrics", metrics.MetricsHandler())
-	if err := r.SetTrustedProxies(trustedProxies()); err != nil {
+	if err := r.SetTrustedProxies(config.TrustedProxies()); err != nil {
 		slog.Error("failed to set trusted proxies", "error", err)
 		os.Exit(1)
 	}
@@ -159,21 +158,3 @@ func main() {
 	}
 }
 
-func trustedProxies() []string {
-	raw := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES"))
-	if raw == "" {
-		return []string{"127.0.0.1", "::1"}
-	}
-	parts := strings.Split(raw, ",")
-	proxies := make([]string, 0, len(parts))
-	for _, part := range parts {
-		proxy := strings.TrimSpace(part)
-		if proxy != "" {
-			proxies = append(proxies, proxy)
-		}
-	}
-	if len(proxies) == 0 {
-		return []string{"127.0.0.1", "::1"}
-	}
-	return proxies
-}

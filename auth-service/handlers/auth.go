@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -22,6 +21,7 @@ import (
 	"auth-service/internal/models"
 	"auth-service/internal/token"
 
+	"esydocs/shared/config"
 	"esydocs/shared/natsconn"
 	"esydocs/shared/queue"
 	"esydocs/shared/response"
@@ -148,7 +148,7 @@ func (ae *AuthEndpoints) Login(c *gin.Context) {
 }
 
 func (ae *AuthEndpoints) Refresh(c *gin.Context) {
-	cookieName := getEnv("AUTH_REFRESH_COOKIE", "refresh_token")
+	cookieName := config.GetEnv("AUTH_REFRESH_COOKIE", "refresh_token")
 	refreshToken, err := c.Cookie(cookieName)
 	if err != nil || strings.TrimSpace(refreshToken) == "" {
 		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
@@ -189,7 +189,7 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 		role = "user"
 	}
 
-	accessTTL := getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
+	accessTTL := config.GetEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
 
 	// Refresh plan cache in Redis
 	ae.cachePlanInfo(c.Request.Context(), user.ID.String(), plan, accessTTL)
@@ -281,8 +281,8 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 		role = "user"
 	}
 
-	accessTTL := getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
-	refreshTTL := getEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour)
+	accessTTL := config.GetEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
+	refreshTTL := config.GetEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour)
 
 	// Cache plan info in Redis for the API gateway to read
 	ae.cachePlanInfo(c.Request.Context(), user.ID.String(), plan, accessTTL)
@@ -333,7 +333,7 @@ func (ae *AuthEndpoints) denyAccessToken(ctx context.Context, tokenStr string) e
 	ttl, err := getTokenRemainingTTL(tokenStr)
 	if err != nil {
 		slog.Warn("could not parse token expiration, using default TTL", "error", err)
-		ttl = getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
+		ttl = config.GetEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
 	}
 
 	return ae.Denylist.DenyToken(ctx, tokenStr, ttl)
@@ -409,10 +409,10 @@ func isDuplicateError(err error) bool {
 }
 
 func setAccessTokenCookie(c *gin.Context, tokenStr string, ttl time.Duration) {
-	name := getEnv("AUTH_ACCESS_COOKIE", "access_token")
-	domain := strings.TrimSpace(getEnv("AUTH_COOKIE_DOMAIN", ""))
-	secure := getEnvBool("AUTH_COOKIE_SECURE", true)
-	sameSite := getEnv("AUTH_COOKIE_SAMESITE", "lax")
+	name := config.GetEnv("AUTH_ACCESS_COOKIE", "access_token")
+	domain := strings.TrimSpace(config.GetEnv("AUTH_COOKIE_DOMAIN", ""))
+	secure := config.GetEnvBool("AUTH_COOKIE_SECURE", true)
+	sameSite := config.GetEnv("AUTH_COOKIE_SAMESITE", "lax")
 
 	if !secure {
 		slog.Warn("AUTH_COOKIE_SECURE is disabled - insecure for production")
@@ -424,20 +424,20 @@ func setAccessTokenCookie(c *gin.Context, tokenStr string, ttl time.Duration) {
 }
 
 func clearAccessTokenCookie(c *gin.Context) {
-	name := getEnv("AUTH_ACCESS_COOKIE", "access_token")
-	domain := strings.TrimSpace(getEnv("AUTH_COOKIE_DOMAIN", ""))
-	secure := getEnvBool("AUTH_COOKIE_SECURE", true)
-	sameSite := getEnv("AUTH_COOKIE_SAMESITE", "lax")
+	name := config.GetEnv("AUTH_ACCESS_COOKIE", "access_token")
+	domain := strings.TrimSpace(config.GetEnv("AUTH_COOKIE_DOMAIN", ""))
+	secure := config.GetEnvBool("AUTH_COOKIE_SECURE", true)
+	sameSite := config.GetEnv("AUTH_COOKIE_SAMESITE", "lax")
 
 	c.SetSameSite(parseSameSite(sameSite))
 	c.SetCookie(name, "", -1, "/", domain, secure, true)
 }
 
 func setRefreshTokenCookie(c *gin.Context, tokenStr string, ttl time.Duration) {
-	name := getEnv("AUTH_REFRESH_COOKIE", "refresh_token")
-	domain := strings.TrimSpace(getEnv("AUTH_COOKIE_DOMAIN", ""))
-	secure := getEnvBool("AUTH_COOKIE_SECURE", true)
-	sameSite := getEnv("AUTH_COOKIE_SAMESITE", "lax")
+	name := config.GetEnv("AUTH_REFRESH_COOKIE", "refresh_token")
+	domain := strings.TrimSpace(config.GetEnv("AUTH_COOKIE_DOMAIN", ""))
+	secure := config.GetEnvBool("AUTH_COOKIE_SECURE", true)
+	sameSite := config.GetEnv("AUTH_COOKIE_SAMESITE", "lax")
 
 	c.SetSameSite(parseSameSite(sameSite))
 	maxAge := int(ttl.Seconds())
@@ -445,10 +445,10 @@ func setRefreshTokenCookie(c *gin.Context, tokenStr string, ttl time.Duration) {
 }
 
 func clearRefreshTokenCookie(c *gin.Context) {
-	name := getEnv("AUTH_REFRESH_COOKIE", "refresh_token")
-	domain := strings.TrimSpace(getEnv("AUTH_COOKIE_DOMAIN", ""))
-	secure := getEnvBool("AUTH_COOKIE_SECURE", true)
-	sameSite := getEnv("AUTH_COOKIE_SAMESITE", "lax")
+	name := config.GetEnv("AUTH_REFRESH_COOKIE", "refresh_token")
+	domain := strings.TrimSpace(config.GetEnv("AUTH_COOKIE_DOMAIN", ""))
+	secure := config.GetEnvBool("AUTH_COOKIE_SECURE", true)
+	sameSite := config.GetEnv("AUTH_COOKIE_SAMESITE", "lax")
 
 	c.SetSameSite(parseSameSite(sameSite))
 	c.SetCookie(name, "", -1, "/auth", domain, secure, true)
@@ -505,40 +505,6 @@ func getTokenRemainingTTL(tokenString string) (time.Duration, error) {
 	return remaining, nil
 }
 
-func getEnv(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func getEnvBool(key string, fallback bool) bool {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	switch strings.ToLower(value) {
-	case "1", "true", "yes", "y":
-		return true
-	case "0", "false", "no", "n":
-		return false
-	default:
-		return fallback
-	}
-}
-
-func getEnvDuration(key string, fallback time.Duration) time.Duration {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
 func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 	user, _, ok := loadUserFromAuth(c)
 	if !ok {
@@ -581,7 +547,7 @@ func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 	}
 
 	// Update plan cache in Redis immediately
-	accessTTL := getEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
+	accessTTL := config.GetEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
 	ae.cachePlanInfo(c.Request.Context(), user.ID.String(), plan, accessTTL)
 
 	publishPlanChangedEvent(c.Request.Context(), user.ID.String(), oldPlan, planName)

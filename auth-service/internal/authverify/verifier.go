@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"esydocs/shared/config"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -73,8 +74,8 @@ func NewVerifier(config VerifierConfig) (*Verifier, error) {
 }
 
 func NewVerifierFromEnv(denylist TokenDenylist) (*Verifier, error) {
-	allowed := parseCommaList(getEnv("JWT_ALLOWED_ALGS", "HS256"))
-	clockSkew := getEnvDuration("JWT_CLOCK_SKEW", 60*time.Second)
+	allowed := parseCommaList(config.GetEnv("JWT_ALLOWED_ALGS", "HS256"))
+	clockSkew := config.GetEnvDuration("JWT_CLOCK_SKEW", 60*time.Second)
 	secret := os.Getenv("JWT_HS256_SECRET")
 	if secret == "" {
 		secret = os.Getenv("JWT_SECRET")
@@ -196,13 +197,6 @@ func parseRSAPublicKey(raw string) (*rsa.PublicKey, error) {
 	return key, nil
 }
 
-func getEnv(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
-}
-
 func parseCommaList(raw string) []string {
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
@@ -215,14 +209,3 @@ func parseCommaList(raw string) []string {
 	return out
 }
 
-func getEnvDuration(key string, fallback time.Duration) time.Duration {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}

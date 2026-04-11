@@ -3,12 +3,11 @@ package routes
 import (
 	"context"
 	"net/http"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"esydocs/shared/config"
 	"esydocs/shared/natsconn"
 	"esydocs/shared/redisstore"
 
@@ -19,12 +18,12 @@ import (
 )
 
 func SetupRouter(r *gin.Engine) {
-	window := getEnvDuration("RATE_LIMIT_WINDOW", 60*time.Second)
+	window := config.GetEnvDuration("RATE_LIMIT_WINDOW", 60*time.Second)
 
 	uploadLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
 		RedisClient: redisstore.Client,
 		KeyPrefix:   "ratelimit:upload",
-		MaxRequests: getEnvInt("RATE_LIMIT_UPLOAD", 30),
+		MaxRequests: config.GetEnvInt("RATE_LIMIT_UPLOAD", 30),
 		Window:      window,
 	})
 
@@ -111,26 +110,3 @@ func SetupRouter(r *gin.Engine) {
 	})
 }
 
-func getEnvInt(key string, fallback int) int {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func getEnvDuration(key string, fallback time.Duration) time.Duration {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}

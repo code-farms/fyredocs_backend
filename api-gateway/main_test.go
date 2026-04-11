@@ -8,42 +8,6 @@ import (
 	"testing"
 )
 
-func TestValidateJWTSecret(t *testing.T) {
-	tests := []struct {
-		name      string
-		secret    string
-		wantError bool
-	}{
-		{"empty secret", "", true},
-		{"short secret", "tooshort", true},
-		{"dangerous secret - change-me", "change-me-padding-to-32-chars!!!", false}, // only exact "change-me" is blocked
-		{"exactly dangerous value", "change-me", true},
-		{"dangerous secret - secret", "secret", true},
-		{"dangerous secret - password", "password", true},
-		{"valid secret 32 chars", "abcdefghijklmnopqrstuvwxyz123456", false},
-		{"valid long secret", "a-very-long-and-secure-secret-that-is-definitely-more-than-32-characters", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("JWT_HS256_SECRET", tt.secret)
-			t.Setenv("JWT_SECRET", "")
-			err := validateJWTSecret()
-			if (err != nil) != tt.wantError {
-				t.Errorf("validateJWTSecret() error = %v, wantError %v", err, tt.wantError)
-			}
-		})
-	}
-}
-
-func TestValidateJWTSecretFallbackToJWTSecret(t *testing.T) {
-	t.Setenv("JWT_HS256_SECRET", "")
-	t.Setenv("JWT_SECRET", "abcdefghijklmnopqrstuvwxyz123456")
-	if err := validateJWTSecret(); err != nil {
-		t.Errorf("expected no error with JWT_SECRET fallback, got %v", err)
-	}
-}
-
 func TestCorsAllowOrigin(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -110,39 +74,6 @@ func TestParseCommaList(t *testing.T) {
 		if tt.input != "" && len(got) != tt.want {
 			t.Errorf("parseCommaList(%q) len = %d, want %d", tt.input, len(got), tt.want)
 		}
-	}
-}
-
-func TestGetEnvBool(t *testing.T) {
-	tests := []struct {
-		name     string
-		envValue string
-		fallback bool
-		want     bool
-	}{
-		{"true", "true", false, true},
-		{"TRUE", "TRUE", false, true},
-		{"1", "1", false, true},
-		{"yes", "yes", false, true},
-		{"y", "y", false, true},
-		{"false", "false", true, false},
-		{"FALSE", "FALSE", true, false},
-		{"0", "0", true, false},
-		{"no", "no", true, false},
-		{"n", "n", true, false},
-		{"empty uses fallback true", "", true, true},
-		{"empty uses fallback false", "", false, false},
-		{"unknown uses fallback", "maybe", true, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("TEST_BOOL", tt.envValue)
-			got := getEnvBool("TEST_BOOL", tt.fallback)
-			if got != tt.want {
-				t.Errorf("getEnvBool(%q, %v) = %v, want %v", tt.envValue, tt.fallback, got, tt.want)
-			}
-		})
 	}
 }
 

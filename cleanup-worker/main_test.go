@@ -124,24 +124,6 @@ func TestFreeJobTTL(t *testing.T) {
 	})
 }
 
-func TestTrustedProxies(t *testing.T) {
-	t.Run("default", func(t *testing.T) {
-		t.Setenv("TRUSTED_PROXIES", "")
-		got := trustedProxies()
-		if len(got) != 2 || got[0] != "127.0.0.1" {
-			t.Errorf("expected default proxies, got %v", got)
-		}
-	})
-
-	t.Run("custom", func(t *testing.T) {
-		t.Setenv("TRUSTED_PROXIES", "10.0.0.1, 10.0.0.2")
-		got := trustedProxies()
-		if len(got) != 2 || got[0] != "10.0.0.1" || got[1] != "10.0.0.2" {
-			t.Errorf("expected [10.0.0.1, 10.0.0.2], got %v", got)
-		}
-	})
-}
-
 func TestHealthzRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

@@ -3,8 +3,6 @@ package routes
 import (
 	"context"
 	"net/http"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,6 +13,8 @@ import (
 	"auth-service/internal/models"
 	"auth-service/internal/token"
 	"auth-service/middleware"
+
+	"esydocs/shared/config"
 )
 
 func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenDenylist, redisClient *redis.Client, authMiddleware gin.HandlerFunc) {
@@ -24,26 +24,26 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 		RedisClient: redisClient,
 	}
 
-	window := getEnvDuration("RATE_LIMIT_WINDOW", 60*time.Second)
+	window := config.GetEnvDuration("RATE_LIMIT_WINDOW", 60*time.Second)
 
 	loginLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
 		RedisClient: redisClient,
 		KeyPrefix:   "ratelimit:login",
-		MaxRequests: getEnvInt("RATE_LIMIT_LOGIN", 5),
+		MaxRequests: config.GetEnvInt("RATE_LIMIT_LOGIN", 5),
 		Window:      window,
 	})
 
 	signupLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
 		RedisClient: redisClient,
 		KeyPrefix:   "ratelimit:signup",
-		MaxRequests: getEnvInt("RATE_LIMIT_SIGNUP", 3),
+		MaxRequests: config.GetEnvInt("RATE_LIMIT_SIGNUP", 3),
 		Window:      window,
 	})
 
 	refreshLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
 		RedisClient: redisClient,
 		KeyPrefix:   "ratelimit:refresh",
-		MaxRequests: getEnvInt("RATE_LIMIT_REFRESH", 10),
+		MaxRequests: config.GetEnvInt("RATE_LIMIT_REFRESH", 10),
 		Window:      window,
 	})
 
@@ -108,26 +108,3 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 	})
 }
 
-func getEnvInt(key string, fallback int) int {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func getEnvDuration(key string, fallback time.Duration) time.Duration {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}

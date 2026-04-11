@@ -4,18 +4,18 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"strconv"
 	"time"
 
+	"esydocs/shared/config"
 	"github.com/redis/go-redis/v9"
 )
 
 var Client *redis.Client
 
 func Connect() {
-	addr := getEnv("REDIS_ADDR", "redis:6379")
+	addr := config.GetEnv("REDIS_ADDR", "redis:6379")
 	password := os.Getenv("REDIS_PASSWORD")
-	dbIndex := getEnvInt("REDIS_DB", 0)
+	dbIndex := config.GetEnvInt("REDIS_DB", 0)
 
 	Client = redis.NewClient(&redis.Options{
 		Addr:     addr,
@@ -38,21 +38,3 @@ func Close() {
 	}
 }
 
-func getEnv(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func getEnvInt(key string, fallback int) int {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
