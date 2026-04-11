@@ -56,8 +56,7 @@ RUN mkdir -p uploads outputs && \
 
 # 4. Copy the binary from builder
 COPY --from=builder /app/bin/optimize-pdf .
-COPY optimize-pdf/.env .env
-RUN chown appuser:appuser optimize-pdf .env
+RUN chown appuser:appuser optimize-pdf
 
 USER appuser
 

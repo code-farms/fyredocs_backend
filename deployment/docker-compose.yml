@@ -462,6 +462,10 @@ services:
       OUTPUT_DIR: /app/outputs
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
+      # OCR
+      OCR_DEFAULT_LANGUAGE: ${OCR_DEFAULT_LANGUAGE:-eng}
+      OCR_DEFAULT_DPI: ${OCR_DEFAULT_DPI:-150}
+
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     healthcheck:

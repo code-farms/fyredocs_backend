@@ -10,17 +10,16 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"api-gateway/internal/authverify"
 	"api-gateway/internal/plancache"
+	"esydocs/shared/config"
 	"esydocs/shared/logger"
 	"esydocs/shared/metrics"
 	"esydocs/shared/telemetry"
-	"github.com/joho/godotenv"
 )
 
 type routeConfig struct {
@@ -60,7 +59,7 @@ func validateJWTSecret() error {
 }
 
 func main() {
-	loadEnv()
+	config.LoadConfig()
 	logger.Init("api-gateway", os.Getenv("LOG_MODE"))
 	shutdownTracer := telemetry.Init("api-gateway")
 	defer shutdownTracer(context.Background())
@@ -258,24 +257,6 @@ func main() {
 	slog.Info("api-gateway exited")
 }
 
-func loadEnv() {
-	candidates := []string{
-		".env",
-		filepath.Join("esydocs_backend", "api-gateway", ".env"),
-	}
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			if err := godotenv.Load(path); err != nil {
-				slog.Error("failed to load env file", "path", path, "error", err)
-			}
-			normalizeEnv()
-			return
-		}
-	}
-	slog.Info("No .env file found, relying on environment variables")
-	normalizeEnv()
-}
-
 // proxyTransport is shared across all reverse proxies with sensible timeouts.
 var proxyTransport = &http.Transport{
 	ResponseHeaderTimeout: 5 * time.Minute, // allow long PDF conversions
@@ -329,29 +310,6 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-func normalizeEnv() {
-	for _, entry := range os.Environ() {
-		parts := strings.SplitN(entry, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key, value := parts[0], parts[1]
-		cleaned := unquoteValue(value)
-		if cleaned != value {
-			_ = os.Setenv(key, cleaned)
-		}
-	}
-}
-
-func unquoteValue(value string) string {
-	if len(value) < 2 {
-		return value
-	}
-	if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
-		return value[1 : len(value)-1]
-	}
-	return value
-}
 
 func getEnvBool(key string, fallback bool) bool {
 	value := strings.TrimSpace(os.Getenv(key))

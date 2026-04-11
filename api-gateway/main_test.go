@@ -113,29 +113,6 @@ func TestParseCommaList(t *testing.T) {
 	}
 }
 
-func TestUnquoteValue(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{`"hello"`, "hello"},
-		{`'hello'`, "hello"},
-		{"hello", "hello"},
-		{`""`, ""},
-		{`''`, ""},
-		{"x", "x"},
-		{"", ""},
-		{`"mismatched'`, `"mismatched'`},
-	}
-
-	for _, tt := range tests {
-		got := unquoteValue(tt.input)
-		if got != tt.want {
-			t.Errorf("unquoteValue(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
 func TestGetEnvBool(t *testing.T) {
 	tests := []struct {
 		name     string

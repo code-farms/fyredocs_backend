@@ -25,7 +25,7 @@ services:
       MAX_RETRIES: "3"
       PROCESSING_TIMEOUT: 30m
     env_file:
-      - ../convert-from-pdf/.env
+      - ../.env
     volumes:
       - ../files/uploads:/app/uploads
       - ../files/outputs:/app/outputs

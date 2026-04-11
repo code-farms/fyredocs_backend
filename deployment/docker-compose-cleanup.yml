@@ -13,7 +13,7 @@ services:
       MAX_RETRIES: "3"
       CLEANUP_INTERVAL: 15m
     env_file:
-      - ../cleanup-worker/.env
+      - ../.env
     volumes:
       - ../files/uploads:/app/uploads
       - ../files/outputs:/app/outputs
