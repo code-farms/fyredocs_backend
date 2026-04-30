@@ -1,3 +1,5 @@
+name: fyredocs
+
 services:
   volume-init:
     image: alpine:3.19

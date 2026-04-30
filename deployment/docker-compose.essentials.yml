@@ -1,3 +1,5 @@
+name: fyredocs
+
 services:
   # --- PostgreSQL commented out: using Neon cloud database ---
   # db:
