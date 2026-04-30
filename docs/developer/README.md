@@ -1,12 +1,12 @@
-# EsyDocs Developer Documentation
+# Fyredocs Developer Documentation
 
-Welcome to the EsyDocs developer docs. This guide helps new developers understand the system architecture, set up a local development environment, and navigate the codebase.
+Welcome to the Fyredocs developer docs. This guide helps new developers understand the system architecture, set up a local development environment, and navigate the codebase.
 
 ---
 
 ## Architecture Overview
 
-EsyDocs uses a true microservices architecture. Each service is independently deployable with its own database, configuration, and API contract.
+Fyredocs uses a true microservices architecture. Each service is independently deployable with its own database, configuration, and API contract.
 
 | Service | Port | Description |
 |---------|------|-------------|
@@ -58,7 +58,7 @@ EsyDocs uses a true microservices architecture. Each service is independently de
 ### Quick Start
 ```bash
 # 1. Clone the repo
-git clone <repo-url> && cd esydocs/esydocs_backend
+git clone <repo-url> && cd fyredocs/fyredocs_backend
 
 # 2. Copy environment config
 cp .env.example .env  # Edit with your local settings

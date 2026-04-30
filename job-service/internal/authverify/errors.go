@@ -3,7 +3,7 @@ package authverify
 import (
 	"net/http"
 
-	"esydocs/shared/response"
+	"fyredocs/shared/response"
 )
 
 type ErrorCode string

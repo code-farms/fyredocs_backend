@@ -15,10 +15,10 @@ import (
 
 	"api-gateway/internal/authverify"
 	"api-gateway/internal/plancache"
-	"esydocs/shared/config"
-	"esydocs/shared/logger"
-	"esydocs/shared/metrics"
-	"esydocs/shared/telemetry"
+	"fyredocs/shared/config"
+	"fyredocs/shared/logger"
+	"fyredocs/shared/metrics"
+	"fyredocs/shared/telemetry"
 )
 
 type routeConfig struct {

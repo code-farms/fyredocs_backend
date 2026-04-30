@@ -10,8 +10,8 @@ import (
 func TestIssueAccessTokenValid(t *testing.T) {
 	issuer := &Issuer{
 		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
-		issuer:     "esydocs",
-		audience:   "esydocs-api",
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
 	}
 
 	tokenStr, jti, expiresAt, err := issuer.IssueAccessToken("user-123", "user", nil, time.Hour)
@@ -51,8 +51,8 @@ func TestIssueAccessTokenClaims(t *testing.T) {
 	secret := []byte("test-secret-key-32-chars-long!!")
 	issuer := &Issuer{
 		hmacSecret: secret,
-		issuer:     "esydocs",
-		audience:   "esydocs-api",
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
 	}
 
 	tokenStr, _, _, err := issuer.IssueAccessToken("user-456", "admin", []string{"read", "write"}, 2*time.Hour)
@@ -79,11 +79,11 @@ func TestIssueAccessTokenClaims(t *testing.T) {
 	if claims.Role != "admin" {
 		t.Errorf("expected role 'admin', got %q", claims.Role)
 	}
-	if claims.Issuer != "esydocs" {
-		t.Errorf("expected issuer 'esydocs', got %q", claims.Issuer)
+	if claims.Issuer != "fyredocs" {
+		t.Errorf("expected issuer 'fyredocs', got %q", claims.Issuer)
 	}
-	if len(claims.Audience) != 1 || claims.Audience[0] != "esydocs-api" {
-		t.Errorf("expected audience ['esydocs-api'], got %v", claims.Audience)
+	if len(claims.Audience) != 1 || claims.Audience[0] != "fyredocs-api" {
+		t.Errorf("expected audience ['fyredocs-api'], got %v", claims.Audience)
 	}
 	if len(claims.Scope) != 2 {
 		t.Errorf("expected 2 scopes, got %d", len(claims.Scope))
@@ -94,8 +94,8 @@ func TestIssueAccessTokenAlwaysSetsIssuerAudience(t *testing.T) {
 	secret := []byte("test-secret-key-32-chars-long!!")
 	issuer := &Issuer{
 		hmacSecret: secret,
-		issuer:     "esydocs",
-		audience:   "esydocs-api",
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
 	}
 
 	tokenStr, _, _, err := issuer.IssueAccessToken("user-789", "user", nil, time.Hour)
@@ -111,11 +111,11 @@ func TestIssueAccessTokenAlwaysSetsIssuerAudience(t *testing.T) {
 	}
 
 	claims := parsed.Claims.(*Claims)
-	if claims.Issuer != "esydocs" {
-		t.Errorf("expected issuer 'esydocs', got %q", claims.Issuer)
+	if claims.Issuer != "fyredocs" {
+		t.Errorf("expected issuer 'fyredocs', got %q", claims.Issuer)
 	}
-	if len(claims.Audience) != 1 || claims.Audience[0] != "esydocs-api" {
-		t.Errorf("expected audience ['esydocs-api'], got %v", claims.Audience)
+	if len(claims.Audience) != 1 || claims.Audience[0] != "fyredocs-api" {
+		t.Errorf("expected audience ['fyredocs-api'], got %v", claims.Audience)
 	}
 	if claims.ID == "" {
 		t.Error("expected non-empty JTI (token ID)")
@@ -126,21 +126,21 @@ func TestNewIssuerFromEnvRequiresIssuerAndAudience(t *testing.T) {
 	t.Setenv("JWT_HS256_SECRET", "test-secret-key-32-chars-long!!")
 
 	t.Setenv("JWT_ISSUER", "")
-	t.Setenv("JWT_AUDIENCE", "esydocs-api")
+	t.Setenv("JWT_AUDIENCE", "fyredocs-api")
 	_, err := NewIssuerFromEnv()
 	if err == nil {
 		t.Error("expected error when JWT_ISSUER is empty")
 	}
 
-	t.Setenv("JWT_ISSUER", "esydocs")
+	t.Setenv("JWT_ISSUER", "fyredocs")
 	t.Setenv("JWT_AUDIENCE", "")
 	_, err = NewIssuerFromEnv()
 	if err == nil {
 		t.Error("expected error when JWT_AUDIENCE is empty")
 	}
 
-	t.Setenv("JWT_ISSUER", "esydocs")
-	t.Setenv("JWT_AUDIENCE", "esydocs-api")
+	t.Setenv("JWT_ISSUER", "fyredocs")
+	t.Setenv("JWT_AUDIENCE", "fyredocs-api")
 	issuer, err := NewIssuerFromEnv()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -154,8 +154,8 @@ func TestIssueAccessTokenNoPlanClaims(t *testing.T) {
 	secret := []byte("test-secret-key-32-chars-long!!")
 	issuer := &Issuer{
 		hmacSecret: secret,
-		issuer:     "esydocs",
-		audience:   "esydocs-api",
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
 	}
 
 	tokenStr, _, _, err := issuer.IssueAccessToken("user-pro", "user", nil, time.Hour)
@@ -182,8 +182,8 @@ func TestIssueAccessTokenNoPlanClaims(t *testing.T) {
 func TestIssueAccessTokenReturnsTTLDrivenExpiry(t *testing.T) {
 	issuer := &Issuer{
 		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
-		issuer:     "esydocs",
-		audience:   "esydocs-api",
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
 	}
 
 	before := time.Now()
@@ -201,8 +201,8 @@ func TestIssueAccessTokenReturnsTTLDrivenExpiry(t *testing.T) {
 func TestIssueRefreshTokenValid(t *testing.T) {
 	issuer := &Issuer{
 		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
-		issuer:     "esydocs",
-		audience:   "esydocs-api",
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
 	}
 
 	tokenStr, jti, expiresAt, err := issuer.IssueRefreshToken("user-123", 7*24*time.Hour)
@@ -233,8 +233,8 @@ func TestIssueRefreshTokenNilIssuer(t *testing.T) {
 func TestVerifyRefreshTokenValid(t *testing.T) {
 	issuer := &Issuer{
 		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
-		issuer:     "esydocs",
-		audience:   "esydocs-api",
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
 	}
 
 	tokenStr, _, _, err := issuer.IssueRefreshToken("user-456", time.Hour)
@@ -254,8 +254,8 @@ func TestVerifyRefreshTokenValid(t *testing.T) {
 func TestVerifyRefreshTokenInvalid(t *testing.T) {
 	issuer := &Issuer{
 		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
-		issuer:     "esydocs",
-		audience:   "esydocs-api",
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
 	}
 
 	_, err := issuer.VerifyRefreshToken("invalid-token")
@@ -267,13 +267,13 @@ func TestVerifyRefreshTokenInvalid(t *testing.T) {
 func TestVerifyRefreshTokenWrongSecret(t *testing.T) {
 	issuer1 := &Issuer{
 		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
-		issuer:     "esydocs",
-		audience:   "esydocs-api",
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
 	}
 	issuer2 := &Issuer{
 		hmacSecret: []byte("different-secret-key-32-chars!!!"),
-		issuer:     "esydocs",
-		audience:   "esydocs-api",
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
 	}
 
 	tokenStr, _, _, _ := issuer1.IssueRefreshToken("user-789", time.Hour)

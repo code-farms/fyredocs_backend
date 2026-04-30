@@ -7,7 +7,7 @@
 
 ## 1. Overall Assessment
 
-The EsyDocs backend is a well-architected microservices system. Clean service boundaries, solid observability (OpenTelemetry + Prometheus + structured logging), proper auth flow with token denylist, and production-aware Docker setup. This document records the hardening review, what was implemented, and what remains planned.
+The Fyredocs backend is a well-architected microservices system. Clean service boundaries, solid observability (OpenTelemetry + Prometheus + structured logging), proper auth flow with token denylist, and production-aware Docker setup. This document records the hardening review, what was implemented, and what remains planned.
 
 ---
 
@@ -80,7 +80,7 @@ The EsyDocs backend is a well-architected microservices system. Clean service bo
 
 **Finding:** `JWT_ISSUER` and `JWT_AUDIENCE` were optional. If unset, tokens were issued without these claims and the verifier would skip validation. Any HS256 token signed with the same secret — even from a different application — would be accepted.
 
-**Why:** By making both required, the system enforces token provenance: only tokens issued by `esydocs` for the `esydocs-api` audience are valid. The service fails fast on startup if not configured.
+**Why:** By making both required, the system enforces token provenance: only tokens issued by `fyredocs` for the `fyredocs-api` audience are valid. The service fails fast on startup if not configured.
 
 **What changed:**
 - `NewIssuerFromEnv()` returns an error if `JWT_ISSUER` or `JWT_AUDIENCE` is empty
@@ -362,7 +362,7 @@ The EsyDocs backend is a well-architected microservices system. Clean service bo
 
 **Steps:**
 
-1. Create `infra/init-db.sql` with `CREATE DATABASE esydocs_auth` / `esydocs_jobs` and per-service users.
+1. Create `infra/init-db.sql` with `CREATE DATABASE fyredocs_auth` / `fyredocs_jobs` and per-service users.
 2. Mount in docker-compose.yml via `/docker-entrypoint-initdb.d/`.
 3. Add `AUTH_DATABASE_URL` and `JOBS_DATABASE_URL` environment variables.
 4. Update each service to use its own URL.

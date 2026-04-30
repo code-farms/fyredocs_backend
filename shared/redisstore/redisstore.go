@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"esydocs/shared/config"
+	"fyredocs/shared/config"
 	"github.com/redis/go-redis/v9"
 )
 

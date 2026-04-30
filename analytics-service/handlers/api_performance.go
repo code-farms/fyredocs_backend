@@ -8,7 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"analytics-service/internal/promscrape"
-	"esydocs/shared/response"
+	"fyredocs/shared/response"
 )
 
 // APIPerformance returns per-endpoint latency, throughput, and error rate metrics

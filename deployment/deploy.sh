@@ -126,7 +126,7 @@ print_step "Waiting for services to be ready..."
 # --- Local PostgreSQL check commented out: using Neon cloud database ---
 # echo -n "Waiting for Database... "
 # for i in {1..30}; do
-#     if docker compose exec -T db pg_isready -U "$POSTGRES_USER" -d "${POSTGRES_DB:-esydocs}" &> /dev/null; then
+#     if docker compose exec -T db pg_isready -U "$POSTGRES_USER" -d "${POSTGRES_DB:-fyredocs}" &> /dev/null; then
 #         print_success "Database ready!"
 #         break
 #     fi

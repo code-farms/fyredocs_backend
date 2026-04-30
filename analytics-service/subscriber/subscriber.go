@@ -10,8 +10,8 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"gorm.io/datatypes"
 
-	"esydocs/shared/natsconn"
-	"esydocs/shared/queue"
+	"fyredocs/shared/natsconn"
+	"fyredocs/shared/queue"
 
 	"analytics-service/internal/models"
 )

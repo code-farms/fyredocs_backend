@@ -6,13 +6,13 @@ services:
   #   image: postgres:15-alpine
   #   restart: always
   #   environment:
-  #     POSTGRES_DB: ${POSTGRES_DB:-esydocs}
+  #     POSTGRES_DB: ${POSTGRES_DB:-fyredocs}
   #     POSTGRES_USER: ${POSTGRES_USER}
   #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
   #   volumes:
   #     - postgres_data:/var/lib/postgresql/data
   #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-esydocs}"]
+  #     test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-fyredocs}"]
   #     interval: 5s
   #     timeout: 5s
   #     retries: 5
@@ -29,7 +29,7 @@ services:
   #       max-size: "10m"
   #       max-file: "3"
   #   networks:
-  #     - esydocs_net
+  #     - fyredocs_net
 
   redis:
     image: redis:7-alpine
@@ -55,7 +55,7 @@ services:
         max-size: "10m"
         max-file: "3"
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   nats:
     image: nats:2.10-alpine
@@ -81,7 +81,7 @@ services:
         max-size: "10m"
         max-file: "3"
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   # ==================== VOLUME INITIALIZATION ====================
   volume-init:
@@ -91,7 +91,7 @@ services:
       - ../files/uploads:/app/uploads
       - ../files/outputs:/app/outputs
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   # ==================== API GATEWAY ====================
   api-gateway:
@@ -113,8 +113,8 @@ services:
       # JWT Configuration
       JWT_HS256_SECRET: ${JWT_HS256_SECRET}
       JWT_ALLOWED_ALGS: "HS256"
-      JWT_ISSUER: "esydocs"
-      JWT_AUDIENCE: "esydocs-api"
+      JWT_ISSUER: "fyredocs"
+      JWT_AUDIENCE: "fyredocs-api"
       JWT_CLOCK_SKEW: "60s"
 
       # Auth Configuration
@@ -135,7 +135,7 @@ services:
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
-      - ../../esydocs_frontend/dist:/app/frontend:ro
+      - ../../fyredocs_frontend/dist:/app/frontend:ro
     healthcheck:
       test: ["CMD", "./healthcheck", "http://localhost:8080/healthz"]
       interval: 10s
@@ -163,7 +163,7 @@ services:
       analytics-service:
         condition: service_started
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   # ==================== AUTH SERVICE ====================
   auth-service:
@@ -182,8 +182,8 @@ services:
       # JWT Configuration
       JWT_HS256_SECRET: ${JWT_HS256_SECRET}
       JWT_ALLOWED_ALGS: "HS256"
-      JWT_ISSUER: "esydocs"
-      JWT_AUDIENCE: "esydocs-api"
+      JWT_ISSUER: "fyredocs"
+      JWT_AUDIENCE: "fyredocs-api"
       JWT_CLOCK_SKEW: "60s"
       JWT_ACCESS_TTL: "8h"
       JWT_REFRESH_TTL: "168h"
@@ -231,7 +231,7 @@ services:
       nats:
         condition: service_healthy
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   # ==================== JOB SERVICE (formerly upload-service) ====================
   job-service:
@@ -250,8 +250,8 @@ services:
       # JWT Configuration
       JWT_HS256_SECRET: ${JWT_HS256_SECRET}
       JWT_ALLOWED_ALGS: "HS256"
-      JWT_ISSUER: "esydocs"
-      JWT_AUDIENCE: "esydocs-api"
+      JWT_ISSUER: "fyredocs"
+      JWT_AUDIENCE: "fyredocs-api"
       JWT_CLOCK_SKEW: "60s"
 
       # Auth settings
@@ -300,7 +300,7 @@ services:
       volume-init:
         condition: service_completed_successfully
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   # ==================== CONVERT FROM PDF (worker) ====================
   convert-from-pdf:
@@ -347,7 +347,7 @@ services:
       volume-init:
         condition: service_completed_successfully
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   # ==================== CONVERT TO PDF (worker) ====================
   convert-to-pdf:
@@ -395,7 +395,7 @@ services:
       volume-init:
         condition: service_completed_successfully
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   # ==================== ORGANIZE PDF (worker) ====================
   organize-pdf:
@@ -443,7 +443,7 @@ services:
       volume-init:
         condition: service_completed_successfully
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   # ==================== OPTIMIZE PDF (worker) ====================
   optimize-pdf:
@@ -494,7 +494,7 @@ services:
       volume-init:
         condition: service_completed_successfully
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   # ==================== ANALYTICS SERVICE ====================
   analytics-service:
@@ -531,7 +531,7 @@ services:
       nats:
         condition: service_healthy
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   # ==================== CLEANUP WORKER ====================
   cleanup-worker:
@@ -580,11 +580,11 @@ services:
       volume-init:
         condition: service_completed_successfully
     networks:
-      - esydocs_net
+      - fyredocs_net
 
 networks:
-  esydocs_net:
-    name: esydocs_net
+  fyredocs_net:
+    name: fyredocs_net
     driver: bridge
 
 volumes:

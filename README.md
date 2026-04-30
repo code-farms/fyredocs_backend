@@ -1,4 +1,4 @@
-# EsyDocs Backend
+# Fyredocs Backend
 
 A microservices-based document conversion platform built with Go, featuring PDF conversion, Office document processing, and secure user authentication.
 
@@ -59,7 +59,7 @@ All detailed documentation lives under [`docs/`](docs/):
 - **Architecture**: [`docs/architecture/`](docs/architecture/) — system-level design and infrastructure
 - **API spec**: [`docs/swagger/openapi.yaml`](docs/swagger/openapi.yaml) — OpenAPI specification
 - **Diagrams**: [`docs/mermaid/`](docs/mermaid/) — architecture and sequence diagrams
-- **Postman**: [`EsyDocs_API.postman_collection.json`](../EsyDocs_API.postman_collection.json) — importable API collection
+- **Postman**: [`Fyredocs_API.postman_collection.json`](../Fyredocs_API.postman_collection.json) — importable API collection
 
 ## Development
 

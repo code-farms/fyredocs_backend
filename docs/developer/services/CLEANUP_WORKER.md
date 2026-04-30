@@ -228,7 +228,7 @@ cleanup-worker:
   build:
     context: ./cleanup-worker
   environment:
-    DATABASE_URL: postgresql://user:password@db:5432/esydocs
+    DATABASE_URL: postgresql://user:password@db:5432/fyredocs
     REDIS_ADDR: redis:6379
     UPLOAD_DIR: /app/uploads
     OUTPUT_DIR: /app/outputs
@@ -253,7 +253,7 @@ cleanup-worker:
 2. Run worker:
    ```bash
    cd cleanup-worker
-   export DATABASE_URL="postgresql://user:password@localhost:5432/esydocs"
+   export DATABASE_URL="postgresql://user:password@localhost:5432/fyredocs"
    export REDIS_ADDR="localhost:6379"
    export UPLOAD_DIR="./uploads"
    export OUTPUT_DIR="./outputs"
@@ -338,10 +338,10 @@ docker compose exec cleanup-worker find /app/uploads -type f | wc -l
 docker compose exec cleanup-worker find /app/outputs -type f | wc -l
 
 # Check database for expired records
-docker compose exec db psql -U user -d esydocs -c \
+docker compose exec db psql -U user -d fyredocs -c \
   "SELECT COUNT(*) FROM uploads WHERE expires_at < NOW();"
 
-docker compose exec db psql -U user -d esydocs -c \
+docker compose exec db psql -U user -d fyredocs -c \
   "SELECT COUNT(*) FROM processing_jobs WHERE expires_at < NOW();"
 ```
 
@@ -394,7 +394,7 @@ docker compose exec cleanup-worker rm -rf /app/uploads/{expired-id}
 **Solutions**:
 ```bash
 # Test database connection
-docker compose exec cleanup-worker pg_isready -h db -U user -d esydocs
+docker compose exec cleanup-worker pg_isready -h db -U user -d fyredocs
 
 # Check database logs
 docker compose logs db | tail -50

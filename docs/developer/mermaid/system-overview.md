@@ -1,6 +1,6 @@
 # System Overview
 
-High-level architecture of the EsyDocs PDF processing platform.
+High-level architecture of the Fyredocs PDF processing platform.
 
 ## Service Topology
 

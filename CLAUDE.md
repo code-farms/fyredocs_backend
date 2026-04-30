@@ -20,7 +20,7 @@ If a user request violates microservice boundaries, Claude must correct or rejec
 # 2. PROJECT STRUCTURE RULES
 
 ## Allowed top-level folders:
-- `/<service-name>/` (services live directly under `esydocs_backend/`, e.g., `upload-service/`, `convert-from-pdf/`)
+- `/<service-name>/` (services live directly under `fyredocs_backend/`, e.g., `upload-service/`, `convert-from-pdf/`)
 - `/shared/` (utility packages only — logging, tracing, metrics, config, queue clients, response helpers)
 - `/docs/` (documentation hub)
 - `/docs/developer/` (all developer documentation)

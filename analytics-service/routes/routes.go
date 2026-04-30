@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"analytics-service/handlers"
-	"esydocs/shared/response"
+	"fyredocs/shared/response"
 )
 
 func SetupRouter(r *gin.Engine) {

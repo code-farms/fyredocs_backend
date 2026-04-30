@@ -1,7 +1,7 @@
 # Analytics Service
 
 ## Service Responsibility
-The analytics-service collects, stores, and aggregates business metrics for the EsyDocs platform. It provides admin API endpoints for dashboards covering user growth, tool usage, plan distribution, and real-time operational metrics.
+The analytics-service collects, stores, and aggregates business metrics for the Fyredocs platform. It provides admin API endpoints for dashboards covering user growth, tool usage, plan distribution, and real-time operational metrics.
 
 ## Design Constraints
 - Fully independent microservice with its own database tables

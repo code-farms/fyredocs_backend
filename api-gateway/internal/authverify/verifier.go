@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"esydocs/shared/config"
+	"fyredocs/shared/config"
 	"github.com/golang-jwt/jwt/v5"
 )
 

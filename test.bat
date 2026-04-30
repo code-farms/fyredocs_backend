@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-REM Run Go tests for esydocs_backend services.
+REM Run Go tests for fyredocs_backend services.
 REM
 REM Usage:
 REM   test.bat              - run all services

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Redis serves as the backbone for asynchronous job processing, caching, and session management in the EsyDocs backend. It provides high-performance, in-memory data storage with persistence capabilities.
+Redis serves as the backbone for asynchronous job processing, caching, and session management in the Fyredocs backend. It provides high-performance, in-memory data storage with persistence capabilities.
 
 **Version**: Redis 7 (Alpine)
 **Port**: 6379
@@ -492,7 +492,7 @@ redis:
   ports:
     - "6379:6379"  # ⚠️ Exposed to localhost
   networks:
-    - esydocs_net  # Internal Docker network
+    - fyredocs_net  # Internal Docker network
 ```
 
 ### Security Recommendations

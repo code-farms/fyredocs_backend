@@ -33,7 +33,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/convert-to-pdf .
 
 # ---- Runtime Stage ----
-FROM esydocs-base:latest
+FROM fyredocs-base:latest
 
 RUN adduser -D -u 10001 appuser
 

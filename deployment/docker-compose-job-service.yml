@@ -6,7 +6,7 @@ services:
       - ../files/uploads:/app/uploads
       - ../files/outputs:/app/outputs
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   job-service:
     build:
@@ -26,8 +26,8 @@ services:
       # JWT Configuration
       JWT_HS256_SECRET: ${JWT_HS256_SECRET}
       JWT_ALLOWED_ALGS: "HS256"
-      JWT_ISSUER: "esydocs"
-      JWT_AUDIENCE: "esydocs-api"
+      JWT_ISSUER: "fyredocs"
+      JWT_AUDIENCE: "fyredocs-api"
       JWT_CLOCK_SKEW: "60s"
 
       # Auth settings
@@ -61,9 +61,9 @@ services:
       volume-init:
         condition: service_completed_successfully
     networks:
-      - esydocs_net
+      - fyredocs_net
 
 networks:
-  esydocs_net:
+  fyredocs_net:
     external: true
 

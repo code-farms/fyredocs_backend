@@ -12,11 +12,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
-	"esydocs/shared/config"
-	"esydocs/shared/logger"
-	"esydocs/shared/metrics"
-	"esydocs/shared/natsconn"
-	"esydocs/shared/telemetry"
+	"fyredocs/shared/config"
+	"fyredocs/shared/logger"
+	"fyredocs/shared/metrics"
+	"fyredocs/shared/natsconn"
+	"fyredocs/shared/telemetry"
 
 	"auth-service/internal/authverify"
 	"auth-service/internal/models"

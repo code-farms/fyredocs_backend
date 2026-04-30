@@ -7,9 +7,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"esydocs/shared/config"
-	"esydocs/shared/natsconn"
-	"esydocs/shared/redisstore"
+	"fyredocs/shared/config"
+	"fyredocs/shared/natsconn"
+	"fyredocs/shared/redisstore"
 
 	"job-service/handlers"
 	"job-service/internal/authverify"

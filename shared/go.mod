@@ -1,4 +1,4 @@
-module esydocs/shared
+module fyredocs/shared
 
 go 1.25.0
 

@@ -65,7 +65,7 @@ sequenceDiagram
     participant Browser
     participant GW as api-gateway :8080
 
-    Browser->>GW: OPTIONS /api/uploads/init<br/>Origin: https://app.esydocs.com
+    Browser->>GW: OPTIONS /api/uploads/init<br/>Origin: https://app.fyredocs.com
 
     Note over GW: withCORS middleware
 

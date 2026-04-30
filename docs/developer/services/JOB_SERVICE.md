@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Job Service is the central orchestration service for all file processing operations in EsyDocs. It manages the full job lifecycle: receiving file uploads (chunked), creating processing jobs, dispatching work to downstream worker services via NATS JetStream, tracking job status, and serving file downloads. It also handles guest user job tracking through Redis.
+The Job Service is the central orchestration service for all file processing operations in Fyredocs. It manages the full job lifecycle: receiving file uploads (chunked), creating processing jobs, dispatching work to downstream worker services via NATS JetStream, tracking job status, and serving file downloads. It also handles guest user job tracking through Redis.
 
 **Port**: 8081
 **Type**: REST API (Job Orchestrator)
@@ -508,7 +508,7 @@ job-service:
     - "8081:8081"
   environment:
     PORT: "8081"
-    DATABASE_URL: postgresql://user:password@db:5432/esydocs
+    DATABASE_URL: postgresql://user:password@db:5432/fyredocs
     REDIS_ADDR: redis:6379
     NATS_URL: nats://nats:4222
     JWT_HS256_SECRET: ${JWT_HS256_SECRET}
@@ -533,7 +533,7 @@ job-service:
 
 2. Set environment variables:
    ```bash
-   export DATABASE_URL="postgresql://user:password@localhost:5432/esydocs?sslmode=disable"
+   export DATABASE_URL="postgresql://user:password@localhost:5432/fyredocs?sslmode=disable"
    export REDIS_ADDR="localhost:6379"
    export NATS_URL="nats://localhost:4222"
    export JWT_HS256_SECRET=$(openssl rand -hex 32)

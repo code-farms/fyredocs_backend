@@ -3,7 +3,7 @@ module job-service
 go 1.25.0
 
 require (
-	esydocs/shared v0.0.0
+	fyredocs/shared v0.0.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/google/uuid v1.6.0
@@ -13,7 +13,7 @@ require (
 	gorm.io/gorm v1.31.1
 )
 
-replace esydocs/shared => ../shared
+replace fyredocs/shared => ../shared
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect

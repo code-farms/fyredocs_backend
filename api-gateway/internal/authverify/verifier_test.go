@@ -184,16 +184,16 @@ func TestVerifyWithIssuerAndAudience(t *testing.T) {
 	v, _ := NewVerifier(VerifierConfig{
 		AllowedAlgs: []string{"HS256"},
 		HMACSecret:  secret,
-		Issuer:      "esydocs",
-		Audience:    "esydocs-api",
+		Issuer:      "fyredocs",
+		Audience:    "fyredocs-api",
 	})
 
 	now := time.Now()
 	claims := &Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   "user-123",
-			Issuer:    "esydocs",
-			Audience:  []string{"esydocs-api"},
+			Issuer:    "fyredocs",
+			Audience:  []string{"fyredocs-api"},
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 		},

@@ -10,9 +10,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"esydocs/shared/natsconn"
-	"esydocs/shared/queue"
-	"esydocs/shared/response"
+	"fyredocs/shared/natsconn"
+	"fyredocs/shared/queue"
+	"fyredocs/shared/response"
 )
 
 // SSEJobUpdates streams real-time job status updates via Server-Sent Events.

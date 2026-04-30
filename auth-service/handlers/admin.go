@@ -10,7 +10,7 @@ import (
 
 	"auth-service/internal/models"
 
-	"esydocs/shared/response"
+	"fyredocs/shared/response"
 )
 
 // RevokeUserSessions revokes all active sessions for a user.

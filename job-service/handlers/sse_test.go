@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"esydocs/shared/natsconn"
+	"fyredocs/shared/natsconn"
 )
 
 func TestSSEJobUpdates_MissingJobID(t *testing.T) {

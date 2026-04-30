@@ -18,7 +18,7 @@ import (
 
 	"convert-from-pdf/internal/models"
 
-	"esydocs/shared/queue"
+	"fyredocs/shared/queue"
 )
 
 type ProcessResult struct {

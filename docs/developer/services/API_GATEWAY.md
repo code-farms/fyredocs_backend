@@ -2,7 +2,7 @@
 
 ## Overview
 
-The API Gateway is the central entry point for all client requests to the EsyDocs backend. It handles request routing, CORS, rate limiting, and authentication middleware before forwarding requests to the appropriate backend services.
+The API Gateway is the central entry point for all client requests to the Fyredocs backend. It handles request routing, CORS, rate limiting, and authentication middleware before forwarding requests to the appropriate backend services.
 
 **Port**: 8080
 **Type**: HTTP Reverse Proxy
@@ -94,8 +94,8 @@ The reverse proxy sets `FlushInterval = -1` to stream responses immediately to t
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `JWT_ALLOWED_ALGS` | Allowed JWT algorithms | `HS256` |
-| `JWT_ISSUER` | Expected token issuer | `esydocs` |
-| `JWT_AUDIENCE` | Expected token audience | `esydocs-api` |
+| `JWT_ISSUER` | Expected token issuer | `fyredocs` |
+| `JWT_AUDIENCE` | Expected token audience | `fyredocs-api` |
 | `JWT_CLOCK_SKEW` | Allowed clock skew for token validation | `60s` |
 
 #### Authentication

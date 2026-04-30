@@ -16,11 +16,11 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"esydocs/shared/config"
-	"esydocs/shared/logger"
-	"esydocs/shared/metrics"
-	"esydocs/shared/redisstore"
-	"esydocs/shared/telemetry"
+	"fyredocs/shared/config"
+	"fyredocs/shared/logger"
+	"fyredocs/shared/metrics"
+	"fyredocs/shared/redisstore"
+	"fyredocs/shared/telemetry"
 
 	"cleanup-worker/internal/models"
 )

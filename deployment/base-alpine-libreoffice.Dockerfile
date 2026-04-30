@@ -5,7 +5,7 @@
 
 FROM alpine:3.19
 
-LABEL maintainer="esydocs"
+LABEL maintainer="fyredocs"
 LABEL description="Alpine Linux with LibreOffice and PDF tools pre-installed"
 LABEL version="3.19"
 

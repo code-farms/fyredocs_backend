@@ -21,10 +21,10 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
-	"esydocs/shared/natsconn"
-	"esydocs/shared/queue"
-	"esydocs/shared/redisstore"
-	"esydocs/shared/response"
+	"fyredocs/shared/natsconn"
+	"fyredocs/shared/queue"
+	"fyredocs/shared/redisstore"
+	"fyredocs/shared/response"
 
 	"job-service/internal/models"
 	"job-service/internal/routing"

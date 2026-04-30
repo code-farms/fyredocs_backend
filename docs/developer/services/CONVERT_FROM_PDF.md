@@ -439,7 +439,7 @@ convert-from-pdf:
   build:
     context: ./convert-from-pdf
   environment:
-    DATABASE_URL: postgresql://user:password@db:5432/esydocs
+    DATABASE_URL: postgresql://user:password@db:5432/fyredocs
     REDIS_ADDR: redis:6379
     UPLOAD_DIR: /app/uploads
     OUTPUT_DIR: /app/outputs
@@ -475,7 +475,7 @@ convert-from-pdf:
 3. Run service:
    ```bash
    cd convert-from-pdf
-   export DATABASE_URL="postgresql://user:password@localhost:5432/esydocs"
+   export DATABASE_URL="postgresql://user:password@localhost:5432/fyredocs"
    export REDIS_ADDR="localhost:6379"
    go run main.go
    ```

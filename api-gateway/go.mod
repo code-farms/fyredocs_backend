@@ -3,13 +3,13 @@ module api-gateway
 go 1.25.0
 
 require (
-	esydocs/shared v0.0.0
+	fyredocs/shared v0.0.0
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/joho/godotenv v1.5.1
 	github.com/redis/go-redis/v9 v9.14.0
 )
 
-replace esydocs/shared => ../shared
+replace fyredocs/shared => ../shared
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect

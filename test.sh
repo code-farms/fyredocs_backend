@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run Go tests for esydocs_backend services.
+# Run Go tests for fyredocs_backend services.
 #
 # Usage:
 #   ./test.sh              # run all services

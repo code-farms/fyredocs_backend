@@ -8,7 +8,7 @@ import (
 
 	"auth-service/internal/models"
 
-	"esydocs/shared/response"
+	"fyredocs/shared/response"
 )
 
 // GetUserPlan returns the subscription plan for a user.

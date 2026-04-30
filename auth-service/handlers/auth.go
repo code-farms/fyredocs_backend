@@ -21,10 +21,10 @@ import (
 	"auth-service/internal/models"
 	"auth-service/internal/token"
 
-	"esydocs/shared/config"
-	"esydocs/shared/natsconn"
-	"esydocs/shared/queue"
-	"esydocs/shared/response"
+	"fyredocs/shared/config"
+	"fyredocs/shared/natsconn"
+	"fyredocs/shared/queue"
+	"fyredocs/shared/response"
 )
 
 type authCredentials struct {

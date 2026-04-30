@@ -11,7 +11,7 @@ Create a pre-built base image with LibreOffice, push it to a container registry,
 ### Step 1: Build the Base Image
 
 ```bash
-cd esydocs_backend
+cd fyredocs_backend
 
 # Build the base image
 docker build \

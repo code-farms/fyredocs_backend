@@ -13,8 +13,8 @@ services:
     env_file:
       - ../.env
     networks:
-      - esydocs_net
+      - fyredocs_net
 
 networks:
-  esydocs_net:
+  fyredocs_net:
     external: true

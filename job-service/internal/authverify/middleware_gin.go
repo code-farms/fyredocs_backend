@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"esydocs/shared/response"
+	"fyredocs/shared/response"
 )
 
 type GinMiddlewareOptions struct {

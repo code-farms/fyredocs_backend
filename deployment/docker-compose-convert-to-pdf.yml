@@ -6,7 +6,7 @@ services:
       - ../files/uploads:/app/uploads
       - ../files/outputs:/app/outputs
     networks:
-      - esydocs_net
+      - fyredocs_net
 
   convert-to-pdf:
     build:
@@ -33,9 +33,9 @@ services:
       volume-init:
         condition: service_completed_successfully
     networks:
-      - esydocs_net
+      - fyredocs_net
 
 networks:
-  esydocs_net:
+  fyredocs_net:
     external: true
 

@@ -18,9 +18,9 @@ services:
       - ../files/uploads:/app/uploads
       - ../files/outputs:/app/outputs
     networks:
-      - esydocs_net
+      - fyredocs_net
 
 networks:
-  esydocs_net:
+  fyredocs_net:
     external: true
 

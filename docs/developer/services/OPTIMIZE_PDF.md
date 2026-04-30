@@ -74,7 +74,7 @@ pending → processing → completed
 
 ```env
 # Database
-DATABASE_URL="postgresql://user:password@db:5432/esydocs?sslmode=disable"
+DATABASE_URL="postgresql://user:password@db:5432/fyredocs?sslmode=disable"
 
 # Redis
 REDIS_ADDR="redis:6379"
@@ -91,8 +91,8 @@ PORT="8085"
 # JWT
 JWT_HS256_SECRET="..."
 JWT_ALLOWED_ALGS="HS256"
-JWT_ISSUER="esydocs"
-JWT_AUDIENCE="esydocs-api"
+JWT_ISSUER="fyredocs"
+JWT_AUDIENCE="fyredocs-api"
 
 # Auth
 AUTH_GUEST_PREFIX="guest"
@@ -175,7 +175,7 @@ docker run --rm optimize-pdf:latest sh -c "
 
 ### Local Setup
 ```bash
-cd esydocs_backend/optimize-pdf
+cd fyredocs_backend/optimize-pdf
 cp .env.example .env
 go mod tidy
 go run .

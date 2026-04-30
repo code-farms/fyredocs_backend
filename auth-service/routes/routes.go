@@ -14,7 +14,7 @@ import (
 	"auth-service/internal/token"
 	"auth-service/middleware"
 
-	"esydocs/shared/config"
+	"fyredocs/shared/config"
 )
 
 func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenDenylist, redisClient *redis.Client, authMiddleware gin.HandlerFunc) {

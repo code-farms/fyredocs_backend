@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"analytics-service/internal/models"
-	"esydocs/shared/response"
+	"fyredocs/shared/response"
 )
 
 // BusinessMetrics returns business-level metrics: signups, plan changes, churn, conversion.

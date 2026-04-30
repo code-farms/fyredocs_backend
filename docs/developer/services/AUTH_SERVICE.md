@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Auth Service is a dedicated microservice responsible for user authentication, registration, and profile management in EsyDocs. It implements a modern **cookie-based authentication system** with HTTP-only cookies, 8-hour access tokens, and immediate token revocation on logout via a Redis denylist. It also exposes internal service-to-service APIs for user plan lookups.
+The Auth Service is a dedicated microservice responsible for user authentication, registration, and profile management in Fyredocs. It implements a modern **cookie-based authentication system** with HTTP-only cookies, 8-hour access tokens, and immediate token revocation on logout via a Redis denylist. It also exposes internal service-to-service APIs for user plan lookups.
 
 **Port**: 8086
 **Type**: REST API
@@ -310,8 +310,8 @@ All errors follow the standard response format:
 ```json
 {
   "sub": "550e8400-e29b-41d4-a716-446655440000",
-  "iss": "esydocs",
-  "aud": "esydocs-api",
+  "iss": "fyredocs",
+  "aud": "fyredocs-api",
   "exp": 1705324800,
   "iat": 1705296000,
   "jti": "unique-token-id",
@@ -445,7 +445,7 @@ auth-service:
     - "8086:8086"
   environment:
     PORT: "8086"
-    DATABASE_URL: postgresql://user:password@db:5432/esydocs
+    DATABASE_URL: postgresql://user:password@db:5432/fyredocs
     REDIS_ADDR: redis:6379
     JWT_HS256_SECRET: ${JWT_HS256_SECRET}
     AUTH_COOKIE_SECURE: "true"
@@ -464,7 +464,7 @@ auth-service:
 
 2. Set environment variables:
    ```bash
-   export DATABASE_URL="postgresql://user:password@localhost:5432/esydocs?sslmode=disable"
+   export DATABASE_URL="postgresql://user:password@localhost:5432/fyredocs?sslmode=disable"
    export REDIS_ADDR="localhost:6379"
    export JWT_HS256_SECRET=$(openssl rand -hex 32)
    export AUTH_COOKIE_SECURE="false"  # Only for local dev!

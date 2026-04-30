@@ -3,7 +3,7 @@ package handlers
 import (
 	"auth-service/internal/models"
 
-	"esydocs/shared/response"
+	"fyredocs/shared/response"
 
 	"github.com/gin-gonic/gin"
 )

@@ -1,6 +1,6 @@
 # Database Performance & Optimization Guide
 
-This document covers database best practices for the EsyDocs backend, organized into completed optimizations and future production recommendations.
+This document covers database best practices for the Fyredocs backend, organized into completed optimizations and future production recommendations.
 
 **Stack**: PostgreSQL (Neon dev / self-hosted production) + GORM + Redis
 
@@ -155,9 +155,9 @@ This document covers database best practices for the EsyDocs backend, organized 
 **Why**: Currently all services share one PostgreSQL instance via the same `DATABASE_URL`. This creates noisy-neighbor problems (analytics queries starving job writes), shared connection pool pressure, and cross-service blast radius for bad migrations.
 
 **Recommendation**: Use 3 separate databases:
-- `esydocs_auth` — users, sessions, auth metadata, subscription plans
-- `esydocs_jobs` — processing jobs, file metadata
-- `esydocs_analytics` — analytics events, daily metrics
+- `fyredocs_auth` — users, sessions, auth metadata, subscription plans
+- `fyredocs_jobs` — processing jobs, file metadata
+- `fyredocs_analytics` — analytics events, daily metrics
 
 **Benefits**: Independent scaling, isolated connection pools, safe migrations, aligns with microservice data ownership principles.
 

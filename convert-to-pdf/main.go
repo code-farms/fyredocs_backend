@@ -13,12 +13,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"esydocs/shared/config"
-	"esydocs/shared/logger"
-	"esydocs/shared/metrics"
-	"esydocs/shared/natsconn"
-	"esydocs/shared/redisstore"
-	"esydocs/shared/telemetry"
+	"fyredocs/shared/config"
+	"fyredocs/shared/logger"
+	"fyredocs/shared/metrics"
+	"fyredocs/shared/natsconn"
+	"fyredocs/shared/redisstore"
+	"fyredocs/shared/telemetry"
 
 	"convert-to-pdf/internal/models"
 	"convert-to-pdf/internal/worker"

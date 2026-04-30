@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"analytics-service/internal/models"
-	"esydocs/shared/response"
+	"fyredocs/shared/response"
 )
 
 // Overview returns today's summary metrics.

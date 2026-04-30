@@ -12,8 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
-	"esydocs/shared/redisstore"
-	"esydocs/shared/response"
+	"fyredocs/shared/redisstore"
+	"fyredocs/shared/response"
 )
 
 // uploadChunkLua atomically validates the upload exists, records the chunk index,

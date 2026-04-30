@@ -1,8 +1,8 @@
 {
 	"info": {
-		"_postman_id": "esydocs-api-collection-v2",
-		"name": "EsyDocs API - Complete Collection",
-		"description": "Complete API testing collection for EsyDocs backend services. Includes authentication, file upload, PDF conversion, organization, and optimization endpoints.\n\nAll endpoints return a standardized response format:\n{\n  \"success\": true/false,\n  \"message\": \"...\",\n  \"data\": { ... } or null,\n  \"error\": { \"code\": \"...\", \"details\": \"...\" } or null,\n  \"meta\": { \"requestId\": \"...\", \"page\": N, \"limit\": N } or null\n}\n\nFor detailed API documentation, visit /docs on the running server.",
+		"_postman_id": "fyredocs-api-collection-v2",
+		"name": "Fyredocs API - Complete Collection",
+		"description": "Complete API testing collection for Fyredocs backend services. Includes authentication, file upload, PDF conversion, organization, and optimization endpoints.\n\nAll endpoints return a standardized response format:\n{\n  \"success\": true/false,\n  \"message\": \"...\",\n  \"data\": { ... } or null,\n  \"error\": { \"code\": \"...\", \"details\": \"...\" } or null,\n  \"meta\": { \"requestId\": \"...\", \"page\": N, \"limit\": N } or null\n}\n\nFor detailed API documentation, visit /docs on the running server.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
 		"version": "2.0.0"
 	},

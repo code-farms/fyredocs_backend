@@ -13,7 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"analytics-service/internal/promscrape"
-	"esydocs/shared/response"
+	"fyredocs/shared/response"
 )
 
 // ServiceStartTime should be set in main.go at startup.

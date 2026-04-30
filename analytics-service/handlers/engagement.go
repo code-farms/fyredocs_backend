@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"analytics-service/internal/models"
-	"esydocs/shared/response"
+	"fyredocs/shared/response"
 )
 
 // EngagementMetrics returns engagement metrics: tool adoption trends, jobs per user,

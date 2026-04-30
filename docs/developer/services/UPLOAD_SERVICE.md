@@ -325,7 +325,7 @@ Jobs store metadata in PostgreSQL including:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:password@db:5432/esydocs?sslmode=disable` |
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:password@db:5432/fyredocs?sslmode=disable` |
 | `REDIS_ADDR` | Redis server address | `redis:6379` |
 | `JWT_HS256_SECRET` | JWT signing secret (32+ chars) | See [AUTH_SERVICE.md](./AUTH_SERVICE.md) |
 
@@ -440,7 +440,7 @@ upload-service:
   ports:
     - "8081:8081"
   environment:
-    DATABASE_URL: postgresql://user:password@db:5432/esydocs
+    DATABASE_URL: postgresql://user:password@db:5432/fyredocs
     REDIS_ADDR: redis:6379
     JWT_HS256_SECRET: ${JWT_HS256_SECRET}
     # ... other variables
@@ -461,7 +461,7 @@ upload-service:
 
 2. Set environment variables:
    ```bash
-   export DATABASE_URL="postgresql://user:password@localhost:5432/esydocs?sslmode=disable"
+   export DATABASE_URL="postgresql://user:password@localhost:5432/fyredocs?sslmode=disable"
    export REDIS_ADDR="localhost:6379"
    export JWT_HS256_SECRET=$(openssl rand -hex 32)
    ```
@@ -566,7 +566,7 @@ docker compose exec upload-service ls -la /app/outputs/
 docker compose ps db
 
 # Test database connection
-docker compose exec upload-service pg_isready -h db -U user -d esydocs
+docker compose exec upload-service pg_isready -h db -U user -d fyredocs
 
 # Check database logs
 docker compose logs db
@@ -593,7 +593,7 @@ docker compose restart db upload-service
 curl http://localhost:8081/healthz
 
 # Database health
-docker compose exec db pg_isready -U user -d esydocs
+docker compose exec db pg_isready -U user -d fyredocs
 
 # Redis health
 docker compose exec redis redis-cli ping
@@ -762,5 +762,5 @@ sequenceDiagram
 
 For issues:
 - Check logs: `docker compose logs -f upload-service`
-- Inspect database: `docker compose exec db psql -U user -d esydocs`
+- Inspect database: `docker compose exec db psql -U user -d fyredocs`
 - Check Redis: `docker compose exec redis redis-cli`

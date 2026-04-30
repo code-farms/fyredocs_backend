@@ -1,4 +1,4 @@
-# EsyDocs Deployment Strategy Review
+# Fyredocs Deployment Strategy Review
 
 > Reviewed: 2026-03-19 | Scope: `docker-compose.yml`, `deploy.sh`, Dockerfiles, infrastructure config
 
@@ -12,7 +12,7 @@
 - **BuildKit caching** for Go module and build cache — faster rebuilds
 - **Sequential builds** in `deploy.sh` to avoid CPU/memory exhaustion on constrained hosts
 - **JWT secret generation** with `chmod 600` — reasonable for development
-- **Shared base image** (`esydocs-base`) for PDF processing tools — avoids redundant layers across workers
+- **Shared base image** (`fyredocs-base`) for PDF processing tools — avoids redundant layers across workers
 - **Go workspace** (`go.work`) for unified dependency management across services
 
 ---
@@ -25,10 +25,10 @@
 **Severity:** CRITICAL
 
 ```yaml
-POSTGRES_DB: esydocs
+POSTGRES_DB: fyredocs
 POSTGRES_USER: user
 POSTGRES_PASSWORD: password
-DATABASE_URL: postgresql://user:password@db:5432/esydocs?sslmode=disable
+DATABASE_URL: postgresql://user:password@db:5432/fyredocs?sslmode=disable
 ```
 
 Credentials are plaintext in the compose file. Anyone with repo access has full database access.
@@ -37,14 +37,14 @@ Credentials are plaintext in the compose file. Anyone with repo access has full 
 
 ```yaml
 # .env (gitignored)
-POSTGRES_USER=esydocs_admin
+POSTGRES_USER=fyredocs_admin
 POSTGRES_PASSWORD=<generated-secure-password>
 
 # docker-compose.yml
 environment:
   POSTGRES_USER: ${POSTGRES_USER}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/esydocs?sslmode=disable
+  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/fyredocs?sslmode=disable
 ```
 
 **Fix (production):** Use Docker secrets or an external secrets manager (HashiCorp Vault, AWS Secrets Manager, etc.).
@@ -67,7 +67,7 @@ All 8 service ports (8080-8086) are exposed directly to the host. In production 
 - Only expose ports 80 and 443 to the host
 - TLS termination with Let's Encrypt (Caddy does this automatically)
 - Route external traffic **only** to the API gateway
-- Remove `ports:` from all worker services — they communicate internally over `esydocs_net`
+- Remove `ports:` from all worker services — they communicate internally over `fyredocs_net`
 
 ```yaml
 # Example: Add to docker-compose.yml
@@ -84,7 +84,7 @@ caddy:
     api-gateway:
       condition: service_healthy
   networks:
-    - esydocs_net
+    - fyredocs_net
 ```
 
 Then remove `ports:` from `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`, `cleanup-worker`, and infrastructure services.
@@ -123,9 +123,9 @@ jobs:
         with:
           go-version: '1.25'
       - run: go vet ./...
-        working-directory: esydocs_backend
+        working-directory: fyredocs_backend
       - run: go test ./...
-        working-directory: esydocs_backend
+        working-directory: fyredocs_backend
 
   build:
     needs: test
@@ -134,9 +134,9 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           for svc in api-gateway auth-service job-service convert-from-pdf convert-to-pdf organize-pdf optimize-pdf cleanup-worker; do
-            docker build -t esydocs-$svc:${{ github.sha }} -f $svc/Dockerfile .
+            docker build -t fyredocs-$svc:${{ github.sha }} -f $svc/Dockerfile .
           done
-        working-directory: esydocs_backend
+        working-directory: fyredocs_backend
 ```
 
 Add image push to a container registry (GHCR, ECR, Docker Hub) and deployment triggers on merge to main.
@@ -159,7 +159,7 @@ Add image push to a container registry (GHCR, ECR, Docker Hub) and deployment tr
 GIT_SHA=$(git rev-parse --short HEAD)
 for SERVICE in "${GO_SERVICES[@]}"; do
     docker compose build "$SERVICE"
-    docker tag "esydocs_backend-${SERVICE}:latest" "esydocs_backend-${SERVICE}:${GIT_SHA}"
+    docker tag "fyredocs_backend-${SERVICE}:latest" "fyredocs_backend-${SERVICE}:${GIT_SHA}"
 done
 ```
 
@@ -197,10 +197,10 @@ command: ["sh", "-c", "chown -R 10001:10001 /app/uploads /app/outputs && chmod -
 
 PostgreSQL (5432), Redis (6379), and NATS (4222, 8222) are all published to the host network. In production, this means anyone who can reach the host can connect directly to these services.
 
-**Fix:** Remove `ports:` from all infrastructure services. They communicate with application services over the internal `esydocs_net` bridge network. For local debugging, use `docker compose exec`:
+**Fix:** Remove `ports:` from all infrastructure services. They communicate with application services over the internal `fyredocs_net` bridge network. For local debugging, use `docker compose exec`:
 
 ```bash
-docker compose exec db psql -U user -d esydocs
+docker compose exec db psql -U user -d fyredocs
 docker compose exec redis redis-cli
 ```
 
@@ -273,7 +273,7 @@ otel-collector:
   volumes:
     - ./infra/otel-config.yaml:/etc/otelcol-contrib/config.yaml
   networks:
-    - esydocs_net
+    - fyredocs_net
 ```
 
 Or remove the `OTEL_EXPORTER_OTLP_ENDPOINT` env vars to avoid confusion and silent errors on startup.
@@ -292,7 +292,7 @@ PostgreSQL data lives in a Docker named volume (`postgres_data`). If the volume 
 #!/bin/bash
 BACKUP_DIR="./backups"
 mkdir -p "$BACKUP_DIR"
-docker compose exec -T db pg_dump -U user esydocs | gzip > "$BACKUP_DIR/esydocs_$(date +%Y%m%d_%H%M%S).sql.gz"
+docker compose exec -T db pg_dump -U user fyredocs | gzip > "$BACKUP_DIR/fyredocs_$(date +%Y%m%d_%H%M%S).sql.gz"
 # Retain last 7 days
 find "$BACKUP_DIR" -name "*.sql.gz" -mtime +7 -delete
 ```
@@ -331,7 +331,7 @@ wait_for_service() {
     exit 1
 }
 
-wait_for_service "Database" "docker compose exec -T db pg_isready -U user -d esydocs"
+wait_for_service "Database" "docker compose exec -T db pg_isready -U user -d fyredocs"
 wait_for_service "Redis" "docker compose exec -T redis redis-cli ping"
 wait_for_service "NATS" "curl -s http://localhost:8222/healthz"
 wait_for_service "API Gateway" "curl -s http://localhost:8080/healthz"
@@ -343,12 +343,12 @@ wait_for_service "API Gateway" "curl -s http://localhost:8080/healthz"
 
 **Severity:** MEDIUM
 
-The React frontend (`esydocs_frontend/`) has Vite build scripts but no Dockerfile, no container, and no deployment configuration. It is not part of the Docker Compose stack.
+The React frontend (`fyredocs_frontend/`) has Vite build scripts but no Dockerfile, no container, and no deployment configuration. It is not part of the Docker Compose stack.
 
 **Fix:** Add a frontend container with Nginx serving the static build:
 
 ```dockerfile
-# esydocs_frontend/Dockerfile
+# fyredocs_frontend/Dockerfile
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./

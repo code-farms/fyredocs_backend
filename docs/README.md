@@ -1,16 +1,16 @@
-# EsyDocs Documentation
+# Fyredocs Documentation
 
 ## Overview
 
-EsyDocs is a document conversion and PDF manipulation platform built with a microservices architecture. Documentation is organized into two categories:
+Fyredocs is a document conversion and PDF manipulation platform built with a microservices architecture. Documentation is organized into two categories:
 
 ---
 
 ## Feature Docs (User-Facing)
 
-Browse tool guides, supported formats, and FAQ on the EsyDocs website:
+Browse tool guides, supported formats, and FAQ on the Fyredocs website:
 
-**[https://esydocs.com/docs](https://esydocs.com/docs)**
+**[https://fyredocs.com/docs](https://fyredocs.com/docs)**
 
 These docs explain each tool in simple terms — what it does, how to use it, and what formats are supported.
 
@@ -18,7 +18,7 @@ These docs explain each tool in simple terms — what it does, how to use it, an
 
 ## Developer Docs
 
-Technical documentation for developers working on the EsyDocs platform.
+Technical documentation for developers working on the Fyredocs platform.
 
 **[Developer Documentation →](developer/README.md)**
 

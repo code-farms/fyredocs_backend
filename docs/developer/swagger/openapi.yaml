@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
-  title: EsyDocs API
+  title: Fyredocs API
   description: |
-    EsyDocs is a document processing platform that provides PDF conversion,
+    Fyredocs is a document processing platform that provides PDF conversion,
     optimization, and organization tools. All responses follow a unified
     envelope format (`APIResponse`) with consistent error handling.
 
@@ -30,11 +30,11 @@ info:
     - `X-RateLimit-Reset` - Unix timestamp when the window resets
   version: 1.0.0
   contact:
-    name: EsyDocs Team
+    name: Fyredocs Team
 
 servers:
   - url: http://localhost:8080
-    description: EsyDocs API Gateway (local development)
+    description: Fyredocs API Gateway (local development)
 
 tags:
   - name: Health

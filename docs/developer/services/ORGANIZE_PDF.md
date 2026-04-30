@@ -4,7 +4,7 @@ A microservice for PDF organization operations including merging, splitting, rem
 
 ## Overview
 
-The Organize-PDF service provides comprehensive PDF manipulation capabilities using free open-source tools. It's part of the EsyDocs microservices architecture and handles all PDF organization operations.
+The Organize-PDF service provides comprehensive PDF manipulation capabilities using free open-source tools. It's part of the Fyredocs microservices architecture and handles all PDF organization operations.
 
 **Port:** 8084
 **Queue:** `queue:organize-pdf`
@@ -202,7 +202,7 @@ Downloads the processed file once the job is completed.
 
 ### Database & Redis
 ```env
-DATABASE_URL="postgresql://user:password@localhost:5432/esydocs?sslmode=disable"
+DATABASE_URL="postgresql://user:password@localhost:5432/fyredocs?sslmode=disable"
 REDIS_ADDR="localhost:6379"
 REDIS_PASSWORD=""
 REDIS_DB="0"
@@ -221,8 +221,8 @@ OUTPUT_DIR="outputs"
 ```env
 JWT_ALLOWED_ALGS="HS256"
 JWT_HS256_SECRET="your-secret-here-min-32-chars"
-JWT_ISSUER="esydocs"
-JWT_AUDIENCE="esydocs-api"
+JWT_ISSUER="fyredocs"
+JWT_AUDIENCE="fyredocs-api"
 JWT_CLOCK_SKEW="60s"
 ```
 
@@ -310,7 +310,7 @@ organize-pdf:
 
 ### Local Setup
 ```bash
-cd esydocs_backend/organize-pdf
+cd fyredocs_backend/organize-pdf
 
 # Install dependencies
 go mod download
@@ -617,7 +617,7 @@ When retries are exhausted (MaxDeliver reached), the failed job payload is publi
 
 ## License
 
-Part of the EsyDocs project.
+Part of the Fyredocs project.
 
 ## Support
 

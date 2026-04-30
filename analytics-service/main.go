@@ -11,11 +11,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"esydocs/shared/config"
-	"esydocs/shared/logger"
-	"esydocs/shared/metrics"
-	"esydocs/shared/natsconn"
-	"esydocs/shared/telemetry"
+	"fyredocs/shared/config"
+	"fyredocs/shared/logger"
+	"fyredocs/shared/metrics"
+	"fyredocs/shared/natsconn"
+	"fyredocs/shared/telemetry"
 
 	"analytics-service/handlers"
 	"analytics-service/internal/models"
