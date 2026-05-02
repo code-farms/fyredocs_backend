@@ -475,10 +475,18 @@ redis-cli TTL upload:YOUR-UPLOAD-ID
 ```
 
 **Solutions**:
-1. Increase `UPLOAD_TTL` (default 30m may be too short)
+1. Increase `UPLOAD_TTL` (default 2h may be too short for very long sessions)
 2. Verify upload ID is correct
 3. Check if Redis restarted (sessions are in-memory)
 4. Enable AOF persistence for durability
+
+**Note**: As of the retry-safe consume refactor, the job-service no longer
+deletes the upload record until **after** the DB transaction commits and the
+`JobCreated` event is published. So the legacy class of failures — where MIME
+validation, the DB insert, or NATS publish failed and a retry then hit
+"upload not found" because the record had already been deleted — is no longer
+possible. If you see "upload not found" today, it is genuinely missing: either
+it was never created, the TTL elapsed, or Redis was flushed/restarted.
 
 ---
 

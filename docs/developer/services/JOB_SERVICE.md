@@ -310,8 +310,8 @@ sequenceDiagram
     alt JSON body with uploadId
         JS->>R: HGETALL upload:<uploadId>
         R-->>JS: {fileName, fileSize, ...}
-        JS->>JS: Move file from uploads/<uploadId>/ to uploads/<jobId>/
-        JS->>R: DEL upload:<uploadId> (consume upload)
+        JS->>JS: Hardlink (or copy) uploads/<uploadId>/file into uploads/<jobId>/
+        Note over JS,R: Source file and Redis state are NOT removed yet — the upload remains intact so the request can retry on a downstream failure without re-uploading.
     else Multipart form upload
         JS->>JS: Save uploaded files directly to uploads/<jobId>/
     end
@@ -324,6 +324,9 @@ sequenceDiagram
     JS->>JS: routing.ServiceForTool("pdf-to-word") => "convert-from-pdf"
     JS->>NATS: Publish JobCreated to dispatch.convert-from-pdf
     NATS-->>W: Deliver JobCreated event
+
+    JS->>R: DEL upload:<uploadId>, upload:<uploadId>:chunks (release upload — only after publish succeeds)
+    JS->>JS: rm -rf uploads/<uploadId>/
 
     opt Idempotency-Key header present
         JS->>R: SET idempotency:<key> <jobId> EX 600
@@ -452,7 +455,7 @@ All errors follow the standard response format:
 When job creation fails partway through:
 - The job directory (`uploads/<jobId>/`) is removed via a deferred cleanup
 - The `jobCreated` flag ensures cleanup only runs if the DB insert did not complete
-- Upload state in Redis is only consumed (deleted) after successful file move
+- The upload (`upload:<uploadId>` Redis hash and `uploads/<uploadId>/` source dir) is released **only after** the DB transaction commits **and** the `JobCreated` event is published. Any failure before that point leaves the upload intact, so the frontend's retry button can resubmit the same `uploadId` without forcing the user to re-upload. The file is materialised into `uploads/<jobId>/` via a hardlink (with a copy fallback for cross-device cases) so retries land on a fresh `jobDir` while the source remains untouched.
 
 ## Environment Variables
 

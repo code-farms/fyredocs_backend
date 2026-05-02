@@ -1,17 +1,58 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/datatypes"
+
+	"fyredocs/shared/redisstore"
 
 	"job-service/internal/models"
 )
+
+// withMiniRedis swaps the global redisstore.Client for one backed by an
+// in-process miniredis for the duration of the test, then restores the
+// original. The returned client points at the test server so callers can
+// inspect/seed state directly.
+func withMiniRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	prev := redisstore.Client
+	redisstore.Client = client
+	t.Cleanup(func() { redisstore.Client = prev })
+	return mr, client
+}
+
+// seedUpload creates a Redis upload state record and an assembled file on disk
+// matching the layout produced by CompleteUpload.
+func seedUpload(t *testing.T, client *redis.Client, uploadDir string, uploadID string, fileName string, contents []byte) {
+	t.Helper()
+	if err := client.HSet(context.Background(), "upload:"+uploadID, map[string]interface{}{
+		"fileName":    fileName,
+		"fileSize":    len(contents),
+		"totalChunks": 1,
+	}).Err(); err != nil {
+		t.Fatalf("seed redis: %v", err)
+	}
+	srcDir := filepath.Join(uploadDir, uploadID)
+	if err := os.MkdirAll(srcDir, 0750); err != nil {
+		t.Fatalf("mkdir src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, fileName), contents, 0644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+}
 
 func TestNormalizeToolType(t *testing.T) {
 	tests := []struct {
@@ -660,5 +701,175 @@ func TestValidateMIMETypeNonexistentFile(t *testing.T) {
 	err := validateMIMEType("pdf-to-word", "/nonexistent/file.pdf")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
+	}
+}
+
+// PNG header is needed because the convert path runs validateMIMEType after
+// consumeUpload on the linked file.
+var pngBytes = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D}
+
+func TestLinkOrCopyFile_PreservesSource(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "src.bin")
+	dst := filepath.Join(tmp, "dst.bin")
+	contents := []byte("hello world")
+	if err := os.WriteFile(src, contents, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := linkOrCopyFile(src, dst); err != nil {
+		t.Fatalf("linkOrCopyFile: %v", err)
+	}
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("source must remain in place after linkOrCopyFile: %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read dst: %v", err)
+	}
+	if string(got) != string(contents) {
+		t.Errorf("dst contents = %q, want %q", got, contents)
+	}
+}
+
+func TestConsumeUpload_PreservesStateOnSuccess(t *testing.T) {
+	_, client := withMiniRedis(t)
+	tmp := t.TempDir()
+	t.Setenv("UPLOAD_DIR", tmp)
+
+	uploadID := "upl-success"
+	seedUpload(t, client, tmp, uploadID, "photo.png", pngBytes)
+
+	jobDir := filepath.Join(tmp, "job-1")
+	if err := os.MkdirAll(jobDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+
+	consumed, size, err := consumeUpload(context.Background(), "image-to-pdf", uploadID, jobDir, 0)
+	if err != nil {
+		t.Fatalf("consumeUpload: %v", err)
+	}
+	if size != int64(len(pngBytes)) {
+		t.Errorf("size = %d, want %d", size, len(pngBytes))
+	}
+	if _, err := os.Stat(consumed.Path); err != nil {
+		t.Errorf("expected linked file at %s: %v", consumed.Path, err)
+	}
+
+	// The source file and Redis state must still exist so the request can
+	// retry the rest of the flow without re-uploading.
+	srcPath := filepath.Join(tmp, uploadID, "photo.png")
+	if _, err := os.Stat(srcPath); err != nil {
+		t.Errorf("source must be preserved after consumeUpload: %v", err)
+	}
+	exists, err := client.Exists(context.Background(), "upload:"+uploadID).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists != 1 {
+		t.Error("redis upload state must be preserved after consumeUpload")
+	}
+}
+
+func TestConsumeUpload_RetrySafeAfterFirstCall(t *testing.T) {
+	_, client := withMiniRedis(t)
+	tmp := t.TempDir()
+	t.Setenv("UPLOAD_DIR", tmp)
+
+	uploadID := "upl-retry"
+	seedUpload(t, client, tmp, uploadID, "photo.png", pngBytes)
+
+	// First consume — simulates the original request that failed downstream.
+	jobDir1 := filepath.Join(tmp, "job-1")
+	_ = os.MkdirAll(jobDir1, 0750)
+	if _, _, err := consumeUpload(context.Background(), "image-to-pdf", uploadID, jobDir1, 0); err != nil {
+		t.Fatalf("first consumeUpload: %v", err)
+	}
+
+	// Second consume — frontend retries with the same uploadId, fresh jobDir.
+	jobDir2 := filepath.Join(tmp, "job-2")
+	_ = os.MkdirAll(jobDir2, 0750)
+	consumed, _, err := consumeUpload(context.Background(), "image-to-pdf", uploadID, jobDir2, 0)
+	if err != nil {
+		t.Fatalf("retry consumeUpload must succeed, got: %v", err)
+	}
+	if filepath.Dir(consumed.Path) != jobDir2 {
+		t.Errorf("retry should land in jobDir2, got %s", consumed.Path)
+	}
+}
+
+func TestReleaseUpload_ClearsStateAndDir(t *testing.T) {
+	_, client := withMiniRedis(t)
+	tmp := t.TempDir()
+	t.Setenv("UPLOAD_DIR", tmp)
+
+	uploadID := "upl-release"
+	seedUpload(t, client, tmp, uploadID, "photo.png", pngBytes)
+	// Also seed the chunks set so the release covers both keys.
+	if err := client.SAdd(context.Background(), "upload:"+uploadID+":chunks", "0").Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	releaseUpload(context.Background(), uploadID)
+
+	for _, key := range []string{"upload:" + uploadID, "upload:" + uploadID + ":chunks"} {
+		exists, err := client.Exists(context.Background(), key).Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if exists != 0 {
+			t.Errorf("redis key %q must be cleared after releaseUpload", key)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tmp, uploadID)); !os.IsNotExist(err) {
+		t.Errorf("upload directory must be removed after releaseUpload, stat err = %v", err)
+	}
+}
+
+func TestReleaseUpload_NoopOnEmptyOrMissing(t *testing.T) {
+	_, _ = withMiniRedis(t)
+	tmp := t.TempDir()
+	t.Setenv("UPLOAD_DIR", tmp)
+
+	// Must not panic on empty id or on a non-existent upload.
+	releaseUpload(context.Background(), "")
+	releaseUpload(context.Background(), "does-not-exist")
+}
+
+func TestConsumeUpload_RejectsMissingUpload(t *testing.T) {
+	_, _ = withMiniRedis(t)
+	tmp := t.TempDir()
+	t.Setenv("UPLOAD_DIR", tmp)
+
+	jobDir := filepath.Join(tmp, "job-1")
+	_ = os.MkdirAll(jobDir, 0750)
+
+	_, _, err := consumeUpload(context.Background(), "image-to-pdf", "nope", jobDir, 0)
+	if err == nil || err.Error() != "upload not found" {
+		t.Errorf("expected 'upload not found', got %v", err)
+	}
+}
+
+func TestConsumeUpload_RejectsWrongFileType(t *testing.T) {
+	_, client := withMiniRedis(t)
+	tmp := t.TempDir()
+	t.Setenv("UPLOAD_DIR", tmp)
+
+	uploadID := "upl-bad-ext"
+	seedUpload(t, client, tmp, uploadID, "doc.pdf", []byte("%PDF-1.4"))
+
+	jobDir := filepath.Join(tmp, "job-1")
+	_ = os.MkdirAll(jobDir, 0750)
+
+	_, _, err := consumeUpload(context.Background(), "image-to-pdf", uploadID, jobDir, 0)
+	if err == nil {
+		t.Fatal("expected error for pdf submitted to image-to-pdf")
+	}
+	// Source and state must still be preserved on validation failure.
+	if _, err := os.Stat(filepath.Join(tmp, uploadID, "doc.pdf")); err != nil {
+		t.Errorf("source must be preserved on validation failure: %v", err)
+	}
+	exists, _ := client.Exists(context.Background(), "upload:"+uploadID).Result()
+	if exists != 1 {
+		t.Error("redis state must be preserved on validation failure")
 	}
 }

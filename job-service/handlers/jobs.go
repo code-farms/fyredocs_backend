@@ -101,6 +101,7 @@ func CreateJobFromTool(c *gin.Context) {
 	var totalSize int64
 	var inputPaths []string
 	var fileMetas []models.FileMetadata
+	var consumedUploadIDs []string
 	originalName := ""
 	optionsRaw := ""
 
@@ -135,6 +136,7 @@ func CreateJobFromTool(c *gin.Context) {
 				response.BadRequest(c, "INVALID_INPUT", err.Error())
 				return
 			}
+			consumedUploadIDs = append(consumedUploadIDs, uploadID)
 			if err := validateMIMEType(toolType, consumed.Path); err != nil {
 				response.BadRequest(c, "INVALID_INPUT", err.Error())
 				return
@@ -289,6 +291,13 @@ func CreateJobFromTool(c *gin.Context) {
 	}
 
 	jobCreated = true
+
+	// Free the upload slot only after the job is fully committed and queued.
+	// On any failure above this line, the upload state is preserved so the
+	// frontend can retry with the same uploadId without re-uploading.
+	for _, id := range consumedUploadIDs {
+		releaseUpload(c.Request.Context(), id)
+	}
 
 	// Store idempotency key in Redis with 10-minute TTL
 	if idempotencyKey != "" && redisstore.Client != nil {
@@ -476,6 +485,12 @@ type consumedUpload struct {
 	OriginalName string
 }
 
+// consumeUpload materialises an uploaded file into jobDir without removing the
+// source. The Redis state and original upload directory are intentionally left
+// in place so the caller can retry on a downstream failure (MIME validation,
+// DB transaction, queue publish) without forcing the user to re-upload. The
+// caller must invoke releaseUpload after the job is committed to free the
+// upload slot.
 func consumeUpload(ctx context.Context, toolType string, uploadID string, jobDir string, index int) (consumedUpload, int64, error) {
 	if uploadID == "" {
 		return consumedUpload{}, 0, fmt.Errorf("uploadId is required")
@@ -507,7 +522,7 @@ func consumeUpload(ctx context.Context, toolType string, uploadID string, jobDir
 
 	destName := uniqueUploadFileName(uploadID, fileName, index)
 	destPath := filepath.Join(jobDir, destName)
-	if err := moveFile(sourcePath, destPath); err != nil {
+	if err := linkOrCopyFile(sourcePath, destPath); err != nil {
 		return consumedUpload{}, 0, fmt.Errorf("failed to move upload")
 	}
 	info, err := os.Stat(destPath)
@@ -518,10 +533,23 @@ func consumeUpload(ctx context.Context, toolType string, uploadID string, jobDir
 		return consumedUpload{}, 0, fmt.Errorf("file exceeds maximum size")
 	}
 
-	redisstore.Client.Del(ctx, uploadStateKey(uploadID), uploadStateKey(uploadID)+":chunks")
-	_ = os.RemoveAll(filepath.Join(uploadBaseDir(), uploadID))
-
 	return consumedUpload{Path: destPath, OriginalName: fileName}, info.Size(), nil
+}
+
+// releaseUpload clears the Redis state and removes the source upload directory
+// for a successfully consumed upload. Failures are logged but never returned —
+// the job has already been queued and a stuck upload record will be cleaned up
+// by the cleanup-worker / TTL.
+func releaseUpload(ctx context.Context, uploadID string) {
+	if uploadID == "" || redisstore.Client == nil {
+		return
+	}
+	if err := redisstore.Client.Del(ctx, uploadStateKey(uploadID), uploadStateKey(uploadID)+":chunks").Err(); err != nil {
+		slog.Warn("failed to clear upload state", "uploadId", uploadID, "error", err)
+	}
+	if err := os.RemoveAll(filepath.Join(uploadBaseDir(), uploadID)); err != nil {
+		slog.Warn("failed to remove upload directory", "uploadId", uploadID, "error", err)
+	}
 }
 
 func uniqueUploadFileName(uploadID string, fileName string, index int) string {
@@ -532,8 +560,12 @@ func uniqueUploadFileName(uploadID string, fileName string, index int) string {
 	return fmt.Sprintf("%s_%d_%s", uploadID, index, base)
 }
 
-func moveFile(src string, dst string) error {
-	if err := os.Rename(src, dst); err == nil {
+// linkOrCopyFile materialises src at dst without removing src. It first tries
+// a hardlink (zero-copy on the same filesystem) and falls back to a byte copy
+// when hardlinking is not supported (cross-device, EXDEV, or filesystems that
+// disallow links). Leaving src intact is what makes the upload retry-safe.
+func linkOrCopyFile(src string, dst string) error {
+	if err := os.Link(src, dst); err == nil {
 		return nil
 	}
 	in, err := os.Open(src)
@@ -562,7 +594,7 @@ func moveFile(src string, dst string) error {
 		return err
 	}
 	copied = true
-	return os.Remove(src)
+	return nil
 }
 
 func normalizeToolType(toolType string) (string, error) {
