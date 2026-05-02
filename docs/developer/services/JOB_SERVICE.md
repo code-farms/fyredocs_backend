@@ -119,7 +119,7 @@ All job endpoints (`CreateJobFromTool`, `GetJobByID`, `GetJobsByTool`, `GetJobHi
 |--------|------|---------|-------------|
 | GET | `/api/jobs/:id/events` | `SSEJobUpdates` | Stream real-time job status updates via SSE |
 
-The SSE endpoint creates an ephemeral NATS JetStream consumer on the `JOBS_EVENTS` stream and filters events server-side by job ID. The stream auto-closes when the job completes or fails, and has a 5-minute timeout to prevent zombie connections. A keepalive comment is sent every 15 seconds to prevent proxy timeouts.
+The SSE endpoint creates an ephemeral NATS JetStream consumer on the `JOBS_EVENTS` stream and filters events server-side by job ID. The stream auto-closes when the job completes or fails, and has a 5-minute timeout to prevent zombie connections. A keepalive comment is sent every 15 seconds to prevent proxy timeouts. On handler exit the consumer is explicitly deleted via `JS.DeleteConsumer` (using a fresh 5-second context, since the request context is already cancelled); the consumer's `InactiveThreshold` of 60 s acts as a safety net if the explicit delete fails.
 
 **SSE Event Types:**
 | Event | Description |

@@ -53,6 +53,14 @@ func SSEJobUpdates(c *gin.Context) {
 		c.Writer.Flush()
 		return
 	}
+	// Explicitly delete the ephemeral consumer on exit. The request ctx is already
+	// cancelled by the time this defer runs, so a fresh short-lived context is used.
+	// Best-effort: InactiveThreshold reaps it within 60s as a safety net.
+	defer func() {
+		delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer delCancel()
+		_ = natsconn.JS.DeleteConsumer(delCtx, "JOBS_EVENTS", cons.CachedInfo().Name)
+	}()
 
 	// Send initial connected event
 	fmt.Fprintf(c.Writer, "event: connected\ndata: {\"jobId\":\"%s\"}\n\n", jobID)

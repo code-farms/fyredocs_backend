@@ -18,6 +18,9 @@ The service subscribes to two NATS streams:
 
 Events are persisted to the `analytics_events` PostgreSQL table for querying.
 
+### Subscriber Lifecycle
+`subscriber.Start` returns a `*Subscribers` handle that owns the JetStream `ConsumeContext` for both subscriptions. On SIGTERM the service calls `srv.Shutdown(ctx)` to drain in-flight HTTP requests, then `subs.Stop()` to halt the dispatcher goroutines, and finally lets the deferred `natsconn.Close()` drain the NATS connection. This ordering prevents events from being dispatched into DB writes after the connection has begun draining.
+
 ### Event Types
 | Event Type | Source | Description |
 |-----------|--------|-------------|

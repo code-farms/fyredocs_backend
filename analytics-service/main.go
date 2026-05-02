@@ -46,7 +46,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := subscriber.Start(context.Background()); err != nil {
+	subs, err := subscriber.Start(context.Background())
+	if err != nil {
 		slog.Error("failed to start analytics subscribers", "error", err)
 		os.Exit(1)
 	}
@@ -92,6 +93,7 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("server forced to shutdown", "error", err)
 	}
+	subs.Stop()
 	slog.Info("analytics-service exited")
 }
 

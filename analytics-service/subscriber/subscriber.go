@@ -16,19 +16,53 @@ import (
 	"analytics-service/internal/models"
 )
 
-// Start subscribes to analytics and job event streams and persists events to the database.
-func Start(ctx context.Context) error {
-	if err := subscribeAnalyticsEvents(ctx); err != nil {
-		return err
-	}
-	if err := subscribeJobEvents(ctx); err != nil {
-		return err
-	}
-	slog.Info("Analytics subscribers started")
-	return nil
+// Subscribers owns the JetStream consume contexts for the analytics-service.
+// Stop must be called during graceful shutdown so the dispatcher goroutines
+// finish before the NATS connection is drained.
+type Subscribers struct {
+	analytics jetstream.ConsumeContext
+	jobs      jetstream.ConsumeContext
 }
 
-func subscribeAnalyticsEvents(ctx context.Context) error {
+// Start subscribes to analytics and job event streams and persists events to the database.
+// The returned Subscribers must have Stop called on shutdown.
+func Start(ctx context.Context) (*Subscribers, error) {
+	s := &Subscribers{}
+
+	analyticsCtx, err := subscribeAnalyticsEvents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.analytics = analyticsCtx
+
+	jobsCtx, err := subscribeJobEvents(ctx)
+	if err != nil {
+		s.Stop()
+		return nil, err
+	}
+	s.jobs = jobsCtx
+
+	slog.Info("Analytics subscribers started")
+	return s, nil
+}
+
+// Stop halts the dispatcher goroutines for both consumers. Safe to call on a
+// nil receiver and idempotent.
+func (s *Subscribers) Stop() {
+	if s == nil {
+		return
+	}
+	if s.analytics != nil {
+		s.analytics.Stop()
+		s.analytics = nil
+	}
+	if s.jobs != nil {
+		s.jobs.Stop()
+		s.jobs = nil
+	}
+}
+
+func subscribeAnalyticsEvents(ctx context.Context) (jetstream.ConsumeContext, error) {
 	consumer, err := natsconn.JS.CreateOrUpdateConsumer(ctx, "ANALYTICS", jetstream.ConsumerConfig{
 		Durable:       "analytics-service",
 		FilterSubject: "analytics.events.>",
@@ -36,16 +70,15 @@ func subscribeAnalyticsEvents(ctx context.Context) error {
 		DeliverPolicy: jetstream.DeliverNewPolicy,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	_, err = consumer.Consume(func(msg jetstream.Msg) {
+	return consumer.Consume(func(msg jetstream.Msg) {
 		handleAnalyticsEvent(msg)
 	})
-	return err
 }
 
-func subscribeJobEvents(ctx context.Context) error {
+func subscribeJobEvents(ctx context.Context) (jetstream.ConsumeContext, error) {
 	consumer, err := natsconn.JS.CreateOrUpdateConsumer(ctx, "JOBS_EVENTS", jetstream.ConsumerConfig{
 		Durable:       "analytics-job-events",
 		FilterSubject: "jobs.events.>",
@@ -53,13 +86,12 @@ func subscribeJobEvents(ctx context.Context) error {
 		DeliverPolicy: jetstream.DeliverNewPolicy,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	_, err = consumer.Consume(func(msg jetstream.Msg) {
+	return consumer.Consume(func(msg jetstream.Msg) {
 		handleJobEvent(msg)
 	})
-	return err
 }
 
 func handleAnalyticsEvent(msg jetstream.Msg) {

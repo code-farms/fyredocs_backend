@@ -424,6 +424,11 @@ Rate limits are per IP address and enforced via Redis-backed middleware.
 | `AUTH_TRUST_GATEWAY_HEADERS` | `false` | Trust X-User-ID from gateway |
 | `LOG_MODE` | `""` | Logging mode |
 
+## Background Workers
+
+### Expired Session Cleanup
+A single goroutine started at boot runs `models.DeleteExpiredSessions` once an hour. It is driven by a `time.Ticker` and selects on `cleanupCtx.Done()` so it exits on SIGTERM. The main goroutine cancels `cleanupCtx` and waits on a `sync.WaitGroup` after `srv.Shutdown` returns, so an in-flight delete is allowed to finish instead of being killed mid-statement when the DB connection pool is closed.
+
 ## Scaling Constraints
 
 1. **Horizontal scaling**: The auth-service is stateless (JWT tokens are self-contained). Multiple instances can run behind a load balancer.

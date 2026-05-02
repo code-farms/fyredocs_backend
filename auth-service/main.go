@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -90,16 +91,28 @@ func main() {
 	authMiddleware := buildAuthMiddleware(redisClient, denylist)
 	routes.SetupRouter(r, issuer, denylist, redisClient, authMiddleware)
 
-	// Periodically clean up expired sessions from the database
+	// Periodically clean up expired sessions from the database. Cancellable via
+	// cleanupCtx and tracked by cleanupWG so SIGTERM drains an in-flight delete
+	// instead of yanking the DB connection mid-statement.
+	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
+	defer cancelCleanup()
+	var cleanupWG sync.WaitGroup
+	cleanupWG.Add(1)
 	go func() {
+		defer cleanupWG.Done()
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
-		for range ticker.C {
-			deleted, err := models.DeleteExpiredSessions(models.DB)
-			if err != nil {
-				slog.Warn("expired session cleanup failed", "error", err)
-			} else if deleted > 0 {
-				slog.Info("cleaned up expired sessions", "count", deleted)
+		for {
+			select {
+			case <-cleanupCtx.Done():
+				return
+			case <-ticker.C:
+				deleted, err := models.DeleteExpiredSessions(models.DB)
+				if err != nil {
+					slog.Warn("expired session cleanup failed", "error", err)
+				} else if deleted > 0 {
+					slog.Info("cleaned up expired sessions", "count", deleted)
+				}
 			}
 		}
 	}()
@@ -132,6 +145,8 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("server forced to shutdown", "error", err)
 	}
+	cancelCleanup()
+	cleanupWG.Wait()
 	slog.Info("server exited")
 }
 
