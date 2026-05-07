@@ -21,6 +21,7 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
+	"fyredocs/shared/logger"
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/queue"
 	"fyredocs/shared/redisstore"
@@ -87,7 +88,8 @@ func CreateJobFromTool(c *gin.Context) {
 	jobDir := filepath.Join(uploadDir, jobID.String())
 	// Fix #17: Use 0750 instead of os.ModePerm
 	if err := os.MkdirAll(jobDir, 0750); err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Something went wrong. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Something went wrong. Please try again.", err,
+			"op", "create_job_dir", "jobDir", jobDir, "tool", toolType, "jobId", jobID)
 		return
 	}
 
@@ -108,7 +110,8 @@ func CreateJobFromTool(c *gin.Context) {
 	if strings.Contains(c.GetHeader("Content-Type"), "application/json") {
 		var uploadReq UploadJobRequest
 		if err := c.ShouldBindJSON(&uploadReq); err != nil {
-			response.BadRequest(c, "INVALID_INPUT", "Invalid request. Please try again.")
+			response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid request. Please try again.", err,
+				"op", "bind_job_request", "tool", toolType)
 			return
 		}
 		uploadIDs := uploadReq.UploadIDs
@@ -133,12 +136,14 @@ func CreateJobFromTool(c *gin.Context) {
 		for idx, uploadID := range uploadIDs {
 			consumed, size, err := consumeUpload(c.Request.Context(), toolType, uploadID, jobDir, idx)
 			if err != nil {
-				response.BadRequest(c, "INVALID_INPUT", err.Error())
+				response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", err.Error(), err,
+					"op", "consume_upload", "uploadId", uploadID, "tool", toolType, "jobId", jobID)
 				return
 			}
 			consumedUploadIDs = append(consumedUploadIDs, uploadID)
 			if err := validateMIMEType(toolType, consumed.Path); err != nil {
-				response.BadRequest(c, "INVALID_INPUT", err.Error())
+				response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", err.Error(), err,
+					"op", "validate_mime", "uploadId", uploadID, "tool", toolType, "path", consumed.Path)
 				return
 			}
 			totalSize += size
@@ -158,7 +163,8 @@ func CreateJobFromTool(c *gin.Context) {
 	} else {
 		form, err := c.MultipartForm()
 		if err != nil {
-			response.BadRequest(c, "INVALID_INPUT", "Invalid file upload. Please try again.")
+			response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid file upload. Please try again.", err,
+				"op", "parse_multipart", "tool", toolType)
 			return
 		}
 		files := form.File["files"]
@@ -193,16 +199,19 @@ func CreateJobFromTool(c *gin.Context) {
 				return
 			}
 			if err := validateFileType(toolType, file.Filename); err != nil {
-				response.BadRequest(c, "INVALID_INPUT", err.Error())
+				response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", err.Error(), err,
+					"op", "validate_file_type", "tool", toolType, "fileName", file.Filename)
 				return
 			}
 			dst := filepath.Join(jobDir, filepath.Base(file.Filename))
 			if err := c.SaveUploadedFile(file, dst); err != nil {
-				response.InternalError(c, "SERVER_ERROR", "Something went wrong. Please try again.")
+				response.InternalErrorf(c, "SERVER_ERROR", "Something went wrong. Please try again.", err,
+					"op", "save_uploaded_file", "tool", toolType, "dst", dst, "jobId", jobID)
 				return
 			}
 			if err := validateMIMEType(toolType, dst); err != nil {
-				response.BadRequest(c, "INVALID_INPUT", err.Error())
+				response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", err.Error(), err,
+					"op", "validate_mime", "tool", toolType, "path", dst, "jobId", jobID)
 				return
 			}
 			totalSize += file.Size
@@ -235,7 +244,8 @@ func CreateJobFromTool(c *gin.Context) {
 	}
 	metaBytes, err := json.Marshal(metaPayload)
 	if err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Something went wrong. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Something went wrong. Please try again.", err,
+			"op", "marshal_job_meta", "tool", toolType, "jobId", jobID)
 		return
 	}
 
@@ -254,16 +264,19 @@ func CreateJobFromTool(c *gin.Context) {
 
 	if err := models.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&job).Error; err != nil {
-			return err
+			return logger.LogErr(c.Request.Context(), "db.processing_jobs.create", err,
+				"jobId", job.ID, "tool", toolType)
 		}
 		for _, meta := range fileMetas {
 			if err := tx.Create(&meta).Error; err != nil {
-				return err
+				return logger.LogErr(c.Request.Context(), "db.file_metadata.create", err,
+					"jobId", job.ID, "tool", toolType, "fileMetaId", meta.ID)
 			}
 		}
 		return nil
 	}); err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Something went wrong. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Something went wrong. Please try again.", err,
+			"op", "db.processing_jobs.transaction", "tool", toolType, "jobId", jobID)
 		return
 	}
 
@@ -286,7 +299,8 @@ func CreateJobFromTool(c *gin.Context) {
 	}
 	subject := queue.SubjectForDispatch(serviceName)
 	if err := queue.PublishJobEvent(c.Request.Context(), natsconn.JS, subject, event); err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Our servers are busy. Please try again in a moment.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Our servers are busy. Please try again in a moment.", err,
+			"op", "nats.publish_job_event", "subject", subject, "tool", toolType, "jobId", job.ID)
 		return
 	}
 
@@ -337,7 +351,8 @@ func GetJobsByTool(c *gin.Context) {
 			Order("created_at desc").
 			Limit(limit).Offset(offset).
 			Find(&jobs).Error; err != nil {
-			response.InternalError(c, "SERVER_ERROR", "Could not load your jobs. Please try again.")
+			response.InternalErrorf(c, "SERVER_ERROR", "Could not load your jobs. Please try again.", err,
+				"op", "db.processing_jobs.list_guest", "tool", toolType, "page", page, "limit", limit)
 			return
 		}
 		response.OKWithMeta(c, "Jobs loaded successfully", toJobResponses(jobs), &response.Meta{Page: page, Limit: limit})
@@ -349,7 +364,8 @@ func GetJobsByTool(c *gin.Context) {
 		Order("created_at desc").
 		Limit(limit).Offset(offset).
 		Find(&jobs).Error; err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Could not load your jobs. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Could not load your jobs. Please try again.", err,
+			"op", "db.processing_jobs.list_user", "tool", toolType, "userId", userID, "page", page, "limit", limit)
 		return
 	}
 	response.OKWithMeta(c, "Jobs loaded successfully", toJobResponses(jobs), &response.Meta{Page: page, Limit: limit})
@@ -409,7 +425,8 @@ func DeleteJobByID(c *gin.Context) {
 	}
 
 	if err := models.DB.Delete(&job).Error; err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Could not delete the job. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Could not delete the job. Please try again.", err,
+			"op", "db.processing_jobs.delete", "jobId", job.ID, "tool", toolType)
 		return
 	}
 
@@ -473,7 +490,8 @@ func GetJobHistory(c *gin.Context) {
 		Limit(limit).
 		Offset(offset).
 		Find(&jobs).Error; err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Could not load your job history. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Could not load your job history. Please try again.", err,
+			"op", "db.processing_jobs.list_history", "userId", userID, "page", page, "limit", limit)
 		return
 	}
 
@@ -496,13 +514,16 @@ func consumeUpload(ctx context.Context, toolType string, uploadID string, jobDir
 		return consumedUpload{}, 0, fmt.Errorf("uploadId is required")
 	}
 	if redisstore.Client == nil {
-		return consumedUpload{}, 0, fmt.Errorf("redis unavailable")
+		return consumedUpload{}, 0, logger.LogErr(ctx, "consume_upload.redis_unavailable",
+			fmt.Errorf("redis client is nil"), "uploadId", uploadID)
 	}
 	state, err := redisstore.Client.HGetAll(ctx, uploadStateKey(uploadID)).Result()
 	if err != nil {
 		if err == redis.Nil {
+			logger.LogWarn(ctx, "consume_upload.not_found", err, "uploadId", uploadID)
 			return consumedUpload{}, 0, fmt.Errorf("upload not found")
 		}
+		logger.LogErr(ctx, "consume_upload.redis_hgetall", err, "uploadId", uploadID)
 		return consumedUpload{}, 0, fmt.Errorf("failed to read upload state")
 	}
 	if len(state) == 0 {
@@ -510,24 +531,29 @@ func consumeUpload(ctx context.Context, toolType string, uploadID string, jobDir
 	}
 	fileName := state["fileName"]
 	if fileName == "" {
-		return consumedUpload{}, 0, fmt.Errorf("upload file missing")
+		return consumedUpload{}, 0, logger.LogErr(ctx, "consume_upload.missing_filename",
+			fmt.Errorf("redis upload state has no fileName"), "uploadId", uploadID)
 	}
 	if err := validateFileType(toolType, fileName); err != nil {
 		return consumedUpload{}, 0, err
 	}
 	sourcePath := filepath.Join(uploadBaseDir(), uploadID, fileName)
 	if _, err := os.Stat(sourcePath); err != nil {
+		logger.LogErr(ctx, "consume_upload.source_stat", err, "uploadId", uploadID, "sourcePath", sourcePath)
 		return consumedUpload{}, 0, fmt.Errorf("assembled file missing")
 	}
 
 	destName := uniqueUploadFileName(uploadID, fileName, index)
 	destPath := filepath.Join(jobDir, destName)
 	if err := linkOrCopyFile(sourcePath, destPath); err != nil {
+		logger.LogErr(ctx, "consume_upload.link_or_copy", err,
+			"uploadId", uploadID, "sourcePath", sourcePath, "destPath", destPath)
 		return consumedUpload{}, 0, fmt.Errorf("failed to move upload")
 	}
 	info, err := os.Stat(destPath)
 	if err != nil {
-		return consumedUpload{}, 0, err
+		return consumedUpload{}, 0, logger.LogErr(ctx, "consume_upload.dest_stat", err,
+			"uploadId", uploadID, "destPath", destPath)
 	}
 	if info.Size() > maxUploadBytes() {
 		return consumedUpload{}, 0, fmt.Errorf("file exceeds maximum size")

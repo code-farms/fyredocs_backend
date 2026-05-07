@@ -225,10 +225,14 @@ func cleanupUploadState(ctx context.Context) {
 		}
 		createdAt, err := redisstore.Client.HGet(ctx, key, "createdAt").Result()
 		if err != nil || createdAt == "" {
+			if err != nil {
+				slog.Warn("cleanup: read createdAt failed", "key", key, "err", err)
+			}
 			continue
 		}
 		parsed, err := time.Parse(time.RFC3339, createdAt)
 		if err != nil {
+			slog.Warn("cleanup: parse createdAt failed", "key", key, "createdAt", createdAt, "err", err)
 			continue
 		}
 		if time.Since(parsed) > ttl {

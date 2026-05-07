@@ -10,6 +10,7 @@ import (
 
 	"auth-service/internal/models"
 
+	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 )
 
@@ -19,13 +20,15 @@ func (ae *AuthEndpoints) RevokeUserSessions(c *gin.Context) {
 	userIDStr := c.Param("id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_INPUT", "Invalid user ID.")
+		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid user ID.", err,
+			"op", "parse_user_id", "userIdStr", userIDStr)
 		return
 	}
 
 	sessions, err := models.RevokeAllUserSessions(models.DB, userID)
 	if err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Failed to revoke sessions.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Failed to revoke sessions.", err,
+			"op", "db.user_sessions.revoke_all", "userId", userID)
 		return
 	}
 
@@ -53,18 +56,21 @@ func (ae *AuthEndpoints) RevokeSession(c *gin.Context) {
 	sessionIDStr := c.Param("id")
 	sessionID, err := uuid.Parse(sessionIDStr)
 	if err != nil {
-		response.BadRequest(c, "INVALID_INPUT", "Invalid session ID.")
+		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid session ID.", err,
+			"op", "parse_session_id", "sessionIdStr", sessionIDStr)
 		return
 	}
 
 	var session models.UserSession
 	if err := models.DB.First(&session, "id = ?", sessionID).Error; err != nil {
+		logger.LogWarn(c.Request.Context(), "db.user_sessions.lookup", err, "sessionId", sessionID)
 		response.Err(c, http.StatusNotFound, "NOT_FOUND", "Session not found.")
 		return
 	}
 
 	if err := models.DB.Delete(&session).Error; err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Failed to revoke session.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Failed to revoke session.", err,
+			"op", "db.user_sessions.delete", "sessionId", sessionID)
 		return
 	}
 

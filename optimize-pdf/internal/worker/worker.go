@@ -151,7 +151,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 
 	jobID, err := uuid.Parse(payload.JobID)
 	if err != nil {
-		logger.Error("invalid job id", "jobId", payload.JobID)
+		logger.Error("invalid job id", "jobId", payload.JobID, "err", err)
 		_ = msg.Ack()
 		return
 	}
@@ -287,6 +287,7 @@ func updateJobStatus(db *gorm.DB, jobID uuid.UUID, status string, progress int, 
 func updateJobStatusString(db *gorm.DB, jobID string, status string, progress int, failureReason string) {
 	parsed, err := uuid.Parse(jobID)
 	if err != nil {
+		slog.Warn("updateJobStatusString: invalid uuid", "jobId", jobID, "err", err)
 		return
 	}
 	updateJobStatus(db, parsed, status, progress, failureReason)
@@ -325,6 +326,7 @@ func recordOutput(db *gorm.DB, jobID uuid.UUID, outputPath string) error {
 	}
 	info, err := os.Stat(outputPath)
 	if err != nil {
+		slog.Error("recordOutput: stat output failed", "jobId", jobID, "outputPath", outputPath, "err", err)
 		return err
 	}
 	if err := db.Where("job_id = ? AND kind = ?", jobID, "output").Delete(&models.FileMetadata{}).Error; err != nil {

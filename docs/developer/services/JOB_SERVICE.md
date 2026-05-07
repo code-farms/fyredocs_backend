@@ -548,6 +548,12 @@ job-service:
    go run main.go
    ```
 
+## Error Logging
+
+All 5xx response sites in handlers (`CreateJobFromTool`, `InitUpload`, `UploadChunk`, `CompleteUpload`, list/delete/history endpoints) emit a structured `slog.Error` via `response.InternalErrorf` before returning. Internal helpers (`consumeUpload`, etc.) call `logger.LogErr` / `logger.LogWarn` at the point of failure detection. Each line carries `op`, `requestId`, and the local IDs (`jobId`, `uploadId`, `tool`) needed to reproduce the failure. See [Error Logging](../architecture/ERROR_LOGGING.md) for the convention.
+
+To debug a user-visible failure, take `meta.requestId` from the API response and grep job-service stdout for that value — the matching `slog.Error` line names the failing `op` (e.g. `db.processing_jobs.transaction`, `create_job_dir`, `redis.upload_chunk_lua`).
+
 ## Related Documentation
 
 - [API Gateway](./API_GATEWAY.md) -- Request routing and CORS
@@ -558,3 +564,4 @@ job-service:
 - [Organize PDF](./ORGANIZE_PDF.md) -- PDF organization worker
 - [Optimize PDF](./OPTIMIZE_PDF.md) -- PDF optimization worker
 - [Cleanup Worker](./CLEANUP_WORKER.md) -- Expired job/upload cleanup
+- [Error Logging](../architecture/ERROR_LOGGING.md) -- Backend-wide error logging convention

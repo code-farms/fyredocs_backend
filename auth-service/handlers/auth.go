@@ -22,6 +22,7 @@ import (
 	"auth-service/internal/token"
 
 	"fyredocs/shared/config"
+	"fyredocs/shared/logger"
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/queue"
 	"fyredocs/shared/response"
@@ -84,13 +85,15 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 		response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "An account with this email already exists. Please log in instead.")
 		return
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		response.InternalError(c, "SERVER_ERROR", "Could not create your account. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Could not create your account. Please try again.", err,
+			"op", "db.users.lookup_existing", "email", email)
 		return
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(payload.Password), bcrypt.DefaultCost)
 	if err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Could not create your account. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Could not create your account. Please try again.", err,
+			"op", "bcrypt.generate_password_hash")
 		return
 	}
 
@@ -107,7 +110,8 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 			response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "An account with this email already exists. Please log in instead.")
 			return
 		}
-		response.InternalError(c, "SERVER_ERROR", "Could not create your account. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Could not create your account. Please try again.", err,
+			"op", "db.users.create", "email", email)
 		return
 	}
 
@@ -134,11 +138,13 @@ func (ae *AuthEndpoints) Login(c *gin.Context) {
 
 	var user models.User
 	if err := models.DB.Where("email = ?", email).First(&user).Error; err != nil {
+		logger.LogWarn(c.Request.Context(), "login.user_lookup", err, "email", email)
 		response.Unauthorized(c, "INVALID_CREDENTIALS", "Incorrect email or password. Please try again.")
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(payload.Password)); err != nil {
+		logger.LogWarn(c.Request.Context(), "login.password_mismatch", err, "userId", user.ID, "email", email)
 		response.Unauthorized(c, "INVALID_CREDENTIALS", "Incorrect email or password. Please try again.")
 		return
 	}
@@ -151,30 +157,37 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 	cookieName := config.GetEnv("AUTH_REFRESH_COOKIE", "refresh_token")
 	refreshToken, err := c.Cookie(cookieName)
 	if err != nil || strings.TrimSpace(refreshToken) == "" {
+		if err != nil {
+			logger.LogWarn(c.Request.Context(), "refresh.read_cookie", err, "cookie", cookieName)
+		}
 		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
 		return
 	}
 
 	userID, err := ae.Issuer.VerifyRefreshToken(refreshToken)
 	if err != nil {
+		logger.LogWarn(c.Request.Context(), "refresh.verify_token", err)
 		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
 		return
 	}
 
 	session, err := models.FindSessionByRefreshHash(models.DB, models.HashToken(refreshToken))
 	if err != nil {
+		logger.LogWarn(c.Request.Context(), "refresh.find_session", err, "userId", userID)
 		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
 		return
 	}
 
 	parsedID, err := uuid.Parse(strings.TrimSpace(userID))
 	if err != nil {
+		logger.LogErr(c.Request.Context(), "refresh.parse_user_id", err, "userId", userID)
 		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
 		return
 	}
 
 	var user models.User
 	if err := models.DB.First(&user, "id = ?", parsedID).Error; err != nil {
+		logger.LogWarn(c.Request.Context(), "refresh.lookup_user", err, "userId", parsedID)
 		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
 		return
 	}
@@ -196,7 +209,8 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 
 	accessToken, _, accessExpiresAt, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, accessTTL)
 	if err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Failed to refresh token. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Failed to refresh token. Please try again.", err,
+			"op", "issue_access_token.refresh", "userId", user.ID)
 		return
 	}
 
@@ -289,19 +303,22 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 
 	accessToken, jti, accessExpiresAt, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, accessTTL)
 	if err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Login failed. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Login failed. Please try again.", err,
+			"op", "issue_access_token.login", "userId", user.ID)
 		return
 	}
 
 	refreshToken, _, refreshExpiresAt, err := ae.Issuer.IssueRefreshToken(user.ID.String(), refreshTTL)
 	if err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Login failed. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Login failed. Please try again.", err,
+			"op", "issue_refresh_token.login", "userId", user.ID)
 		return
 	}
 
 	sessionID, err := uuid.Parse(jti)
 	if err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Login failed. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Login failed. Please try again.", err,
+			"op", "parse_session_jti", "jti", jti, "userId", user.ID)
 		return
 	}
 
@@ -342,7 +359,8 @@ func (ae *AuthEndpoints) denyAccessToken(ctx context.Context, tokenStr string) e
 func parseAuthPayload(c *gin.Context) (authCredentials, bool) {
 	var payload authCredentials
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		response.BadRequest(c, "INVALID_INPUT", "Invalid request. Please try again.")
+		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid request. Please try again.", err,
+			"op", "bind_auth_payload")
 		return authCredentials{}, false
 	}
 	return payload, true
@@ -384,12 +402,14 @@ func loadUserFromAuth(c *gin.Context) (models.User, authverify.AuthContext, bool
 
 	parsedID, err := uuid.Parse(strings.TrimSpace(authCtx.UserID))
 	if err != nil {
+		logger.LogErr(c.Request.Context(), "load_user.parse_id", err, "userIdRaw", authCtx.UserID)
 		response.Unauthorized(c, "UNAUTHORIZED", "Your session has expired. Please log in again.")
 		return models.User{}, authverify.AuthContext{}, false
 	}
 
 	var user models.User
 	if err := models.DB.First(&user, "id = ?", parsedID).Error; err != nil {
+		logger.LogWarn(c.Request.Context(), "load_user.db_lookup", err, "userId", parsedID)
 		response.Unauthorized(c, "UNAUTHORIZED", "Your session has expired. Please log in again.")
 		return models.User{}, authverify.AuthContext{}, false
 	}
@@ -515,7 +535,8 @@ func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 		PlanName string `json:"planName" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		response.BadRequest(c, "INVALID_INPUT", "Please provide a valid plan name.")
+		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Please provide a valid plan name.", err,
+			"op", "bind_change_plan_request", "userId", user.ID)
 		return
 	}
 
@@ -531,7 +552,8 @@ func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 			response.BadRequest(c, "INVALID_PLAN", "The selected plan does not exist.")
 			return
 		}
-		response.InternalError(c, "SERVER_ERROR", "Could not update your plan. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Could not update your plan. Please try again.", err,
+			"op", "db.subscription_plans.lookup", "planName", planName, "userId", user.ID)
 		return
 	}
 
@@ -542,7 +564,8 @@ func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 	}
 
 	if err := models.DB.Model(&user).Update("plan_name", planName).Error; err != nil {
-		response.InternalError(c, "SERVER_ERROR", "Could not update your plan. Please try again.")
+		response.InternalErrorf(c, "SERVER_ERROR", "Could not update your plan. Please try again.", err,
+			"op", "db.users.update_plan", "userId", user.ID, "newPlan", planName, "oldPlan", oldPlan)
 		return
 	}
 

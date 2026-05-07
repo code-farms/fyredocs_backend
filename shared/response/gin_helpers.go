@@ -1,6 +1,7 @@
 package response
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -94,6 +95,47 @@ func Unauthorized(c *gin.Context, code string, message string) {
 // Forbidden is a convenience for 403 errors.
 func Forbidden(c *gin.Context, code string, message string) {
 	Err(c, http.StatusForbidden, code, message)
+}
+
+// Errorf is like Err, but also emits a structured slog.Error with the supplied
+// underlying err and request context. Use this whenever an err is in scope at a
+// failure site so the cause is debuggable from logs alone. Pass nil err to
+// behave exactly like Err (no log emitted).
+//
+// attrs are slog key/value pairs and are appended after the standard fields.
+func Errorf(c *gin.Context, status int, code string, message string, err error, attrs ...any) {
+	if err != nil {
+		slog.Error(message, buildLogAttrs(c, status, code, err, attrs)...)
+	}
+	Err(c, status, code, message)
+}
+
+// InternalErrorf is a 500 convenience that logs err first.
+func InternalErrorf(c *gin.Context, code string, message string, err error, attrs ...any) {
+	Errorf(c, http.StatusInternalServerError, code, message, err, attrs...)
+}
+
+// AbortErrorf is the c.Abort variant of Errorf for use in middleware.
+func AbortErrorf(c *gin.Context, status int, code string, message string, err error, attrs ...any) {
+	if err != nil {
+		slog.Error(message, buildLogAttrs(c, status, code, err, attrs)...)
+	}
+	AbortErr(c, status, code, message)
+}
+
+func buildLogAttrs(c *gin.Context, status int, code string, err error, extra []any) []any {
+	attrs := []any{
+		"err", err,
+		"code", code,
+		"status", status,
+	}
+	if c != nil && c.Request != nil {
+		attrs = append(attrs, "method", c.Request.Method, "path", c.Request.URL.Path)
+	}
+	if reqID := requestIDFromContext(c); reqID != "" {
+		attrs = append(attrs, "requestId", reqID)
+	}
+	return append(attrs, extra...)
 }
 
 func extractMeta(c *gin.Context) *Meta {

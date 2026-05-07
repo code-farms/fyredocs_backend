@@ -675,9 +675,16 @@ GET /auth/plans
 
 Returns all non-anonymous plans. The `anonymous` plan is excluded because it is an internal default used when no token is present, not a user-selectable tier.
 
+## Error Logging
+
+All 5xx response sites in `Signup`, `Login`, `Refresh`, `respondWithTokens`, `ChangePlan`, `RevokeUserSessions`, `RevokeSession`, and `GetAllPlans` use `response.InternalErrorf` to log the underlying err with `op` and identifiers before returning the standard envelope. Authentication paths (`Login`, `Refresh`, `loadUserFromAuth`) emit `slog.Warn` lines via `logger.LogWarn` for observability without altering the user-visible response. See [Error Logging](../architecture/ERROR_LOGGING.md) for the convention.
+
+To debug a failed signup/login, take `meta.requestId` from the response and grep auth-service stdout — the matching log line names the failing `op` (e.g. `db.users.create`, `bcrypt.generate_password_hash`, `issue_access_token.login`).
+
 ## Related Documentation
 
 - [API Gateway](./API_GATEWAY.md) -- Request routing and CORS
 - [Job Service](./JOB_SERVICE.md) -- Job orchestration and file management
 - [Upload Service](./UPLOAD_SERVICE.md) -- Legacy upload service
 - [Main README](../../README.md) -- Overall architecture
+- [Error Logging](../architecture/ERROR_LOGGING.md) -- Backend-wide error logging convention
