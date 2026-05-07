@@ -432,7 +432,7 @@ A single goroutine started at boot runs `models.DeleteExpiredSessions` once an h
 ## Scaling Constraints
 
 1. **Horizontal scaling**: The auth-service is stateless (JWT tokens are self-contained). Multiple instances can run behind a load balancer.
-2. **Database connection pool**: Configured with `MaxOpenConns=10`, `MaxIdleConns=5`. Appropriate for auth workloads.
+2. **Database connection pool**: Configured with `MaxOpenConns=10`, `MaxIdleConns=5`, `ConnMaxLifetime=5m`, `ConnMaxIdleTime=2m`. The idle-time bound is shorter than typical managed-Postgres idle-close windows so the pool never holds a half-dead socket. `Connect()` also enriches `DATABASE_URL` via `shared/config.ApplyPostgresDSNDefaults` to set `statement_timeout=15s`, `idle_in_transaction_session_timeout=30s`, and libpq TCP keepalives.
 3. **Redis dependency**: The token denylist and rate limiter depend on Redis. If Redis is unavailable, logout revocation and rate limiting will not function. Consider Redis Sentinel or Cluster for HA.
 4. **JWT secret sync**: All services that validate JWT tokens (api-gateway, job-service, auth-service) must use the same `JWT_HS256_SECRET`. Secret rotation requires coordinated deployment.
 5. **bcrypt cost**: Password hashing uses `bcrypt.DefaultCost`. High traffic may benefit from tuning this value.

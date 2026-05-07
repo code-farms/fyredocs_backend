@@ -8,6 +8,8 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+
+	"fyredocs/shared/config"
 )
 
 var DB *gorm.DB
@@ -16,13 +18,19 @@ type PoolConfig struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
 }
 
+// DefaultPoolConfig is tuned for managed Postgres pools (Neon, RDS Proxy,
+// pgbouncer) that close idle TCP connections server-side. ConnMaxIdleTime is
+// shorter than typical server idle-close windows so the local pool never holds
+// a half-dead socket.
 func DefaultPoolConfig() PoolConfig {
 	return PoolConfig{
 		MaxOpenConns:    25,
 		MaxIdleConns:    10,
-		ConnMaxLifetime: 30 * time.Minute,
+		ConnMaxLifetime: 5 * time.Minute,
+		ConnMaxIdleTime: 2 * time.Minute,
 	}
 }
 
@@ -44,7 +52,12 @@ func Connect(pool ...PoolConfig) {
 		if pool[0].ConnMaxLifetime > 0 {
 			cfg.ConnMaxLifetime = pool[0].ConnMaxLifetime
 		}
+		if pool[0].ConnMaxIdleTime > 0 {
+			cfg.ConnMaxIdleTime = pool[0].ConnMaxIdleTime
+		}
 	}
+
+	dsn = config.ApplyPostgresDSNDefaults(dsn)
 
 	var err error
 	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
@@ -59,6 +72,7 @@ func Connect(pool ...PoolConfig) {
 		os.Exit(1)
 	}
 	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
 	sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
 

@@ -491,13 +491,15 @@ When job creation fails partway through:
 ## Scaling Constraints
 
 1. **Horizontal scaling**: The job-service is stateless (all state in Redis/PostgreSQL/NATS). Multiple instances can run behind a load balancer.
-2. **Database connection pool**: Configured with `MaxOpenConns=20`, `MaxIdleConns=10`. Adjust for high-concurrency deployments.
-3. **File storage**: The service writes to a shared filesystem (`UPLOAD_DIR`). When scaling horizontally, all instances must share the same volume mount.
-4. **NATS JetStream**: Provides durable message delivery with at-least-once semantics. Workers acknowledge messages after processing. No messages are lost if the job-service restarts.
-5. **Redis dependency**: Upload state and guest tokens rely on Redis. If Redis is unavailable, uploads and guest tracking will fail. Consider Redis Sentinel or Cluster for HA.
-6. **Rate limiting**: Uses Redis-backed rate limiters. All instances share the same counters via Redis.
-7. **Single writer per job**: Each job has a unique UUID. No concurrent writes to the same job record.
-8. **Memory**: `MaxMultipartMemory` is set to 50 MB. Large file uploads are streamed to disk via chunks, not held in memory.
+2. **Database connection pool**: Configured with `MaxOpenConns=20`, `MaxIdleConns=10`, `ConnMaxLifetime=5m`, `ConnMaxIdleTime=2m`. The idle-time bound is shorter than typical managed-Postgres idle-close windows (Neon, RDS Proxy, pgbouncer), which prevents the pool from handing out a half-dead socket. Adjust for high-concurrency deployments.
+3. **Postgres-side timeouts**: `Connect()` enriches `DATABASE_URL` via `shared/config.ApplyPostgresDSNDefaults` to set `statement_timeout=15s`, `idle_in_transaction_session_timeout=30s`, and libpq TCP keepalives (`keepalives_idle=30s`, `keepalives_interval=10s`, `keepalives_count=3`). These bound the worst-case hang on a stale or dropped connection. User-set values in `DATABASE_URL` are preserved.
+4. **Per-request transaction timeout**: `CreateJobFromTool` wraps the job-create transaction in a 10-second `context.WithTimeout` so a stuck connection cannot freeze a request beyond that bound.
+5. **File storage**: The service writes to a shared filesystem (`UPLOAD_DIR`). When scaling horizontally, all instances must share the same volume mount.
+6. **NATS JetStream**: Provides durable message delivery with at-least-once semantics. Workers acknowledge messages after processing. No messages are lost if the job-service restarts.
+7. **Redis dependency**: Upload state and guest tokens rely on Redis. If Redis is unavailable, uploads and guest tracking will fail. Consider Redis Sentinel or Cluster for HA.
+8. **Rate limiting**: Uses Redis-backed rate limiters. All instances share the same counters via Redis.
+9. **Single writer per job**: Each job has a unique UUID. No concurrent writes to the same job record.
+10. **Memory**: `MaxMultipartMemory` is set to 50 MB. Large file uploads are streamed to disk via chunks, not held in memory.
 
 ## Deployment
 

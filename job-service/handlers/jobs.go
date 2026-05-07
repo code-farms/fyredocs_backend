@@ -262,7 +262,9 @@ func CreateJobFromTool(c *gin.Context) {
 		ExpiresAt: expiresAt,
 	}
 
-	if err := models.DB.Transaction(func(tx *gorm.DB) error {
+	txCtx, txCancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer txCancel()
+	if err := models.DB.WithContext(txCtx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&job).Error; err != nil {
 			return logger.LogErr(c.Request.Context(), "db.processing_jobs.create", err,
 				"jobId", job.ID, "tool", toolType)
