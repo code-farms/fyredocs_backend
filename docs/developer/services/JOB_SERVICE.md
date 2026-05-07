@@ -22,7 +22,9 @@ The Job Service is the central orchestration service for all file processing ope
 7. **Guest Job Tracking** -- Manage guest tokens in Redis to allow anonymous users to track their jobs
 8. **Tool-to-Service Routing** -- Use a centralized `ToolServiceMap` to dispatch jobs to the correct worker service
 9. **MIME-Type Validation** -- Validate uploaded file content types using `http.DetectContentType()` against an allowlist per tool category (pdf, word, excel, ppt, image)
-10. **Idempotency** -- Support `Idempotency-Key` header on job creation to prevent duplicate jobs within a 10-minute window
+10. **Idempotency** -- Two layers, both within a 10-minute window:
+    - `Idempotency-Key` header on job creation: returns the original job for the same key.
+    - Same-`uploadId` replay: a duplicate `POST` with the same `uploadId(s)` after a successful submit returns the original job instead of `INVALID_INPUT: upload not found`. The mapping `idempotency:upload:<uploadId>` → `<jobId>` is written in Redis right before `releaseUpload` clears the upload state. Multi-upload jobs only dedupe when **all** `uploadId`s map to the same `jobId`. This makes the API self-healing against client double-submits regardless of cause (network retry, second tab, etc.).
 
 ## Design Constraints
 

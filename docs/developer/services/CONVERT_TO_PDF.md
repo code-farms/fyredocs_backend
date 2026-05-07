@@ -44,7 +44,7 @@ The container runs a persistent LibreOffice instance via `unoserver` (started by
 |------|--------------|--------|----------------|--------|
 | `word-to-pdf` | .doc, .docx | .pdf | LibreOffice Writer | ✅ Implemented |
 | `excel-to-pdf` | .xls, .xlsx | .pdf | LibreOffice Calc | ✅ Implemented |
-| `ppt-to-pdf` | .ppt, .pptx | .pdf | LibreOffice Impress | ✅ Implemented |
+| `ppt-to-pdf` / `powerpoint-to-pdf` | .ppt, .pptx | .pdf | LibreOffice Impress | ✅ Implemented (both names accepted; canonical is `powerpoint-to-pdf` after job-service `normalizeToolType`) |
 | `html-to-pdf` | .html, .htm | .pdf | LibreOffice Writer | ✅ Implemented |
 | `image-to-pdf` | .jpg, .png, .gif, .webp, .bmp | .pdf | pdfcpu | ✅ Implemented |
 | `img-to-pdf` | .jpg, .png, .gif, .webp, .bmp | .pdf | pdfcpu | ✅ Alias |

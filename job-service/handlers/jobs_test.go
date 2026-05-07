@@ -873,3 +873,81 @@ func TestConsumeUpload_RejectsWrongFileType(t *testing.T) {
 		t.Error("redis state must be preserved on validation failure")
 	}
 }
+
+func TestRecordConsumedUpload_WritesMappingWithTTL(t *testing.T) {
+	mr, client := withMiniRedis(t)
+	uploadID := "upl-x"
+	jobID := uuid.NewString()
+
+	recordConsumedUpload(context.Background(), uploadID, jobID)
+
+	got, err := client.Get(context.Background(), consumedUploadKey(uploadID)).Result()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != jobID {
+		t.Errorf("value = %q, want %q", got, jobID)
+	}
+	ttl := mr.TTL(consumedUploadKey(uploadID))
+	if ttl <= 0 || ttl > consumedUploadIdempotencyTTL {
+		t.Errorf("ttl = %v, want (0, %v]", ttl, consumedUploadIdempotencyTTL)
+	}
+}
+
+func TestRecordConsumedUpload_NoopOnEmptyArgs(t *testing.T) {
+	_, client := withMiniRedis(t)
+
+	recordConsumedUpload(context.Background(), "", "any")
+	recordConsumedUpload(context.Background(), "any", "")
+
+	keys, err := client.Keys(context.Background(), "idempotency:upload:*").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 0 {
+		t.Errorf("no keys should be written for empty args, got %v", keys)
+	}
+}
+
+func TestFindExistingJobForUploads_MissOnEmptyOrPartial(t *testing.T) {
+	_, client := withMiniRedis(t)
+
+	// Empty input
+	if job, ok := findExistingJobForUploads(context.Background(), nil); ok || job != nil {
+		t.Errorf("empty uploadIds: ok=%v job=%v, want (false, nil)", ok, job)
+	}
+	// Partial: one mapping seeded, the other missing
+	if err := client.Set(context.Background(), consumedUploadKey("a"), uuid.NewString(), time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if job, ok := findExistingJobForUploads(context.Background(), []string{"a", "b"}); ok || job != nil {
+		t.Errorf("partial mapping: ok=%v job=%v, want (false, nil) — must not silently return a partial match", ok, job)
+	}
+}
+
+func TestFindExistingJobForUploads_MissOnInconsistentJobIDs(t *testing.T) {
+	_, client := withMiniRedis(t)
+
+	// Two uploadIds map to DIFFERENT jobIds — must NOT return either, even if
+	// both jobs exist. Returning the first would silently merge unrelated work.
+	if err := client.Set(context.Background(), consumedUploadKey("a"), uuid.NewString(), time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Set(context.Background(), consumedUploadKey("b"), uuid.NewString(), time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if job, ok := findExistingJobForUploads(context.Background(), []string{"a", "b"}); ok || job != nil {
+		t.Errorf("inconsistent jobIds: ok=%v job=%v, want (false, nil)", ok, job)
+	}
+}
+
+func TestFindExistingJobForUploads_MissOnEmptyUploadID(t *testing.T) {
+	_, _ = withMiniRedis(t)
+
+	// An empty string in the slice must short-circuit to miss — never let
+	// `idempotency:upload:` (no id) act as a wildcard match.
+	if job, ok := findExistingJobForUploads(context.Background(), []string{""}); ok || job != nil {
+		t.Errorf("empty uploadId in slice: ok=%v job=%v, want (false, nil)", ok, job)
+	}
+}

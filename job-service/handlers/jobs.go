@@ -131,6 +131,19 @@ func CreateJobFromTool(c *gin.Context) {
 			return
 		}
 
+		// Same-uploadId replay: a duplicate POST after the first one already
+		// consumed the upload would otherwise hit "upload not found" because
+		// releaseUpload cleared the Redis state. Return the original job so
+		// the client transparently resumes polling on the same jobId.
+		if existingJob, ok := findExistingJobForUploads(c.Request.Context(), uploadIDs); ok {
+			guestTok := assignGuestTokenIfNeeded(c, authUserID(c), existingJob.ID)
+			response.Created(c, "Your file is being processed!", createJobResponse{
+				jobResponse: toJobResponse(*existingJob),
+				GuestToken:  guestTok,
+			})
+			return
+		}
+
 		optionsRaw = string(uploadReq.Options)
 
 		for idx, uploadID := range uploadIDs {
@@ -310,8 +323,11 @@ func CreateJobFromTool(c *gin.Context) {
 
 	// Free the upload slot only after the job is fully committed and queued.
 	// On any failure above this line, the upload state is preserved so the
-	// frontend can retry with the same uploadId without re-uploading.
+	// frontend can retry with the same uploadId without re-uploading. Record
+	// the upload->job mapping before releasing so a duplicate POST with the
+	// same uploadId returns the original job instead of "upload not found".
 	for _, id := range consumedUploadIDs {
+		recordConsumedUpload(c.Request.Context(), id, job.ID.String())
 		releaseUpload(c.Request.Context(), id)
 	}
 
@@ -578,6 +594,59 @@ func releaseUpload(ctx context.Context, uploadID string) {
 	if err := os.RemoveAll(filepath.Join(uploadBaseDir(), uploadID)); err != nil {
 		slog.Warn("failed to remove upload directory", "uploadId", uploadID, "error", err)
 	}
+}
+
+// consumedUploadIdempotencyTTL bounds how long a same-uploadId replay is
+// deduplicated to the original job. Matches the existing Idempotency-Key TTL.
+const consumedUploadIdempotencyTTL = 10 * time.Minute
+
+func consumedUploadKey(uploadID string) string {
+	return "idempotency:upload:" + uploadID
+}
+
+// recordConsumedUpload remembers which job consumed an uploadId so a duplicate
+// submission with the same uploadId returns the original job rather than
+// "upload not found". Failures are logged but not returned — the job is
+// already queued; losing the dedup record only re-exposes the existing
+// "upload not found" symptom on a duplicate POST, never anything worse.
+func recordConsumedUpload(ctx context.Context, uploadID string, jobID string) {
+	if uploadID == "" || jobID == "" || redisstore.Client == nil {
+		return
+	}
+	if err := redisstore.Client.Set(ctx, consumedUploadKey(uploadID), jobID, consumedUploadIdempotencyTTL).Err(); err != nil {
+		slog.Warn("failed to record consumed upload", "uploadId", uploadID, "jobId", jobID, "error", err)
+	}
+}
+
+// findExistingJobForUploads returns the job that previously consumed every one
+// of the given uploadIds, if and only if all of them resolve to the same jobId
+// and that job still exists in the DB. Any miss, mismatch, or DB lookup
+// failure returns (nil, false) so the caller falls through to the normal
+// create-job flow.
+func findExistingJobForUploads(ctx context.Context, uploadIDs []string) (*models.ProcessingJob, bool) {
+	if len(uploadIDs) == 0 || redisstore.Client == nil {
+		return nil, false
+	}
+	var jobID string
+	for _, id := range uploadIDs {
+		if id == "" {
+			return nil, false
+		}
+		got, err := redisstore.Client.Get(ctx, consumedUploadKey(id)).Result()
+		if err != nil || got == "" {
+			return nil, false
+		}
+		if jobID == "" {
+			jobID = got
+		} else if got != jobID {
+			return nil, false
+		}
+	}
+	var existing models.ProcessingJob
+	if err := models.DB.First(&existing, "id = ?", jobID).Error; err != nil {
+		return nil, false
+	}
+	return &existing, true
 }
 
 func uniqueUploadFileName(uploadID string, fileName string, index int) string {

@@ -41,7 +41,7 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	case "word-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = officeToPDF(ctx, inputPaths[0], outputPath, "docx")
-	case "ppt-to-pdf":
+	case "ppt-to-pdf", "powerpoint-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = officeToPDF(ctx, inputPaths[0], outputPath, "pptx")
 	case "excel-to-pdf":

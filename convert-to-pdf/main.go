@@ -64,7 +64,7 @@ func main() {
 		ServiceName: "convert-to-pdf",
 		AllowedTools: map[string]bool{
 			"word-to-pdf":  true,
-			"ppt-to-pdf":   true,
+			"ppt-to-pdf":   true, "powerpoint-to-pdf": true,
 			"excel-to-pdf": true,
 			"html-to-pdf":  true,
 			"image-to-pdf": true, "img-to-pdf": true,

@@ -195,6 +195,7 @@ func TestIsOfficeConversion(t *testing.T) {
 		{"word-to-pdf", true},
 		{"excel-to-pdf", true},
 		{"ppt-to-pdf", true},
+		{"powerpoint-to-pdf", true},
 		{"html-to-pdf", true},
 		{"image-to-pdf", false},
 		{"merge-pdf", false},
