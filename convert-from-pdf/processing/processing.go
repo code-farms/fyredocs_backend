@@ -3,6 +3,7 @@ package processing
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -38,7 +39,16 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		err = pdfToPdfa(ctx, inputPaths[0], outputPath)
 	case "pdf-to-word", "pdf-to-docx":
 		outputPath = filepath.Join(outputDir, outputFileName+".docx")
-		err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "docx", onProgress)
+		// Try pdf2docx first — it reconstructs real paragraphs/lists/tables.
+		// Fall back to LibreOffice's writer_pdf_import on failure so we never
+		// regress to "totally broken"; the LibreOffice output is structurally
+		// poor but at least produces a file. The ticking progress is reset
+		// when the fallback path takes over so the UI keeps moving.
+		err = pdfToDocxNativeTicking(ctx, inputPaths[0], outputPath, onProgress)
+		if err != nil {
+			slog.Warn("pdf2docx failed, falling back to LibreOffice", "input", inputPaths[0], "err", err)
+			err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "docx", onProgress)
+		}
 	case "pdf-to-excel", "pdf-to-xlsx":
 		outputPath = filepath.Join(outputDir, outputFileName+".xlsx")
 		err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "xlsx", onProgress)

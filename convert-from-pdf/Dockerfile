@@ -35,19 +35,24 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/convert-from-pdf .
 
 # ---- Runtime Stage ----
-# This service uses LibreOffice (pdf-to-office), poppler (pdftoppm/pdftohtml/pdftotext),
-# and Ghostscript (pdf-to-pdfa). Does NOT need unoserver/Python.
-FROM alpine:3.19
+# Runtime uses Python (pdf2docx for pdf→word), LibreOffice (pdf→xlsx/odt/ods/odp +
+# pdf→word fallback), poppler (pdftoppm/pdftohtml/pdftotext), and Ghostscript
+# (pdf→pdfa). Base is python:3.11-slim-bookworm because pdf2docx's deps
+# (PyMuPDF, opencv-python-headless) do not publish musllinux wheels for aarch64
+# and would otherwise have to compile MuPDF from source.
+FROM python:3.11-slim-bookworm
 
-RUN apk add --no-cache \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
-    libreoffice \
-    ttf-liberation \
+    libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress \
     poppler-utils \
     ghostscript \
-    && rm -rf /var/cache/apk/*
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN adduser -D -u 10001 appuser
+RUN pip3 install --no-cache-dir pdf2docx==0.5.8
+
+RUN useradd -m -u 10001 appuser
 
 WORKDIR /app
 

@@ -7,7 +7,7 @@ The Convert From PDF service converts PDF files to other formats including image
 **Port**: 8082 (internal, not exposed through API Gateway)
 **Type**: Background Worker + REST API
 **Framework**: Gin (Go)
-**Processing**: LibreOffice, Ghostscript, Poppler (pdftotext, pdftohtml, pdftoppm)
+**Processing**: pdf2docx (Python; for `pdf-to-word`/`pdf-to-docx`), LibreOffice (Writer/Calc/Impress for `pdf-to-xlsx`/`pdf-to-odt`/`pdf-to-ods`/`pdf-to-odp` and the `pdf-to-word` fallback), Ghostscript (`pdf-to-pdfa`), Poppler (`pdftotext`, `pdftohtml`, `pdftoppm` for image/text/html conversions)
 
 ## Responsibilities
 
@@ -39,8 +39,8 @@ Convert-From-PDF Worker
 |------|-------|--------|----------------|--------|
 | `pdf-to-image` | .pdf | .png (single page) or .zip (multi-page PNGs) | pdftoppm (Poppler) | ✅ Implemented |
 | `pdf-to-img` | .pdf | .png (single page) or .zip (multi-page PNGs) | pdftoppm (Poppler) | ✅ Alias |
-| `pdf-to-word` | .pdf | .docx | LibreOffice Writer | ✅ Implemented |
-| `pdf-to-docx` | .pdf | .docx | LibreOffice Writer | ✅ Alias |
+| `pdf-to-word` | .pdf | .docx | pdf2docx (primary) → LibreOffice Writer (fallback) | ✅ Implemented |
+| `pdf-to-docx` | .pdf | .docx | pdf2docx (primary) → LibreOffice Writer (fallback) | ✅ Alias |
 | `pdf-to-excel` | .pdf | .xlsx | LibreOffice Calc | ✅ Implemented |
 | `pdf-to-xlsx` | .pdf | .xlsx | LibreOffice Calc | ✅ Alias |
 | `pdf-to-ppt` | .pdf | .pptx | LibreOffice Impress | ✅ Implemented |
@@ -171,12 +171,16 @@ Converts PDF to Microsoft Word (.docx).
 
 **Input**: `.pdf`
 **Output**: `.docx`
-**Implementation**: LibreOffice Writer (PDF import filter)
+**Implementation**: [pdf2docx](https://github.com/ArtifexSoftware/pdf2docx) (Python; primary) with LibreOffice Writer's `writer_pdf_import` filter as a fallback.
+
+`pdf2docx` reconstructs real `<w:p>` paragraphs, lists, tables, and image runs from PDF text-with-coordinates. The previous LibreOffice-only path imported each page as a canvas of absolutely-positioned text frames (`position:absolute;margin-left:XXXpt;margin-top:YYYpt`) — visually faithful but unusable for editing/reflow/spell-check. `pdf2docx` is invoked as `pdf2docx convert <input> <output>`. On any non-zero exit or empty output the dispatcher logs a warning and falls back to LibreOffice so the request never hard-fails on an unexpected PDF shape.
+
+The integration boundary in code is a single Go function, [`pdfToDocxNative`](../../../convert-from-pdf/processing/processing_free.go), that shells out to the binary. When a Go-native PDF→DOCX package becomes available it can replace the function body without touching any other file.
 
 **Limitations**:
-- Complex layouts may not convert perfectly
-- Scanned PDFs will contain images, not editable text
-- Fonts may be substituted
+- Slide-deck PDFs (presentations rendered to PDF) will still produce sub-optimal docx because the source isn't a flowing document — no tool can fully recover a presentation as a Word doc. The output will be better than the LibreOffice-only path but not "great".
+- Scanned PDFs (image-only PDFs) yield empty/near-empty docx. Use `ocr-pdf` first.
+- Fonts may be substituted by the embedded font fallback list.
 
 **Example**:
 ```bash

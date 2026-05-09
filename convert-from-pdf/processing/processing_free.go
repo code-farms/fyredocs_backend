@@ -182,15 +182,26 @@ func pdfToPptImages(ctx context.Context, inputPath string, outputPath string, on
 }
 
 // pdfToOfficeTicking wraps pdfToOffice with synthetic progress ticking for
-// conversion tools that call a single long-running subprocess (docx, xlsx).
+// conversion tools that call a single long-running subprocess (xlsx, odt, etc.).
 func pdfToOfficeTicking(ctx context.Context, inputPath string, outputPath string, outputFormat string, onProgress ProgressFunc) error {
+	return runWithProgressTicking(ctx, onProgress, func(ctx context.Context) error {
+		return pdfToOffice(ctx, inputPath, outputPath, outputFormat)
+	})
+}
+
+// runWithProgressTicking runs convert in a goroutine while emitting synthetic
+// progress ticks every 5s (30 → 80%, capped). On completion it bumps to 85%.
+// On context cancellation it waits for the worker so the underlying
+// CommandContext can finish cleaning up. Used by every PDF→office path that
+// blocks on a single long-running subprocess (LibreOffice, pdf2docx, ...).
+func runWithProgressTicking(ctx context.Context, onProgress ProgressFunc, convert func(context.Context) error) error {
 	if onProgress != nil {
 		onProgress(30)
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		done <- pdfToOffice(ctx, inputPath, outputPath, outputFormat)
+		done <- convert(ctx)
 	}()
 
 	ticker := time.NewTicker(5 * time.Second)
@@ -209,11 +220,42 @@ func pdfToOfficeTicking(ctx context.Context, inputPath string, outputPath string
 				onProgress(progress)
 			}
 		case <-ctx.Done():
-			// Wait for the goroutine to finish so pdfToOffice's CommandContext
-			// handles cancellation properly.
 			return <-done
 		}
 	}
+}
+
+// pdfToDocxNative converts PDF to DOCX using the pdf2docx Python tool, which
+// reconstructs real paragraphs/lists/tables from the PDF instead of dumping
+// page contents as floating text frames the way LibreOffice's
+// writer_pdf_import filter does. Falls back to LibreOffice when the binary is
+// missing or fails — see processing.go dispatch.
+func pdfToDocxNative(ctx context.Context, inputPath string, outputPath string) error {
+	slog.Info("converting PDF to DOCX via pdf2docx", "input", inputPath)
+
+	cmd := exec.CommandContext(ctx, "pdf2docx", "convert", inputPath, outputPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// CombinedOutput already includes stderr; surface it for debugging
+		// without exposing the raw subprocess to upstream callers.
+		return fmt.Errorf("pdf2docx convert failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
+	}
+
+	info, statErr := os.Stat(outputPath)
+	if statErr != nil || info.Size() == 0 {
+		return fmt.Errorf("pdf2docx produced no output for %s", inputPath)
+	}
+
+	slog.Info("pdf2docx conversion completed", "output", outputPath, "bytes", info.Size())
+	return nil
+}
+
+// pdfToDocxNativeTicking wraps pdfToDocxNative with the same progress ticker
+// pdfToOfficeTicking uses.
+func pdfToDocxNativeTicking(ctx context.Context, inputPath string, outputPath string, onProgress ProgressFunc) error {
+	return runWithProgressTicking(ctx, onProgress, func(ctx context.Context) error {
+		return pdfToDocxNative(ctx, inputPath, outputPath)
+	})
 }
 
 func pdfToHTML(ctx context.Context, inputPath string, outputPath string) error {
