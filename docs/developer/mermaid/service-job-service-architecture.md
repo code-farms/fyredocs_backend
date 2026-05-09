@@ -10,22 +10,22 @@ graph TB
         direction TB
 
         subgraph Middleware["Middleware Chain (Gin)"]
-            TRACE["OpenTelemetry<br/>GinTraceMiddleware"]
-            METRICS["Prometheus<br/>GinMetricsMiddleware"]
-            REQID["Request ID"]
-            LOGGER["Request Logger"]
-            AUTHMW["Auth Middleware<br/>(JWT + Guest)"]
+            TRACE["OpenTelemetry · GinTraceMiddleware"]
+            METRICS["Prometheus · GinMetricsMiddleware"]
+            REQID["GinRequestID"]
+            LOGGER["GinRequestLogger"]
+            AUTHMW["GinAuthMiddleware<br/>(JWT verifier · denylist · guest)"]
         end
 
         subgraph Routes["Route Groups"]
-            subgraph UploadRoutes["/api/uploads"]
+            subgraph UploadRoutes["/api/uploads (rate-limited 30/min)"]
                 INIT["POST /init"]
-                CHUNK["PUT /:uploadId/chunk"]
+                CHUNK["PUT /:uploadId/chunk?index=N"]
                 STATUS["GET /:uploadId/status"]
                 COMPLETE["POST /:uploadId/complete"]
             end
 
-            subgraph ConvertFromRoutes["/api/convert-from-pdf"]
+            subgraph CFRoutes["/api/convert-from-pdf"]
                 CF_LIST["GET /:tool"]
                 CF_CREATE["POST /:tool"]
                 CF_GET["GET /:tool/:id"]
@@ -33,7 +33,7 @@ graph TB
                 CF_DOWNLOAD["GET /:tool/:id/download"]
             end
 
-            subgraph ConvertToRoutes["/api/convert-to-pdf"]
+            subgraph CTRoutes["/api/convert-to-pdf"]
                 CT_LIST["GET /:tool"]
                 CT_CREATE["POST /:tool"]
                 CT_GET["GET /:tool/:id"]
@@ -41,69 +41,105 @@ graph TB
                 CT_DOWNLOAD["GET /:tool/:id/download"]
             end
 
-            HISTORY["GET /api/jobs/history"]
-            SSE_ROUTE["GET /api/jobs/:id/events"]
-            HEALTHZ["/healthz"]
+            subgraph ORGRoutes["/api/organize-pdf"]
+                ORG_LIST["GET /:tool"]
+                ORG_CREATE["POST /:tool"]
+                ORG_GET["GET /:tool/:id"]
+                ORG_DELETE["DELETE /:tool/:id"]
+                ORG_DOWNLOAD["GET /:tool/:id/download"]
+            end
+
+            subgraph OPTRoutes["/api/optimize-pdf"]
+                OPT_LIST["GET /:tool"]
+                OPT_CREATE["POST /:tool"]
+                OPT_GET["GET /:tool/:id"]
+                OPT_DELETE["DELETE /:tool/:id"]
+                OPT_DOWNLOAD["GET /:tool/:id/download"]
+            end
+
+            HISTORY["GET /api/jobs/history (auth required)"]
+            SSE_ROUTE["GET /api/jobs/:id/events (SSE)"]
+            HEALTHZ["/healthz · /readyz"]
             METRICSEP["/metrics"]
         end
 
         subgraph Handlers
-            UH["Upload Handlers<br/>(chunked upload)"]
-            JH["Job Handlers<br/>(CRUD + dispatch)"]
-            SSEH["SSE Handler<br/>(real-time job updates)"]
+            UH["Upload Handlers<br/>(chunked upload + Redis Lua atomic chunk recording)"]
+            JH["Job Handlers<br/>(CreateJobFromTool · GetJobsByTool · GetJobByID · DeleteJobByID · DownloadJobFile · GetJobHistory)"]
+            SSEH["SSE Handler<br/>(ephemeral NATS consumer · FilterSubject scoped to jobId)"]
         end
 
         subgraph Internal
-            ROUTING["routing.ServiceForTool()<br/>Tool-to-service mapping"]
+            ROUTING["routing.ServiceForTool()<br/>Tool → service-name"]
+            IDEMP["Idempotency-Key cache (Redis)<br/>10-minute TTL"]
+            UPLOAD_DEDUP["Upload→Job mapping<br/>(prevents replay confusion)"]
             VERIFIER["Auth Verifier"]
             DENYLIST["Token Denylist"]
-            GUESTSTORE["Guest Store"]
+            GUESTSTORE["Guest Store<br/>(guest:{token}:jobs)"]
         end
 
         subgraph RateLimiting
-            RL_UPLOAD["upload: 30 req/min"]
+            RL_UPLOAD["ratelimit:upload:&lt;ip&gt; · 30/min"]
+        end
+
+        subgraph Models["internal/models (GORM)"]
+            JOB["processing_jobs (UUIDv7)"]
+            FM["file_metadata"]
         end
     end
 
-    Client["api-gateway"] --> TRACE
-    TRACE --> METRICS --> REQID --> LOGGER --> AUTHMW
+    Client["api-gateway"] --> TRACE --> METRICS --> REQID --> LOGGER --> AUTHMW
+    AUTHMW --> Routes
 
     UploadRoutes --> UH
-    ConvertFromRoutes --> JH
-    ConvertToRoutes --> JH
+    CFRoutes --> JH
+    CTRoutes --> JH
+    ORGRoutes --> JH
+    OPTRoutes --> JH
     HISTORY --> JH
     SSE_ROUTE --> SSEH
 
     UH --> Redis[(Redis)]
-    UH --> Disk[(File System)]
-    JH --> PG[(PostgreSQL)]
-    JH --> Redis
+    UH --> Disk[(uploads/)]
+    JH --> JOB
+    JH --> FM
+    JH --> IDEMP
+    JH --> UPLOAD_DEDUP
     JH --> ROUTING
-    ROUTING --> NATS["NATS JetStream<br/>(PublishJobEvent)"]
+    JOB & FM --> PG[(PostgreSQL)]
+    ROUTING --> NATS["NATS JetStream<br/>JOBS_DISPATCH<br/>(jobs.dispatch.&lt;service&gt;)"]
+    JH --> NATS
     SSEH --> NATS
+    SSEH -->|filter jobs.events.&lt;jobId&gt;.>| NATS
     DENYLIST --> Redis
     GUESTSTORE --> Redis
     RateLimiting --> Redis
+    IDEMP --> Redis
+    UPLOAD_DEDUP --> Redis
 ```
 
 ## Job Dispatch Flow
 
 ```mermaid
 flowchart TD
-    A["POST /api/convert-from-pdf/pdf-to-word"] --> B["Normalize tool type"]
-    B --> C["Validate tool is supported"]
-    C --> D["Save uploaded file(s)"]
-    D --> E["Create job record in PostgreSQL<br/>(status: queued)"]
-    E --> F["routing.ServiceForTool(toolType)"]
-    F --> G{"Service name?"}
-    G -->|convert-from-pdf| H["Publish to<br/>jobs.dispatch.convert-from-pdf"]
-    G -->|convert-to-pdf| I["Publish to<br/>jobs.dispatch.convert-to-pdf"]
-    G -->|organize-pdf| J["Publish to<br/>jobs.dispatch.organize-pdf"]
-    G -->|optimize-pdf| K["Publish to<br/>jobs.dispatch.optimize-pdf"]
-    H --> L["Return 201 {job}"]
-    I --> L
-    J --> L
-    K --> L
+    A["POST /api/&lt;group&gt;/:tool"] --> B["normalizeToolType"]
+    B --> C["routing.ServiceForTool(tool) — reject unknown"]
+    C --> D{"Idempotency-Key in Redis?"}
+    D -->|Yes, hit| Z["Return original job"]
+    D -->|No| E{"Body type?"}
+    E -->|JSON uploadIds| E1["Look up by Upload→Job map<br/>(replay safety)"]
+    E1 -->|hit| Z
+    E1 -->|miss| F["consumeUpload(uploadId): move file from uploads/tmp/&lt;id&gt;/ to uploads/&lt;jobId&gt;/<br/>+ MIME validation"]
+    E -->|multipart| G["SaveUploadedFile to uploads/&lt;jobId&gt;/<br/>+ MIME validation"]
+    F --> H
+    G --> H
+    H["Build ProcessingJob (UUIDv7) + FileMetadata rows<br/>in single DB transaction"]
+    H --> I["Compute expires_at from plan TTL"]
+    I --> J["Publish JobEvent to jobs.dispatch.&lt;serviceName&gt;<br/>(JOBS_DISPATCH WorkQueue)"]
+    J --> K["Record upload→job mapping<br/>+ release upload Redis state"]
+    K --> L["Cache idempotency-key:jobId for 10m"]
+    L --> M["publish analytics.events.job.created"]
+    M --> N["201 {job + guestToken?}"]
 ```
 
 ## Tool-to-Service Routing Map
@@ -111,27 +147,59 @@ flowchart TD
 ```mermaid
 graph LR
     subgraph convert-from-pdf
-        A1["pdf-to-word"]
-        A2["pdf-to-excel"]
-        A3["pdf-to-powerpoint"]
-        A4["pdf-to-image"]
-        A5["ocr"]
+        A1["pdf-to-image / pdf-to-img"]
+        A2["pdf-to-pdfa"]
+        A3["pdf-to-word / pdf-to-docx"]
+        A4["pdf-to-excel / pdf-to-xlsx"]
+        A5["pdf-to-ppt / pdf-to-powerpoint / pdf-to-pptx"]
+        A6["pdf-to-html"]
+        A7["pdf-to-text / pdf-to-txt"]
+        A8["pdf-to-odt · pdf-to-ods · pdf-to-odp"]
     end
 
     subgraph convert-to-pdf
         B1["word-to-pdf"]
-        B2["excel-to-pdf"]
-        B3["powerpoint-to-pdf"]
-        B4["image-to-pdf"]
-        B5["merge-pdf"]
-        B6["split-pdf"]
-        B7["compress-pdf"]
-        B8["protect-pdf / unlock-pdf"]
-        B9["watermark-pdf / sign-pdf / edit-pdf"]
+        B2["ppt-to-pdf / powerpoint-to-pdf"]
+        B3["excel-to-pdf"]
+        B4["html-to-pdf"]
+        B5["image-to-pdf / img-to-pdf"]
     end
 
-    ROUTER["routing.ServiceForTool()"] --> convert-from-pdf
-    ROUTER --> convert-to-pdf
+    subgraph organize-pdf
+        C1["merge-pdf"]
+        C2["split-pdf"]
+        C3["remove-pages · extract-pages"]
+        C4["organize-pdf · scan-to-pdf"]
+        C5["rotate-pdf · watermark-pdf"]
+        C6["protect-pdf · unlock-pdf · sign-pdf"]
+        C7["edit-pdf · add-page-numbers"]
+    end
+
+    subgraph optimize-pdf
+        D1["compress-pdf"]
+        D2["repair-pdf"]
+        D3["ocr-pdf"]
+    end
+
+    ROUTER["routing.ServiceForTool()"] --> convert-from-pdf & convert-to-pdf & organize-pdf & optimize-pdf
+```
+
+## SSE Consumer Lifecycle
+
+```mermaid
+flowchart TD
+    A["Client opens GET /api/jobs/:id/events"] --> B["Set SSE headers"]
+    B --> C["Create ephemeral consumer on JOBS_EVENTS<br/>FilterSubject jobs.events.&lt;jobId&gt;.&gt;<br/>DeliverPolicy=DeliverNewPolicy<br/>InactiveThreshold=1m"]
+    C --> D["Send 'connected' event"]
+    D --> E["Loop: Fetch up to 1 msg every 5s"]
+    E -->|got msg| F["Forward as 'job-update' event"]
+    F --> G{"Status terminal?"}
+    G -->|yes (completed/failed)| H["Close stream"]
+    G -->|no| E
+    E -->|no msg / timeout| I["Send 15s keepalive comment"]
+    I --> E
+    E -->|ctx done / 5min cap| H
+    H --> J["DELETE consumer (best-effort)"]
 ```
 
 ## Dependency Graph
@@ -151,9 +219,9 @@ graph LR
     JS --> |internal/models| Models
     JS --> |internal/routing| Routing
 
-    Models --> |gorm| PG[(PostgreSQL)]
+    Models --> |gorm + UUIDv7| PG[(PostgreSQL)]
     RedisStore --> |go-redis/v9| Redis[(Redis)]
     NATSConn --> NATS["NATS JetStream"]
-    Queue --> |PublishJobEvent| NATS
+    Queue --> |PublishJobEvent · SubjectForDispatch| NATS
     AuthVerify --> |golang-jwt/jwt/v5| JWT
 ```

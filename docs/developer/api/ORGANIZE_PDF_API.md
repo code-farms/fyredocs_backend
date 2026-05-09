@@ -8,6 +8,8 @@ Manipulate and organize PDF files - merge, split, reorder pages, and more.
 
 ## Supported Tools
 
+13 tools — see `organize-pdf/main.go:59` `AllowedTools` for the canonical list.
+
 | Tool | Description |
 |------|-------------|
 | `merge-pdf` | Combine multiple PDFs into one |
@@ -17,6 +19,12 @@ Manipulate and organize PDF files - merge, split, reorder pages, and more.
 | `extract-pages` | Extract specific pages to new PDF |
 | `organize-pdf` | Reorder pages in PDF |
 | `scan-to-pdf` | Convert images to PDF with optional OCR |
+| `watermark-pdf` | Add a text or image watermark to every page |
+| `protect-pdf` | Encrypt with a password |
+| `unlock-pdf` | Remove password from an encrypted PDF |
+| `sign-pdf` | Stamp a signature image on a chosen page |
+| `edit-pdf` | Add free-form text annotations |
+| `add-page-numbers` | Add page-number stamps |
 
 ---
 
@@ -196,6 +204,12 @@ GET /api/organize-pdf/{tool}/{jobId}/download
 | extract-pages | application/pdf | Single PDF |
 | organize-pdf | application/pdf | Single PDF |
 | scan-to-pdf | application/pdf | Single PDF |
+| watermark-pdf | application/pdf | Single PDF |
+| protect-pdf | application/pdf | Single password-protected PDF |
+| unlock-pdf | application/pdf | Single unprotected PDF |
+| sign-pdf | application/pdf | Single PDF with signature stamp |
+| edit-pdf | application/pdf | Single PDF with text annotations |
+| add-page-numbers | application/pdf | Single PDF with page numbers |
 
 ### Errors
 
@@ -221,29 +235,6 @@ DELETE /api/organize-pdf/{tool}/{jobId}
 ### Response
 
 **204 No Content**
-
----
-
-## PATCH /api/organize-pdf/{tool}/{jobId}
-
-Update job status (internal use).
-
-**Authentication:** Required (service-to-service)
-
-### Request
-
-```
-PATCH /api/organize-pdf/{tool}/{jobId}
-Content-Type: application/json
-```
-
-**Body:**
-```json
-{
-  "status": "processing",
-  "progress": "50"
-}
-```
 
 ---
 
@@ -467,7 +458,7 @@ Convert images to a PDF document, with optional OCR.
 
 **Output:** Single PDF
 
-**Conversion Engine:** ImageMagick + Tesseract (for OCR)
+**Conversion Engine:** pdfcpu (image import) + Tesseract (when `ocr=true`)
 
 **Supported Image Formats:** `.png`, `.jpg`, `.jpeg`, `.webp`
 
@@ -492,6 +483,81 @@ Convert images to a PDF document, with optional OCR.
 ```
 
 **Note:** Images are added to the PDF in the order provided. Each image becomes one page.
+
+---
+
+### watermark-pdf
+
+Adds a text or image watermark to every page.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| type | `"text"` \| `"image"` | `"text"` | Watermark type |
+| text | string | `"CONFIDENTIAL"` | Watermark text (when `type=text`) |
+| imageData | string (data URL) | — | Base64 watermark image (when `type=image`) |
+| position | `"center"` \| `"diagonal"` \| `"tiled"` | `"diagonal"` | Watermark placement |
+| opacity | number (10–100) | `50` | Opacity percentage |
+| fontSize | number (12–120) | `48` | Font size (text only) |
+| color | string (hex) | `"#6366f1"` | Text color |
+
+---
+
+### protect-pdf
+
+Encrypts a PDF with a password.
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| password | string | Yes | ≥ 4 characters |
+
+---
+
+### unlock-pdf
+
+Removes the password from an encrypted PDF.
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| password | string | Yes | The current password on the PDF |
+
+---
+
+### sign-pdf
+
+Stamps an image onto a chosen page.
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| imageData | string (data URL) | Yes | Base64 image (PNG/JPEG/WebP) |
+| page | integer | No | 1-indexed page number (default `1`) |
+| position | string | No | `top-left`, `top-right`, `bottom-left`, `bottom-right`, `center` (default) |
+
+---
+
+### edit-pdf
+
+Adds free-form text annotations to a PDF.
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| text | string | Yes | Annotation text |
+| page | integer | Yes | 1-indexed page number |
+| x / y | number | Yes | Coordinates in PDF user space |
+| fontSize | number | No | Default 12 |
+| color | string (hex) | No | Default `#000000` |
+
+---
+
+### add-page-numbers
+
+Adds page-number stamps to every page.
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| position | string | No | top/bottom + left/center/right (e.g., `bottom-center`) |
+| format | string | No | e.g., `"%d / %d"` (current / total) |
+| fontSize | number | No | Default 10 |
+| color | string (hex) | No | Default `#000000` |
 
 ---
 

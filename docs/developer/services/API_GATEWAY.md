@@ -14,10 +14,11 @@ The API Gateway acts as a reverse proxy that:
 - Routes incoming HTTP requests to backend services
 - Enforces CORS policies for browser clients
 - Validates JWT tokens from cookies or Authorization headers
-- Manages guest access tokens
-- Provides centralized rate limiting
+- Issues + validates guest cookies for unauthenticated users
+- Resolves plan info from Redis on every request and forwards it as headers
 - Adds security response headers (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy) via `withSecurityHeaders()` middleware
 - Enforces request body size limit (1MB for non-upload routes) via `withMaxBodySize()` middleware
+- Optionally serves the SPA bundle from `SPA_DIR` so the frontend ships with first-party cookies (no cross-origin)
 - Performs graceful shutdown with 30-second drain on SIGTERM/SIGINT
 
 ### Request Flow
@@ -27,36 +28,42 @@ Client Request
     ↓
 [API Gateway :8080]
     ↓
-Authentication Middleware
-    ├─ Check Authorization header (Bearer token)
-    ├─ Check access_token cookie
-    └─ Check X-Guest-Token header
+Telemetry → Metrics → Request-ID → SecurityHeaders → CORS → Auth middleware
+    ├─ Auth: Bearer header > access_token cookie > guest_token cookie (issues new if absent)
+    └─ ResolvePlan: read user:plan:<userId> from Redis (defaults to free)
     ↓
-Route to Backend Service
-    ├─ /api/upload → upload-service:8081
-    ├─ /api/convert-from-pdf → upload-service:8081
-    ├─ /api/convert-to-pdf → upload-service:8081
-    ├─ /api/jobs → upload-service:8081
-    └─ /auth → upload-service:8081
+Body-size limit (1 MB on non-upload routes)
+    ↓
+Reverse-proxy to backend (FlushInterval=-1 for streaming downloads)
+    ├─ /auth/*                                      → AUTH_SERVICE_URL  (default: JOB_SERVICE_URL fallback)
+    ├─ /api/upload/*                                → JOB_SERVICE_URL   (rewritten to /api/uploads/*)
+    ├─ /api/jobs/*                                  → JOB_SERVICE_URL
+    ├─ /api/{convert-from,convert-to,organize,optimize}-pdf/* → JOB_SERVICE_URL
+    ├─ /admin/*                                     → ANALYTICS_SERVICE_URL
+    └─ /                                            → SPA_DIR static files (when set)
 ```
 
 ## Routing Configuration
 
 ### Service Routing Map
 
-| Path Prefix | Target Service | Purpose |
-|-------------|---------------|---------|
-| `/auth/*` | upload-service:8081 | Authentication endpoints |
-| `/api/upload/*` | upload-service:8081 | File upload management |
-| `/api/jobs/*` | upload-service:8081 | Job status and management |
-| `/api/convert-from-pdf/*` | convert-from-pdf:8082 | PDF → Other formats |
-| `/api/convert-to-pdf/*` | convert-to-pdf:8083 | Other formats → PDF |
-| `/api/organize-pdf/*` | organize-pdf:8084 | PDF organization (merge, split, etc.) |
-| `/api/optimize-pdf/*` | optimize-pdf:8085 | PDF optimization (compress, repair, OCR) |
-| `/healthz` | api-gateway (local) | Health check |
-| `/readyz` | api-gateway (local) | Readiness probe — verifies Redis connectivity, returns 200/503 with check details |
+All `/api/*` traffic is proxied to **job-service**. Workers are not exposed publicly — `job-service` publishes jobs to NATS and the workers consume from there.
 
-**Note**: The API Gateway routes requests directly to the appropriate processing service. Each service manages its own job creation, queuing, and processing through Redis queues.
+| Path Prefix | Target Service (env override) | Purpose |
+|-------------|------------------------------|---------|
+| `/auth/*` | `AUTH_SERVICE_URL` (default = `JOB_SERVICE_URL` fallback for backward compat) | Auth, plan management, sessions |
+| `/api/upload/*` | `JOB_SERVICE_URL` (rewritten to `/api/uploads/*`) | Chunked file uploads |
+| `/api/jobs/*` | `JOB_SERVICE_URL` | History + SSE event stream |
+| `/api/convert-from-pdf/*` | `JOB_SERVICE_URL` | PDF → Word/Excel/PPTX/Image/HTML/Text/ODF |
+| `/api/convert-to-pdf/*` | `JOB_SERVICE_URL` | Office/Image → PDF |
+| `/api/organize-pdf/*` | `JOB_SERVICE_URL` | Merge, split, rotate, watermark, sign, etc. |
+| `/api/optimize-pdf/*` | `JOB_SERVICE_URL` | Compress, repair, OCR |
+| `/admin/*` | `ANALYTICS_SERVICE_URL` | Admin / analytics dashboards |
+| `/healthz` | api-gateway (local) | Liveness — pings Redis |
+| `/metrics` | api-gateway (local) | Prometheus metrics |
+| `/` (catch-all) | static SPA from `SPA_DIR` (when set) | Frontend bundle, with `/index.html` fallback for client-side routing |
+
+**Job dispatch is NATS, not Redis.** The gateway is HTTP-only — it never touches the JOBS_DISPATCH stream directly. `job-service` is the only publisher.
 
 ### Proxy Transport Configuration
 
@@ -81,12 +88,10 @@ The reverse proxy sets `FlushInterval = -1` to stream responses immediately to t
 |----------|-------------|---------|
 | `JWT_HS256_SECRET` | **REQUIRED** - JWT signing secret (min 32 chars) | `your-64-char-hex-secret` |
 | `PORT` | Gateway listening port | `8080` |
-| `UPLOAD_SERVICE_URL` | Upload service base URL | `http://upload-service:8081` |
-| `CONVERT_FROM_PDF_URL` | Convert From PDF service URL | `http://convert-from-pdf:8082` |
-| `CONVERT_TO_PDF_URL` | Convert To PDF service URL | `http://convert-to-pdf:8083` |
-| `ORGANIZE_PDF_URL` | Organize PDF service URL | `http://organize-pdf:8084` |
-| `OPTIMIZE_PDF_URL` | Optimize PDF service URL | `http://optimize-pdf:8085` |
-| `REDIS_ADDR` | Redis server address | `redis:6379` |
+| `JOB_SERVICE_URL` | Job-service base URL (handles uploads, jobs, tool routes) | `http://job-service:8081` |
+| `AUTH_SERVICE_URL` | Auth-service base URL (defaults to `JOB_SERVICE_URL` for backward compat) | `http://auth-service:8086` |
+| `ANALYTICS_SERVICE_URL` | Analytics-service base URL | `http://analytics-service:8087` |
+| `REDIS_ADDR` | Redis server address (used for denylist, guest cookie store, plan cache) | `redis:6379` |
 
 ### Optional (with defaults)
 
@@ -105,7 +110,7 @@ The reverse proxy sets `FlushInterval = -1` to stream responses immediately to t
 | `AUTH_GUEST_SUFFIX` | Guest token Redis key suffix | `jobs` |
 | `AUTH_DENYLIST_ENABLED` | Enable token denylist (logout) | `true` |
 | `AUTH_DENYLIST_PREFIX` | Denylist Redis key prefix | `denylist:jwt` |
-| `ACCESS_TOKEN_COOKIE_NAME` | Cookie name for access token | `access_token` |
+| `SPA_DIR` | If set, serve static files from this directory at `/` (with index.html fallback). Disabled by default. | `""` |
 
 #### Redis
 | Variable | Description | Default |
@@ -137,11 +142,11 @@ Cookie: access_token=eyJhbGc...
 ```
 Primary method for browser clients. Automatically sent by browsers.
 
-### 3. Guest Token Header (Lowest Priority)
+### 3. Guest Cookie (Lowest Priority)
 ```http
-X-Guest-Token: guest-token-uuid
+Cookie: guest_token=<uuid>
 ```
-For unauthenticated users accessing guest features.
+For unauthenticated users accessing guest features. The gateway issues this cookie automatically on first contact when no auth header/cookie is present and validates it against `guest:<token>:jobs` in Redis (the suffix is configurable via `AUTH_GUEST_SUFFIX`). Same-origin SPA hosting (via `SPA_DIR`) keeps this cookie HttpOnly + Secure.
 
 ### Token Validation
 
@@ -177,11 +182,11 @@ These headers are cleared from incoming client requests before proxying (`ClearU
 
 ### Bypass Paths
 
-The following paths skip authentication:
+The following paths skip authentication (`PublicPaths` in [main.go:179](../../../api-gateway/main.go#L179)):
 - `/healthz` - Health check endpoint
-- `/readyz` - Readiness check endpoint
-- `/auth/signup` - User registration
 - `/auth/login` - User login
+- `/auth/signup` - User registration
+- `/auth/refresh` - Refresh-token rotation (the cookie itself is the credential)
 - `/auth/plans` - Public plan listing
 - OPTIONS requests (CORS preflight)
 
@@ -231,25 +236,31 @@ api-gateway:
     - "8080:8080"
   environment:
     PORT: "8080"
-    UPLOAD_SERVICE_URL: http://upload-service:8081
+    JOB_SERVICE_URL: http://job-service:8081
+    AUTH_SERVICE_URL: http://auth-service:8086
+    ANALYTICS_SERVICE_URL: http://analytics-service:8087
     JWT_HS256_SECRET: ${JWT_HS256_SECRET}
+    # SPA_DIR: /app/spa  # uncomment to serve the frontend bundle
     # ... other env vars
   depends_on:
     - redis
-    - upload-service
+    - job-service
+    - auth-service
 ```
 
 ### Local Development
 
 1. Ensure dependencies are running:
    ```bash
-   docker compose up -d redis upload-service
+   docker compose up -d redis job-service auth-service
    ```
 
 2. Set environment variables:
    ```bash
    export JWT_HS256_SECRET=$(openssl rand -hex 32)
-   export UPLOAD_SERVICE_URL=http://localhost:8081
+   export JOB_SERVICE_URL=http://localhost:8081
+   export AUTH_SERVICE_URL=http://localhost:8086
+   export ANALYTICS_SERVICE_URL=http://localhost:8087
    export REDIS_ADDR=localhost:6379
    ```
 
@@ -266,7 +277,7 @@ api-gateway:
 - [ ] Generate a strong JWT secret (`openssl rand -hex 32`)
 - [ ] Set specific CORS origins (no wildcards)
 - [ ] Use HTTPS in production
-- [ ] Update `AUTH_COOKIE_SECURE=true` (enforced by upload-service)
+- [ ] Update `AUTH_COOKIE_SECURE=true` (enforced by job-service)
 - [ ] Configure proper DNS/load balancer
 - [ ] Enable request logging and monitoring
 - [ ] Set up rate limiting at load balancer level
@@ -372,11 +383,11 @@ fetch('http://localhost:8080/api/jobs', {
 # Check service status
 docker compose ps
 
-# Check upload-service logs
-docker compose logs upload-service
+# Check job-service logs
+docker compose logs job-service
 
 # Restart services
-docker compose restart api-gateway upload-service
+docker compose restart api-gateway job-service
 ```
 
 #### 4. Cookie Not Being Sent
@@ -393,8 +404,8 @@ docker compose restart api-gateway upload-service
 # Verify CORS credentials
 docker compose exec api-gateway env | grep CORS_ALLOW_CREDENTIALS
 
-# Check cookie settings in upload-service
-docker compose exec upload-service env | grep AUTH_COOKIE
+# Check cookie settings in job-service
+docker compose exec job-service env | grep AUTH_COOKIE
 ```
 
 ### Debug Logging
@@ -558,4 +569,4 @@ When a backend service is unreachable:
 For issues or questions:
 - Check service logs: `docker compose logs -f api-gateway`
 - Review environment variables: `docker compose exec api-gateway env`
-- Verify service connectivity: `docker compose exec api-gateway ping upload-service`
+- Verify service connectivity: `docker compose exec api-gateway ping job-service`

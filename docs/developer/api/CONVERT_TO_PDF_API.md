@@ -8,13 +8,15 @@ Convert various document formats to PDF.
 
 ## Supported Tools
 
-| Tool | Input Formats | Description |
-|------|---------------|-------------|
-| `word-to-pdf` | .doc, .docx | Convert Word documents to PDF |
-| `excel-to-pdf` | .xls, .xlsx | Convert Excel spreadsheets to PDF |
-| `powerpoint-to-pdf` | .ppt, .pptx | Convert PowerPoint presentations to PDF |
-| `image-to-pdf` | .png, .jpg, .jpeg, .webp | Convert images to PDF (one page per image) |
-| `html-to-pdf` | .html, .htm | Convert HTML files to PDF |
+| Tool | Aliases | Input Formats | Description |
+|------|---------|---------------|-------------|
+| `word-to-pdf` | — | `.doc`, `.docx` | Convert Word documents to PDF |
+| `excel-to-pdf` | — | `.xls`, `.xlsx` | Convert Excel spreadsheets to PDF |
+| `ppt-to-pdf` | `powerpoint-to-pdf` | `.ppt`, `.pptx` | Convert PowerPoint presentations to PDF |
+| `image-to-pdf` | `img-to-pdf` | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | Convert images to PDF (one page per image) |
+| `html-to-pdf` | — | `.html`, `.htm` | Convert HTML files to PDF |
+
+> The conversion engine for office formats is **LibreOffice via unoserver** (with a `libreoffice --headless` fallback). `image-to-pdf` uses **pdfcpu**.
 
 ---
 
@@ -285,40 +287,6 @@ DELETE /api/convert-to-pdf/{tool}/{jobId}
 
 ---
 
-## PATCH /api/convert-to-pdf/{tool}/{jobId}
-
-Update job status (internal use by conversion services).
-
-**Authentication:** Required (service-to-service)
-
-### Request
-
-```
-PATCH /api/convert-to-pdf/{tool}/{jobId}
-Content-Type: application/json
-```
-
-**Body:**
-```json
-{
-  "status": "processing",
-  "progress": "50"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| status | string | No | Job status |
-| progress | string | No | Progress percentage (0-100) |
-
-### Response
-
-**200 OK**
-
-Returns updated job object.
-
----
-
 ## Tool-Specific Information
 
 ### word-to-pdf
@@ -351,15 +319,15 @@ Converts Microsoft PowerPoint presentations to PDF.
 
 ---
 
-### image-to-pdf
+### image-to-pdf (alias `img-to-pdf`)
 
 Converts one or more images to a single PDF (one image per page).
 
-**Supported Extensions:** `.png`, `.jpg`, `.jpeg`, `.webp`
+**Supported Extensions:** `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`
 
-**Conversion Engine:** ImageMagick
+**Conversion Engine:** pdfcpu (pure Go, no re-compression)
 
-**Note:** Use `uploadIds` array for multiple images.
+**Note:** Use `uploadIds` array for multiple images. Pages are emitted in the same order as the array.
 
 ---
 

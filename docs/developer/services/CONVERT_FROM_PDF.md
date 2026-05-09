@@ -23,14 +23,24 @@ The Convert From PDF service converts PDF files to other formats including image
 ## Architecture
 
 ```
-Redis Queue (queue:pdf-to-image, queue:pdf-to-word, etc.)
-  ↓
-Convert-From-PDF Worker
-  ├─ Poll Queue
-  ├─ Download Input File
-  ├─ Process with LibreOffice/Ghostscript/Poppler
-  ├─ Upload Output File
-  └─ Update Job Status (PostgreSQL)
+NATS JetStream JOBS_DISPATCH (jobs.dispatch.convert-from-pdf)
+  ↓ pull-consumer (durable=convert-from-pdf, MaxDeliver=4, AckWait=30m, BackOff 10s/30s/2m)
+convert-from-pdf worker
+  ├─ Validate AllowedTools[toolType]
+  ├─ Duplicate-job guard (skip if already completed/processing)
+  ├─ Update DB → status='processing', progress=20
+  ├─ Run processing.ProcessFile():
+  │     ├─ pdf-to-image      → pdftoppm (Poppler) → single PNG or ZIP
+  │     ├─ pdf-to-word/docx  → pdf2docx (primary) → LibreOffice writer_pdf_import (fallback)
+  │     ├─ pdf-to-excel/xlsx → LibreOffice Calc (writer_pdf_import → xlsx)
+  │     ├─ pdf-to-ppt/pptx   → image-based: rasterize each page (pdftoppm) → embed as one slide per image
+  │     ├─ pdf-to-html       → pdftohtml → ZIP (HTML + images)
+  │     ├─ pdf-to-text/txt   → pdftotext
+  │     ├─ pdf-to-pdfa       → Ghostscript (PDF/A-2b)
+  │     └─ pdf-to-odt/ods/odp → LibreOffice writer_pdf_import → odt/ods/odp
+  ├─ DB → status='completed', progress=100; INSERT file_metadata (kind=output)
+  ├─ Publish jobs.events.<jobId>.{processing,completed,failed}
+  └─ On MaxDeliver exhaustion → publish JobFailed to jobs.dlq.convert-from-pdf
 ```
 
 ## Supported Tools
@@ -43,9 +53,9 @@ Convert-From-PDF Worker
 | `pdf-to-docx` | .pdf | .docx | pdf2docx (primary) → LibreOffice Writer (fallback) | ✅ Alias |
 | `pdf-to-excel` | .pdf | .xlsx | LibreOffice Calc | ✅ Implemented |
 | `pdf-to-xlsx` | .pdf | .xlsx | LibreOffice Calc | ✅ Alias |
-| `pdf-to-ppt` | .pdf | .pptx | LibreOffice Impress | ✅ Implemented |
-| `pdf-to-powerpoint` | .pdf | .pptx | LibreOffice Impress | ✅ Alias |
-| `pdf-to-pptx` | .pdf | .pptx | LibreOffice Impress | ✅ Alias |
+| `pdf-to-ppt` | .pdf | .pptx | image-based: pdftoppm → embed each page as a slide image | ✅ Implemented |
+| `pdf-to-powerpoint` | .pdf | .pptx | image-based (alias of `pdf-to-ppt`) | ✅ Alias |
+| `pdf-to-pptx` | .pdf | .pptx | image-based (alias of `pdf-to-ppt`) | ✅ Alias |
 | `pdf-to-html` | .pdf | .zip (HTML+images) | pdftohtml (Poppler) | ✅ Implemented |
 | `pdf-to-text` | .pdf | .txt | pdftotext (Poppler) | ✅ Implemented |
 | `pdf-to-txt` | .pdf | .txt | pdftotext (Poppler) | ✅ Alias |
@@ -218,13 +228,12 @@ Converts PDF to Microsoft PowerPoint (.pptx).
 
 **Input**: `.pdf`
 **Output**: `.pptx`
-**Implementation**: LibreOffice Impress
-
-**Behavior**: Each PDF page becomes a slide
+**Implementation**: image-based — `pdftoppm` rasterizes every PDF page to a PNG, then a small builder embeds one image per slide. This avoids LibreOffice Impress's PDF-import path, which produces unusable empty layouts. The trade-off: text in the resulting `.pptx` is **not selectable / editable** — each slide is essentially a screenshot of the corresponding PDF page. For an editable presentation, run OCR on the PDF first or start from the source deck.
 
 **Limitations**:
-- Content is placed as images/shapes
-- Original animations not preserved
+- Slides contain images, not editable text or shapes.
+- Resulting `.pptx` is larger than a text-based presentation of the same content.
+- Animations / transitions are not preserved (the source has none).
 
 **Example**:
 ```bash
@@ -392,7 +401,9 @@ curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-odp \
 | `OUTPUT_DIR` | `/app/outputs` | Output files directory |
 | `QUEUE_PREFIX` | `queue` | Redis queue key prefix |
 | `MAX_RETRIES` | `3` | Max retry attempts for failed jobs |
-| `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing |
+| `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing (currently honoured via NATS `AckWait` rather than a context deadline in code) |
+| `WORKER_CONCURRENCY` | `1` | Max concurrent jobs (this service runs single-threaded by default; workers do not spawn parallel goroutines) |
+| `NATS_URL` | **Required** | NATS server URL |
 
 ## Dependencies
 
@@ -556,7 +567,7 @@ sequenceDiagram
     participant FS as File System
     participant LO as LibreOffice/Poppler/GS
 
-    JS->>NATS: Publish JobCreated to dispatch.convert-from-pdf
+    JS->>NATS: Publish JobCreated to jobs.dispatch.convert-from-pdf
     NATS->>W: Deliver JobCreated event
 
     W->>W: Validate toolType in AllowedTools
@@ -696,4 +707,5 @@ When retries are exhausted (MaxDeliver reached), the failed job payload is publi
 For issues:
 - Check logs: `docker compose logs -f convert-from-pdf`
 - Inspect jobs: Query `processing_jobs` table in PostgreSQL
-- Check queues: `docker compose exec redis redis-cli keys "queue:*"`
+- Inspect NATS subjects: `nats stream view JOBS_DISPATCH --filter jobs.dispatch.convert-from-pdf`
+- Inspect DLQ: `nats stream view JOBS_DLQ --filter jobs.dlq.convert-from-pdf`

@@ -10,114 +10,98 @@ graph TB
         direction TB
 
         subgraph HTTP["HTTP Server (Gin)"]
-            TRACE["OpenTelemetry Middleware"]
-            METRICS["Metrics Middleware"]
-            REQID["Request ID Middleware"]
-            LOGGER["Request Logger"]
-            RECOVERY["Recovery Middleware"]
+            TRACE["OpenTelemetry · GinTraceMiddleware"]
+            METRICS["Prometheus · GinMetricsMiddleware"]
+            REQID["GinRequestID"]
+            LOGGER["GinRequestLogger"]
+            RECOVERY["gin.Recovery"]
             HEALTHZ["/healthz"]
+            READYZ["/readyz"]
             METRICSEP["/metrics"]
         end
 
-        subgraph Worker["NATS Worker (goroutine)"]
-            CONSUMER["JetStream Pull Consumer<br/>Durable: convert-to-pdf<br/>Filter: jobs.dispatch.convert-to-pdf"]
-            MSGLOOP["Message Loop<br/>(Fetch 1 at a time, 30s wait)"]
-            DISPATCH["Tool Dispatcher"]
+        subgraph Worker["NATS Worker (goroutine pool)"]
+            CONSUMER["JetStream Pull Consumer<br/>Durable: convert-to-pdf<br/>Filter: jobs.dispatch.convert-to-pdf<br/>MaxDeliver=4 · AckWait=30m<br/>BackOff 10s · 30s · 2m"]
+            FETCH["Fetch up to WORKER_CONCURRENCY (default 2)"]
+            SEM["Semaphore chan struct{} sized to WORKER_CONCURRENCY"]
+            DISPATCH["processMessage()<br/>(per-msg goroutine)"]
+            DUP_GUARD["Duplicate-job guard<br/>(skip if already processing/completed)"]
+            PROG["Time-based progressReporter<br/>(20→90% ease-out · publishes events)"]
         end
 
         subgraph Processing["processing package"]
-            PROC["ProcessFile()"]
-            WORD["word-to-pdf"]
-            PPT["ppt-to-pdf"]
-            EXCEL["excel-to-pdf"]
-            HTML["html-to-pdf"]
-            IMG["image-to-pdf / img-to-pdf"]
-            COMPRESS["compress-pdf"]
-            MERGE["merge-pdf"]
-            SPLIT["split-pdf"]
-            PROTECT["protect-pdf"]
-            UNLOCK["unlock-pdf"]
-            WATERMARK["watermark-pdf"]
-            EDIT["edit-pdf"]
-            SIGN["sign-pdf"]
-            ODT_PDF["odt-to-pdf"]
-            ODS_PDF["ods-to-pdf"]
-            ODP_PDF["odp-to-pdf"]
-            WORD_ODT["word-to-odt"]
-            EXCEL_ODS["excel-to-ods"]
-            PPT_ODP["powerpoint-to-odp"]
+            PROC["ProcessFile(toolType, ...)"]
+            OFFICE["officeToPDF()"]
+            UNO["unoconvert<br/>(UNOSERVER_HOST:UNOSERVER_PORT)"]
+            FALLBACK["libreoffice --headless<br/>(fallback)"]
+            IMG["image-to-pdf / img-to-pdf<br/>(pdfcpu, multi-image → multi-page)"]
         end
 
-        subgraph Models["internal/models"]
-            DB_CONN["Database Connection<br/>(GORM + PostgreSQL)"]
-            JOB_MODEL["ProcessingJob"]
-            FILE_MODEL["FileMetadata"]
+        subgraph DLQ["DLQ on MaxDeliver exhaustion"]
+            DLQ_PUB["Publish jobs.dlq.convert-to-pdf<br/>(JOBS_DLQ stream · 7d)"]
+        end
+
+        subgraph Models["internal/models (GORM)"]
+            JOB_MODEL["processing_jobs"]
+            FILE_MODEL["file_metadata"]
         end
     end
 
-    NATS["NATS JetStream<br/>JOBS_DISPATCH stream"] -->|jobs.dispatch.convert-to-pdf| CONSUMER
-    CONSUMER --> MSGLOOP --> DISPATCH
+    NATS["NATS JetStream<br/>JOBS_DISPATCH"] -->|jobs.dispatch.convert-to-pdf| CONSUMER
+    CONSUMER --> FETCH --> SEM --> DISPATCH
+    DISPATCH --> DUP_GUARD
+    DUP_GUARD --> PROG
+    PROG --> PROC
 
-    DISPATCH --> PROC
-    PROC --> WORD
-    PROC --> PPT
-    PROC --> EXCEL
-    PROC --> HTML
+    PROC --> OFFICE
+    OFFICE --> UNO
+    OFFICE -.->|on connect failure| FALLBACK
     PROC --> IMG
-    PROC --> COMPRESS
-    PROC --> MERGE
-    PROC --> SPLIT
-    PROC --> PROTECT
-    PROC --> UNLOCK
-    PROC --> WATERMARK
-    PROC --> EDIT
-    PROC --> SIGN
-    PROC --> ODT_PDF
-    PROC --> ODS_PDF
-    PROC --> ODP_PDF
-    PROC --> WORD_ODT
-    PROC --> EXCEL_ODS
-    PROC --> PPT_ODP
 
-    DISPATCH -->|Update status| DB_CONN
-    DB_CONN --> PG[(PostgreSQL)]
-    HEALTHZ -->|Ping| Redis[(Redis)]
-    HEALTHZ -->|Check connected| NATS
-    PROC --> Disk[(File System<br/>outputs/)]
+    DISPATCH -->|status updates| JOB_MODEL
+    DISPATCH -->|jobs.events.&lt;jobId&gt;.{processing,completed,failed}| EVENTS["JOBS_EVENTS stream"]
+    DISPATCH -.->|on MaxDeliver| DLQ_PUB
+
+    OFFICE & IMG --> Disk[(File System · outputs/)]
+    JOB_MODEL & FILE_MODEL --> PG[(PostgreSQL)]
+
+    HEALTHZ -->|PING| Redis[(Redis)]
+    HEALTHZ -->|Conn.IsConnected| NATS
+    READYZ -->|tcp dial UNOSERVER_PORT| UNO
 ```
 
 ## Allowed Tool Types
 
+The whitelist in `main.go:65` is the authoritative source. Any other tool type is failed with `[UNSUPPORTED_TOOL]` and the message is acked.
+
 ```mermaid
 graph LR
-    subgraph ConversionTools["Document-to-PDF Conversions"]
+    subgraph Office["Office → PDF"]
         A["word-to-pdf"]
-        B["ppt-to-pdf"]
+        B["ppt-to-pdf<br/>(alias: powerpoint-to-pdf)"]
         C["excel-to-pdf"]
         D["html-to-pdf"]
-        E["image-to-pdf<br/>(img-to-pdf)"]
-        AA["odt-to-pdf"]
-        BB["ods-to-pdf"]
-        CC["odp-to-pdf"]
     end
 
-    subgraph OdfTools["Office-to-LibreOffice Conversions"]
-        DD["word-to-odt"]
-        EE["excel-to-ods"]
-        FF["powerpoint-to-odp"]
-    end
-
-    subgraph PDFTools["PDF Manipulation Tools"]
-        F["compress-pdf"]
-        G["merge-pdf"]
-        H["split-pdf"]
-        I["protect-pdf"]
-        J["unlock-pdf"]
-        K["watermark-pdf"]
-        L["edit-pdf"]
-        M["sign-pdf"]
+    subgraph Image["Image → PDF (pdfcpu)"]
+        E["image-to-pdf<br/>(alias: img-to-pdf)"]
     end
 ```
+
+> PDF-manipulation tools (compress / merge / split / watermark / sign / etc.) are NOT here — they live in **organize-pdf** (pdfcpu structural ops) and **optimize-pdf** (Ghostscript/Tesseract). See [system-overview](./system-overview.md).
+
+## Concurrency Model
+
+```mermaid
+flowchart LR
+    A["cons.Fetch(N=WORKER_CONCURRENCY,<br/>FetchMaxWait 30s)"] --> B{N msgs}
+    B -->|each| C["sem &lt;- struct{}{}"]
+    C --> D["go processMessage(msg)"]
+    D --> E["defer &lt;-sem"]
+    F["ctx.Done()"] --> G["wg.Wait()<br/>(drain in-flight)"] --> H["return"]
+```
+
+`WORKER_CONCURRENCY` (default 2) defines the maximum simultaneous in-flight jobs. The fetch batch size matches the semaphore capacity so the consumer can't pull more than it can run.
 
 ## Dependency Graph
 
@@ -129,13 +113,17 @@ graph LR
     CTP --> |shared/telemetry| Telemetry
     CTP --> |shared/natsconn| NATSConn
     CTP --> |shared/redisstore| RedisStore
+    CTP --> |shared/queue| Queue
     CTP --> |internal/models| Models
-    CTP --> |internal/worker| Worker
-    CTP --> |processing| Processing
+    CTP --> |internal/worker| WorkerPkg
+    CTP --> |processing| ProcessingPkg
 
     NATSConn --> NATS["NATS JetStream"]
-    Models --> PG[(PostgreSQL)]
+    Queue --> NATS
+    Models --> |GORM + UUIDv7| PG[(PostgreSQL)]
     RedisStore --> Redis[(Redis)]
-    Worker --> |google/uuid| UUID
-    Worker --> |nats-io/nats.go/jetstream| JetStream
+    WorkerPkg --> |google/uuid| UUID
+    WorkerPkg --> |nats-io/nats.go/jetstream| JetStream
+    ProcessingPkg --> |unoserver/unoconvert| UnoServer
+    ProcessingPkg --> |pdfcpu| PdfCpu
 ```

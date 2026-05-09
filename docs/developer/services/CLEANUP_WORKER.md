@@ -21,38 +21,32 @@ The Cleanup Worker is a background service that maintains system hygiene by clea
 ```
 Cleanup Worker (Background Loop)
   ↓
-┌─────────────────────────────────┐
-│  Every CLEANUP_INTERVAL (5min)  │
-└────────────┬────────────────────┘
+┌─────────────────────────────────────┐
+│  Every CLEANUP_INTERVAL (15 min)    │
+└────────────┬────────────────────────┘
              ↓
-      ┌──────────────┐
-      │ Query Database│
-      │ for expired   │
-      │ uploads/jobs  │
-      └──────┬───────┘
+   Acquire Redis SETNX lock
+   `cleanup-worker:lock` (10-min TTL)
              ↓
-      ┌──────────────┐
-      │ Delete Files │
-      │ from disk    │
-      └──────┬───────┘
+   ┌─────────┴─────────────┐
+   ▼                       ▼
+   ├ Phase 1: cleanupExpiredJobs   (DB-driven, batch=100)
+   ├ Phase 2: cleanupUploadState   (Redis SCAN upload:*)
+   ├ Phase 3: cleanupOrphanedDirs  (FS scan vs DB)
+   └ Phase 4: backfillExpiry       (UPDATE legacy authenticated jobs)
              ↓
-      ┌──────────────┐
-      │ Delete DB    │
-      │ records      │
-      └──────┬───────┘
-             ↓
-      ┌──────────────┐
-      │ Log Results  │
-      └──────────────┘
+   Release lock (DEL)
 ```
 
-When scaled to multiple replicas, a Redis distributed lock (`cleanup-worker:lock`, 10-minute TTL via SETNX) ensures only one instance runs cleanup at a time. If the lock is already held, the instance skips the cycle.
+The worker runs as a **scratch container** with the shared healthcheck binary. It exposes `/healthz`, `/readyz`, and `/metrics` on port `8088` but does **not** consume from NATS — it operates directly on PostgreSQL, Redis, and the filesystem.
+
+When scaled to multiple replicas, the Redis SETNX lock ensures only one instance runs cleanup per tick. Other replicas skip the cycle if the lock is already held.
 
 ## Cleanup Operations
 
 ### 1. Expired Upload Cleanup
 
-**Criteria**: Uploads older than `UPLOAD_TTL` (default: 30 minutes)
+**Criteria**: Uploads older than `UPLOAD_TTL` (default: 2 hours)
 
 **Process**:
 1. Query uploads table for expired uploads
@@ -80,10 +74,10 @@ When scaled to multiple replicas, a Redis distributed lock (`cleanup-worker:lock
 
 ### 2. Expired Job Cleanup
 
-**Criteria**: Jobs where `expires_at` has passed (any user type)
+**Criteria**: Jobs where `expires_at IS NOT NULL` and `expires_at <= NOW()` — applies to any user type. The `expires_at` value is set at job-creation time by `job-service` based on the user's plan:
 
-- **Guest Jobs** (no user): `GUEST_JOB_TTL` (default: 30 minutes)
-- **Free Plan Users**: `FREE_JOB_TTL` (default: 24 hours)
+- **Guest Jobs** (no user): TTL set by `job-service` (`GUEST_JOB_TTL`, configured there — not in cleanup-worker)
+- **Free Plan Users**: TTL set by `job-service` from plan info, also enforced by Phase 4 backfill below for legacy rows (`FREE_JOB_TTL`, default `24h`)
 - **Pro Plan Users**: Never expire (`expires_at = NULL`)
 
 **Process**:
@@ -159,12 +153,9 @@ The cleanup worker exposes a lightweight HTTP server for health checks, readines
 | `REDIS_DB` | `0` | Redis database number |
 | `UPLOAD_DIR` | `/app/uploads` | Directory for uploaded files |
 | `OUTPUT_DIR` | `/app/outputs` | Directory for output files |
-| `UPLOAD_TTL` | `30m` | Upload expiration time |
-| `GUEST_JOB_TTL` | `30m` | Guest job expiration time |
-| `FREE_JOB_TTL` | `24h` | Free plan user job expiration time (set in job-service) |
-| `CLEANUP_INTERVAL` | `5m` | How often to run cleanup |
-| `MAX_RETRIES` | `3` | Max retries for failed jobs before cleanup |
-| `QUEUE_PREFIX` | `queue` | Redis queue key prefix |
+| `UPLOAD_TTL` | `2h` | How long an upload session in Redis (`upload:<id>`) can live before Phase 2 deletes it and the on-disk chunk dir |
+| `FREE_JOB_TTL` | `24h` | TTL applied by Phase 4 backfill to legacy authenticated jobs that were created before plan-based expiration was wired up |
+| `CLEANUP_INTERVAL` | `15m` | How often the ticker fires |
 
 ### Redis Keys
 
@@ -177,11 +168,11 @@ The cleanup worker exposes a lightweight HTTP server for health checks, readines
 ### Default Schedule
 
 ```
-Every 5 minutes:
-  ├─ Phase 1: Delete expired jobs (guest + free user) and their files/directories
-  ├─ Phase 2: Clean up expired upload sessions from Redis and temp chunks
+Every 15 minutes (under Redis SETNX lock):
+  ├─ Phase 1: Delete expired jobs (any user, expires_at <= NOW) and their files/directories
+  ├─ Phase 2: Clean up Redis upload:* sessions older than UPLOAD_TTL and their on-disk chunks
   ├─ Phase 3: Remove orphaned upload dirs and output files (no matching DB record)
-  └─ Phase 4: Backfill expires_at on legacy authenticated-user jobs
+  └─ Phase 4: Backfill expires_at on legacy authenticated-user jobs (user_id IS NOT NULL AND expires_at IS NULL)
 ```
 
 ### Customizing Interval
@@ -212,12 +203,12 @@ The cleanup worker helps prevent disk space exhaustion by:
 - Without cleanup: ~5 GB/day accumulation
 - With cleanup (2h TTL): ~500 MB average usage
 
-**File Retention**:
-- Active uploads: Until expiration or consumption
-- Completed jobs (pro user): No expiration
-- Completed jobs (free user): 24 hours (configurable via `FREE_JOB_TTL`)
-- Completed jobs (guest): 30 minutes (configurable via `GUEST_JOB_TTL`)
-- Failed jobs: 24 hours
+**File Retention** (TTLs are set at job creation time by `job-service`, except where noted):
+- Active uploads: Until consumed by a job, or until `UPLOAD_TTL` (default `2h`) expires the Redis session
+- Completed jobs (pro user): No expiration (`expires_at = NULL`)
+- Completed jobs (free user): TTL set from plan info; legacy rows backfilled to `FREE_JOB_TTL` (default `24h`) by Phase 4
+- Completed jobs (guest): TTL set by job-service (guest TTL is not configured in cleanup-worker)
+- Failed jobs: same TTL as completed (still rows in `processing_jobs`)
 
 ## Deployment
 
@@ -232,9 +223,9 @@ cleanup-worker:
     REDIS_ADDR: redis:6379
     UPLOAD_DIR: /app/uploads
     OUTPUT_DIR: /app/outputs
-    UPLOAD_TTL: 30m
-    CLEANUP_INTERVAL: 5m
-    GUEST_JOB_TTL: 30m
+    UPLOAD_TTL: 2h
+    CLEANUP_INTERVAL: 15m
+    FREE_JOB_TTL: 24h
   volumes:
     - uploads_data:/app/uploads
     - outputs_data:/app/outputs
@@ -408,20 +399,19 @@ docker compose restart db cleanup-worker
 **Symptoms**: Disk usage growing even with cleanup running
 
 **Possible Causes**:
-1. `UPLOAD_TTL` or `GUEST_JOB_TTL` too long
+1. `UPLOAD_TTL` (or job-service-side `GUEST_JOB_TTL` / plan TTLs) too long
 2. Orphaned files (no database records)
-3. User jobs not expiring (by design)
+3. Pro user jobs not expiring (by design)
 
 **Solutions**:
 ```bash
 # Check for orphaned files
 docker compose exec cleanup-worker find /app/uploads -type f -mtime +1
 
-# Reduce TTL values
+# Reduce upload session TTL
 # In docker-compose.yml:
 environment:
   UPLOAD_TTL: "1h"      # Shorter expiration
-  GUEST_JOB_TTL: "1h"
 
 # Manual cleanup of old files
 docker compose exec cleanup-worker \

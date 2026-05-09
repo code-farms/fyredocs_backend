@@ -1,8 +1,12 @@
 # Upload API
 
-Base URL: `http://localhost:8080`
+Base URL (via gateway): `http://localhost:8080`
 
 The Upload API supports chunked file uploads for large files. Files are uploaded in chunks and assembled on completion.
+
+> **Path note:** the gateway exposes these endpoints under `/api/upload/*` and rewrites them to `/api/uploads/*` on `job-service:8081`. Either path works through the gateway.
+
+**Rate limit:** `RATE_LIMIT_UPLOAD` (default 30) requests per `RATE_LIMIT_WINDOW` (default 60s) per IP.
 
 ---
 
@@ -195,27 +199,31 @@ POST /api/upload/{uploadId}/complete
 **200 OK**
 ```json
 {
-  "uploadId": "550e8400-e29b-41d4-a716-446655440000",
-  "storedPath": "/uploads/550e8400-e29b-41d4-a716-446655440000/document.pdf"
+  "success": true,
+  "message": "File uploaded successfully!",
+  "data": {
+    "uploadId": "550e8400-e29b-41d4-a716-446655440000"
+  }
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| uploadId | string | Upload session ID |
-| storedPath | string | Path where the assembled file is stored |
+| uploadId | string | Upload session ID — pass this back as `uploadId` / `uploadIds` when creating a job |
 
 ### Behavior
 
-- Assembles all chunks into a single file
-- Cleans up temporary chunk files
-- Returns file path for use in job creation
+- Assembles chunks `000000.part`, `000001.part`, ... into one file under `uploads/<uploadId>/<fileName>`.
+- Cleans up the temporary chunk directory `uploads/tmp/<uploadId>/`.
+- The Redis upload session (`upload:<uploadId>`) is **kept** so that the next `POST /api/<group>/:tool` call can reference this `uploadId`. The session is only released after the job is committed and queued (or expired by the cleanup-worker after `UPLOAD_TTL`).
+- Files larger than `MAX_UPLOAD_MB` are rejected after assembly (the partial file is removed).
 
 ### Errors
 
 | Status | Code | Description |
 |--------|------|-------------|
-| 400 | INVALID_INPUT | Not all chunks received |
+| 400 | BAD_REQUEST | Not all chunks received yet |
+| 400 | FILE_TOO_LARGE | Assembled file exceeds `MAX_UPLOAD_MB` |
 | 404 | NOT_FOUND | Upload session not found or expired |
 
 ---
@@ -224,8 +232,9 @@ POST /api/upload/{uploadId}/complete
 
 | Constraint | Value |
 |------------|-------|
-| Max file size | 50 MB (configurable via `MAX_UPLOAD_MB`) |
-| Upload TTL | 30 minutes (configurable via `UPLOAD_TTL`) |
+| Max file size | configurable via `MAX_UPLOAD_MB` (server-side); the per-job plan limit (`X-Plan-Max-File-MB`) is also enforced when creating a job |
+| Upload TTL | 2 hours (configurable via `UPLOAD_TTL`) |
+| API gateway body size | uploads are exempt; non-upload routes are capped at 1 MB |
 
 ---
 

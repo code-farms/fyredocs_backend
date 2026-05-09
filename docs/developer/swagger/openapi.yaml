@@ -8,12 +8,12 @@ info:
 
     ## Authentication
     The API supports three authentication methods:
-    - **BearerAuth** - JWT token in the `Authorization: Bearer <token>` header
-    - **CookieAuth** - JWT token in the `access_token` HTTP-only cookie (set automatically on login/signup)
-    - **GuestToken** - Temporary guest identifier via `X-Guest-Token` header or `guest_token` cookie
+    - **BearerAuth** - JWT access token in the `Authorization: Bearer <token>` header (API clients).
+    - **CookieAuth** - `access_token` HttpOnly cookie set on signup/login. Pair with `refresh_token` (Path=`/auth`) for silent rotation via `POST /auth/refresh`.
+    - **GuestToken** - `guest_token` HttpOnly cookie issued automatically by the API gateway on first contact when no auth is present. The same cookie is sent on every subsequent request.
 
     Authenticated users get persistent job storage. Guest users get temporary
-    jobs that expire after a configurable TTL (default 2 hours).
+    jobs that expire after a configurable TTL.
 
     ## Chunked Uploads
     Large files are uploaded via a chunked upload flow:
@@ -46,7 +46,7 @@ tags:
   - name: Convert From PDF
     description: Convert PDF files to other formats (Word, Excel, PowerPoint, Image, OCR)
   - name: Convert To PDF
-    description: Convert other formats to PDF and PDF manipulation tools
+    description: Convert Office (Word/Excel/PowerPoint), HTML, and image files to PDF
   - name: Organize PDF
     description: Merge, split, reorder, and organize PDF pages
   - name: Optimize PDF
@@ -65,8 +65,24 @@ x-path-tool-convert-from: &toolConvertFromParam
   required: true
   schema:
     type: string
-    enum: [pdf-to-word, pdf-to-excel, pdf-to-powerpoint, pdf-to-image, pdf-to-odt, pdf-to-ods, pdf-to-odp, ocr]
-  description: The conversion tool to use
+    enum:
+      - pdf-to-image
+      - pdf-to-img
+      - pdf-to-pdfa
+      - pdf-to-word
+      - pdf-to-docx
+      - pdf-to-excel
+      - pdf-to-xlsx
+      - pdf-to-ppt
+      - pdf-to-powerpoint
+      - pdf-to-pptx
+      - pdf-to-html
+      - pdf-to-text
+      - pdf-to-txt
+      - pdf-to-odt
+      - pdf-to-ods
+      - pdf-to-odp
+  description: The conversion tool to use (canonical names + aliases — see convert-from-pdf/main.go AllowedTools)
 
 x-path-tool-convert-to: &toolConvertToParam
   name: tool
@@ -77,23 +93,12 @@ x-path-tool-convert-to: &toolConvertToParam
     enum:
       - word-to-pdf
       - excel-to-pdf
+      - ppt-to-pdf
       - powerpoint-to-pdf
+      - html-to-pdf
       - image-to-pdf
-      - odt-to-pdf
-      - ods-to-pdf
-      - odp-to-pdf
-      - word-to-odt
-      - excel-to-ods
-      - powerpoint-to-odp
-      - merge-pdf
-      - split-pdf
-      - compress-pdf
-      - protect-pdf
-      - unlock-pdf
-      - watermark-pdf
-      - sign-pdf
-      - edit-pdf
-  description: The conversion/manipulation tool to use
+      - img-to-pdf
+  description: The Office/Image → PDF tool to use (PDF-manipulation tools live under /api/organize-pdf and /api/optimize-pdf)
 
 x-path-tool-organize: &toolOrganizeParam
   name: tool
@@ -101,8 +106,21 @@ x-path-tool-organize: &toolOrganizeParam
   required: true
   schema:
     type: string
-    enum: [merge-pdf, split-pdf, remove-pages, extract-pages, organize-pdf, scan-to-pdf]
-  description: The PDF organization tool to use
+    enum:
+      - merge-pdf
+      - split-pdf
+      - remove-pages
+      - extract-pages
+      - organize-pdf
+      - scan-to-pdf
+      - rotate-pdf
+      - watermark-pdf
+      - protect-pdf
+      - unlock-pdf
+      - sign-pdf
+      - edit-pdf
+      - add-page-numbers
+  description: The PDF organization tool to use (13 tools — see organize-pdf/main.go AllowedTools)
 
 x-path-tool-optimize: &toolOptimizeParam
   name: tool
@@ -312,15 +330,41 @@ paths:
   /auth/refresh:
     post:
       tags: [Authentication]
-      summary: Refresh access token (deprecated)
+      summary: Refresh access token
       description: |
-        This endpoint has been deprecated and always returns HTTP 410 Gone.
-        Clients should log in again to obtain a new access token.
+        Issues a new short-lived `access_token` cookie from a valid `refresh_token`
+        cookie. The refresh token cookie is left unchanged — only the underlying
+        `user_sessions` row's access-token hash is rotated. Rate-limited at
+        `RATE_LIMIT_REFRESH` (default 10) per `RATE_LIMIT_WINDOW` (default 60s)
+        per IP.
       operationId: refreshToken
-      deprecated: true
+      security: []  # auth comes from the refresh_token cookie itself
       responses:
-        "410":
-          description: Endpoint deprecated
+        "200":
+          description: New access token issued
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: "access_token=eyJhbGc...; HttpOnly; Secure; SameSite=Lax; Max-Age=28800; Path=/"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          user:
+                            $ref: "#/components/schemas/User"
+                          accessExpiresAt:
+                            type: integer
+                            format: int64
+                            description: Access token expiry as unix milliseconds
+        "401":
+          description: Missing, expired, or unknown refresh token
           content:
             application/json:
               schema:
@@ -331,8 +375,12 @@ paths:
                       error:
                         $ref: "#/components/schemas/APIError"
                         example:
-                          code: ENDPOINT_DEPRECATED
-                          details: Refresh tokens are no longer supported. Please login again to get a new access token.
+                          code: INVALID_REFRESH_TOKEN
+                          details: Your session has expired. Please log in again.
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /auth/me:
     get:
@@ -405,44 +453,11 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  /auth/guest:
-    post:
-      tags: [Authentication]
-      summary: Create a guest session
-      description: |
-        Generates a temporary guest token valid for 24 hours (configurable via
-        `GUEST_SESSION_TTL` env). The token is stored in Redis using the key
-        pattern `guest:{token}:jobs`. No authentication required.
-
-        Send the returned `guest_token` in the `X-Guest-Token` request header
-        (or `guest_token` cookie) to authenticate as a guest on subsequent
-        API calls. All basic tools are accessible to guests.
-      operationId: createGuestSession
-      security: []
-      responses:
-        "200":
-          description: Guest session created
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/SuccessResponse"
-                  - type: object
-                    properties:
-                      data:
-                        type: object
-                        properties:
-                          guest_token:
-                            type: string
-                            format: uuid
-                            description: Guest token to use in X-Guest-Token header
-                          expires_in:
-                            type: integer
-                            description: Token lifetime in seconds (default 86400)
-        "429":
-          $ref: "#/components/responses/TooManyRequests"
-        "500":
-          $ref: "#/components/responses/InternalError"
+  # Note: there is no /auth/guest endpoint. Guest sessions are managed entirely
+  # by the API gateway via the `guest_token` HttpOnly cookie. The gateway issues
+  # the cookie automatically on first contact and validates it against
+  # `guest:{token}:jobs` in Redis on every subsequent request. No application
+  # code needs to call a "create guest session" endpoint.
 
   # ==========================================================================
   # Uploads

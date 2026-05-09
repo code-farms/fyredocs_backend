@@ -20,7 +20,7 @@ If a user request violates microservice boundaries, Claude must correct or rejec
 # 2. PROJECT STRUCTURE RULES
 
 ## Allowed top-level folders:
-- `/<service-name>/` (services live directly under `fyredocs_backend/`, e.g., `upload-service/`, `convert-from-pdf/`)
+- `/<service-name>/` (services live directly under `fyredocs_backend/`, e.g., `job-service/`, `convert-from-pdf/`)
 - `/shared/` (utility packages only — logging, tracing, metrics, config, queue clients, response helpers)
 - `/docs/` (documentation hub)
 - `/docs/developer/` (all developer documentation)
@@ -38,13 +38,12 @@ If a user request violates microservice boundaries, Claude must correct or rejec
 ## Current services:
 - `api-gateway/`
 - `analytics-service/`
-- `upload-service/`
+- `auth-service/`
+- `job-service/`
 - `convert-from-pdf/`
 - `convert-to-pdf/`
 - `organize-pdf/`
 - `optimize-pdf/`
-- `job-service/`
-- `auth-service/`
 - `cleanup-worker/`
 
 ## Forbidden:

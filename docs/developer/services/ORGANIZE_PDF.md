@@ -7,7 +7,9 @@ A microservice for PDF organization operations including merging, splitting, rem
 The Organize-PDF service provides comprehensive PDF manipulation capabilities using free open-source tools. It's part of the Fyredocs microservices architecture and handles all PDF organization operations.
 
 **Port:** 8084
-**Queue:** `queue:organize-pdf`
+**Bus:** NATS JetStream — pulls from `jobs.dispatch.organize-pdf`, publishes events to `jobs.events.<jobId>.*`, DLQ on `jobs.dlq.organize-pdf`
+**Engine:** [pdfcpu](https://github.com/pdfcpu/pdfcpu) (pure Go, no LibreOffice in this container)
+**OCR (optional):** Tesseract — used by `scan-to-pdf` when `options.ocr = true`
 
 ## Supported Operations
 
@@ -132,6 +134,79 @@ curl -X POST http://localhost:8080/api/organize-pdf/scan-to-pdf \
   -F 'options={"ocr":true}'
 ```
 
+### 8. Watermark PDF
+
+Adds a text or image watermark to every page.
+
+**Tool:** `watermark-pdf`
+**Input:** Single PDF file
+**Output:** PDF with watermark applied
+**Options:**
+- `type`: `"text"` (default) or `"image"`
+- `text`: watermark text (when `type=text`, default `"CONFIDENTIAL"`)
+- `imageData`: base64 data URL of the watermark image (when `type=image`)
+- `position`: `"center"`, `"diagonal"` (default), or `"tiled"`
+- `opacity`: 10–100 (default 50)
+- `fontSize`: 12–120 (default 48; text watermarks)
+- `color`: hex string (default `"#6366f1"`; text watermarks)
+
+### 9. Protect PDF
+
+Encrypts a PDF with a password.
+
+**Tool:** `protect-pdf`
+**Input:** Single PDF file
+**Output:** Password-protected PDF
+**Options:**
+- `password`: required, ≥4 characters
+
+### 10. Unlock PDF
+
+Removes the password from an encrypted PDF.
+
+**Tool:** `unlock-pdf`
+**Input:** Single password-protected PDF
+**Output:** Unprotected PDF
+**Options:**
+- `password`: required (existing password)
+
+### 11. Sign PDF
+
+Stamps a signature image onto a specific page.
+
+**Tool:** `sign-pdf`
+**Input:** Single PDF file
+**Output:** PDF with image stamp
+**Options:**
+- `imageData`: base64 data URL of the signature image
+- `page`: 1-indexed page number (default 1)
+- `position`: `"top-left"`, `"top-right"`, `"bottom-left"`, `"bottom-right"`, `"center"` (default)
+
+### 12. Edit PDF
+
+Adds free-form text annotations to a PDF.
+
+**Tool:** `edit-pdf`
+**Input:** Single PDF file
+**Output:** Modified PDF
+**Options:**
+- `text`: annotation text
+- `page`: 1-indexed page number
+- `x` / `y`: coordinates in PDF user space
+- `fontSize` / `color`
+
+### 13. Add Page Numbers
+
+Adds page-number stamps to every page.
+
+**Tool:** `add-page-numbers`
+**Input:** Single PDF file
+**Output:** PDF with page numbers
+**Options:**
+- `position`: top/bottom + left/center/right
+- `format`: e.g. `"%d / %d"` (current / total)
+- `fontSize` / `color`
+
 ## API Endpoints
 
 All endpoints follow RESTful conventions:
@@ -143,9 +218,9 @@ POST /api/organize-pdf/:tool
 Creates a new processing job for the specified tool.
 
 **Parameters:**
-- `:tool` - One of: merge-pdf, split-pdf, rotate-pdf, remove-pages, extract-pages, organize-pdf, scan-to-pdf
-- Form data: `files` (multipart/form-data)
-- Form data: `options` (JSON string, optional)
+- `:tool` — One of: `merge-pdf`, `split-pdf`, `rotate-pdf`, `remove-pages`, `extract-pages`, `organize-pdf`, `scan-to-pdf`, `watermark-pdf`, `protect-pdf`, `unlock-pdf`, `sign-pdf`, `edit-pdf`, `add-page-numbers` (13 total — see `main.go:59` `AllowedTools`)
+- Form data: `files` (multipart/form-data) **or** JSON body with `uploadId`/`uploadIds`
+- Form data: `options` (JSON string, optional, tool-specific)
 
 **Response:**
 ```json
@@ -211,10 +286,10 @@ REDIS_DB="0"
 ### Service Configuration
 ```env
 PORT="8084"
-QUEUE_PREFIX="queue"
-PROCESSING_TIMEOUT="30m"
-MAX_RETRIES="3"
+NATS_URL="nats://nats:4222"
+PROCESSING_TIMEOUT="30m"   # honoured via NATS AckWait
 OUTPUT_DIR="outputs"
+WORKER_CONCURRENCY="1"     # this worker is single-threaded by default
 ```
 
 ### JWT Authentication
@@ -261,15 +336,21 @@ AUTH_TRUST_GATEWAY_HEADERS="false"
 ### Processing Flow
 
 ```
-Client Request → API Handler → Create Job → Redis Queue
-                                               ↓
-                                            Worker
-                                               ↓
-                                    Process File (pdfcpu)
-                                               ↓
-                                    Update Job Status
-                                               ↓
-                                    Store Output File
+Client Request
+  ↓
+API Gateway → Job Service (creates ProcessingJob in Postgres)
+  ↓
+NATS JetStream (jobs.dispatch.organize-pdf) — WorkQueue
+  ↓
+organize-pdf worker pull-consumer (durable=organize-pdf · MaxDeliver=4 · AckWait=30m)
+  ↓
+processing.ProcessFile() — dispatches to pdfcpu helpers
+  ↓
+Output written to outputs/<jobId>.<ext>
+  ↓
+DB → status=completed, INSERT file_metadata
+  ↓
+Publish jobs.events.<jobId>.{processing,completed,failed}
 ```
 
 ## Docker Deployment
@@ -434,26 +515,26 @@ docker logs -f organize-pdf
 docker logs -f organize-pdf | grep "job completed"
 ```
 
-### Redis Queue
+### NATS Inspection
 ```bash
-# Check queue length
-redis-cli LLEN queue:organize-pdf
+# Pending dispatch
+nats stream view JOBS_DISPATCH --filter jobs.dispatch.organize-pdf
 
-# View processing jobs
-redis-cli LRANGE queue:organize-pdf:processing 0 -1
+# DLQ
+nats stream view JOBS_DLQ --filter jobs.dlq.organize-pdf
 ```
 
 ## Troubleshooting
 
 ### Service Won't Start
 1. Check database connection
-2. Verify Redis is running
+2. Verify Redis and NATS are running
 3. Ensure JWT_HS256_SECRET is set
 4. Check port 8084 is available
 
 ### Jobs Stuck in Pending
-1. Verify worker is running
-2. Check Redis queue: `redis-cli LLEN queue:organize-pdf`
+1. Verify worker is running (`docker compose logs organize-pdf`)
+2. Inspect dispatch stream: `nats stream view JOBS_DISPATCH --filter jobs.dispatch.organize-pdf`
 3. Review worker logs for errors
 
 ### Processing Failures
@@ -475,7 +556,7 @@ sequenceDiagram
     participant FS as File System
     participant PC as pdfcpu
 
-    JS->>NATS: Publish JobCreated to dispatch.organize-pdf
+    JS->>NATS: Publish JobCreated to jobs.dispatch.organize-pdf
     NATS->>W: Deliver JobCreated event
 
     W->>W: Validate toolType in AllowedTools
@@ -486,18 +567,29 @@ sequenceDiagram
     alt merge-pdf
         W->>PC: pdfcpu merge [file1.pdf, file2.pdf, ...] -> merged.pdf
     else split-pdf
-        W->>PC: pdfcpu split input.pdf by page range
-        W->>FS: Create ZIP archive of split pages
+        W->>PC: pdfcpu split input.pdf by page range → ZIP
     else remove-pages
-        W->>PC: pdfcpu remove pages [2,4,6] from input.pdf
+        W->>PC: pdfcpu remove pages [2,4,6]
     else extract-pages
-        W->>PC: pdfcpu extract pages [1,3,5-7] from input.pdf
+        W->>PC: pdfcpu CollectFile pages [1,3,5-7]
     else rotate-pdf
-        W->>PC: pdfcpu rotate pages by 90/180/270 degrees
+        W->>PC: pdfcpu rotate pages by 90/180/270 (all/odd/even)
     else organize-pdf (reorder)
-        W->>PC: pdfcpu reorder pages [3,1,2,4] in input.pdf
+        W->>PC: pdfcpu reorder pages [3,1,2,4]
     else scan-to-pdf
-        W->>PC: pdfcpu import images to PDF
+        W->>PC: pdfcpu import images to PDF (+ optional Tesseract OCR layer)
+    else watermark-pdf
+        W->>PC: pdfcpu add text/image watermark
+    else protect-pdf
+        W->>PC: pdfcpu encrypt with password
+    else unlock-pdf
+        W->>PC: pdfcpu decrypt with password
+    else sign-pdf
+        W->>PC: pdfcpu image stamp on selected page
+    else edit-pdf
+        W->>PC: pdfcpu text stamp at coordinates
+    else add-page-numbers
+        W->>PC: pdfcpu add page numbers (per template)
     end
 
     alt Processing succeeds

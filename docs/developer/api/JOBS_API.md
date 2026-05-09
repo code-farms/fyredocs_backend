@@ -1,114 +1,174 @@
 # Jobs API
 
-Base URL: `http://localhost:8080`
+Base URL (via gateway): `http://localhost:8080`
 
-Manage and track all processing jobs across services.
+The job-service exposes job creation, listing, retrieval, deletion, downloads, history, and a Server-Sent Events stream. Jobs are scoped under tool-group prefixes (`/api/<group>/:tool/...`) — there is no generic `/api/jobs/:jobId` resource. The history and SSE endpoints are the only routes under the bare `/api/jobs` namespace.
+
+Authentication options:
+- Authenticated user — `access_token` cookie or `Authorization: Bearer <jwt>`
+- Guest — `X-Guest-Token` header or `guest_token` cookie (the gateway issues this on first contact)
+
+Tool groups:
+- `/api/convert-from-pdf/:tool`
+- `/api/convert-to-pdf/:tool`
+- `/api/organize-pdf/:tool`
+- `/api/optimize-pdf/:tool`
 
 ---
 
-## GET /api/jobs
+## POST /api/&lt;group&gt;/:tool
 
-Get all jobs for the authenticated user.
+Create a job using one of two request shapes:
 
-**Authentication:** Required
+1. **Chunked-upload pre-completed flow** (`Content-Type: application/json`) — references a previously completed `uploadId`/`uploadIds`. Recommended for large files because the chunked-upload protocol gives you resumability.
+2. **Direct multipart upload** (`Content-Type: multipart/form-data`) — for small files or simple single-shot scripts.
 
-### Request
+### Common headers
 
-```
-GET /api/jobs?limit=25&page=1
-```
+| Header | Optional | Description |
+|--------|----------|-------------|
+| `Idempotency-Key` | Yes | If you replay a POST with the same key within 10 minutes, the original job is returned. |
+| `X-Guest-Token` | Yes | Guest sessions; mutually exclusive with auth cookie. |
 
-**Query Parameters:**
+### JSON body shape
 
-| Parameter | Type | Default | Range | Description |
-|-----------|------|---------|-------|-------------|
-| limit | integer | 25 | 1-100 | Results per page |
-| page | integer | 1 | 1-100000 | Page number |
-
-### Response
-
-**200 OK**
 ```json
-[
-  {
-    "id": "job-550e8400-e29b-41d4-a716-446655440000",
-    "userId": "user-550e8400-e29b-41d4-a716-446655440000",
-    "toolType": "pdf-to-word",
-    "status": "completed",
-    "progress": "100",
-    "fileName": "document.docx",
-    "fileSize": "512.50 KB",
-    "createdAt": "2025-01-19T10:30:00Z",
-    "updatedAt": "2025-01-19T10:35:00Z",
-    "completedAt": "2025-01-19T10:35:00Z"
-  },
-  {
-    "id": "job-660f9500-f30c-52e5-b827-557766551111",
-    "userId": "user-550e8400-e29b-41d4-a716-446655440000",
-    "toolType": "compress-pdf",
-    "status": "processing",
-    "progress": "45",
-    "fileName": "compressed.pdf",
-    "fileSize": "2.10 MB",
-    "createdAt": "2025-01-19T11:00:00Z",
-    "updatedAt": "2025-01-19T11:01:00Z",
-    "completedAt": null
-  }
-]
+{
+  "uploadId": "0c2b...UUID",
+  "uploadIds": ["uuid1", "uuid2"],
+  "options": { "anyToolSpecific": "object" }
+}
 ```
 
-### Notes
+`uploadIds` (plural) is preferred. `uploadId` (singular) is accepted for backward compat. If you POST again with the same `uploadIds` (e.g. a network retry), you get the original `jobId` back transparently.
 
-- Jobs are returned in reverse chronological order (newest first)
-- Only returns jobs belonging to the authenticated user
+### Multipart body shape
+
+```
+files: <binary> (one or more, key="files")
+options: <stringified JSON>
+```
+
+### Response — 201 Created
+
+```json
+{
+  "success": true,
+  "message": "Your file is being processed!",
+  "data": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "userId": null,
+    "toolType": "pdf-to-word",
+    "status": "queued",
+    "progress": 0,
+    "fileName": "document.docx",
+    "fileSize": 2456789,
+    "createdAt": "2026-05-09T10:30:00Z",
+    "updatedAt": "2026-05-09T10:30:00Z",
+    "completedAt": null,
+    "expiresAt": "2026-05-10T10:30:00Z",
+    "guestToken": "<set on first guest job>"
+  }
+}
+```
 
 ### Errors
 
 | Status | Code | Description |
 |--------|------|-------------|
-| 401 | UNAUTHORIZED | Not authenticated |
+| 400 | INVALID_INPUT | Missing fields, unknown tool, MIME mismatch |
+| 400 | TOO_MANY_FILES | More files than the user's plan permits |
+| 401 | UNAUTHORIZED | Auth required for non-guest tools |
+| 413 | FILE_TOO_LARGE | File exceeds the plan's max-file-size |
+| 500 | SERVER_ERROR | Disk / DB / NATS publish failure |
 
 ---
 
-## GET /api/jobs/{jobId}
+## GET /api/&lt;group&gt;/:tool
 
-Get a specific job by ID.
+List jobs created by the current user (or guest) for a specific tool, paginated.
 
-**Authentication:** Required
+| Query param | Default | Range | Description |
+|-------------|---------|-------|-------------|
+| `limit` | 25 | 1–100 | Results per page |
+| `page` | 1 | 1–100000 | Page number |
 
-### Request
+### Response — 200 OK
 
-```
-GET /api/jobs/{jobId}
-```
-
-**URL Parameters:**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| jobId | string | Yes | Job ID |
-
-### Response
-
-**200 OK**
 ```json
 {
-  "id": "job-550e8400-e29b-41d4-a716-446655440000",
-  "userId": "user-550e8400-e29b-41d4-a716-446655440000",
-  "toolType": "pdf-to-word",
-  "status": "completed",
-  "progress": "100",
-  "fileName": "document.docx",
-  "fileSize": "512.50 KB",
-  "metadata": {
-    "inputPaths": ["/uploads/file.pdf"],
-    "outputPath": "/outputs/document.docx",
-    "options": {}
-  },
-  "createdAt": "2025-01-19T10:30:00Z",
-  "updatedAt": "2025-01-19T10:35:00Z",
-  "completedAt": "2025-01-19T10:35:00Z",
-  "expiresAt": null
+  "success": true,
+  "message": "Jobs loaded successfully",
+  "data": [ /* Job objects, newest first */ ],
+  "meta": { "page": 1, "limit": 25, "total": 0 }
+}
+```
+
+Guest callers see only jobs associated with their `guest_token`. Authenticated users see jobs owned by their `userId` for the given tool.
+
+---
+
+## GET /api/&lt;group&gt;/:tool/:id
+
+Fetch a single job by ID. Auth must match (job owner or guest token holder).
+
+### Response — 200 OK
+
+Same envelope as `POST` above, with `data` containing one Job object.
+
+### Errors
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 404 | NOT_FOUND | Job not found, expired, or accessor unauthorized |
+
+---
+
+## DELETE /api/&lt;group&gt;/:tool/:id
+
+Delete the job and all associated files. Auth must match.
+
+### Response — 200 / 204
+
+Returns 200 with the standard envelope (or 204 No Content depending on response helper). Side effects: removes input + output files from disk and deletes the `processing_jobs` row.
+
+### Errors
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 404 | NOT_FOUND | Job not found, expired, or accessor unauthorized |
+
+---
+
+## GET /api/&lt;group&gt;/:tool/:id/download
+
+Stream the output file. The `Content-Disposition` filename is derived from the original input. MIME type is set per the tool (e.g. `application/pdf` for `*-to-pdf`, `application/zip` for split / multi-output jobs).
+
+### Errors
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 404 | NOT_FOUND | Job not completed, missing output, or accessor unauthorized |
+
+---
+
+## GET /api/jobs/history
+
+Paginated history across **all** tools for the **authenticated user**. Guest callers cannot use this endpoint.
+
+| Query param | Default | Range | Description |
+|-------------|---------|-------|-------------|
+| `limit` | 25 | 1–100 | Results per page |
+| `page` | 1 | 1–100000 | Page number |
+
+### Response — 200 OK
+
+```json
+{
+  "success": true,
+  "message": "Jobs loaded successfully",
+  "data": [ /* Job objects, newest first, across all tools */ ],
+  "meta": { "page": 1, "limit": 25, "total": 0 }
 }
 ```
 
@@ -117,61 +177,65 @@ GET /api/jobs/{jobId}
 | Status | Code | Description |
 |--------|------|-------------|
 | 401 | UNAUTHORIZED | Not authenticated |
-| 404 | NOT_FOUND | Job not found |
 
 ---
 
-## DELETE /api/jobs/{jobId}
+## GET /api/jobs/:id/events  (Server-Sent Events)
 
-Delete a job and its associated files.
+Open an SSE stream of real-time updates for one job. Internally the handler creates an **ephemeral** NATS JetStream consumer with `FilterSubject="jobs.events.<jobId>.>"`, `DeliverPolicy=DeliverNewPolicy`, and `InactiveThreshold=1m`, so the server does the filtering and the consumer self-cleans.
 
-**Authentication:** Required
+### Connection
 
-### Request
-
+```http
+GET /api/jobs/<jobId>/events
+Accept: text/event-stream
+Cookie: access_token=<JWT>   # or guest_token
 ```
-DELETE /api/jobs/{jobId}
+
+The connection auto-closes after 5 minutes (server-side timeout) or when the job reaches a terminal status.
+
+### Event format
+
+Initial connect:
+```
+event: connected
+data: {"jobId":"<uuid>"}
 ```
 
-**URL Parameters:**
+Per progress / completion / failure update:
+```
+event: job-update
+data: {"jobId":"<uuid>","status":"progress","progress":42,"toolType":"pdf-to-word","fileSize":1048576}
+```
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| jobId | string | Yes | Job ID |
+Keepalive comments are sent every 15 seconds:
+```
+: keepalive
+```
 
-### Response
-
-**204 No Content**
-
-### Behavior
-
-- Deletes job record from database
-- Removes all associated input files
-- Removes all associated output files
-- Removes guest token association (if applicable)
-
-### Errors
-
-| Status | Code | Description |
-|--------|------|-------------|
-| 401 | UNAUTHORIZED | Not authenticated |
-| 404 | NOT_FOUND | Job not found |
+If the underlying NATS stream is unavailable:
+```
+event: error
+data: {"message":"event stream unavailable"}
+```
 
 ---
 
 ## Job Status Lifecycle
 
 ```
-pending → processing → completed
-                    ↘ failed
+queued → processing → completed
+                   ↘ failed
 ```
 
 | Status | Description |
 |--------|-------------|
-| `pending` | Job created and queued for processing |
-| `processing` | Job is actively being processed |
-| `completed` | Job finished successfully, output ready for download |
-| `failed` | Job failed (check `failureReason` for details) |
+| `queued` | Job created, JobMessage published to NATS, awaiting worker pickup |
+| `processing` | Worker has acked the message and is running |
+| `completed` | Worker finished successfully; `outputPath` populated |
+| `failed` | Worker reported failure; `failureReason` populated |
+
+Workers also emit `jobs.events.<jobId>.progress` events while running. These are visible only via the SSE endpoint, not as a separate HTTP status.
 
 ---
 
@@ -179,125 +243,60 @@ pending → processing → completed
 
 | Field | Type | Nullable | Description |
 |-------|------|----------|-------------|
-| id | string | No | Unique job identifier (UUID) |
-| userId | string | Yes | User ID (null for guest jobs) |
+| id | string (UUID) | No | Unique job identifier |
+| userId | string (UUID) | Yes | User ID (null for guest jobs) |
 | toolType | string | No | Tool used for processing |
-| status | string | No | Current job status |
-| progress | string | No | Progress percentage (0-100) |
-| fileName | string | No | Output file name |
-| fileSize | string | No | Human-readable file size |
-| failureReason | string | Yes | Error message (only if failed) |
-| metadata | object | No | Job metadata |
-| createdAt | string | No | ISO 8601 creation timestamp |
-| updatedAt | string | No | ISO 8601 last update timestamp |
-| completedAt | string | Yes | ISO 8601 completion timestamp |
-| expiresAt | string | Yes | ISO 8601 expiration timestamp |
-
-### Metadata Object
-
-| Field | Type | Description |
-|-------|------|-------------|
-| inputPaths | array | Paths to input files |
-| outputPath | string | Path to output file (when completed) |
-| options | object | Tool-specific options used |
-| correlationId | string | Request correlation ID |
+| status | string | No | `queued` / `processing` / `completed` / `failed` |
+| progress | integer | No | 0–100 |
+| fileName | string | No | Original or canonical output filename |
+| fileSize | integer | No | Size in bytes (input total, or output for completed jobs) |
+| failureReason | string | Yes | Error message (only if `failed`) |
+| metadata | object | No | `{options, correlationId, ...}` |
+| createdAt | string (RFC3339) | No | Creation timestamp |
+| updatedAt | string (RFC3339) | No | Last update timestamp |
+| completedAt | string (RFC3339) | Yes | Set when `completed` |
+| expiresAt | string (RFC3339) | Yes | TTL set per plan; null for pro users |
 
 ---
 
-## Tool Types
+## Tool Types (per group)
 
-Jobs can have the following `toolType` values:
+### `/api/convert-from-pdf/:tool`
+`pdf-to-image` (alias `pdf-to-img`), `pdf-to-pdfa`, `pdf-to-word` (alias `pdf-to-docx`), `pdf-to-excel` (alias `pdf-to-xlsx`), `pdf-to-ppt` (aliases `pdf-to-powerpoint`, `pdf-to-pptx`), `pdf-to-html`, `pdf-to-text` (alias `pdf-to-txt`), `pdf-to-odt`, `pdf-to-ods`, `pdf-to-odp`
 
-### Convert To PDF
-- `word-to-pdf`
-- `excel-to-pdf`
-- `powerpoint-to-pdf`
-- `image-to-pdf`
-- `html-to-pdf`
+### `/api/convert-to-pdf/:tool`
+`word-to-pdf`, `ppt-to-pdf` (alias `powerpoint-to-pdf`), `excel-to-pdf`, `html-to-pdf`, `image-to-pdf` (alias `img-to-pdf`)
 
-### Convert From PDF
-- `pdf-to-word`
-- `pdf-to-excel`
-- `pdf-to-ppt`
-- `pdf-to-image`
-- `pdf-to-html`
-- `pdf-to-text`
-- `pdf-to-pdfa`
+### `/api/organize-pdf/:tool`
+`merge-pdf`, `split-pdf`, `remove-pages`, `extract-pages`, `organize-pdf`, `scan-to-pdf`, `rotate-pdf`, `watermark-pdf`, `protect-pdf`, `unlock-pdf`, `sign-pdf`, `edit-pdf`, `add-page-numbers`
 
-### Organize PDF
-- `merge-pdf`
-- `split-pdf`
-- `remove-pages`
-- `extract-pages`
-- `organize-pdf`
-- `scan-to-pdf`
-
-### Optimize PDF
-- `compress-pdf`
-- `repair-pdf`
-- `ocr-pdf`
+### `/api/optimize-pdf/:tool`
+`compress-pdf`, `repair-pdf`, `ocr-pdf`
 
 ---
 
 ## Guest Jobs
 
-Jobs created by unauthenticated (guest) users have special behavior:
+Jobs created by unauthenticated (guest) users:
 
 | Property | Value |
 |----------|-------|
-| userId | `null` |
-| expiresAt | 2 hours from creation |
-| Identification | Via `X-Guest-Token` header/cookie |
+| `userId` | `null` |
+| `expiresAt` | TTL set by job-service per `GUEST_JOB_TTL` |
+| Identification | `X-Guest-Token` header **or** `guest_token` cookie (issued by the gateway) |
 
-### Guest Token
-
-- Generated automatically on first job creation
-- Must be included in subsequent requests
-- Jobs are automatically deleted after expiration
-
-**Header:**
-```
-X-Guest-Token: guest-token-value
-```
-
-**Or Cookie:**
-```
-Cookie: guest_token=guest-token-value
-```
+The gateway issues a `guest_token` cookie automatically on first contact when the request has no auth. Subsequent calls scope to that token via `guest:{token}:jobs` Redis sets.
 
 ---
 
-## Polling Strategy
+## Polling vs SSE
 
-For tracking job progress, poll the job status endpoint:
-
-**Recommended Intervals:**
-
-| Job Duration | Poll Interval |
-|--------------|---------------|
-| < 30 seconds | 2 seconds |
-| 30s - 2 min | 5 seconds |
-| > 2 minutes | 10 seconds |
-
-**Example Flow:**
-
-1. Create job → Get `jobId`
-2. Poll `GET /api/jobs/{jobId}` every N seconds
-3. Check `status` field:
-   - `pending` or `processing` → Continue polling
-   - `completed` → Download result
-   - `failed` → Handle error (check `failureReason`)
+Prefer **SSE** (`/api/jobs/:id/events`) for tracking progress — it is push-based and automatically cleans up. Polling individual jobs via `GET /api/<group>/:tool/:id` works as a fallback but is more expensive and lossy for `progress` events.
 
 ---
 
 ## File Cleanup
 
-### Automatic Cleanup
-
-- Guest job files are deleted after `expiresAt`
-- Cleanup worker runs periodically to remove expired files
-
-### Manual Cleanup
-
-- Use `DELETE /api/jobs/{jobId}` to immediately remove job and files
-- Recommended after downloading results to free storage
+- Expired jobs are reaped by the [cleanup-worker](../services/CLEANUP_WORKER.md) every `CLEANUP_INTERVAL` (default 15m).
+- Pro-user jobs have `expires_at = NULL` and are not auto-deleted.
+- `DELETE /api/<group>/:tool/:id` immediately removes the job and its files.

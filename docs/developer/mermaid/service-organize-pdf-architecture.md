@@ -25,14 +25,21 @@ graph TB
             DISPATCH["Tool Dispatcher"]
         end
 
-        subgraph Processing["processing package"]
+        subgraph Processing["processing package (pdfcpu + Tesseract)"]
             PROC["ProcessFile()"]
             MERGE["merge-pdf"]
-            SPLIT["split-pdf"]
+            SPLIT["split-pdf (→ ZIP)"]
             REMOVE["remove-pages"]
-            EXTRACT["extract-pages"]
-            ORGANIZE["organize-pdf"]
-            SCAN["scan-to-pdf"]
+            EXTRACT["extract-pages (CollectFile)"]
+            ORGANIZE["organize-pdf (reorder)"]
+            ROTATE["rotate-pdf<br/>(90/180/270 · all/odd/even)"]
+            SCAN["scan-to-pdf (+ optional Tesseract OCR)"]
+            WATERMARK["watermark-pdf<br/>(text or image)"]
+            PROTECT["protect-pdf"]
+            UNLOCK["unlock-pdf"]
+            SIGN["sign-pdf<br/>(image stamp)"]
+            EDIT["edit-pdf<br/>(text stamp)"]
+            PAGENO["add-page-numbers"]
         end
 
         subgraph Models["internal/models"]
@@ -51,9 +58,18 @@ graph TB
     PROC --> REMOVE
     PROC --> EXTRACT
     PROC --> ORGANIZE
+    PROC --> ROTATE
     PROC --> SCAN
+    PROC --> WATERMARK
+    PROC --> PROTECT
+    PROC --> UNLOCK
+    PROC --> SIGN
+    PROC --> EDIT
+    PROC --> PAGENO
 
     DISPATCH -->|Update status| DB_CONN
+    DISPATCH -->|jobs.events.&lt;jobId&gt;.{processing,completed,failed}| EVENTS["JOBS_EVENTS"]
+    DISPATCH -.->|on MaxDeliver| DLQ["jobs.dlq.organize-pdf · JOBS_DLQ · 7d"]
     DB_CONN --> PG[(PostgreSQL)]
     HEALTHZ -->|Ping| Redis[(Redis)]
     HEALTHZ -->|Check connected| NATS
@@ -62,15 +78,30 @@ graph TB
 
 ## Allowed Tool Types
 
+The whitelist in `main.go:59` is the authoritative source — 13 tools.
+
 ```mermaid
 graph LR
-    subgraph Tools["organize-pdf Tool Types"]
-        A["merge-pdf<br/>Combine multiple PDFs"]
-        B["split-pdf<br/>Split into pages/ranges"]
-        C["remove-pages<br/>Remove specific pages"]
-        D["extract-pages<br/>Extract page subset"]
-        E["organize-pdf<br/>Reorder pages"]
-        F["scan-to-pdf<br/>Scan images to PDF"]
+    subgraph Structural["Structural"]
+        A["merge-pdf"]
+        B["split-pdf"]
+        C["remove-pages"]
+        D["extract-pages"]
+        E["organize-pdf<br/>(reorder)"]
+        F["rotate-pdf"]
+        G["scan-to-pdf"]
+    end
+
+    subgraph Annotation["Annotation / stamping"]
+        H["watermark-pdf"]
+        I["sign-pdf"]
+        J["edit-pdf"]
+        K["add-page-numbers"]
+    end
+
+    subgraph Encryption["Encryption"]
+        L["protect-pdf"]
+        M["unlock-pdf"]
     end
 ```
 

@@ -90,22 +90,30 @@ done
 
 ```
 Browser → API Gateway (8080)
-           ├─ Auth check (JWT / Guest Token)
-           ├─ CORS validation
+           ├─ CORS, security headers
+           ├─ Auth check (JWT / Guest cookie) + plan resolution from Redis
+           ├─ Body size limit (1 MB on non-upload routes)
            └─ Reverse proxy to target service
                │
-               ├─ /auth/*          → Auth Service (8086)
-               ├─ /api/jobs/*      → Job Service (8081)
-               ├─ /api/upload/*    → Job Service (8081)
-               └─ /api/analytics/* → Analytics Service (8087)
+               ├─ /auth/*                     → Auth Service (8086)
+               ├─ /api/upload/*               → Job Service (8081)  (rewritten to /api/uploads/*)
+               ├─ /api/jobs/history|:id/events → Job Service (8081)
+               ├─ /api/{convert-from-pdf,convert-to-pdf,organize-pdf,optimize-pdf}/:tool → Job Service (8081)
+               ├─ /admin/*                    → Analytics Service (8087)
+               └─ /                           → SPA static files (when SPA_DIR is set)
 
 Job Service receives tool requests:
-  1. Accepts chunked file upload → assembles in Redis
-  2. Creates ProcessingJob record in PostgreSQL
-  3. Publishes event to NATS JetStream (tool-specific queue)
-  4. Worker service consumes event → processes file
-  5. Client polls for status or connects via SSE
-  6. Client downloads result from Job Service
+  1. Client uploads chunks via /api/uploads/* (state in Redis, bytes on disk)
+  2. Client POSTs /api/<group>/:tool with the uploadId(s) — job-service creates a
+     ProcessingJob in PostgreSQL (UUIDv7), guarded by idempotency-key + a 10-minute
+     uploadId-dedupe window
+  3. Publishes a JobMessage to NATS subject `jobs.dispatch.<service-name>`
+  4. Worker pulls from JOBS_DISPATCH (WorkQueue), runs processing, updates status,
+     publishes `jobs.events.<jobId>.{progress,completed,failed}` events
+  5. Client subscribes via SSE on /api/jobs/:id/events — job-service uses an
+     ephemeral NATS consumer with FilterSubject scoped to the jobId
+  6. Client downloads the result from /api/<group>/:tool/:id/download
+  7. On max-retry exhaustion, the worker publishes to `jobs.dlq.<service>` (JOBS_DLQ stream)
 ```
 
 ---

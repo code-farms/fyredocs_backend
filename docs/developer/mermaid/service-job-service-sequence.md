@@ -1,214 +1,240 @@
 # Job Service -- Sequence Diagrams
 
-Request flows through the `job-service`.
+Request flows through the `job-service` (port 8081).
 
-## Create Job (JSON body with uploadId)
-
-```mermaid
-sequenceDiagram
-    participant GW as api-gateway
-    participant JS as job-service :8081
-    participant Redis
-    participant PG as PostgreSQL
-    participant Disk as File System
-    participant NATS as NATS JetStream
-
-    GW->>JS: POST /api/convert-from-pdf/pdf-to-word<br/>X-User-ID: <uuid><br/>{"uploadId": "<uploadId>"}
-
-    JS->>JS: Auth middleware<br/>Extract user from headers or JWT
-
-    JS->>JS: Normalize tool type<br/>Validate against convertFromTools
-
-    JS->>Redis: HGETALL upload:<uploadId>
-    Redis-->>JS: {fileName: "doc.pdf", fileSize: 5242880}
-
-    JS->>Disk: Move file from uploads/<uploadId>/doc.pdf<br/>to uploads/<jobId>/doc.pdf
-    JS->>Redis: DEL upload:<uploadId>, upload:<uploadId>:chunks
-    JS->>Disk: Remove uploads/<uploadId>/ directory
-
-    JS->>PG: BEGIN TRANSACTION
-    JS->>PG: INSERT processing_jobs<br/>(id=<jobId>, tool_type=pdf-to-word,<br/>status=queued, user_id=<uuid>)
-    JS->>PG: INSERT file_metadata<br/>(job_id=<jobId>, kind=input, path=...)
-    JS->>PG: COMMIT
-
-    JS->>JS: routing.ServiceForTool("pdf-to-word")<br/>returns "convert-from-pdf"
-
-    JS->>NATS: Publish to jobs.dispatch.convert-from-pdf<br/>{eventType: "JobCreated", jobId, toolType,<br/>inputPaths, options, correlationId}
-
-    JS-->>GW: 201 Created {job}
-```
-
-## Create Job (Multipart upload)
-
-```mermaid
-sequenceDiagram
-    participant GW as api-gateway
-    participant JS as job-service :8081
-    participant PG as PostgreSQL
-    participant NATS as NATS JetStream
-
-    GW->>JS: POST /api/convert-to-pdf/word-to-pdf<br/>Content-Type: multipart/form-data<br/>files[]=report.docx
-
-    JS->>JS: Parse multipart form
-    JS->>JS: Validate file extension (.docx)
-    JS->>JS: Check file size <= 50 MB
-
-    JS->>JS: Save to uploads/<jobId>/report.docx
-
-    JS->>PG: INSERT processing_jobs (status=queued)
-    JS->>PG: INSERT file_metadata (kind=input)
-
-    JS->>JS: routing.ServiceForTool("word-to-pdf")<br/>returns "convert-to-pdf"
-
-    JS->>NATS: Publish to jobs.dispatch.convert-to-pdf<br/>{JobCreated event}
-
-    JS-->>GW: 201 Created {job}
-```
-
-## Get Job Status
-
-```mermaid
-sequenceDiagram
-    participant GW as api-gateway
-    participant JS as job-service :8081
-    participant PG as PostgreSQL
-
-    GW->>JS: GET /api/convert-from-pdf/pdf-to-word/<jobId><br/>X-User-ID: <uuid>
-
-    JS->>PG: SELECT * FROM processing_jobs<br/>WHERE id = <jobId> AND tool_type = pdf-to-word
-
-    PG-->>JS: {id, status: "processing", progress: 20, ...}
-
-    JS->>JS: authorizeJobAccess()<br/>Check job.user_id matches X-User-ID
-
-    JS-->>GW: 200 {job}
-```
-
-## Download Completed Job
-
-```mermaid
-sequenceDiagram
-    participant GW as api-gateway
-    participant JS as job-service :8081
-    participant PG as PostgreSQL
-    participant Disk as File System
-
-    GW->>JS: GET /api/convert-from-pdf/pdf-to-word/<jobId>/download<br/>X-User-ID: <uuid>
-
-    JS->>PG: SELECT * FROM processing_jobs<br/>WHERE id = <jobId> AND tool_type = pdf-to-word
-    PG-->>JS: {status: "completed"}
-
-    JS->>JS: authorizeJobAccess() -- OK
-
-    alt FileMetadata cache hit
-        JS->>JS: Load from outputFileCache
-    else FileMetadata cache miss
-        JS->>PG: SELECT * FROM file_metadata<br/>WHERE job_id = <jobId> AND kind = output
-        PG-->>JS: {path: "outputs/result.docx", size: 2048000}
-        JS->>JS: Store in outputFileCache
-    end
-
-    JS->>JS: Determine filename: "doc.docx"<br/>Determine Content-Type
-
-    JS->>Disk: Read outputs/result.docx
-
-    JS-->>GW: 200 OK<br/>Content-Disposition: attachment; filename="doc.docx"<br/>Content-Type: application/vnd...wordprocessingml<br/>(streamed via FlushInterval=-1)
-```
-
-## Delete Job
-
-```mermaid
-sequenceDiagram
-    participant GW as api-gateway
-    participant JS as job-service :8081
-    participant PG as PostgreSQL
-    participant Disk as File System
-    participant Redis
-
-    GW->>JS: DELETE /api/convert-from-pdf/pdf-to-word/<jobId>
-
-    JS->>PG: SELECT * FROM processing_jobs WHERE id = <jobId>
-    JS->>JS: authorizeJobAccess()
-
-    JS->>PG: SELECT * FROM file_metadata WHERE job_id = <jobId>
-    PG-->>JS: [input file, output file]
-
-    loop For each file
-        JS->>Disk: os.Remove(file.Path)
-    end
-
-    JS->>PG: DELETE FROM file_metadata WHERE job_id = <jobId>
-    JS->>PG: DELETE FROM processing_jobs WHERE id = <jobId>
-
-    JS->>Redis: SREM guest:<token>:jobs <jobId>
-
-    JS-->>GW: 204 No Content
-```
-
-## Guest User Job Access
+## Chunked Upload (3 phases: init → chunks → complete)
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant GW as api-gateway
-    participant JS as job-service :8081
+    participant JS as job-service
     participant Redis
-    participant PG as PostgreSQL
+    participant Disk
 
-    Client->>GW: GET /api/convert-from-pdf/pdf-to-word<br/>(Cookie: guest_token=<token>)
+    Client->>GW: POST /api/upload/init {fileName, fileSize, totalChunks}
+    GW->>JS: Proxy → /api/uploads/init
+    JS->>Redis: HSET upload:&lt;uploadId&gt; (fileName, fileSize, totalChunks, createdAt) EX UPLOAD_TTL
+    JS-->>Client: 201 {uploadId}
 
-    GW->>Redis: Validate guest token
-    GW->>JS: GET /api/convert-from-pdf/pdf-to-word<br/>X-Guest-Token: <token>
+    loop For each chunk index
+        Client->>GW: PUT /api/upload/&lt;uploadId&gt;/chunk?index=N (multipart "chunk")
+        GW->>JS: Proxy
+        JS->>Disk: Save uploads/tmp/&lt;uploadId&gt;/00000N.part
+        JS->>Redis: EVAL Lua atomic — EXISTS state · SADD chunk-set · refresh both TTLs · HGETALL state · SCARD chunk-set
+        Redis-->>JS: state + receivedChunks
+        JS-->>Client: 200 {uploadId, receivedChunks, complete}
+    end
 
-    JS->>Redis: SMEMBERS guest:<token>:jobs
-    Redis-->>JS: ["job-id-1", "job-id-2"]
-
-    JS->>PG: SELECT * FROM processing_jobs<br/>WHERE id IN (<ids>) AND tool_type = pdf-to-word AND user_id IS NULL
-
-    PG-->>JS: [job1, job2]
-
-    JS-->>GW: 200 {jobs: [...], meta: {page, limit}}
-    GW-->>Client: 200 {jobs}
-```
-
-## SSE Job Status Updates
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant GW as api-gateway
-    participant JS as job-service :8081
-    participant NATS as NATS JetStream
-    participant W as Worker Service
-
-    Client->>GW: GET /api/jobs/<jobId>/events<br/>Accept: text/event-stream
-    GW->>JS: Proxy request
-
-    JS->>JS: Set SSE headers<br/>(Content-Type: text/event-stream)
-
-    JS->>NATS: Create ephemeral consumer<br/>on JOBS_EVENTS stream<br/>filter: jobs.events.>
-
-    JS-->>Client: event: connected<br/>data: {"jobId": "<jobId>"}
-
-    loop Until job completes/fails or 5min timeout
-        W->>NATS: Publish job event<br/>(jobs.events.JobProgress)
-
-        JS->>NATS: Fetch messages (5s wait)
-        NATS-->>JS: JobEvent {jobId, eventType, progress}
-
-        alt Event matches requested jobId
-            JS-->>Client: event: job-update<br/>data: {"jobId","status","progress","toolType"}
-            JS->>NATS: ACK message
-        else Event for different job
-            JS->>NATS: ACK message (skip)
+    Client->>GW: POST /api/upload/&lt;uploadId&gt;/complete
+    GW->>JS: Proxy
+    JS->>Redis: HGETALL upload:&lt;uploadId&gt; · SCARD upload:&lt;uploadId&gt;:chunks
+    alt all chunks received
+        JS->>Disk: Open uploads/&lt;uploadId&gt;/&lt;fileName&gt; · concat 00000.part..N.part · sync
+        JS->>JS: stat size > MAX_UPLOAD_MB?
+        alt over limit
+            JS->>Disk: rm assembled file
+            JS-->>Client: 400 FILE_TOO_LARGE
+        else within limit
+            JS->>Disk: rm uploads/tmp/&lt;uploadId&gt;/
+            JS-->>Client: 200 {uploadId}
         end
+    else
+        JS-->>Client: 400 BAD_REQUEST (not all chunks received)
+    end
+```
 
-        Note over JS,Client: Keepalive comment every 15s<br/>": keepalive"
+## Create Job (JSON body with uploadIds)
+
+```mermaid
+sequenceDiagram
+    participant GW as api-gateway
+    participant JS as job-service
+    participant Redis
+    participant PG as PostgreSQL
+    participant Disk
+    participant NATS
+
+    GW->>JS: POST /api/&lt;group&gt;/:tool {uploadIds, options} · Idempotency-Key?
+    JS->>JS: GinAuth · normalize tool · routing.ServiceForTool
+
+    alt Idempotency-Key cache hit
+        JS->>Redis: GET idempotency:&lt;key&gt;
+        JS->>PG: SELECT processing_jobs WHERE id=...
+        JS-->>GW: 201 (original job)
+    else
+        JS->>JS: findExistingJobForUploads(uploadIds) — replay safety
+        alt mapped already
+            JS-->>GW: 201 (original job)
+        else
+            JS->>JS: enforce plan max-files-per-job
+            loop For each uploadId
+                JS->>Redis: HGETALL upload:&lt;id&gt;
+                JS->>Disk: Move uploads/&lt;id&gt;/&lt;file&gt; → uploads/&lt;jobId&gt;/&lt;file&gt;
+                JS->>JS: validateMIMEType(toolType, path)
+            end
+
+            JS->>PG: BEGIN TX
+            JS->>PG: INSERT processing_jobs (id=UUIDv7, tool, status='queued', expires_at, ...)
+            JS->>PG: INSERT file_metadata × N
+            JS->>PG: COMMIT
+
+            JS->>JS: assignGuestTokenIfNeeded
+            JS->>NATS: Publish jobs.dispatch.&lt;serviceName&gt; (JobMessage)
+            JS->>Redis: SET upload:&lt;id&gt;:job &lt;jobId&gt;
+            JS->>Redis: DEL upload:&lt;id&gt; · upload:&lt;id&gt;:chunks
+            JS->>Redis: SETEX idempotency:&lt;key&gt; 10m → jobId
+            JS->>NATS: Publish analytics.events.job.created
+            JS-->>GW: 201 {job, guestToken?}
+        end
+    end
+```
+
+## Create Job (multipart/form-data)
+
+```mermaid
+sequenceDiagram
+    participant GW as api-gateway
+    participant JS as job-service
+    participant PG as PostgreSQL
+    participant Disk
+    participant NATS
+
+    GW->>JS: POST /api/&lt;group&gt;/:tool · multipart files[] + options
+    JS->>JS: enforce plan limits (max files · max file size MB)
+    loop For each file
+        JS->>JS: validateFileType(toolType, filename)
+        JS->>Disk: SaveUploadedFile → uploads/&lt;jobId&gt;/&lt;basename&gt;
+        JS->>JS: validateMIMEType(toolType, path)
+    end
+    JS->>PG: INSERT processing_jobs + file_metadata in TX
+    JS->>NATS: Publish jobs.dispatch.&lt;serviceName&gt;
+    JS-->>GW: 201 {job}
+```
+
+## List Jobs by Tool (paginated)
+
+```mermaid
+sequenceDiagram
+    participant GW as api-gateway
+    participant JS as job-service
+    participant Redis
+    participant PG as PostgreSQL
+
+    GW->>JS: GET /api/&lt;group&gt;/:tool?limit=25&page=1
+    alt authenticated user
+        JS->>PG: SELECT processing_jobs WHERE user_id=:uid AND tool_type=:tool ORDER BY created_at DESC LIMIT/OFFSET
+    else guest
+        JS->>Redis: SMEMBERS guest:&lt;token&gt;:jobs
+        JS->>PG: SELECT WHERE id IN (...) AND tool_type=:tool AND user_id IS NULL ORDER BY created_at DESC
+    end
+    JS-->>GW: 200 {jobs[], meta:{page, limit}}
+```
+
+## Get Job History (auth only, all tools)
+
+```mermaid
+sequenceDiagram
+    participant GW as api-gateway
+    participant JS as job-service
+    participant PG as PostgreSQL
+
+    GW->>JS: GET /api/jobs/history?limit=&page=
+    JS->>JS: RequireAuthenticatedGin (401 if guest)
+    JS->>PG: SELECT processing_jobs WHERE user_id=:uid ORDER BY created_at DESC LIMIT/OFFSET
+    JS-->>GW: 200 {jobs[], meta}
+```
+
+## Get / Download / Delete (single job)
+
+```mermaid
+sequenceDiagram
+    participant GW as api-gateway
+    participant JS as job-service
+    participant PG as PostgreSQL
+    participant Disk
+
+    GW->>JS: GET /api/&lt;group&gt;/:tool/:id
+    JS->>PG: SELECT processing_jobs WHERE id=:id AND tool_type=:tool
+    JS->>JS: authorizeJobAccess (user_id match or guest_token in set)
+    JS-->>GW: 200 {job}
+
+    GW->>JS: GET /api/&lt;group&gt;/:tool/:id/download
+    JS->>JS: outputFileCache lookup
+    alt miss
+        JS->>PG: SELECT file_metadata WHERE job_id=:id AND kind='output'
+    end
+    JS->>Disk: stream file
+    JS-->>GW: 200 + Content-Disposition + Content-Type
+
+    GW->>JS: DELETE /api/&lt;group&gt;/:tool/:id
+    JS->>PG: SELECT processing_jobs · authorize
+    JS->>PG: SELECT file_metadata
+    loop each file
+        JS->>Disk: os.Remove
+    end
+    JS->>PG: DELETE file_metadata · DELETE processing_jobs
+    JS->>Redis: SREM guest:&lt;token&gt;:jobs &lt;jobId&gt; (best-effort)
+    JS-->>GW: 200 / 204
+```
+
+## SSE — Real-Time Job Updates
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant GW as api-gateway
+    participant JS as job-service
+    participant NATS as JOBS_EVENTS stream
+    participant W as Worker
+
+    Client->>GW: GET /api/jobs/&lt;jobId&gt;/events (Accept: text/event-stream)
+    GW->>JS: Proxy
+    JS->>JS: Set SSE headers · 5-minute timeout context
+    JS->>NATS: CreateConsumer(JOBS_EVENTS, FilterSubject="jobs.events.&lt;jobId&gt;.>", DeliverNew, InactiveThreshold=1m)
+    JS-->>Client: event: connected · data: {jobId}
+
+    par Worker side
+        W->>NATS: Publish jobs.events.&lt;jobId&gt;.progress (every progress tick)
+        W->>NATS: Publish jobs.events.&lt;jobId&gt;.completed (or .failed)
+    and SSE side
+        loop Until ctx done / terminal status
+            JS->>NATS: cons.Fetch(1, 5s wait)
+            alt got msg
+                JS-->>Client: event: job-update · data: {jobId,status,progress,toolType,fileSize?}
+                JS->>NATS: ACK
+                opt status terminal
+                    JS->>JS: close stream
+                end
+            else no msg / timeout
+                JS-->>Client: : keepalive (every 15s)
+            end
+        end
     end
 
-    W->>NATS: Publish JobCompleted/JobFailed
-    NATS-->>JS: Terminal event
-    JS-->>Client: event: job-update<br/>data: {final status}
-    JS-->>Client: event: done<br/>data: {"jobId": "<jobId>"}
-    Note over JS,Client: Connection closed
+    JS->>NATS: DeleteConsumer (best-effort cleanup)
+    JS-->>Client: connection closed
+```
+
+## Failure: Upload Replay Safety
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant JS as job-service
+    participant Redis
+
+    Client->>JS: POST /api/&lt;group&gt;/:tool {uploadIds:[X]}
+    JS->>Redis: GET upload:X
+    Redis-->>JS: present
+    JS->>JS: ... create job J1, release Redis state, record upload:X:job=J1
+    JS-->>Client: 201 J1
+
+    Note over Client,JS: Network blip — client retries the same POST
+
+    Client->>JS: POST /api/&lt;group&gt;/:tool {uploadIds:[X]}
+    JS->>Redis: GET upload:X:job
+    Redis-->>JS: J1
+    JS->>JS: findExistingJobForUploads → J1
+    JS-->>Client: 201 J1 (idempotent)
 ```

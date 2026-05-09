@@ -12,11 +12,16 @@ The analytics-service collects, stores, and aggregates business metrics for the 
 ## Internal Architecture
 
 ### Event Ingestion
-The service subscribes to two NATS streams:
+The service subscribes to two NATS streams via durable JetStream consumers:
 1. **ANALYTICS stream** (`analytics.events.>`) — Custom analytics events published by auth-service and job-service
-2. **JOBS_EVENTS stream** (`jobs.events.>`) — Job lifecycle events (completed, failed) from worker services
+2. **JOBS_EVENTS stream** (`jobs.events.>`) — Job lifecycle events (progress, completed, failed) from worker services
+
+Both consumers use `DeliverPolicy: DeliverNewPolicy` — only events emitted **after** the analytics-service starts are persisted. Events that flowed through NATS before the service was up are intentionally dropped (no historical replay). This is a deliberate trade-off: the SSE event stream and analytics ingestion share the same `JOBS_EVENTS` interest stream, so a backlog of analytics work would otherwise compete for retention with active SSE consumers.
 
 Events are persisted to the `analytics_events` PostgreSQL table for querying.
+
+### Service start timestamp
+`main.go` sets `handlers.ServiceStartTime = time.Now().UTC()` before the subscriber starts. This timestamp is reported by `/admin/metrics/system` so dashboards can compute uptime and detect "events older than ServiceStartTime are missing because they predate boot".
 
 ### Subscriber Lifecycle
 `subscriber.Start` returns a `*Subscribers` handle that owns the JetStream `ConsumeContext` for both subscriptions. On SIGTERM the service calls `srv.Shutdown(ctx)` to drain in-flight HTTP requests, then `subs.Stop()` to halt the dispatcher goroutines, and finally lets the deferred `natsconn.Close()` drain the NATS connection. This ordering prevents events from being dispatched into DB writes after the connection has begun draining.

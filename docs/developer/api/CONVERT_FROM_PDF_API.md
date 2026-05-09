@@ -8,15 +8,18 @@ Convert PDF files to various document formats.
 
 ## Supported Tools
 
-| Tool | Output Format | Description |
-|------|---------------|-------------|
-| `pdf-to-word` | .docx | Convert PDF to Word document |
-| `pdf-to-excel` | .xlsx | Convert PDF to Excel spreadsheet |
-| `pdf-to-ppt` | .pptx | Convert PDF to PowerPoint presentation |
-| `pdf-to-image` | .zip (PNG images) | Convert PDF pages to PNG images |
-| `pdf-to-html` | .zip (HTML + images) | Convert PDF to HTML with images |
-| `pdf-to-text` | .txt | Extract text from PDF |
-| `pdf-to-pdfa` | .pdf (PDF/A-2b) | Convert PDF to archival format |
+| Tool | Aliases | Output | Engine |
+|------|---------|--------|--------|
+| `pdf-to-word` | `pdf-to-docx` | `.docx` | pdf2docx (primary) → LibreOffice writer_pdf_import (fallback) |
+| `pdf-to-excel` | `pdf-to-xlsx` | `.xlsx` | LibreOffice Calc |
+| `pdf-to-ppt` | `pdf-to-powerpoint`, `pdf-to-pptx` | `.pptx` | image-based: pdftoppm + pptx builder (one slide per page; not editable text) |
+| `pdf-to-image` | `pdf-to-img` | `.png` (single page) or `.zip` (multi-page) | Poppler `pdftoppm` |
+| `pdf-to-html` | — | `.zip` (HTML + images) | Poppler `pdftohtml` |
+| `pdf-to-text` | `pdf-to-txt` | `.txt` | Poppler `pdftotext` |
+| `pdf-to-pdfa` | — | `.pdf` (PDF/A-2b) | Ghostscript |
+| `pdf-to-odt` | — | `.odt` | LibreOffice Writer |
+| `pdf-to-ods` | — | `.ods` | LibreOffice Calc |
+| `pdf-to-odp` | — | `.odp` | LibreOffice Impress |
 
 ---
 

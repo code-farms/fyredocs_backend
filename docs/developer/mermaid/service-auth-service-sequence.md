@@ -1,6 +1,6 @@
 # Auth Service -- Sequence Diagrams
 
-Request flows through the `auth-service`.
+Request flows through the `auth-service` (port 8086).
 
 ## User Signup
 
@@ -11,32 +11,28 @@ sequenceDiagram
     participant AS as auth-service :8086
     participant Redis
     participant PG as PostgreSQL
+    participant NATS
 
-    Client->>GW: POST /auth/signup<br/>{"email", "password", "fullName", "country"}
+    Client->>GW: POST /auth/signup {email, password, fullName, country, phone?, image?}
+    GW->>AS: Proxy
 
-    GW->>GW: CORS check
-    GW->>AS: POST /auth/signup<br/>(proxied)
+    Note over AS: Rate limit ratelimit:signup:&lt;ip&gt; (3/min)
 
-    Note over AS: Rate limit: 3 req/min per IP
+    AS->>AS: Validate inputs (email · password 8-128 · fullName · country)
+    AS->>AS: normalizeEmail(email)
+    AS->>PG: SELECT users WHERE email=?
+    PG-->>AS: ErrRecordNotFound
+    AS->>AS: bcrypt.GenerateFromPassword(password)
+    AS->>PG: INSERT users (id=UUIDv7, email, full_name, phone, country, image_url, password_hash, plan_name='free')
+    AS->>NATS: Publish analytics.events.user.signup
+    AS->>PG: SELECT subscription_plans WHERE name=user.plan_name (fallback to free)
 
-    AS->>AS: Validate inputs<br/>email required, password 8-128 chars,<br/>fullName required, country required
+    AS->>AS: IssueAccessToken (jti=sessionId, role) + IssueRefreshToken
+    AS->>PG: INSERT user_sessions (id=jti, user_id, access_token_hash, refresh_token_hash, expiries)
+    AS->>Redis: SET user:plan:&lt;userId&gt; EX accessTTL
 
-    AS->>AS: normalizeEmail(email)<br/>(lowercase + trim)
-
-    AS->>PG: SELECT * FROM users WHERE email = ?
-    PG-->>AS: ErrRecordNotFound (user does not exist)
-
-    AS->>AS: bcrypt.GenerateFromPassword(password, DefaultCost)
-
-    AS->>PG: INSERT INTO users<br/>(email, full_name, phone, country, image_url, password_hash)
-    PG-->>AS: User created (with generated UUID)
-
-    AS->>AS: Issuer.IssueAccessToken(userId, "user")<br/>Generate HS256 JWT
-
-    AS->>AS: Set access_token cookie<br/>(HttpOnly, Secure, SameSite=Lax, MaxAge=8h)
-
-    AS-->>GW: 200 {user: {id, email, fullName, role: "user"}}
-    GW-->>Client: 200 + Set-Cookie: access_token=<jwt>
+    AS-->>GW: 200 {user, accessExpiresAt} + Set-Cookie access_token (Path=/) + Set-Cookie refresh_token (Path=/auth)
+    GW-->>Client: forward
 ```
 
 ## User Login
@@ -47,27 +43,61 @@ sequenceDiagram
     participant GW as api-gateway :8080
     participant AS as auth-service :8086
     participant PG as PostgreSQL
+    participant Redis
+    participant NATS
 
-    Client->>GW: POST /auth/login<br/>{"email": "user@example.com", "password": "secret123"}
+    Client->>GW: POST /auth/login {email, password}
+    GW->>AS: Proxy
 
-    GW->>AS: POST /auth/login
+    Note over AS: Rate limit ratelimit:login:&lt;ip&gt; (5/min)
 
-    Note over AS: Rate limit: 5 req/min per IP
+    AS->>AS: normalizeEmail · validate not empty · password ≤ 128
+    AS->>PG: SELECT users WHERE email=?
+    alt not found
+        AS-->>Client: 401 INVALID_CREDENTIALS
+    else found
+        AS->>AS: bcrypt.CompareHashAndPassword
+        alt mismatch
+            AS-->>Client: 401 INVALID_CREDENTIALS
+        else match
+            AS->>PG: SELECT subscription_plans WHERE name=user.plan_name
+            AS->>NATS: Publish analytics.events.user.login
+            AS->>AS: IssueAccessToken + IssueRefreshToken
+            AS->>PG: INSERT user_sessions
+            AS->>Redis: SET user:plan:&lt;userId&gt; EX accessTTL
+            AS-->>Client: 200 {user, accessExpiresAt} + Set-Cookie access_token & refresh_token
+        end
+    end
+```
 
-    AS->>AS: normalizeEmail("user@example.com")
-    AS->>AS: Validate: email not empty, password not empty, <= 128 chars
+## Refresh-Token Rotation
 
-    AS->>PG: SELECT * FROM users WHERE email = ?
-    PG-->>AS: User {id, email, password_hash, ...}
+```mermaid
+sequenceDiagram
+    participant Client
+    participant GW as api-gateway :8080
+    participant AS as auth-service :8086
+    participant PG as PostgreSQL (user_sessions)
+    participant Redis
 
-    AS->>AS: bcrypt.CompareHashAndPassword(hash, password)
-    Note over AS: Password matches
+    Client->>GW: POST /auth/refresh (Cookie: refresh_token)
+    GW->>AS: Proxy
+    Note over AS: Rate limit ratelimit:refresh:&lt;ip&gt; (10/min)
 
-    AS->>AS: Issuer.IssueAccessToken(userId, "user")
-    AS->>AS: Set access_token cookie
+    AS->>AS: Read refresh cookie · reject if missing
+    AS->>AS: Issuer.VerifyRefreshToken → userId
 
-    AS-->>GW: 200 {user: {id, email, fullName, role}}
-    GW-->>Client: 200 + Set-Cookie: access_token=<jwt>
+    AS->>PG: FindSessionByRefreshHash(SHA256(refresh)) WHERE refresh_expires_at > NOW
+    alt not found / expired
+        AS-->>Client: 401 INVALID_REFRESH_TOKEN
+    else session valid
+        AS->>PG: SELECT users WHERE id=userId
+        AS->>PG: SELECT subscription_plans WHERE name=user.plan_name
+        AS->>Redis: SET user:plan:&lt;userId&gt; EX accessTTL
+        AS->>AS: IssueAccessToken (new) — refresh hash stays
+        AS->>PG: UPDATE user_sessions SET access_token_hash=?, access_expires_at=? WHERE id=session.id
+        AS-->>Client: 200 {user, accessExpiresAt} + new Set-Cookie access_token
+    end
 ```
 
 ## User Logout
@@ -77,26 +107,19 @@ sequenceDiagram
     participant Client
     participant GW as api-gateway :8080
     participant AS as auth-service :8086
+    participant PG as PostgreSQL
     participant Redis
 
-    Client->>GW: POST /auth/logout<br/>(Cookie: access_token=<jwt>)
+    Client->>GW: POST /auth/logout (Cookie: access_token)
+    GW->>GW: Verify JWT · populate auth context
+    GW->>AS: Proxy with X-User-ID
 
-    GW->>GW: Verify JWT, populate auth context
-    GW->>AS: POST /auth/logout<br/>(X-User-ID: <uuid>)
-
-    AS->>AS: Extract auth context<br/>Verify user is authenticated
-
-    AS->>AS: Extract access token from<br/>Authorization header or context
-
-    AS->>AS: Parse token expiration (unverified)<br/>Calculate remaining TTL
-
-    AS->>Redis: SET deny:<token_hash> EX <remaining_ttl>
-    Note over Redis: Token added to denylist
-
-    AS->>AS: Clear access_token cookie<br/>(Set-Cookie with MaxAge=-1)
-
-    AS-->>GW: 204 No Content
-    GW-->>Client: 204 + Set-Cookie: access_token=; Max-Age=-1
+    AS->>AS: Extract access token (Authorization or cookie)
+    AS->>PG: DELETE FROM user_sessions WHERE access_token_hash = SHA256(token)
+    AS->>Redis: SET denylist:jwt:&lt;hash&gt; EX remaining-ttl
+    AS->>Redis: DEL user:plan:&lt;userId&gt;
+    AS->>AS: Clear access_token (Path=/) and refresh_token (Path=/auth) cookies
+    AS-->>Client: 204 No Content
 ```
 
 ## Get Current User (Me)
@@ -108,20 +131,58 @@ sequenceDiagram
     participant AS as auth-service :8086
     participant PG as PostgreSQL
 
-    Client->>GW: GET /auth/me<br/>(Cookie: access_token=<jwt>)
+    Client->>GW: GET /auth/me (Cookie: access_token)
+    GW->>GW: Verify JWT + check denylist
+    GW->>AS: Proxy with X-User-ID, X-Role
 
-    GW->>GW: Verify JWT
-    GW->>Redis: Check denylist
-    GW->>AS: GET /auth/me<br/>(X-User-ID: <uuid>, X-Role: user)
+    AS->>AS: GinAuthMiddleware re-verifies (defence in depth)
+    AS->>PG: SELECT users WHERE id=:userId
+    AS->>PG: SELECT subscription_plans WHERE name=user.plan_name
+    AS-->>Client: 200 {user: {..., role, planName}}
+```
 
-    AS->>AS: Auth middleware extracts context
-    AS->>AS: Parse user ID from auth context
+## Change Plan
 
-    AS->>PG: SELECT * FROM users WHERE id = <uuid>
-    PG-->>AS: User {id, email, full_name, phone, country, image_url}
+```mermaid
+sequenceDiagram
+    participant Client
+    participant GW as api-gateway :8080
+    participant AS as auth-service :8086
+    participant PG as PostgreSQL
+    participant Redis
+    participant NATS
 
-    AS-->>GW: 200 {user: {id, email, fullName, phone, country, image, role}}
-    GW-->>Client: 200 {user}
+    Client->>GW: PUT /auth/plan {"planName":"pro"}
+    GW->>AS: Proxy (auth-required)
+
+    AS->>PG: SELECT users WHERE id=:userId
+    AS->>PG: SELECT subscription_plans WHERE name=:plan
+    alt plan missing or same as current
+        AS-->>Client: 400 INVALID_PLAN / SAME_PLAN
+    else change
+        AS->>PG: UPDATE users SET plan_name=:plan WHERE id=:userId
+        AS->>Redis: SET user:plan:&lt;userId&gt; (new limits) EX accessTTL
+        AS->>NATS: Publish analytics.events.plan.changed {oldPlan, newPlan}
+        AS-->>Client: 200 {user}
+    end
+```
+
+## Internal Admin — Revoke All User Sessions
+
+```mermaid
+sequenceDiagram
+    participant Admin as Internal caller
+    participant AS as auth-service :8086
+    participant PG as PostgreSQL
+    participant Redis
+
+    Admin->>AS: POST /internal/users/:id/revoke-sessions
+    AS->>PG: DELETE FROM user_sessions WHERE user_id=:id RETURNING * (still active)
+    PG-->>AS: revoked sessions[]
+    loop For each revoked
+        AS->>Redis: SET denylist:jwt:&lt;access_token_hash&gt; EX remaining
+    end
+    AS-->>Admin: 200 {revokedCount}
 ```
 
 ## Failed Login (Wrong Password)
@@ -129,70 +190,25 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Client
-    participant GW as api-gateway :8080
     participant AS as auth-service :8086
     participant PG as PostgreSQL
 
-    Client->>GW: POST /auth/login<br/>{"email": "user@example.com", "password": "wrongpass"}
-
-    GW->>AS: POST /auth/login
-
-    AS->>PG: SELECT * FROM users WHERE email = ?
-    PG-->>AS: User found
-
-    AS->>AS: bcrypt.CompareHashAndPassword(hash, "wrongpass")
-    Note over AS: Password does NOT match
-
-    AS-->>GW: 401 {code: "INVALID_CREDENTIALS", message: "Invalid credentials"}
-    GW-->>Client: 401
+    Client->>AS: POST /auth/login {wrong}
+    AS->>PG: SELECT users WHERE email=?
+    AS->>AS: bcrypt.CompareHashAndPassword (mismatch)
+    AS-->>Client: 401 INVALID_CREDENTIALS
 ```
 
-## Duplicate Signup
+## Background — Expired Session Cleanup
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant AS as auth-service :8086
+    participant Tick as 1h Ticker
+    participant AS as auth-service
     participant PG as PostgreSQL
 
-    Client->>AS: POST /auth/signup<br/>{"email": "existing@example.com", ...}
-
-    AS->>PG: SELECT * FROM users WHERE email = ?
-    PG-->>AS: User found (already exists)
-
-    AS-->>Client: 409 {code: "USER_ALREADY_EXISTS", message: "User already exists"}
-```
-
-## Guest Session Creation
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant GW as api-gateway :8080
-    participant AS as auth-service :8086
-    participant Redis
-
-    Client->>GW: POST /auth/guest
-
-    GW->>GW: CORS check
-    GW->>AS: POST /auth/guest<br/>(proxied, no auth required)
-
-    Note over AS: Rate limit: 20 req/min per IP
-
-    AS->>AS: uuid.New() → guest_token
-
-    AS->>Redis: SET guest:{token}:jobs "1" EX 86400
-    Redis-->>AS: OK
-
-    AS-->>GW: 200 {guest_token, expires_in: 86400}
-    GW-->>Client: 200 {guest_token, expires_in: 86400}
-
-    Note over Client: Store token in localStorage<br/>Send as X-Guest-Token header on API calls
-
-    Client->>GW: POST /api/organize-pdf/merge-pdf<br/>X-Guest-Token: {token}
-
-    GW->>Redis: EXISTS guest:{token}:jobs
-    Redis-->>GW: 1 (valid)
-
-    GW->>GW: Set X-User-Role: guest<br/>Forward to job-service
+    Tick->>AS: tick
+    AS->>PG: DELETE FROM user_sessions<br/>WHERE access_expires_at < NOW()<br/>AND (refresh_expires_at IS NULL OR refresh_expires_at < NOW())
+    PG-->>AS: rows_affected
+    AS->>AS: log("cleaned up expired sessions", count)
 ```

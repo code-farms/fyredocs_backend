@@ -8,7 +8,9 @@ PDF optimization microservice providing compression, repair, and OCR capabilitie
 |----------|-------|
 | Port | 8085 |
 | Route Prefix | `/api/optimize-pdf` |
-| Queue | `queue:optimize-pdf` |
+| Bus | NATS JetStream — pulls from `jobs.dispatch.optimize-pdf` (durable consumer), publishes events to `jobs.events.<jobId>.*`, DLQ `jobs.dlq.optimize-pdf` |
+| Engines | Ghostscript (`compress-pdf`, `repair-pdf`), Tesseract + Poppler `pdftoppm` (`ocr-pdf`) |
+| Allowed tools | `compress-pdf`, `repair-pdf`, `ocr-pdf` (3 — see `optimize-pdf/main.go:59`) |
 
 ## Supported Operations
 
@@ -83,10 +85,10 @@ REDIS_DB="0"
 
 # Processing
 OUTPUT_DIR="outputs"
-QUEUE_PREFIX="queue"
-PROCESSING_TIMEOUT="30m"
-MAX_RETRIES="3"
+NATS_URL="nats://nats:4222"
+PROCESSING_TIMEOUT="30m"   # honoured via NATS AckWait
 PORT="8085"
+WORKER_CONCURRENCY="1"     # this worker is single-threaded by default
 
 # JWT
 JWT_HS256_SECRET="..."

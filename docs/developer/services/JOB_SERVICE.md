@@ -76,9 +76,11 @@ The `routing.go` file contains the centralized mapping from tool types to their 
 | Service | Tools |
 |---------|-------|
 | `convert-from-pdf` | pdf-to-word, pdf-to-docx, pdf-to-excel, pdf-to-xlsx, pdf-to-powerpoint, pdf-to-ppt, pdf-to-pptx, pdf-to-image, pdf-to-img, pdf-to-html, pdf-to-text, pdf-to-txt, pdf-to-pdfa, pdf-to-odt, pdf-to-ods, pdf-to-odp |
-| `convert-to-pdf` | word-to-pdf, excel-to-pdf, powerpoint-to-pdf, ppt-to-pdf, html-to-pdf, image-to-pdf, img-to-pdf, odt-to-pdf, ods-to-pdf, odp-to-pdf, word-to-odt, excel-to-ods, powerpoint-to-odp |
+| `convert-to-pdf` | word-to-pdf, excel-to-pdf, powerpoint-to-pdf, ppt-to-pdf, html-to-pdf, image-to-pdf, img-to-pdf |
 | `organize-pdf` | merge-pdf, split-pdf, rotate-pdf, remove-pages, extract-pages, organize-pdf, scan-to-pdf, watermark-pdf, protect-pdf, unlock-pdf, sign-pdf, edit-pdf, add-page-numbers |
 | `optimize-pdf` | compress-pdf, repair-pdf, ocr-pdf |
+
+The mapping in `routing.go` is the only authoritative source — these tables in docs are kept in sync, but **always cross-check against `internal/routing/routing.go` and each worker's `main.go` `AllowedTools` if there is any doubt.**
 
 ## Routes
 
@@ -156,7 +158,7 @@ Both the JSON (uploadId) and multipart form paths check the file-count limit. Th
 
 When a job is created, the service publishes a `JobCreated` event to NATS JetStream:
 
-**Subject**: `dispatch.<service-name>` (e.g., `dispatch.convert-from-pdf`)
+**Subject**: `jobs.dispatch.<service-name>` (e.g., `jobs.dispatch.convert-from-pdf`)
 
 **Event Schema** (`queue.JobEvent`):
 ```json
@@ -205,7 +207,7 @@ CREATE TABLE processing_jobs (
     created_at    TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
     completed_at  TIMESTAMP     NULL,
-    expires_at    TIMESTAMP     NULL        -- guest: GUEST_JOB_TTL (30m), free: FREE_JOB_TTL (24h), pro: NULL (never)
+    expires_at    TIMESTAMP     NULL        -- guest: GUEST_JOB_TTL, free: FREE_JOB_TTL (24h), pro: NULL (never)
 );
 
 -- Indexes
@@ -236,9 +238,10 @@ CREATE INDEX idx_file_metadata_job_id ON file_metadata(job_id);
 
 | Key Pattern | Type | TTL | Purpose |
 |-------------|------|-----|---------|
-| `upload:<uploadId>` | Hash | `UPLOAD_TTL` (30m) | Upload session state (fileName, fileSize, totalChunks, createdAt) |
-| `upload:<uploadId>:chunks` | Set | `UPLOAD_TTL` (30m) | Set of received chunk indices |
-| `guest:<token>:jobs` | Set | `GUEST_JOB_TTL` (2h) | Job IDs belonging to a guest session |
+| `upload:<uploadId>` | Hash | `UPLOAD_TTL` (default 2h) | Upload session state (fileName, fileSize, totalChunks, createdAt) |
+| `upload:<uploadId>:chunks` | Set | `UPLOAD_TTL` (default 2h) | Set of received chunk indices |
+| `upload:<uploadId>:job` | String | 10 minutes | Maps a consumed `uploadId` → `jobId` so duplicate POSTs return the original job |
+| `guest:<token>:jobs` | Set | `GUEST_JOB_TTL` | Job IDs belonging to a guest session |
 | `ratelimit:upload:<ip>` | String | Rate limit window | Upload rate limit counter |
 | `idempotency:<key>` | String | 10 minutes | Maps idempotency key to job ID for deduplication |
 
@@ -277,8 +280,8 @@ sequenceDiagram
     JS->>R: SCARD upload:<id>:chunks (verify all chunks received)
     JS->>FS: Assemble chunks into uploads/<id>/<fileName>
     JS->>FS: Remove tmp/<id>/ chunk directory
-    JS-->>GW: 200 {uploadId, storedPath}
-    GW-->>C: 200 {uploadId, storedPath}
+    JS-->>GW: 200 {uploadId}
+    GW-->>C: 200 {uploadId}
 ```
 
 ### Job Creation and Dispatch Flow
@@ -324,7 +327,7 @@ sequenceDiagram
     JS->>DB: INSERT file_metadata (kind=input)
 
     JS->>JS: routing.ServiceForTool("pdf-to-word") => "convert-from-pdf"
-    JS->>NATS: Publish JobCreated to dispatch.convert-from-pdf
+    JS->>NATS: Publish JobCreated to jobs.dispatch.convert-from-pdf
     NATS-->>W: Deliver JobCreated event
 
     JS->>R: DEL upload:<uploadId>, upload:<uploadId>:chunks (release upload — only after publish succeeds)
@@ -477,7 +480,7 @@ When job creation fails partway through:
 | `PORT` | `8081` | HTTP server port |
 | `UPLOAD_DIR` | `uploads` | Base directory for uploaded files |
 | `MAX_UPLOAD_MB` | `50` | Server-side hard cap on file size in MB (per-user plan limits are enforced via `X-User-Plan-Max-File-MB` header) |
-| `UPLOAD_TTL` | `30m` | Upload session expiration |
+| `UPLOAD_TTL` | `2h` | Upload session expiration |
 | `GUEST_JOB_TTL` | `30m` | Guest job expiration (no user) |
 | `FREE_JOB_TTL` | `24h` | Free plan user job expiration |
 | `RATE_LIMIT_UPLOAD` | `30` | Upload rate limit per window |
@@ -562,7 +565,6 @@ To debug a user-visible failure, take `meta.requestId` from the API response and
 
 - [API Gateway](./API_GATEWAY.md) -- Request routing and CORS
 - [Auth Service](./AUTH_SERVICE.md) -- Authentication and user management
-- [Upload Service](./UPLOAD_SERVICE.md) -- Legacy upload service (being replaced)
 - [Convert From PDF](./CONVERT_FROM_PDF.md) -- PDF-to-other-format worker
 - [Convert To PDF](./CONVERT_TO_PDF.md) -- Other-format-to-PDF worker
 - [Organize PDF](./ORGANIZE_PDF.md) -- PDF organization worker
