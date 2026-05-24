@@ -90,6 +90,7 @@ func Migrate() {
 		&AuthMetadata{},
 		&SubscriptionPlan{},
 		&UserSession{},
+		&PasswordResetToken{},
 	); err != nil {
 		slog.Error("Database migration failed", "error", err)
 		os.Exit(1)

@@ -10,6 +10,7 @@ import (
 
 	"auth-service/handlers"
 	"auth-service/internal/authverify"
+	"auth-service/internal/email"
 	"auth-service/internal/models"
 	"auth-service/internal/token"
 	"auth-service/middleware"
@@ -17,11 +18,12 @@ import (
 	"fyredocs/shared/config"
 )
 
-func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenDenylist, redisClient *redis.Client, authMiddleware gin.HandlerFunc) {
+func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenDenylist, redisClient *redis.Client, mailer email.Mailer, authMiddleware gin.HandlerFunc) {
 	authEndpoints := &handlers.AuthEndpoints{
 		Issuer:      issuer,
 		Denylist:    denylist,
 		RedisClient: redisClient,
+		Mailer:      mailer,
 	}
 
 	window := config.GetEnvDuration("RATE_LIMIT_WINDOW", 60*time.Second)
@@ -47,12 +49,28 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 		Window:      window,
 	})
 
+	forgotPasswordLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
+		RedisClient: redisClient,
+		KeyPrefix:   "ratelimit:forgot_password",
+		MaxRequests: config.GetEnvInt("RATE_LIMIT_FORGOT_PASSWORD", 3),
+		Window:      window,
+	})
+
+	resetPasswordLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
+		RedisClient: redisClient,
+		KeyPrefix:   "ratelimit:reset_password",
+		MaxRequests: config.GetEnvInt("RATE_LIMIT_RESET_PASSWORD", 5),
+		Window:      window,
+	})
+
 	// Public auth routes — no token verification needed
 	publicAuth := r.Group("/auth")
 	{
 		publicAuth.POST("/signup", signupLimiter.RateLimitByIP(), authEndpoints.Signup)
 		publicAuth.POST("/login", loginLimiter.RateLimitByIP(), authEndpoints.Login)
 		publicAuth.POST("/refresh", refreshLimiter.RateLimitByIP(), authEndpoints.Refresh)
+		publicAuth.POST("/forgot-password", forgotPasswordLimiter.RateLimitByIP(), authEndpoints.ForgotPassword)
+		publicAuth.POST("/reset-password", resetPasswordLimiter.RateLimitByIP(), authEndpoints.ResetPassword)
 		publicAuth.GET("/plans", handlers.GetAllPlans)
 	}
 

@@ -18,6 +18,7 @@ import (
 	"gorm.io/gorm"
 
 	"auth-service/internal/authverify"
+	"auth-service/internal/email"
 	"auth-service/internal/models"
 	"auth-service/internal/token"
 
@@ -52,6 +53,7 @@ type AuthEndpoints struct {
 	Issuer      *token.Issuer
 	Denylist    authverify.TokenDenylist
 	RedisClient *redis.Client
+	Mailer      email.Mailer
 }
 
 func (ae *AuthEndpoints) Signup(c *gin.Context) {

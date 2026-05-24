@@ -20,6 +20,7 @@ import (
 	"fyredocs/shared/telemetry"
 
 	"auth-service/internal/authverify"
+	"auth-service/internal/email"
 	"auth-service/internal/models"
 	"auth-service/internal/token"
 	"auth-service/routes"
@@ -87,9 +88,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	var mailer email.Mailer
+	if config.GetEnv("RESEND_API_KEY", "") != "" {
+		m, err := email.NewResendMailerFromEnv()
+		if err != nil {
+			slog.Error("mailer init failed", "error", err)
+			os.Exit(1)
+		}
+		mailer = m
+		slog.Info("mailer initialized", "provider", "resend")
+	} else {
+		slog.Warn("RESEND_API_KEY not set — using NoopMailer (password reset links will be logged only)")
+		mailer = email.NoopMailer{}
+	}
+
 	// Auth middleware applied selectively to protected routes only (not login/signup/refresh)
 	authMiddleware := buildAuthMiddleware(redisClient, denylist)
-	routes.SetupRouter(r, issuer, denylist, redisClient, authMiddleware)
+	routes.SetupRouter(r, issuer, denylist, redisClient, mailer, authMiddleware)
 
 	// Periodically clean up expired sessions from the database. Cancellable via
 	// cleanupCtx and tracked by cleanupWG so SIGTERM drains an in-flight delete
@@ -112,6 +127,12 @@ func main() {
 					slog.Warn("expired session cleanup failed", "error", err)
 				} else if deleted > 0 {
 					slog.Info("cleaned up expired sessions", "count", deleted)
+				}
+				deletedResets, err := models.DeleteExpiredResetTokens(models.DB)
+				if err != nil {
+					slog.Warn("expired reset token cleanup failed", "error", err)
+				} else if deletedResets > 0 {
+					slog.Info("cleaned up expired reset tokens", "count", deletedResets)
 				}
 			}
 		}

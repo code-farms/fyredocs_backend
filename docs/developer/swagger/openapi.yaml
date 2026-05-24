@@ -382,6 +382,119 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /auth/forgot-password:
+    post:
+      tags: [Authentication]
+      summary: Request a password reset link
+      description: |
+        Issues a single-use password reset token and emails it to the user as
+        a magic link (`${APP_BASE_URL}/reset-password?token=<raw>`).
+
+        Always returns 200 with the same generic message regardless of whether
+        the email is registered — this prevents account enumeration.
+
+        Rate-limited at `RATE_LIMIT_FORGOT_PASSWORD` (default 3) per
+        `RATE_LIMIT_WINDOW` (default 60s) per IP.
+
+        If `RESEND_API_KEY` is unset, the link is logged via `slog.Info` under
+        `password_reset.email.noop` instead of being emailed (development).
+      operationId: forgotPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: user@example.com
+      responses:
+        "200":
+          description: Reset link emailed if the email is registered (response is identical for unknown emails)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      message:
+                        type: string
+                        example: "If an account exists for this email, a reset link has been sent."
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/reset-password:
+    post:
+      tags: [Authentication]
+      summary: Consume a password reset token and set a new password
+      description: |
+        Validates the single-use reset token, updates the user's bcrypt password
+        hash, and revokes every active session for that user. Outstanding access
+        tokens are added to the Redis denylist for the remainder of their TTL.
+
+        The token is consumed (deleted) on success — replays return 400
+        `INVALID_OR_EXPIRED_TOKEN`.
+
+        Rate-limited at `RATE_LIMIT_RESET_PASSWORD` (default 5) per
+        `RATE_LIMIT_WINDOW` (default 60s) per IP.
+      operationId: resetPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, newPassword]
+              properties:
+                token:
+                  type: string
+                  description: Raw token from the magic link in the reset email
+                  example: "K8nXkz4M-…43chars…"
+                newPassword:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+                  example: "NewSecurePass123!"
+      responses:
+        "200":
+          description: Password updated; user must sign in again
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      message:
+                        type: string
+                        example: "Password updated. Please sign in."
+        "400":
+          description: Validation error or invalid/expired token
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      error:
+                        $ref: "#/components/schemas/APIError"
+                        example:
+                          code: INVALID_OR_EXPIRED_TOKEN
+                          details: This reset link is invalid or has expired. Please request a new one.
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /auth/me:
     get:
       tags: [Authentication]

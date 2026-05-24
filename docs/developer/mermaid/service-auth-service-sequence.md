@@ -199,7 +199,76 @@ sequenceDiagram
     AS-->>Client: 401 INVALID_CREDENTIALS
 ```
 
-## Background — Expired Session Cleanup
+## Forgot Password — Issue Reset Token
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant GW as api-gateway :8080
+    participant AS as auth-service :8086
+    participant Redis
+    participant PG as PostgreSQL
+    participant M as Resend / NoopMailer
+
+    Client->>GW: POST /auth/forgot-password {email}
+    GW->>AS: Proxy
+
+    Note over AS: Rate limit ratelimit:forgot_password:&lt;ip&gt; (3/min)
+
+    AS->>AS: normalizeEmail(email)
+    AS->>PG: SELECT users WHERE email=?
+
+    alt User not found / DB error
+        Note over AS: STILL respond 200 (no enumeration)
+    else User found
+        AS->>PG: DELETE FROM password_reset_tokens WHERE user_id=?
+        AS->>AS: rand 32 bytes -> base64url (raw)
+        AS->>PG: INSERT password_reset_tokens (id=UUIDv7, user_id, token_hash=SHA256(raw), expires_at=NOW()+PASSWORD_RESET_TOKEN_TTL, request_ip)
+        AS-->>M: SendPasswordReset(to, ${APP_BASE_URL}/reset-password?token=raw, ip, ttl)  [async, 15s timeout]
+    end
+
+    AS-->>GW: 200 "If an account exists for this email, a reset link has been sent."
+    GW-->>Client: forward
+```
+
+## Reset Password — Consume Token
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant GW as api-gateway :8080
+    participant AS as auth-service :8086
+    participant Redis
+    participant PG as PostgreSQL
+    participant NATS
+
+    Client->>GW: POST /auth/reset-password {token, newPassword}
+    GW->>AS: Proxy
+
+    Note over AS: Rate limit ratelimit:reset_password:&lt;ip&gt; (5/min)
+
+    AS->>AS: Validate token non-empty + password length [8,128]
+    AS->>PG: SELECT password_reset_tokens WHERE token_hash=SHA256(token) AND expires_at>NOW()
+
+    alt not found / expired
+        AS-->>Client: 400 INVALID_OR_EXPIRED_TOKEN
+    else valid
+        AS->>AS: bcrypt.GenerateFromPassword(newPassword)
+        AS->>PG: BEGIN
+        AS->>PG: UPDATE users SET password_hash=? WHERE id=user_id
+        AS->>PG: DELETE FROM password_reset_tokens WHERE user_id=user_id
+        AS->>PG: DELETE FROM user_sessions WHERE user_id=user_id RETURNING * (active only)
+        AS->>PG: COMMIT
+        loop For each revoked session
+            AS->>Redis: SET denylist:jwt:&lt;access_token_hash&gt; EX remaining
+        end
+        AS->>Redis: DEL user:plan:&lt;user_id&gt;
+        AS->>NATS: Publish analytics.events.user.password_reset_completed
+        AS-->>Client: 200 "Password updated. Please sign in."
+    end
+```
+
+## Background — Expired Session & Reset-Token Cleanup
 
 ```mermaid
 sequenceDiagram
@@ -211,4 +280,7 @@ sequenceDiagram
     AS->>PG: DELETE FROM user_sessions<br/>WHERE access_expires_at < NOW()<br/>AND (refresh_expires_at IS NULL OR refresh_expires_at < NOW())
     PG-->>AS: rows_affected
     AS->>AS: log("cleaned up expired sessions", count)
+    AS->>PG: DELETE FROM password_reset_tokens WHERE expires_at < NOW()
+    PG-->>AS: rows_affected
+    AS->>AS: log("cleaned up expired reset tokens", count)
 ```

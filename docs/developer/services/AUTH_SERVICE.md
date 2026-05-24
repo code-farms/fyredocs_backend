@@ -21,8 +21,9 @@ The Auth Service is a dedicated microservice responsible for user signup, login,
 6. **Plan Management** — `PUT /auth/plan` updates the user's `plan_name`, refreshes the Redis plan cache, and publishes `plan.changed` to NATS.
 7. **Plans Listing** — `GET /auth/plans` returns all selectable subscription plans.
 8. **Internal Admin** — `/internal/users/:id/plan`, `/internal/users/:id/revoke-sessions`, `/internal/sessions/:id` for service-to-service calls.
-9. **Rate Limiting** — Login / signup / refresh endpoints are IP-throttled via Redis.
-10. **Background Cleanup** — A 1-hour ticker calls `models.DeleteExpiredSessions` to remove sessions where both access and refresh tokens have expired.
+9. **Rate Limiting** — Login / signup / refresh / forgot-password / reset-password endpoints are IP-throttled via Redis.
+10. **Background Cleanup** — A 1-hour ticker calls `models.DeleteExpiredSessions` and `models.DeleteExpiredResetTokens` to prune expired rows.
+11. **Password Reset** — `POST /auth/forgot-password` issues a single-use, 1-hour magic-link token and emails it via Resend; `POST /auth/reset-password` consumes the token, updates the bcrypt hash, and revokes every active session for the user.
 
 > Guest sessions are **not** issued by this service. The api-gateway issues and verifies guest tokens directly via cookies.
 
@@ -43,17 +44,19 @@ API Gateway :8080  (verifies JWT, reads plan cache, sets X-User-* headers)
   │
 Auth Service :8086
   │── Gin router (routes/routes.go)
-  │── handlers/auth.go      Signup · Login · Refresh · Me · Profile · Logout · ChangePlan
-  │── handlers/internal_api.go   GetUserPlan
-  │── handlers/admin.go     RevokeUserSessions · RevokeSession
-  │── handlers/plans.go     GetAllPlans
-  │── internal/token/       JWT issuance (HS256), Claims with jti
-  │── internal/authverify/  JWT verification middleware, Redis token denylist
-  │── internal/models/      GORM models: User · SubscriptionPlan · UserSession
-  │── middleware/ratelimit  Redis-backed rate limiter (per IP)
-  │── PostgreSQL            users · auth_metadata · subscription_plans · user_sessions
-  │── Redis                 denylist:jwt:* · ratelimit:* · user:plan:*
-  └── NATS                  analytics.events.user.signup / user.login / plan.changed
+  │── handlers/auth.go             Signup · Login · Refresh · Me · Profile · Logout · ChangePlan
+  │── handlers/password_reset.go   ForgotPassword · ResetPassword
+  │── handlers/internal_api.go     GetUserPlan
+  │── handlers/admin.go            RevokeUserSessions · RevokeSession
+  │── handlers/plans.go            GetAllPlans
+  │── internal/token/              JWT issuance (HS256), Claims with jti
+  │── internal/authverify/         JWT verification middleware, Redis token denylist
+  │── internal/email/              Mailer interface · ResendMailer · NoopMailer
+  │── internal/models/             GORM models: User · SubscriptionPlan · UserSession · PasswordResetToken
+  │── middleware/ratelimit         Redis-backed rate limiter (per IP)
+  │── PostgreSQL                   users · auth_metadata · subscription_plans · user_sessions · password_reset_tokens
+  │── Redis                        denylist:jwt:* · ratelimit:* · user:plan:*
+  └── NATS                         analytics.events.user.signup / user.login / plan.changed / user.password_reset_completed
 ```
 
 ### Key Internal Packages
@@ -61,13 +64,16 @@ Auth Service :8086
 | Package | Purpose |
 |---------|---------|
 | `handlers/auth.go` | Signup, Login, Refresh, Me, Profile, Logout, ChangePlan endpoints; plan cache helpers |
+| `handlers/password_reset.go` | ForgotPassword, ResetPassword endpoints; magic-link token issuance |
 | `handlers/admin.go` | RevokeUserSessions, RevokeSession (internal API) |
 | `handlers/internal_api.go` | GetUserPlan (internal API) |
 | `handlers/plans.go` | GetAllPlans (public, lists non-anonymous plans) |
 | `internal/token/` | JWT issuance with HS256; AccessToken (8h, includes role) and RefreshToken (7d) |
 | `internal/authverify/` | JWT verification, denylist, gin middleware |
+| `internal/email/` | `Mailer` interface, `ResendMailer` (HTTPS API), `NoopMailer` (dev/test) |
 | `internal/models/user.go` | `User`, `SubscriptionPlan`, `AuthMetadata` |
 | `internal/models/token.go` | `UserSession` + `HashToken`, `StoreSession`, `FindSessionByRefreshHash`, `RevokeSessionByAccessHash`, `RevokeAllUserSessions`, `DeleteExpiredSessions` |
+| `internal/models/password_reset.go` | `PasswordResetToken` + `CreatePasswordResetToken`, `FindValidResetTokenByHash`, `DeleteResetTokensForUser`, `DeleteExpiredResetTokens` |
 | `routes/routes.go` | Gin route registration with rate limiting |
 
 ## Routes
@@ -79,6 +85,8 @@ Auth Service :8086
 | POST | `/auth/signup` | `Signup` | 3/min per IP | Create a new user account; returns access+refresh cookies |
 | POST | `/auth/login` | `Login` | 5/min per IP | Authenticate; returns access+refresh cookies |
 | POST | `/auth/refresh` | `Refresh` | 10/min per IP | Issue a new access token from a valid refresh cookie (DB-backed rotation) |
+| POST | `/auth/forgot-password` | `ForgotPassword` | 3/min per IP | Issue a single-use reset token and email it; always responds 200 regardless of whether the email is registered |
+| POST | `/auth/reset-password` | `ResetPassword` | 5/min per IP | Consume a reset token, update password hash, revoke every active session for the user |
 | GET | `/auth/plans` | `GetAllPlans` | none | List all non-anonymous subscription plans with limits |
 
 ### Authenticated Endpoints
@@ -184,6 +192,28 @@ CREATE INDEX        idx_user_sessions_user_id     ON user_sessions(user_id);
 - **Logout** deletes the row by access-token hash.
 - **Background ticker** (every 1h) deletes rows where both access and refresh tokens have expired.
 
+### password_reset_tokens
+
+```sql
+CREATE TABLE password_reset_tokens (
+    id          UUID PRIMARY KEY,
+    user_id     UUID NOT NULL,              -- FK users(id) ON DELETE CASCADE
+    token_hash  TEXT NOT NULL,              -- SHA-256 hex of the raw token sent in the email
+    expires_at  TIMESTAMP NOT NULL,
+    request_ip  TEXT,                       -- client IP that requested the reset (audit)
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX idx_password_reset_tokens_token_hash ON password_reset_tokens(token_hash);
+CREATE INDEX        idx_password_reset_tokens_user_id    ON password_reset_tokens(user_id);
+CREATE INDEX        idx_password_reset_tokens_expires_at ON password_reset_tokens(expires_at);
+```
+
+- **One outstanding token per user** — `ForgotPassword` calls `DeleteResetTokensForUser` before inserting, so a new request invalidates any prior link.
+- **Single-use** — `ResetPassword` deletes every token row for the user inside the same transaction that updates the password hash.
+- **Background ticker** (every 1h) also prunes expired rows via `DeleteExpiredResetTokens`.
+- The raw token is never persisted; only its SHA-256 hash. Reuse of `HashToken` from [`internal/models/token.go`](../../../auth-service/internal/models/token.go) keeps the lookup format identical to session tokens.
+
 ### Redis Keys
 
 | Key Pattern | Type | TTL | Purpose |
@@ -193,6 +223,8 @@ CREATE INDEX        idx_user_sessions_user_id     ON user_sessions(user_id);
 | `ratelimit:login:<ip>` | String | Rate limit window | Login attempt counter |
 | `ratelimit:signup:<ip>` | String | Rate limit window | Signup attempt counter |
 | `ratelimit:refresh:<ip>` | String | Rate limit window | Refresh attempt counter |
+| `ratelimit:forgot_password:<ip>` | String | Rate limit window | Forgot-password attempt counter |
+| `ratelimit:reset_password:<ip>` | String | Rate limit window | Reset-password attempt counter |
 
 ## Sequence Diagrams
 
@@ -325,6 +357,66 @@ sequenceDiagram
     end
 ```
 
+### Forgot Password — Issue Reset Token
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant GW as API Gateway
+    participant AS as Auth Service
+    participant DB as PostgreSQL
+    participant R as Redis
+    participant M as Resend (or NoopMailer)
+
+    C->>GW: POST /auth/forgot-password {email}
+    GW->>AS: Proxy
+    AS->>R: Rate-limit ratelimit:forgot_password:<ip>
+    AS->>DB: SELECT users WHERE email=?
+    alt User not found / DB error
+        Note over AS: STILL respond 200 (no enumeration)
+    else User found
+        AS->>DB: DELETE password_reset_tokens WHERE user_id=?
+        AS->>AS: Generate 32 random bytes -> base64url (raw)
+        AS->>DB: INSERT password_reset_tokens (token_hash=SHA256(raw), expires_at=NOW()+1h, request_ip)
+        AS-->>M: SendPasswordReset(to, ${APP_BASE_URL}/reset-password?token=raw, ip, ttl)  [async]
+    end
+    AS-->>C: 200 "If an account exists for this email, a reset link has been sent."
+```
+
+### Reset Password — Consume Token
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant GW as API Gateway
+    participant AS as Auth Service
+    participant DB as PostgreSQL
+    participant R as Redis
+    participant NATS as NATS
+
+    C->>GW: POST /auth/reset-password {token, newPassword}
+    GW->>AS: Proxy
+    AS->>R: Rate-limit ratelimit:reset_password:<ip>
+    AS->>AS: Validate token non-empty + password length [8,128]
+    AS->>DB: SELECT password_reset_tokens WHERE token_hash=SHA256(token) AND expires_at>NOW
+    alt not found / expired
+        AS-->>C: 400 INVALID_OR_EXPIRED_TOKEN
+    else valid
+        AS->>AS: bcrypt.GenerateFromPassword(newPassword)
+        AS->>DB: BEGIN
+        AS->>DB: UPDATE users SET password_hash=? WHERE id=user_id
+        AS->>DB: DELETE FROM password_reset_tokens WHERE user_id=user_id
+        AS->>DB: DELETE FROM user_sessions WHERE user_id=user_id RETURNING * (active only)
+        AS->>DB: COMMIT
+        loop For each revoked session
+            AS->>R: SET denylist:jwt:<access_token_hash> EX=remaining
+        end
+        AS->>R: DEL user:plan:<user_id>
+        AS->>NATS: Publish analytics.events.user.password_reset_completed
+        AS-->>C: 200 "Password updated. Please sign in."
+    end
+```
+
 ### Internal Session Revocation (admin)
 
 ```mermaid
@@ -353,6 +445,7 @@ sequenceDiagram
 | `USER_ALREADY_EXISTS` | 409 | Email already registered |
 | `INVALID_CREDENTIALS` | 401 | Wrong email or password |
 | `INVALID_REFRESH_TOKEN` | 401 | Missing, expired, or unknown refresh token |
+| `INVALID_OR_EXPIRED_TOKEN` | 400 | Reset token does not match any active row or has expired |
 | `UNAUTHORIZED` | 401 | Not authenticated or token expired/revoked |
 | `RATE_LIMIT_EXCEEDED` | 429 | Too many attempts |
 | `INVALID_PLAN` | 400 | `ChangePlan` with unknown plan name |
@@ -480,7 +573,18 @@ Rate limits are per IP and enforced via Redis-backed middleware.
 | `RATE_LIMIT_LOGIN` | `5` | Max login attempts per window |
 | `RATE_LIMIT_SIGNUP` | `3` | Max signup attempts per window |
 | `RATE_LIMIT_REFRESH` | `10` | Max refresh attempts per window |
+| `RATE_LIMIT_FORGOT_PASSWORD` | `3` | Max forgot-password requests per window |
+| `RATE_LIMIT_RESET_PASSWORD` | `5` | Max reset-password attempts per window |
 | `RATE_LIMIT_WINDOW` | `60s` | Rate-limit time window |
+
+### Password Reset / Email
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RESEND_API_KEY` | `""` | Resend API key. When empty, the service uses `NoopMailer` and the reset link is logged instead of emailed (intended for local dev). |
+| `RESET_EMAIL_FROM` | `no-reply@fyredocs.com` | From address. Must be on a domain verified in the Resend dashboard, otherwise Resend will only deliver to the account owner. |
+| `APP_BASE_URL` | `http://localhost:5173` | Used to build the magic link: `${APP_BASE_URL}/reset-password?token=<raw>`. |
+| `PASSWORD_RESET_TOKEN_TTL` | `1h` | Lifetime of a password reset token. |
 
 ### Other
 
@@ -495,6 +599,8 @@ Rate limits are per IP and enforced via Redis-backed middleware.
 
 ### Expired Session Cleanup
 A goroutine started at boot runs `models.DeleteExpiredSessions` once per hour. It is driven by a `time.Ticker` and selects on `cleanupCtx.Done()` so it exits on SIGTERM. The main goroutine cancels `cleanupCtx` and waits on a `sync.WaitGroup` after `srv.Shutdown` returns, so an in-flight delete is allowed to finish instead of being killed mid-statement when the DB connection pool is closed.
+
+The same goroutine also runs `models.DeleteExpiredResetTokens` each tick so the `password_reset_tokens` table does not accumulate dead rows.
 
 ## Scaling Constraints
 
@@ -612,6 +718,71 @@ Returns 204. Side effects: deletes the matching `user_sessions` row, denies the 
 ### GET /auth/plans
 
 Returns all non-anonymous plans (`free`, `pro` by default).
+
+### POST /auth/forgot-password
+
+**Request**:
+```http
+POST /auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "user@example.com"
+}
+```
+
+**Response** (always 200):
+```json
+{
+  "success": true,
+  "message": "If an account exists for this email, a reset link has been sent.",
+  "data": null
+}
+```
+
+Notes:
+- The response shape is identical whether or not the email is registered, to prevent account enumeration.
+- The email send is fire-and-forget on a background goroutine with a 15-second timeout; mailer failures do not change the response.
+- A new request invalidates any previously-issued reset token for that user.
+
+### POST /auth/reset-password
+
+**Request**:
+```http
+POST /auth/reset-password
+Content-Type: application/json
+
+{
+  "token": "<raw token from the magic link>",
+  "newPassword": "NewSecurePass123!"
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "success": true,
+  "message": "Password updated. Please sign in.",
+  "data": null
+}
+```
+
+**Error responses**:
+
+| Status | Code | Cause |
+|--------|------|-------|
+| 400 | `INVALID_INPUT` | Missing token or empty/whitespace-only token |
+| 400 | `WEAK_PASSWORD` | New password shorter than 8 characters |
+| 400 | `INVALID_INPUT` | New password longer than 128 characters |
+| 400 | `INVALID_OR_EXPIRED_TOKEN` | Token does not match any active row, or has expired |
+| 500 | `SERVER_ERROR` | bcrypt failure or transaction failure |
+
+Side effects on success:
+- `users.password_hash` updated.
+- Every row in `password_reset_tokens` for the user deleted (single-use).
+- Every row in `user_sessions` for the user deleted; each access-token hash is added to the Redis denylist for the remainder of its original TTL.
+- The plan cache (`user:plan:<id>`) is dropped.
+- `analytics.events.user.password_reset_completed` published to NATS.
 
 ### Internal — GET /internal/users/:id/plan
 
