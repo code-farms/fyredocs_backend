@@ -1,15 +1,6 @@
 name: fyredocs
 
 services:
-  volume-init:
-    image: alpine:3.19
-    command: ["sh", "-c", "chmod -R 777 /app/uploads /app/outputs"]
-    volumes:
-      - ../files/uploads:/app/uploads
-      - ../files/outputs:/app/outputs
-    networks:
-      - fyredocs_net
-
   job-service:
     build:
       context: ..
@@ -41,11 +32,18 @@ services:
 
       # File Handling
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
-      UPLOAD_DIR: /app/uploads
-      OUTPUT_DIR: /app/outputs
-      MAX_UPLOAD_MB: "50"
       GUEST_JOB_TTL: 2h
       UPLOAD_TTL: 2h
+
+      # Object storage (presigned uploads/downloads; no shared volume)
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_USE_SSL: "false"
+      S3_BUCKET_UPLOADS: fyredocs-uploads
+      S3_BUCKET_OUTPUTS: fyredocs-outputs
+      S3_PUBLIC_ENDPOINT: ${PUBLIC_ORIGIN:-http://localhost:8080}
+      UPLOAD_PART_SIZE_MB: "8"
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
@@ -56,12 +54,6 @@ services:
       retries: 3
     env_file:
       - ../job-service/.env
-    volumes:
-      - ../files/uploads:/app/uploads
-      - ../files/outputs:/app/outputs
-    depends_on:
-      volume-init:
-        condition: service_completed_successfully
     networks:
       - fyredocs_net
 
