@@ -321,6 +321,9 @@ services:
       OUTPUT_DIR: /app/outputs
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
+      # Parallel jobs per container (pdf2docx/LibreOffice are CPU-heavy)
+      WORKER_CONCURRENCY: "2"
+
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     healthcheck:
@@ -334,7 +337,7 @@ services:
           memory: 1G
           cpus: '2.0'
         reservations:
-          memory: 256M
+          memory: 512M
     logging:
       driver: "json-file"
       options:
@@ -382,7 +385,7 @@ services:
           memory: 1G
           cpus: '2.0'
         reservations:
-          memory: 256M
+          memory: 512M
     logging:
       driver: "json-file"
       options:
@@ -430,7 +433,7 @@ services:
           memory: 1G
           cpus: '2.0'
         reservations:
-          memory: 256M
+          memory: 512M
     logging:
       driver: "json-file"
       options:
@@ -468,6 +471,9 @@ services:
       OCR_DEFAULT_LANGUAGE: ${OCR_DEFAULT_LANGUAGE:-eng}
       OCR_DEFAULT_DPI: ${OCR_DEFAULT_DPI:-150}
 
+      # Parallel jobs per container (kept low — OCR parallelizes pages internally)
+      WORKER_CONCURRENCY: "2"
+
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     healthcheck:
@@ -481,7 +487,7 @@ services:
           memory: 1G
           cpus: '2.0'
         reservations:
-          memory: 256M
+          memory: 512M
     logging:
       driver: "json-file"
       options:

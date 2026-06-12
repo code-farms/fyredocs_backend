@@ -21,7 +21,7 @@ The Convert To PDF service converts Office (Word/Excel/PowerPoint), HTML, and im
 
 ```
 NATS JetStream JOBS_DISPATCH (jobs.dispatch.convert-to-pdf)
-  ↓ pull-consumer (durable=convert-to-pdf, MaxDeliver=4, AckWait=30m, BackOff 10s/30s/2m)
+  ↓ pull-consumer (durable=convert-to-pdf, MaxDeliver=4, AckWait=30m, MaxAckPending=2×concurrency, BackOff 10s/30s/2m)
 convert-to-pdf worker
   ├─ Fetch up to WORKER_CONCURRENCY messages (default 2)
   ├─ Per message → goroutine guarded by a semaphore
@@ -87,7 +87,7 @@ DB updates and `jobs.events.<jobId>.processing` events are emitted from the repo
 
 - **Stream**: `JOBS_DISPATCH` (WorkQueue, 24h)
 - **Subject pulled**: `jobs.dispatch.convert-to-pdf`
-- **Consumer**: durable `convert-to-pdf`, `AckExplicit`, `MaxDeliver=4`, `AckWait=30m`, `BackOff=[10s, 30s, 2m]`
+- **Consumer**: durable `convert-to-pdf`, `AckExplicit`, `MaxDeliver=4`, `AckWait=30m`, `MaxAckPending=2×WORKER_CONCURRENCY`, `BackOff=[10s, 30s, 2m]`
 - **Events emitted**: `jobs.events.<jobId>.{processing,completed,failed}` (Interest, 1h retention)
 - **DLQ**: `jobs.dlq.convert-to-pdf` (Limits, 7-day retention) — published when `MaxDeliver` is exhausted, then the original message is acked.
 

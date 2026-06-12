@@ -119,3 +119,40 @@ func TestJobPayloadUnmarshal(t *testing.T) {
 		t.Errorf("expected 'pdf-to-word', got %q", payload.ToolType)
 	}
 }
+
+func TestConcurrencyFromEnv(t *testing.T) {
+	t.Run("default is 2", func(t *testing.T) {
+		t.Setenv("WORKER_CONCURRENCY", "")
+		if got := concurrencyFromEnv(); got != 2 {
+			t.Errorf("expected 2, got %d", got)
+		}
+	})
+
+	t.Run("custom value", func(t *testing.T) {
+		t.Setenv("WORKER_CONCURRENCY", "4")
+		if got := concurrencyFromEnv(); got != 4 {
+			t.Errorf("expected 4, got %d", got)
+		}
+	})
+
+	t.Run("invalid uses default", func(t *testing.T) {
+		t.Setenv("WORKER_CONCURRENCY", "abc")
+		if got := concurrencyFromEnv(); got != 2 {
+			t.Errorf("expected 2, got %d", got)
+		}
+	})
+
+	t.Run("zero uses default", func(t *testing.T) {
+		t.Setenv("WORKER_CONCURRENCY", "0")
+		if got := concurrencyFromEnv(); got != 2 {
+			t.Errorf("expected 2, got %d", got)
+		}
+	})
+
+	t.Run("negative uses default", func(t *testing.T) {
+		t.Setenv("WORKER_CONCURRENCY", "-1")
+		if got := concurrencyFromEnv(); got != 2 {
+			t.Errorf("expected 2, got %d", got)
+		}
+	})
+}

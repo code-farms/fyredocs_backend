@@ -20,7 +20,7 @@ graph TB
             METRICSEP["/metrics"]
         end
 
-        subgraph Worker["NATS Worker (single-threaded)"]
+        subgraph Worker["NATS Worker (parallel, semaphore-bounded)"]
             CONSUMER["JetStream Pull Consumer<br/>Durable: convert-from-pdf<br/>Filter: jobs.dispatch.convert-from-pdf<br/>MaxDeliver=4 · AckWait=30m<br/>BackOff 10s · 30s · 2m"]
             FETCH["Fetch 1 msg / 30s wait"]
             DISPATCH["processMessage()"]

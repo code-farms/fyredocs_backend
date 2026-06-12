@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -82,9 +84,26 @@ func backoffDuration(attempt int) time.Duration {
 	return backoff[attempt]
 }
 
+// concurrencyFromEnv reads the WORKER_CONCURRENCY environment variable.
+// Falls back to 2 if unset or invalid.
+func concurrencyFromEnv() int {
+	if v := os.Getenv("WORKER_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 2
+}
+
 func Run(ctx context.Context, cfg WorkerConfig) {
 	outDir := outputDir()
 	logger := slog.Default().With("service", cfg.ServiceName)
+
+	maxConcurrency := concurrencyFromEnv()
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+
+	logger.Info("worker starting", "concurrency", maxConcurrency)
 
 	// ── Create / get durable pull consumer on JOBS_DISPATCH stream ──
 	cons, err := cfg.JS.CreateOrUpdateConsumer(ctx, "JOBS_DISPATCH", jetstream.ConsumerConfig{
@@ -92,7 +111,8 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 		FilterSubject: "jobs.dispatch." + cfg.ServiceName,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		MaxDeliver:    4, // 1 initial + 3 retries
-		AckWait:       30 * time.Minute,
+		AckWait:       5 * time.Minute, // pdfcpu ops are fast; redeliver stuck jobs sooner
+		MaxAckPending: 2 * maxConcurrency, // bound unacked messages on a wedged container
 		BackOff:       []time.Duration{10 * time.Second, 30 * time.Second, 2 * time.Minute},
 	})
 	if err != nil {
@@ -103,15 +123,18 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("worker shutting down")
+			logger.Info("worker shutting down, waiting for in-flight jobs")
+			wg.Wait()
 			return
 		default:
 		}
 
-		// Pull one message at a time, blocking up to 30 s.
-		msgs, err := cons.Fetch(1, jetstream.FetchMaxWait(30*time.Second))
+		// Pull up to maxConcurrency messages; jobs process in parallel goroutines
+		// bounded by the semaphore so one slow job never blocks the rest.
+		msgs, err := cons.Fetch(maxConcurrency, jetstream.FetchMaxWait(30*time.Second))
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				wg.Wait()
 				return
 			}
 			logger.Error("fetch failed", "error", err)
@@ -120,7 +143,13 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 		}
 
 		for msg := range msgs.Messages() {
-			processMessage(ctx, cfg, msg, outDir, logger)
+			sem <- struct{}{} // acquire semaphore slot
+			wg.Add(1)
+			go func(m jetstream.Msg) {
+				defer wg.Done()
+				defer func() { <-sem }() // release semaphore slot
+				processMessage(ctx, cfg, m, outDir, logger)
+			}(msg)
 		}
 
 		if msgs.Error() != nil && !errors.Is(msgs.Error(), jetstream.ErrNoMessages) {

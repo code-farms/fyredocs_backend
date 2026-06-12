@@ -287,9 +287,9 @@ REDIS_DB="0"
 ```env
 PORT="8084"
 NATS_URL="nats://nats:4222"
-PROCESSING_TIMEOUT="30m"   # honoured via NATS AckWait
+PROCESSING_TIMEOUT="5m"    # honoured via NATS AckWait (pdfcpu ops are fast)
 OUTPUT_DIR="outputs"
-WORKER_CONCURRENCY="1"     # this worker is single-threaded by default
+WORKER_CONCURRENCY="4"     # parallel jobs per container (semaphore-bounded goroutines)
 ```
 
 ### JWT Authentication
@@ -342,7 +342,9 @@ API Gateway → Job Service (creates ProcessingJob in Postgres)
   ↓
 NATS JetStream (jobs.dispatch.organize-pdf) — WorkQueue
   ↓
-organize-pdf worker pull-consumer (durable=organize-pdf · MaxDeliver=4 · AckWait=30m)
+organize-pdf worker pull-consumer (durable=organize-pdf · MaxDeliver=4 · AckWait=5m · MaxAckPending=2×concurrency)
+  ↓
+Fetch up to WORKER_CONCURRENCY messages (default 4); jobs run in parallel semaphore-bounded goroutines
   ↓
 processing.ProcessFile() — dispatches to pdfcpu helpers
   ↓

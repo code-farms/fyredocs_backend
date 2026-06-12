@@ -133,7 +133,7 @@ sequenceDiagram
     Main->>Gin: ListenAndServe(:8082)
     Note over Main: block on SIGINT/SIGTERM
     Main->>W: cancel ctx
-    W->>W: drain in-flight (no-op since single-threaded)
+    W->>W: drain in-flight goroutines (wg.Wait)
     Main->>Gin: graceful shutdown (10s)
 ```
 

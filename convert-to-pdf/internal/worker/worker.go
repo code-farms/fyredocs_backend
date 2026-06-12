@@ -101,14 +101,14 @@ type progressReporter struct {
 // startPct to maxPct over estimatedDuration, updating the DB every tick.
 // It uses a sqrt ease-out curve so progress feels natural (fast at first,
 // slows as it approaches maxPct). Both DB writes and NATS events are
-// published every 3s.
+// published every 10s.
 func startProgressReporter(db *gorm.DB, js jetstream.JetStream, jobID uuid.UUID, toolType string, startPct, maxPct int, estimatedDuration time.Duration) *progressReporter {
 	ctx, cancel := context.WithCancel(context.Background())
 	pr := &progressReporter{cancel: cancel, done: make(chan struct{})}
 
 	go func() {
 		defer close(pr.done)
-		ticker := time.NewTicker(3 * time.Second)
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 		start := time.Now()
 		for {
@@ -207,6 +207,7 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		MaxDeliver:    4, // 1 initial + 3 retries
 		AckWait:       30 * time.Minute,
+		MaxAckPending: 2 * maxConcurrency, // bound unacked messages on a wedged container
 		BackOff:       []time.Duration{10 * time.Second, 30 * time.Second, 2 * time.Minute},
 	})
 	if err != nil {

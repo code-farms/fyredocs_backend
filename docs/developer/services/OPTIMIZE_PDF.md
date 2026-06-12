@@ -88,7 +88,7 @@ OUTPUT_DIR="outputs"
 NATS_URL="nats://nats:4222"
 PROCESSING_TIMEOUT="30m"   # honoured via NATS AckWait
 PORT="8085"
-WORKER_CONCURRENCY="1"     # this worker is single-threaded by default
+WORKER_CONCURRENCY="2"     # parallel jobs per container (semaphore-bounded goroutines; OCR also parallelizes pages internally)
 
 # JWT
 JWT_HS256_SECRET="..."

@@ -35,12 +35,13 @@ func pdfToImages(ctx context.Context, inputPath string, outputDir string, baseNa
 		return "", fmt.Errorf("failed to read PDF: %w", err)
 	}
 
-	for i := 1; i <= pdfCtx.PageCount; i++ {
-		cmd := exec.CommandContext(ctx, "pdftoppm", "-png", "-f", fmt.Sprintf("%d", i), "-l", fmt.Sprintf("%d", i), inputPath, filepath.Join(tempDir, fmt.Sprintf("page_%03d", i)))
-		if err := cmd.Run(); err != nil {
-			slog.Error("pdftoppm failed", "page", i, "error", err)
-			return "", fmt.Errorf("PDF to image conversion requires pdftoppm (poppler-utils): %w", err)
-		}
+	// Convert all pages in a single pdftoppm invocation — spawning one process
+	// per page dominated conversion time on large PDFs. pdftoppm zero-pads the
+	// page index, so the globs below stay in page order.
+	cmd := exec.CommandContext(ctx, "pdftoppm", "-png", inputPath, filepath.Join(tempDir, "page"))
+	if err := cmd.Run(); err != nil {
+		slog.Error("pdftoppm failed", "error", err)
+		return "", fmt.Errorf("PDF to image conversion requires pdftoppm (poppler-utils): %w", err)
 	}
 
 	// Single-page PDF: return the PNG directly instead of wrapping in ZIP.
@@ -144,29 +145,13 @@ func pdfToPptImages(ctx context.Context, inputPath string, outputPath string, on
 		return fmt.Errorf("PDF has no pages")
 	}
 
-	// Convert each page to PNG using pdftoppm and report progress.
-	for i := 1; i <= pageCount; i++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		cmd := exec.CommandContext(ctx, "pdftoppm", "-png",
-			"-f", fmt.Sprintf("%d", i),
-			"-l", fmt.Sprintf("%d", i),
-			inputPath,
-			filepath.Join(tempDir, fmt.Sprintf("page_%03d", i)),
-		)
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("pdftoppm failed on page %d: %w", i, err)
-		}
-
-		// Report progress: pages use range 20-80%.
-		if onProgress != nil {
-			pct := 20 + int(float64(i)/float64(pageCount)*60)
-			onProgress(pct)
-		}
+	// Convert all pages in a single pdftoppm invocation (was one process per
+	// page); synthetic ticking covers progress while the subprocess runs.
+	// pdftoppm zero-pads the page index, so the builder's glob stays in order.
+	if err := runWithProgressTicking(ctx, onProgress, func(ctx context.Context) error {
+		return exec.CommandContext(ctx, "pdftoppm", "-png", inputPath, filepath.Join(tempDir, "page")).Run()
+	}); err != nil {
+		return fmt.Errorf("pdftoppm failed: %w", err)
 	}
 
 	// Build the PPTX from the images.
@@ -190,7 +175,7 @@ func pdfToOfficeTicking(ctx context.Context, inputPath string, outputPath string
 }
 
 // runWithProgressTicking runs convert in a goroutine while emitting synthetic
-// progress ticks every 5s (30 → 80%, capped). On completion it bumps to 85%.
+// progress ticks every 10s (30 → 80%, capped). On completion it bumps to 85%.
 // On context cancellation it waits for the worker so the underlying
 // CommandContext can finish cleaning up. Used by every PDF→office path that
 // blocks on a single long-running subprocess (LibreOffice, pdf2docx, ...).
@@ -204,7 +189,7 @@ func runWithProgressTicking(ctx context.Context, onProgress ProgressFunc, conver
 		done <- convert(ctx)
 	}()
 
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	progress := 30
 	for {

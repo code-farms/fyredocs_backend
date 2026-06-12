@@ -24,8 +24,10 @@ The Convert From PDF service converts PDF files to other formats including image
 
 ```
 NATS JetStream JOBS_DISPATCH (jobs.dispatch.convert-from-pdf)
-  ↓ pull-consumer (durable=convert-from-pdf, MaxDeliver=4, AckWait=30m, BackOff 10s/30s/2m)
+  ↓ pull-consumer (durable=convert-from-pdf, MaxDeliver=4, AckWait=30m, MaxAckPending=2×concurrency, BackOff 10s/30s/2m)
 convert-from-pdf worker
+  ├─ Fetch up to WORKER_CONCURRENCY messages (default 2); each job runs in a
+  │  semaphore-bounded goroutine so jobs process in parallel
   ├─ Validate AllowedTools[toolType]
   ├─ Duplicate-job guard (skip if already completed/processing)
   ├─ Update DB → status='processing', progress=20
@@ -33,7 +35,7 @@ convert-from-pdf worker
   │     ├─ pdf-to-image      → pdftoppm (Poppler) → single PNG or ZIP
   │     ├─ pdf-to-word/docx  → pdf2docx (primary) → LibreOffice writer_pdf_import (fallback)
   │     ├─ pdf-to-excel/xlsx → LibreOffice Calc (writer_pdf_import → xlsx)
-  │     ├─ pdf-to-ppt/pptx   → image-based: rasterize each page (pdftoppm) → embed as one slide per image
+  │     ├─ pdf-to-ppt/pptx   → image-based: rasterize all pages in one pdftoppm call → embed as one slide per image
   │     ├─ pdf-to-html       → pdftohtml → ZIP (HTML + images)
   │     ├─ pdf-to-text/txt   → pdftotext
   │     ├─ pdf-to-pdfa       → Ghostscript (PDF/A-2b)
@@ -402,7 +404,7 @@ curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-odp \
 | `QUEUE_PREFIX` | `queue` | Redis queue key prefix |
 | `MAX_RETRIES` | `3` | Max retry attempts for failed jobs |
 | `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing (currently honoured via NATS `AckWait` rather than a context deadline in code) |
-| `WORKER_CONCURRENCY` | `1` | Max concurrent jobs (this service runs single-threaded by default; workers do not spawn parallel goroutines) |
+| `WORKER_CONCURRENCY` | `2` | Max concurrent jobs processed in parallel (semaphore-bounded goroutines; one slow conversion no longer blocks the rest) |
 | `NATS_URL` | **Required** | NATS server URL |
 
 ## Dependencies
