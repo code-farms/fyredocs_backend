@@ -288,9 +288,21 @@ REDIS_DB="0"
 PORT="8084"
 NATS_URL="nats://nats:4222"
 PROCESSING_TIMEOUT="5m"    # honoured via NATS AckWait (pdfcpu ops are fast)
-OUTPUT_DIR="outputs"
 WORKER_CONCURRENCY="4"     # parallel jobs per container (semaphore-bounded goroutines)
 ```
+
+### Object Storage (S3 / MinIO)
+```env
+S3_ENDPOINT="minio:9000"               # required
+S3_ACCESS_KEY="minioadmin"             # required
+S3_SECRET_KEY="minioadmin"             # required
+S3_USE_SSL="false"
+S3_BUCKET_UPLOADS="fyredocs-uploads"   # job inputs (object keys in payload.inputPaths)
+S3_BUCKET_OUTPUTS="fyredocs-outputs"   # job outputs, stored as jobs/{jobID}/...
+S3_REGION="us-east-1"
+```
+
+> `OUTPUT_DIR` has been removed — outputs no longer live on a shared volume. The worker downloads inputs to a container-local scratch directory, processes them there, and uploads the result to the outputs bucket.
 
 ### JWT Authentication
 ```env
@@ -346,14 +358,25 @@ organize-pdf worker pull-consumer (durable=organize-pdf · MaxDeliver=4 · AckWa
   ↓
 Fetch up to WORKER_CONCURRENCY messages (default 4); jobs run in parallel semaphore-bounded goroutines
   ↓
-processing.ProcessFile() — dispatches to pdfcpu helpers
+Create scratch dir (os.MkdirTemp "job-<jobId>-*"); download inputPaths keys
+from S3 uploads bucket → <scratch>/in/ (failure → recoverable NAK + backoff)
   ↓
-Output written to outputs/<jobId>.<ext>
+processing.ProcessFile() — dispatches to pdfcpu helpers (local files, output to <scratch>/out)
   ↓
-DB → status=completed, INSERT file_metadata
+Upload output → S3 outputs bucket jobs/<jobId>/<file> (failure → recoverable NAK + backoff)
   ↓
-Publish jobs.events.<jobId>.{processing,completed,failed}
+DB → status=completed, INSERT file_metadata (path=object key, size_bytes=uploaded size)
+  ↓
+Publish jobs.events.<jobId>.{processing,completed,failed}; scratch dir removed
 ```
+
+### Object Storage
+
+Inputs and outputs live in S3-compatible object storage (MinIO in compose), not on a shared volume:
+
+- `payload.inputPaths` carries **object keys** in the uploads bucket. The worker downloads each key to `<scratch>/in/<basename>` before processing, because pdfcpu/Tesseract need real local files.
+- The output is uploaded to the outputs bucket as `jobs/{jobID}/{filename}` with an extension-derived `Content-Type`; `file_metadata.path` stores the object key and `size_bytes` the uploaded size.
+- The scratch directory is deleted after every job (success or failure). Download/upload failures are treated as recoverable and retried via NAK + backoff.
 
 ## Docker Deployment
 
@@ -369,8 +392,9 @@ docker run -d \
   -e DATABASE_URL="postgresql://..." \
   -e REDIS_ADDR="redis:6379" \
   -e JWT_HS256_SECRET="your-secret" \
-  -v uploads:/app/uploads \
-  -v outputs:/app/outputs \
+  -e S3_ENDPOINT="minio:9000" \
+  -e S3_ACCESS_KEY="minioadmin" \
+  -e S3_SECRET_KEY="minioadmin" \
   organize-pdf:latest
 ```
 
@@ -384,9 +408,11 @@ organize-pdf:
     PORT: "8084"
     DATABASE_URL: "postgresql://..."
     REDIS_ADDR: "redis:6379"
-  volumes:
-    - uploads_data:/app/uploads
-    - outputs_data:/app/outputs
+    S3_ENDPOINT: "minio:9000"
+    S3_ACCESS_KEY: "minioadmin"
+    S3_SECRET_KEY: "minioadmin"
+    S3_BUCKET_UPLOADS: "fyredocs-uploads"
+    S3_BUCKET_OUTPUTS: "fyredocs-outputs"
 ```
 
 ## Development
@@ -555,7 +581,7 @@ sequenceDiagram
     participant NATS as NATS JetStream
     participant W as organize-pdf Worker
     participant DB as PostgreSQL
-    participant FS as File System
+    participant S3 as MinIO / S3
     participant PC as pdfcpu
 
     JS->>NATS: Publish JobCreated to jobs.dispatch.organize-pdf
@@ -564,7 +590,11 @@ sequenceDiagram
     W->>W: Validate toolType in AllowedTools
     W->>DB: UPDATE processing_jobs SET status='processing'
 
-    W->>FS: Read input PDF file(s) from inputPaths
+    W->>W: Create scratch dir (job-scoped temp)
+    W->>S3: Download inputPaths keys (uploads bucket → scratch/in)
+    alt Download fails
+        W->>NATS: NAK with backoff (recoverable)
+    end
 
     alt merge-pdf
         W->>PC: pdfcpu merge [file1.pdf, file2.pdf, ...] -> merged.pdf
@@ -595,15 +625,19 @@ sequenceDiagram
     end
 
     alt Processing succeeds
-        PC-->>W: Output file produced
-        W->>FS: Write output to output directory
-        W->>DB: INSERT file_metadata (kind='output')
+        PC-->>W: Output file produced in scratch/out
+        W->>S3: Upload output (outputs bucket, jobs/<jobId>/<file>)
+        alt Upload fails
+            W->>NATS: NAK with backoff (recoverable)
+        end
+        W->>DB: INSERT file_metadata (kind='output', path=object key, size=uploaded bytes)
         W->>DB: UPDATE processing_jobs SET status='completed', progress=100
         W->>NATS: Ack message
     else Processing fails
         W->>DB: UPDATE processing_jobs SET status='failed', failure_reason=error
         W->>NATS: Ack message
     end
+    W->>W: Remove scratch dir
 ```
 
 ### Merge PDF Flow
@@ -614,17 +648,17 @@ sequenceDiagram
     participant JS as Job Service
     participant NATS as NATS JetStream
     participant W as organize-pdf Worker
-    participant FS as File System
+    participant S3 as MinIO / S3
 
     C->>JS: POST /api/organize-pdf/merge-pdf (files: [doc1.pdf, doc2.pdf, doc3.pdf])
-    JS->>JS: Save all files to uploads/<jobId>/
-    JS->>NATS: Publish JobCreated {inputPaths: [doc1.pdf, doc2.pdf, doc3.pdf]}
+    JS->>S3: Store uploads in uploads bucket
+    JS->>NATS: Publish JobCreated {inputPaths: [object keys]}
 
     NATS->>W: Deliver JobCreated
-    W->>FS: Read all input PDFs
-    W->>W: pdfcpu.MergeCreateFile(inputPaths, outputPath)
-    W->>FS: Write merged.pdf
-    W-->>W: Job completed
+    W->>S3: Download all input PDFs → scratch/in
+    W->>W: pdfcpu.MergeCreateFile(local inputs, scratch/out/merged.pdf)
+    W->>S3: Upload merged.pdf → outputs bucket jobs/<jobId>/merged.pdf
+    W-->>W: Job completed (scratch removed)
 ```
 
 ### Split PDF Flow
@@ -635,18 +669,18 @@ sequenceDiagram
     participant JS as Job Service
     participant NATS as NATS JetStream
     participant W as organize-pdf Worker
-    participant FS as File System
+    participant S3 as MinIO / S3
 
     C->>JS: POST /api/organize-pdf/split-pdf {files: [doc.pdf], options: {range: "1-3,5"}}
-    JS->>NATS: Publish JobCreated {inputPaths: [doc.pdf], options: {range: "1-3,5"}}
+    JS->>NATS: Publish JobCreated {inputPaths: [object key], options: {range: "1-3,5"}}
 
     NATS->>W: Deliver JobCreated
-    W->>FS: Read input PDF
+    W->>S3: Download input PDF → scratch/in
     W->>W: Parse page range "1-3,5"
     W->>W: Extract pages 1, 2, 3, 5 into individual PDFs
-    W->>FS: Create ZIP archive of extracted pages
-    W->>FS: Write output.zip
-    W-->>W: Job completed
+    W->>W: Create ZIP archive in scratch/out
+    W->>S3: Upload output.zip → outputs bucket jobs/<jobId>/output.zip
+    W-->>W: Job completed (scratch removed)
 ```
 
 ### Health Check Flow

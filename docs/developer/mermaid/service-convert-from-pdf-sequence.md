@@ -11,7 +11,7 @@ sequenceDiagram
     participant Proc as processing.ProcessFile
     participant Tools as pdf2docx · LibreOffice · poppler · ghostscript
     participant PG as PostgreSQL
-    participant Disk as File System
+    participant S3 as MinIO / S3
     participant EV as JOBS_EVENTS
 
     NATS->>W: Pull (1 msg, MaxWait 30s)
@@ -22,17 +22,27 @@ sequenceDiagram
     W->>EV: jobs.events.&lt;jobId&gt;.processing
     W->>W: Parse options JSON
 
-    W->>Proc: ProcessFile(toolType, inputPaths, options, outputDir, onProgress)
+    W->>W: MkdirTemp scratch (job-&lt;jobId&gt;-*)
+    W->>S3: DownloadToFile per inputPaths key (uploads bucket → scratch/in)
+    alt download fails
+        W->>NATS: NAK with backoff (recoverable)
+    end
+
+    W->>Proc: ProcessFile(toolType, local inputs, options, scratch/out, onProgress)
     Proc->>Tools: tool-specific dispatch (see arch diagram)
-    Tools-->>Disk: output file
+    Tools-->>Proc: output file in scratch/out
     Proc-->>W: {OutputPath, Metadata{outputExt}}
 
+    W->>S3: UploadFromFile (outputs bucket, jobs/&lt;jobId&gt;/&lt;file&gt;) → size
+    alt upload fails
+        W->>NATS: NAK with backoff (recoverable)
+    end
     W->>PG: DELETE file_metadata WHERE job_id=:id AND kind='output' (idempotent re-run)
-    W->>Disk: Stat output → size
-    W->>PG: INSERT file_metadata (kind='output', path, size_bytes)
+    W->>PG: INSERT file_metadata (kind='output', path=object key, size_bytes=uploaded size)
     W->>PG: Merge metadata JSON
     W->>PG: UPDATE status=completed, progress=100, completed_at=NOW(), failure_reason=NULL
-    W->>EV: jobs.events.&lt;jobId&gt;.completed (with fileSize)
+    W->>EV: jobs.events.&lt;jobId&gt;.completed (with uploaded fileSize)
+    W->>W: RemoveAll scratch dir
     W->>NATS: ACK
 ```
 

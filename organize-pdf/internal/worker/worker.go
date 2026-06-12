@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +38,7 @@ type WorkerConfig struct {
 	Process      ProcessFunc
 	JS           jetstream.JetStream
 	DB           *gorm.DB
+	Storage      Storage       // object storage for job inputs/outputs
 	RedisClient  *redis.Client // optional – only used for processing markers; may be nil
 }
 
@@ -96,7 +99,6 @@ func concurrencyFromEnv() int {
 }
 
 func Run(ctx context.Context, cfg WorkerConfig) {
-	outDir := outputDir()
 	logger := slog.Default().With("service", cfg.ServiceName)
 
 	maxConcurrency := concurrencyFromEnv()
@@ -148,7 +150,7 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 			go func(m jetstream.Msg) {
 				defer wg.Done()
 				defer func() { <-sem }() // release semaphore slot
-				processMessage(ctx, cfg, m, outDir, logger)
+				processMessage(ctx, cfg, m, logger)
 			}(msg)
 		}
 
@@ -158,7 +160,7 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 	}
 }
 
-func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, outDir string, logger *slog.Logger) {
+func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, logger *slog.Logger) {
 	var payload JobPayload
 	if err := json.Unmarshal(msg.Data(), &payload); err != nil {
 		logger.Error("invalid payload", "error", err, "code", ErrCodeInvalidPayload)
@@ -206,17 +208,49 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 		}
 	}
 
+	// Stage inputs: download from the uploads bucket into a job-scoped
+	// scratch directory (subprocess tools need real local files).
+	scratch, err := os.MkdirTemp("", "job-"+payload.JobID+"-")
+	if err != nil {
+		handleFailure(cfg, msg, payload, markRecoverable(fmt.Errorf("create scratch dir: %w", err)), logger)
+		return
+	}
+	defer os.RemoveAll(scratch)
+
+	localInputs, err := fetchInputs(ctx, cfg.Storage, scratch, payload.InputPaths)
+	if err != nil {
+		// Download failures are network-ish: retry via the recoverable path.
+		handleFailure(cfg, msg, payload, markRecoverable(err), logger)
+		return
+	}
+
+	outDir := filepath.Join(scratch, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		handleFailure(cfg, msg, payload, markRecoverable(fmt.Errorf("create output dir: %w", err)), logger)
+		return
+	}
+
 	// Per-job timeout prevents hung subprocesses from causing AckWait redelivery.
 	jobCtx, jobCancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer jobCancel()
 
-	result, procErr := cfg.Process(jobCtx, jobID, payload.ToolType, payload.InputPaths, options, outDir)
+	result, procErr := cfg.Process(jobCtx, jobID, payload.ToolType, localInputs, options, outDir)
 	if procErr != nil {
 		handleFailure(cfg, msg, payload, procErr, logger)
 		return
 	}
 
-	if err := recordOutput(cfg.DB, jobID, result.OutputPath); err != nil {
+	// Persist the output to the outputs bucket; the scratch copy is deleted
+	// when this function returns.
+	outKey, outSize, err := storeOutput(ctx, cfg.Storage, payload.JobID, result.OutputPath)
+	if err != nil {
+		logger.Error("failed to upload output", "jobId", payload.JobID, "error", err)
+		// Upload failures are network-ish: retry via the recoverable path.
+		handleFailure(cfg, msg, payload, markRecoverable(err), logger)
+		return
+	}
+
+	if err := recordOutput(cfg.DB, jobID, outKey, outSize); err != nil {
 		logger.Error("failed to record output", "jobId", payload.JobID, "error", err)
 		handleFailure(cfg, msg, payload, err, logger)
 		return
@@ -224,7 +258,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, ou
 
 	mergeMetadata(cfg.DB, jobID, result.Metadata, logger)
 	updateJobStatus(cfg.DB, jobID, "completed", 100, "")
-	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "completed", 100, "", outputFileSize(result.OutputPath))
+	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "completed", 100, "", outSize)
 	clearFailure(cfg.DB, jobID)
 
 	if err := msg.Ack(); err != nil {
@@ -352,14 +386,11 @@ func mergeMetadata(db *gorm.DB, jobID uuid.UUID, meta map[string]interface{}, lo
 	}
 }
 
-func recordOutput(db *gorm.DB, jobID uuid.UUID, outputPath string) error {
-	if outputPath == "" {
-		return errors.New("output path is empty")
-	}
-	info, err := os.Stat(outputPath)
-	if err != nil {
-		slog.Error("recordOutput: stat output failed", "jobId", jobID, "outputPath", outputPath, "err", err)
-		return err
+// recordOutput stores the output's object-storage key (outputs bucket) and
+// uploaded size, replacing any previous output record from an earlier attempt.
+func recordOutput(db *gorm.DB, jobID uuid.UUID, outputKey string, sizeBytes int64) error {
+	if outputKey == "" {
+		return errors.New("output key is empty")
 	}
 	if err := db.Where("job_id = ? AND kind = ?", jobID, "output").Delete(&models.FileMetadata{}).Error; err != nil {
 		slog.Warn("failed to delete old output record", "jobId", jobID, "error", err)
@@ -368,31 +399,20 @@ func recordOutput(db *gorm.DB, jobID uuid.UUID, outputPath string) error {
 		ID:           uuid.New(),
 		JobID:        jobID,
 		Kind:         "output",
-		OriginalName: filepathBase(outputPath),
-		Path:         outputPath,
-		SizeBytes:    info.Size(),
+		OriginalName: path.Base(outputKey),
+		Path:         outputKey,
+		SizeBytes:    sizeBytes,
 	}
 	return db.Create(&output).Error
-}
-
-func filepathBase(path string) string {
-	idx := strings.LastIndex(path, string(os.PathSeparator))
-	if idx == -1 {
-		return path
-	}
-	return path[idx+1:]
-}
-
-func outputDir() string {
-	if value := os.Getenv("OUTPUT_DIR"); value != "" {
-		return value
-	}
-	return "outputs"
 }
 
 func isRecoverable(err error) bool {
 	if err == nil {
 		return false
+	}
+	var recErr *recoverableError
+	if errors.As(err, &recErr) {
+		return true
 	}
 	if strings.Contains(err.Error(), "status=5") || strings.Contains(err.Error(), "status=429") {
 		return true
@@ -418,15 +438,6 @@ func statusToEventType(status string) string {
 	default:
 		return "JobProgress"
 	}
-}
-
-// outputFileSize returns the size of the file at path, or 0 on error.
-func outputFileSize(path string) int64 {
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0
-	}
-	return info.Size()
 }
 
 // publishStatusEvent publishes a job status update to NATS so that SSE

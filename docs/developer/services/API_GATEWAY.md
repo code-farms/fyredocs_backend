@@ -17,7 +17,8 @@ The API Gateway acts as a reverse proxy that:
 - Issues + validates guest cookies for unauthenticated users
 - Resolves plan info from Redis on every request and forwards it as headers
 - Adds security response headers (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy) via `withSecurityHeaders()` middleware
-- Enforces request body size limit (1MB for non-upload routes) via `withMaxBodySize()` middleware
+- Enforces request body size limit (1 MiB on **all** service routes — `/api/upload/*` is JSON-only now that file bytes flow through the presigned MinIO proxy) via `withMaxBodySize()` middleware
+- Relays presigned object-storage traffic (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`) verbatim to MinIO — no auth, no body limit, original `Host` preserved for SigV4
 - Optionally serves the SPA bundle from `SPA_DIR` so the frontend ships with first-party cookies (no cross-origin)
 - Performs graceful shutdown with 30-second drain on SIGTERM/SIGINT
 
@@ -28,19 +29,24 @@ Client Request
     ↓
 [API Gateway :8080]
     ↓
-Telemetry → Metrics → Request-ID → SecurityHeaders → CORS → Auth middleware
-    ├─ Auth: Bearer header > access_token cookie > guest_token cookie (issues new if absent)
-    └─ ResolvePlan: read user:plan:<userId> from Redis (defaults to free)
+Telemetry → Metrics → Request-ID → SecurityHeaders
     ↓
-Body-size limit (1 MB on non-upload routes)
-    ↓
-Reverse-proxy to backend (FlushInterval=-1 for streaming downloads)
-    ├─ /auth/*                                      → AUTH_SERVICE_URL  (default: JOB_SERVICE_URL fallback)
-    ├─ /api/upload/*                                → JOB_SERVICE_URL   (rewritten to /api/uploads/*)
-    ├─ /api/jobs/*                                  → JOB_SERVICE_URL
-    ├─ /api/{convert-from,convert-to,organize,optimize}-pdf/* → JOB_SERVICE_URL
-    ├─ /admin/*                                     → ANALYTICS_SERVICE_URL
-    └─ /                                            → SPA_DIR static files (when set)
+    ├─ /fyredocs-uploads/*   ─┐  Presigned MinIO proxy (MINIO_URL)
+    ├─ /fyredocs-outputs/*   ─┘  no auth · no body limit · path verbatim · Host preserved (SigV4)
+    │
+    └─ everything else → CORS → Auth middleware
+            ├─ Auth: Bearer header > access_token cookie > guest_token cookie (issues new if absent)
+            └─ ResolvePlan: read user:plan:<userId> from Redis (defaults to free)
+            ↓
+        Body-size limit (1 MiB on all service routes — uploads are JSON-only)
+            ↓
+        Reverse-proxy to backend (FlushInterval=-1 for streaming)
+            ├─ /auth/*                                      → AUTH_SERVICE_URL  (default: JOB_SERVICE_URL fallback)
+            ├─ /api/upload/*                                → JOB_SERVICE_URL   (rewritten to /api/uploads/*)
+            ├─ /api/jobs/*                                  → JOB_SERVICE_URL
+            ├─ /api/{convert-from,convert-to,organize,optimize}-pdf/* → JOB_SERVICE_URL
+            ├─ /admin/*                                     → ANALYTICS_SERVICE_URL
+            └─ /                                            → SPA_DIR static files (when set)
 ```
 
 ## Routing Configuration
@@ -52,7 +58,9 @@ All `/api/*` traffic is proxied to **job-service**. Workers are not exposed publ
 | Path Prefix | Target Service (env override) | Purpose |
 |-------------|------------------------------|---------|
 | `/auth/*` | `AUTH_SERVICE_URL` (default = `JOB_SERVICE_URL` fallback for backward compat) | Auth, plan management, sessions |
-| `/api/upload/*` | `JOB_SERVICE_URL` (rewritten to `/api/uploads/*`) | Chunked file uploads |
+| `/fyredocs-uploads/*` | `MINIO_URL` (path verbatim, Host preserved, no auth/body limit) | Presigned upload PUTs / multipart parts |
+| `/fyredocs-outputs/*` | `MINIO_URL` (path verbatim, Host preserved, no auth/body limit) | Presigned output downloads |
+| `/api/upload/*` | `JOB_SERVICE_URL` (rewritten to `/api/uploads/*`) | Upload orchestration (JSON init/complete — file bytes go via the MinIO proxy) |
 | `/api/jobs/*` | `JOB_SERVICE_URL` | History + SSE event stream |
 | `/api/convert-from-pdf/*` | `JOB_SERVICE_URL` | PDF → Word/Excel/PPTX/Image/HTML/Text/ODF |
 | `/api/convert-to-pdf/*` | `JOB_SERVICE_URL` | Office/Image → PDF |
@@ -76,6 +84,20 @@ The reverse proxy uses a custom `http.Transport` tuned for long-running conversi
 | `MaxIdleConnsPerHost` | 20 | Connection pool per backend service |
 | `MaxIdleConns` | 100 | Global idle connection pool limit |
 
+The MinIO bucket proxy uses its own `minioTransport` with `MaxIdleConnsPerHost: 50` because browsers send multipart upload parts in parallel to a single upstream host.
+
+### Presigned Object-Storage Proxy
+
+`/fyredocs-uploads/*` and `/fyredocs-outputs/*` (prefixes configurable via `S3_BUCKET_UPLOADS`/`S3_BUCKET_OUTPUTS`) are relayed to `MINIO_URL` with semantics that differ from the service routes:
+
+- **Path forwarded verbatim** — no prefix stripping; the SigV4 signature covers the canonical `/{bucket}/{key}` path.
+- **Original `Host` header preserved** — presigned URLs are signed by job-service against `S3_PUBLIC_ENDPOINT` (this gateway's public origin), and SigV4 includes `Host` in the signed canonical request. Service routes rewrite `req.Host` to the upstream; the MinIO proxy must NOT, or MinIO's signature check fails.
+- **No auth middleware** — the presigned signature (with its expiry) is the credential. Client-supplied identity headers (`X-User-ID` etc.) are stripped before forwarding.
+- **No body-size limit** — file bytes flow through these routes.
+- **`FlushInterval = -1`** — streams immediately in both directions.
+
+See [Object Storage](../architecture/object-storage.md) for the full presigned flow and the multi-host variant (publishing port 9000 and flipping `S3_PUBLIC_ENDPOINT`).
+
 ### Response Streaming
 
 The reverse proxy sets `FlushInterval = -1` to stream responses immediately to the client without buffering. This is critical for file download performance — without it, the proxy buffers the entire upstream response before forwarding, which can add significant latency for multi-megabyte files.
@@ -92,6 +114,13 @@ The reverse proxy sets `FlushInterval = -1` to stream responses immediately to t
 | `AUTH_SERVICE_URL` | Auth-service base URL (defaults to `JOB_SERVICE_URL` for backward compat) | `http://auth-service:8086` |
 | `ANALYTICS_SERVICE_URL` | Analytics-service base URL | `http://analytics-service:8087` |
 | `REDIS_ADDR` | Redis server address (used for denylist, guest cookie store, plan cache) | `redis:6379` |
+
+#### Object Storage Proxy
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MINIO_URL` | Upstream for the presigned bucket proxy routes | `http://minio:9000` |
+| `S3_BUCKET_UPLOADS` | Uploads bucket name (= proxied path prefix) | `fyredocs-uploads` |
+| `S3_BUCKET_OUTPUTS` | Outputs bucket name (= proxied path prefix) | `fyredocs-outputs` |
 
 ### Optional (with defaults)
 
@@ -511,6 +540,37 @@ sequenceDiagram
     GW->>GW: Process normally with CORS headers
 ```
 
+### Presigned Object Upload/Download Flow
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant GW as API Gateway :8080
+    participant JS as Job Service :8081
+    participant M as MinIO :9000 (internal)
+
+    B->>GW: POST /api/upload/init (JSON, 1 MiB limit)
+    GW->>JS: proxy (auth + plan headers)
+    JS->>M: CreateMultipart / presign part URLs (signed for gateway origin)
+    JS-->>B: {uploadId, presigned part URLs https://<origin>/fyredocs-uploads/...}
+
+    par parts in parallel
+        B->>GW: PUT /fyredocs-uploads/uploads/<id>/<file>?partNumber=N&X-Amz-...
+        Note over GW: bucket proxy — no auth, no body limit,<br/>path verbatim, Host preserved (SigV4)
+        GW->>M: relay bytes (FlushInterval=-1)
+        M-->>B: 200 + ETag
+    end
+
+    B->>GW: POST /api/upload/complete (JSON: part ETags)
+    GW->>JS: proxy
+    JS->>M: CompleteMultipart
+
+    Note over B,M: download is the same shape:
+    B->>GW: GET /fyredocs-outputs/jobs/<jobId>/<file>?X-Amz-...
+    GW->>M: relay
+    M-->>B: object bytes (streamed)
+```
+
 ### Health Check Flow
 
 ```mermaid
@@ -562,6 +622,7 @@ When a backend service is unreachable:
 
 - [Auth Service](./AUTH_SERVICE.md) - Detailed authentication documentation
 - [Job Service](./JOB_SERVICE.md) - Backend service documentation
+- [Object Storage](../architecture/object-storage.md) - MinIO topology and presigned flow
 - [Main README](../README.md) - Overall architecture and deployment
 
 ## Support

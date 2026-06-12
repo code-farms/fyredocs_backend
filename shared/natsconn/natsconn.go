@@ -53,6 +53,52 @@ func Connect() error {
 	return nil
 }
 
+// streamConfigs returns the canonical JetStream stream definitions for the
+// pipeline. Job payloads carry object-storage keys (not file bytes), so
+// per-message sizes are small; MaxBytes/MaxMsgSize cap disk usage and reject
+// accidentally oversized payloads instead of letting a bug fill the volume.
+func streamConfigs() []jetstream.StreamConfig {
+	return []jetstream.StreamConfig{
+		{
+			// JOBS_DISPATCH: WorkQueue retention ensures each message is consumed exactly once.
+			Name:       "JOBS_DISPATCH",
+			Subjects:   []string{"jobs.dispatch.>"},
+			Storage:    jetstream.FileStorage,
+			Retention:  jetstream.WorkQueuePolicy,
+			MaxAge:     24 * time.Hour,
+			MaxBytes:   1 << 30,  // 1 GiB stream cap
+			MaxMsgSize: 64 << 10, // 64 KiB — payloads are object keys + metadata, never file bytes
+		},
+		{
+			// JOBS_EVENTS: Interest retention keeps messages while consumers need them.
+			Name:      "JOBS_EVENTS",
+			Subjects:  []string{"jobs.events.>"},
+			Storage:   jetstream.FileStorage,
+			Retention: jetstream.InterestPolicy,
+			MaxAge:    1 * time.Hour,
+			MaxBytes:  256 << 20, // 256 MiB
+		},
+		{
+			// JOBS_DLQ: Captures permanently failed messages for investigation.
+			Name:      "JOBS_DLQ",
+			Subjects:  []string{"jobs.dlq.>"},
+			Storage:   jetstream.FileStorage,
+			Retention: jetstream.LimitsPolicy,
+			MaxAge:    7 * 24 * time.Hour, // keep failed messages for 7 days
+			MaxBytes:  256 << 20,          // 256 MiB
+		},
+		{
+			// ANALYTICS: Captures analytics events for business metrics.
+			Name:      "ANALYTICS",
+			Subjects:  []string{"analytics.events.>"},
+			Storage:   jetstream.FileStorage,
+			Retention: jetstream.InterestPolicy,
+			MaxAge:    24 * time.Hour,
+			MaxBytes:  256 << 20, // 256 MiB
+		},
+	}
+}
+
 // EnsureStreams creates or updates the JetStream streams used by the pipeline.
 // Safe to call multiple times (idempotent).
 func EnsureStreams(ctx context.Context) error {
@@ -60,55 +106,15 @@ func EnsureStreams(ctx context.Context) error {
 		return fmt.Errorf("jetstream not initialized")
 	}
 
-	// JOBS_DISPATCH: WorkQueue retention ensures each message is consumed exactly once.
-	_, err := JS.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:      "JOBS_DISPATCH",
-		Subjects:  []string{"jobs.dispatch.>"},
-		Storage:   jetstream.FileStorage,
-		Retention: jetstream.WorkQueuePolicy,
-		MaxAge:    24 * time.Hour,
-	})
-	if err != nil {
-		return fmt.Errorf("create JOBS_DISPATCH stream: %w", err)
+	names := make([]string, 0, 4)
+	for _, cfg := range streamConfigs() {
+		if _, err := JS.CreateOrUpdateStream(ctx, cfg); err != nil {
+			return fmt.Errorf("create %s stream: %w", cfg.Name, err)
+		}
+		names = append(names, cfg.Name)
 	}
 
-	// JOBS_EVENTS: Interest retention keeps messages while consumers need them.
-	_, err = JS.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:      "JOBS_EVENTS",
-		Subjects:  []string{"jobs.events.>"},
-		Storage:   jetstream.FileStorage,
-		Retention: jetstream.InterestPolicy,
-		MaxAge:    1 * time.Hour,
-	})
-	if err != nil {
-		return fmt.Errorf("create JOBS_EVENTS stream: %w", err)
-	}
-
-	// JOBS_DLQ: Captures permanently failed messages for investigation.
-	_, err = JS.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:      "JOBS_DLQ",
-		Subjects:  []string{"jobs.dlq.>"},
-		Storage:   jetstream.FileStorage,
-		Retention: jetstream.LimitsPolicy,
-		MaxAge:    7 * 24 * time.Hour, // keep failed messages for 7 days
-	})
-	if err != nil {
-		return fmt.Errorf("create JOBS_DLQ stream: %w", err)
-	}
-
-	// ANALYTICS: Captures analytics events for business metrics.
-	_, err = JS.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:      "ANALYTICS",
-		Subjects:  []string{"analytics.events.>"},
-		Storage:   jetstream.FileStorage,
-		Retention: jetstream.InterestPolicy,
-		MaxAge:    24 * time.Hour,
-	})
-	if err != nil {
-		return fmt.Errorf("create ANALYTICS stream: %w", err)
-	}
-
-	slog.Info("NATS JetStream streams ensured", "streams", []string{"JOBS_DISPATCH", "JOBS_EVENTS", "JOBS_DLQ", "ANALYTICS"})
+	slog.Info("NATS JetStream streams ensured", "streams", names)
 	return nil
 }
 

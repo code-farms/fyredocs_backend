@@ -2,7 +2,11 @@
 
 Request flows through the `job-service` (port 8081).
 
-## Chunked Upload (3 phases: init → chunks → complete)
+## Presigned Multipart Upload (init → browser PUTs to MinIO → complete)
+
+File bytes never pass through the job-service: the browser PUTs each part
+directly to MinIO/S3 through presigned URLs (signed against
+`S3_PUBLIC_ENDPOINT`, typically the API gateway origin).
 
 ```mermaid
 sequenceDiagram
@@ -10,37 +14,55 @@ sequenceDiagram
     participant GW as api-gateway
     participant JS as job-service
     participant Redis
-    participant Disk
+    participant S3 as MinIO/S3
 
-    Client->>GW: POST /api/upload/init {fileName, fileSize, totalChunks}
-    GW->>JS: Proxy → /api/uploads/init
-    JS->>Redis: HSET upload:&lt;uploadId&gt; (fileName, fileSize, totalChunks, createdAt) EX UPLOAD_TTL
-    JS-->>Client: 201 {uploadId}
+    Client->>GW: POST /api/uploads/init {fileName, fileSize, contentType}
+    GW->>JS: Proxy
+    JS->>JS: plan limit on declared size (413 FILE_TOO_LARGE) · partSize=UPLOAD_PART_SIZE_MB · totalParts=ceil (cap 1000)
+    JS->>S3: CreateMultipartUpload uploads/&lt;uploadId&gt;/&lt;fileName&gt;
+    JS->>JS: presign PUT URL per part (30m expiry)
+    JS->>Redis: HSET upload:&lt;uploadId&gt; (fileName, declaredSize, contentType, bucket, key, s3UploadId, partSize, totalParts, createdAt) EX UPLOAD_TTL (30m)
+    JS-->>Client: 201 {uploadId, key, partSize, totalParts, urlExpiresAt, parts[{partNumber,url}]}
 
-    loop For each chunk index
-        Client->>GW: PUT /api/upload/&lt;uploadId&gt;/chunk?index=N (multipart "chunk")
-        GW->>JS: Proxy
-        JS->>Disk: Save uploads/tmp/&lt;uploadId&gt;/00000N.part
-        JS->>Redis: EVAL Lua atomic — EXISTS state · SADD chunk-set · refresh both TTLs · HGETALL state · SCARD chunk-set
-        Redis-->>JS: state + receivedChunks
-        JS-->>Client: 200 {uploadId, receivedChunks, complete}
+    loop For each part
+        Client->>S3: PUT &lt;presigned part URL&gt; [part bytes] (via gateway/public endpoint)
+        S3-->>Client: 200 + ETag
     end
 
-    Client->>GW: POST /api/upload/&lt;uploadId&gt;/complete
+    opt Resume / expired URLs
+        Client->>JS: GET /api/uploads/&lt;uploadId&gt;/parts?partNumbers=2,3
+        JS->>Redis: HGETALL upload:&lt;uploadId&gt; (404 if gone)
+        JS-->>Client: 200 {uploadId, partSize, parts (re-presigned)}
+    end
+
+    Client->>GW: POST /api/uploads/&lt;uploadId&gt;/complete {parts:[{partNumber,etag}]}
     GW->>JS: Proxy
-    JS->>Redis: HGETALL upload:&lt;uploadId&gt; · SCARD upload:&lt;uploadId&gt;:chunks
-    alt all chunks received
-        JS->>Disk: Open uploads/&lt;uploadId&gt;/&lt;fileName&gt; · concat 00000.part..N.part · sync
-        JS->>JS: stat size > MAX_UPLOAD_MB?
-        alt over limit
-            JS->>Disk: rm assembled file
-            JS-->>Client: 400 FILE_TOO_LARGE
-        else within limit
-            JS->>Disk: rm uploads/tmp/&lt;uploadId&gt;/
-            JS-->>Client: 200 {uploadId}
-        end
+    JS->>Redis: HGETALL upload:&lt;uploadId&gt; (404 if expired)
+    alt part count != totalParts
+        JS-->>Client: 400 UPLOAD_INCOMPLETE
     else
-        JS-->>Client: 400 BAD_REQUEST (not all chunks received)
+        JS->>S3: CompleteMultipartUpload(etags)
+        JS->>S3: StatObject → TRUE size
+        alt true size > plan limit
+            JS->>S3: RemoveObject
+            JS->>Redis: DEL upload:&lt;uploadId&gt;
+            JS-->>Client: 413 FILE_TOO_LARGE
+        else
+            JS->>Redis: HSET upload:&lt;uploadId&gt; size · refresh TTL
+            JS-->>Client: 200 {uploadId, fileName, size, complete:true}
+        end
+    end
+
+    opt Cancel
+        Client->>JS: DELETE /api/uploads/&lt;uploadId&gt;
+        JS->>S3: AbortMultipartUpload (idempotent)
+        JS->>Redis: DEL upload:&lt;uploadId&gt;
+        JS-->>Client: 204
+    end
+
+    opt Stale frontend bundle (retired protocol)
+        Client->>JS: PUT /api/uploads/&lt;uploadId&gt;/chunk
+        JS-->>Client: 410 UPLOAD_PROTOCOL_CHANGED "Please refresh the page"
     end
 ```
 
@@ -52,11 +74,11 @@ sequenceDiagram
     participant JS as job-service
     participant Redis
     participant PG as PostgreSQL
-    participant Disk
+    participant S3 as MinIO/S3
     participant NATS
 
     GW->>JS: POST /api/&lt;group&gt;/:tool {uploadIds, options} · Idempotency-Key?
-    JS->>JS: GinAuth · normalize tool · routing.ServiceForTool
+    JS->>JS: GinAuth · normalize tool · routing.ServiceForTool · per-IP RATE_LIMIT_JOB_CREATE
 
     alt Idempotency-Key cache hit
         JS->>Redis: GET idempotency:&lt;key&gt;
@@ -68,21 +90,23 @@ sequenceDiagram
             JS-->>GW: 201 (original job)
         else
             JS->>JS: enforce plan max-files-per-job
-            loop For each uploadId
-                JS->>Redis: HGETALL upload:&lt;id&gt;
-                JS->>Disk: Move uploads/&lt;id&gt;/&lt;file&gt; → uploads/&lt;jobId&gt;/&lt;file&gt;
-                JS->>JS: validateMIMEType(toolType, path)
+            loop For each uploadId (consumeUpload — read-only)
+                JS->>Redis: HGETALL upload:&lt;id&gt; (bucket, key, fileName)
+                JS->>S3: StatObject(uploads, key) — existence + TRUE size
+                JS->>S3: GetObjectRange(key, 0, 512)
+                JS->>JS: validateMIMEHead(toolType, head)
             end
+            Note over JS,S3: Object stays at uploads/&lt;uploadId&gt;/... — workers read it from there. InputPaths = object keys.
 
             JS->>PG: BEGIN TX
             JS->>PG: INSERT processing_jobs (id=UUIDv7, tool, status='queued', expires_at, ...)
-            JS->>PG: INSERT file_metadata × N
+            JS->>PG: INSERT file_metadata × N (path=&lt;object key&gt;)
             JS->>PG: COMMIT
 
             JS->>JS: assignGuestTokenIfNeeded
-            JS->>NATS: Publish jobs.dispatch.&lt;serviceName&gt; (JobMessage)
-            JS->>Redis: SET upload:&lt;id&gt;:job &lt;jobId&gt;
-            JS->>Redis: DEL upload:&lt;id&gt; · upload:&lt;id&gt;:chunks
+            JS->>NATS: Publish jobs.dispatch.&lt;serviceName&gt; (inputPaths = object keys)
+            JS->>Redis: SET idempotency:upload:&lt;id&gt; &lt;jobId&gt;
+            JS->>Redis: DEL upload:&lt;id&gt; (session only — object untouched)
             JS->>Redis: SETEX idempotency:&lt;key&gt; 10m → jobId
             JS->>NATS: Publish analytics.events.job.created
             JS-->>GW: 201 {job, guestToken?}
@@ -97,17 +121,17 @@ sequenceDiagram
     participant GW as api-gateway
     participant JS as job-service
     participant PG as PostgreSQL
-    participant Disk
+    participant S3 as MinIO/S3
     participant NATS
 
     GW->>JS: POST /api/&lt;group&gt;/:tool · multipart files[] + options
     JS->>JS: enforce plan limits (max files · max file size MB)
-    loop For each file
+    loop For each file (storeDirectUpload)
         JS->>JS: validateFileType(toolType, filename)
-        JS->>Disk: SaveUploadedFile → uploads/&lt;jobId&gt;/&lt;basename&gt;
-        JS->>JS: validateMIMEType(toolType, path)
+        JS->>JS: sniff first 512 bytes → validateMIMEHead
+        JS->>S3: PutObject → uploads/&lt;jobId&gt;/&lt;basename&gt; (streamed, head re-prepended)
     end
-    JS->>PG: INSERT processing_jobs + file_metadata in TX
+    JS->>PG: INSERT processing_jobs + file_metadata (path=&lt;object key&gt;) in TX
     JS->>NATS: Publish jobs.dispatch.&lt;serviceName&gt;
     JS-->>GW: 201 {job}
 ```
@@ -149,10 +173,11 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
+    participant Client
     participant GW as api-gateway
     participant JS as job-service
     participant PG as PostgreSQL
-    participant Disk
+    participant S3 as MinIO/S3
 
     GW->>JS: GET /api/&lt;group&gt;/:tool/:id
     JS->>PG: SELECT processing_jobs WHERE id=:id AND tool_type=:tool
@@ -160,18 +185,26 @@ sequenceDiagram
     JS-->>GW: 200 {job}
 
     GW->>JS: GET /api/&lt;group&gt;/:tool/:id/download
+    JS->>JS: authorizeJobAccess · status == completed?
     JS->>JS: outputFileCache lookup
     alt miss
         JS->>PG: SELECT file_metadata WHERE job_id=:id AND kind='output'
     end
-    JS->>Disk: stream file
-    JS-->>GW: 200 + Content-Disposition + Content-Type
+    alt legacy disk path (starts with "/")
+        JS-->>GW: 404 NOT_FOUND "download link has expired"
+    else object key
+        JS->>JS: PresignGet(outputs, key, 5m, response-content-disposition + response-content-type)
+        JS-->>GW: 302 Location: presigned URL
+        GW-->>Client: 302
+        Client->>S3: GET presigned URL (bytes from object storage)
+        S3-->>Client: 200 + Content-Disposition: attachment
+    end
 
     GW->>JS: DELETE /api/&lt;group&gt;/:tool/:id
     JS->>PG: SELECT processing_jobs · authorize
     JS->>PG: SELECT file_metadata
-    loop each file
-        JS->>Disk: os.Remove
+    loop each file (skip legacy "/" paths)
+        JS->>S3: RemoveObject(bucketFor(kind), key)
     end
     JS->>PG: DELETE file_metadata · DELETE processing_jobs
     JS->>Redis: SREM guest:&lt;token&gt;:jobs &lt;jobId&gt; (best-effort)
@@ -227,13 +260,13 @@ sequenceDiagram
     Client->>JS: POST /api/&lt;group&gt;/:tool {uploadIds:[X]}
     JS->>Redis: GET upload:X
     Redis-->>JS: present
-    JS->>JS: ... create job J1, release Redis state, record upload:X:job=J1
+    JS->>JS: ... create job J1, release Redis state, record idempotency:upload:X=J1
     JS-->>Client: 201 J1
 
     Note over Client,JS: Network blip — client retries the same POST
 
     Client->>JS: POST /api/&lt;group&gt;/:tool {uploadIds:[X]}
-    JS->>Redis: GET upload:X:job
+    JS->>Redis: GET idempotency:upload:X
     Redis-->>JS: J1
     JS->>JS: findExistingJobForUploads → J1
     JS-->>Client: 201 J1 (idempotent)

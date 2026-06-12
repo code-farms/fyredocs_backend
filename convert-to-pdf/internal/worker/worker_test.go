@@ -61,40 +61,6 @@ func (e *timeoutErr) Error() string   { return "timeout" }
 func (e *timeoutErr) Timeout() bool   { return true }
 func (e *timeoutErr) Temporary() bool { return true }
 
-func TestFilepathBase(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"document.pdf", "document.pdf"},
-		{"output.pdf", "output.pdf"},
-	}
-	for _, tt := range tests {
-		got := filepathBase(tt.input)
-		if got != tt.want {
-			t.Errorf("filepathBase(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
-func TestOutputDir(t *testing.T) {
-	t.Run("default", func(t *testing.T) {
-		t.Setenv("OUTPUT_DIR", "")
-		got := outputDir()
-		if got != "outputs" {
-			t.Errorf("expected 'outputs', got %q", got)
-		}
-	})
-
-	t.Run("custom", func(t *testing.T) {
-		t.Setenv("OUTPUT_DIR", "/custom/path")
-		got := outputDir()
-		if got != "/custom/path" {
-			t.Errorf("expected '/custom/path', got %q", got)
-		}
-	})
-}
-
 func TestJobPayloadUnmarshal(t *testing.T) {
 	data := []byte(`{"eventType":"JobCreated","jobId":"abc-123","toolType":"word-to-pdf","attempts":1,"correlationId":"corr-456"}`)
 	var payload JobPayload

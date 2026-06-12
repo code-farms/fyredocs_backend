@@ -33,13 +33,14 @@ graph TB
     end
 
     subgraph Background
-        CW["cleanup-worker :8088<br/>Ticker · 4-phase cleanup"]
+        CW["cleanup-worker :8088<br/>Ticker · 4-phase cleanup<br/>(jobs · upload sessions · stale multiparts · backfill)"]
     end
 
     subgraph Infrastructure
         PG[(PostgreSQL)]
         RD[(Redis)]
-        NATS["NATS JetStream<br/>JOBS_DISPATCH · JOBS_EVENTS · JOBS_DLQ · ANALYTICS"]
+        NATS["NATS JetStream<br/>JOBS_DISPATCH · JOBS_EVENTS · JOBS_DLQ · ANALYTICS<br/>(payloads = object keys; MaxMsgSize/MaxBytes capped)"]
+        S3[("MinIO :9000 (internal)<br/>fyredocs-uploads · fyredocs-outputs<br/>bootstrap: minio-init (buckets · lifecycle · app user)")]
     end
 
     WebApp -->|HTTPS| GW
@@ -52,6 +53,7 @@ graph TB
     GW -->|/api/{convert,organize,optimize}-pdf/*| JOB
     GW -->|/admin/*| AN
     GW -->|plan info| RD
+    GW -->|"/fyredocs-uploads/* · /fyredocs-outputs/*<br/>presigned proxy (Host preserved)"| S3
 
     JOB -->|jobs.dispatch.*| NATS
     NATS -->|jobs.dispatch.convert-from-pdf| CFP
@@ -82,8 +84,14 @@ graph TB
     AN --> NATS
     AUTH -->|analytics.events.*| NATS
     JOB -->|analytics.events.*| NATS
+    JOB -->|presign · stat · multipart| S3
+    CFP -->|input download · output upload| S3
+    CTP -->|input download · output upload| S3
+    ORG -->|input download · output upload| S3
+    OPT -->|input download · output upload| S3
     CW --> PG
     CW --> RD
+    CW -->|RemoveObject · AbortMultipart| S3
     GW --> RD
 ```
 
@@ -91,31 +99,33 @@ graph TB
 
 ```mermaid
 flowchart LR
-    subgraph Upload
-        A[Client] -->|1. Init upload| B[job-service]
-        A -->|2. PUT chunks| B
-        A -->|3. Complete upload| B
-        B -->|Store state| Redis[(Redis: upload:*)]
-        B -->|Save chunks| Disk[(uploads/tmp/<uploadId>)]
+    subgraph Upload["Upload (presigned, same-origin via gateway)"]
+        A[Client] -->|1. Init upload JSON| B[job-service]
+        B -->|Store state incl. key + s3UploadId| Redis[(Redis: upload:*)]
+        B -->|presign part URLs for gateway origin| S3[("MinIO<br/>fyredocs-uploads")]
+        A -->|"2. PUT parts via gateway<br/>/fyredocs-uploads/*?X-Amz-..."| S3
+        A -->|3. Complete upload JSON + ETags| B
+        B -->|CompleteMultipart| S3
     end
 
     subgraph Processing
         A -->|4. POST /api/<group>/:tool| B
         B -->|5. Save ProcessingJob<br/>UUIDv7 + idempotency| PG[(PostgreSQL)]
-        B -->|6. Publish JobMessage| NATS["NATS JetStream<br/>JOBS_DISPATCH"]
+        B -->|6. Publish JobMessage with object key| NATS["NATS JetStream<br/>JOBS_DISPATCH"]
         NATS -->|7. Pull-consumer| W["Worker Service"]
-        W -->|8. processing/processing.go| W
-        W -->|9. Update status, output_path| PG
-        W -->|10. Publish progress / completed / failed| EV["jobs.events.<jobId>.*"]
+        W -->|8. download input to tmpfs scratch| S3
+        W -->|9. upload output jobs/<jobId>/...| S3O[("MinIO<br/>fyredocs-outputs")]
+        W -->|10. Update status, output key| PG
+        W -->|11. Publish progress / completed / failed| EV["jobs.events.<jobId>.*"]
         W -->|on max-retry exhaustion| DLQ["jobs.dlq.<service>"]
     end
 
     subgraph Retrieval
-        A -->|11. SSE /api/jobs/:id/events| B
+        A -->|12. SSE /api/jobs/:id/events| B
         EV --> B
         B -->|stream events| A
-        A -->|12. GET /:tool/:id/download| B
-        B -->|Read file| Disk
+        A -->|13. GET download → presigned URL| B
+        A -->|"14. GET via gateway<br/>/fyredocs-outputs/*?X-Amz-..."| S3O
     end
 ```
 
@@ -123,24 +133,24 @@ flowchart LR
 
 ```mermaid
 graph LR
-    subgraph JOBS_DISPATCH["JOBS_DISPATCH (WorkQueue · 24h)"]
+    subgraph JOBS_DISPATCH["JOBS_DISPATCH (WorkQueue · 24h · 1 GiB · 64 KiB/msg)"]
         D1["jobs.dispatch.convert-from-pdf"]
         D2["jobs.dispatch.convert-to-pdf"]
         D3["jobs.dispatch.organize-pdf"]
         D4["jobs.dispatch.optimize-pdf"]
     end
 
-    subgraph JOBS_EVENTS["JOBS_EVENTS (Interest · 1h)"]
+    subgraph JOBS_EVENTS["JOBS_EVENTS (Interest · 1h · 256 MiB)"]
         E1["jobs.events.&lt;jobId&gt;.progress"]
         E2["jobs.events.&lt;jobId&gt;.completed"]
         E3["jobs.events.&lt;jobId&gt;.failed"]
     end
 
-    subgraph JOBS_DLQ["JOBS_DLQ (Limits · 7d)"]
+    subgraph JOBS_DLQ["JOBS_DLQ (Limits · 7d · 256 MiB)"]
         Q1["jobs.dlq.&lt;service&gt;"]
     end
 
-    subgraph ANALYTICS_STREAM["ANALYTICS (Interest · 24h)"]
+    subgraph ANALYTICS_STREAM["ANALYTICS (Interest · 24h · 256 MiB)"]
         A1["analytics.events.user.*"]
         A2["analytics.events.job.*"]
         A3["analytics.events.plan.*"]

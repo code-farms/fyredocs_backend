@@ -15,7 +15,8 @@ The Convert To PDF service converts Office (Word/Excel/PowerPoint), HTML, and im
 2. **HTML → PDF** — Convert HTML documents to PDF.
 3. **Image → PDF** — Convert one or more JPG/PNG/GIF/WebP/BMP images into a single PDF.
 4. **Job lifecycle** — Pull jobs from JetStream, run conversions concurrently (semaphore-bound), update `processing_jobs`, publish progress + completion + failure events.
-5. **DLQ** — On `MaxDeliver` exhaustion, publish the failed job to `jobs.dlq.convert-to-pdf` (JOBS_DLQ stream, 7-day retention) before acking.
+5. **Object storage I/O** — Download input objects from the S3 uploads bucket into a container-local scratch directory, and upload the conversion output to the S3 outputs bucket under `jobs/{jobID}/...`.
+6. **DLQ** — On `MaxDeliver` exhaustion, publish the failed job to `jobs.dlq.convert-to-pdf` (JOBS_DLQ stream, 7-day retention) before acking.
 
 ## Architecture
 
@@ -27,14 +28,25 @@ convert-to-pdf worker
   ├─ Per message → goroutine guarded by a semaphore
   │     ├─ duplicate-job guard (skip if already completed/processing)
   │     ├─ DB status → "processing" (progress 20)
+  │     ├─ create scratch dir (os.MkdirTemp "job-<jobId>-*", removed when done)
+  │     ├─ download inputs: S3 uploads bucket → <scratch>/in/ (failure → recoverable retry)
   │     ├─ time-based progress reporter (smooth 20→90% with ease-out curve)
-  │     ├─ processing.ProcessFile()
+  │     ├─ processing.ProcessFile() — local files in <scratch>/in, output to <scratch>/out
   │     │     ├─ word/excel/ppt/html → officeToPDF() → unoconvert (port 2002) — fallback: libreoffice --headless
   │     │     └─ image-to-pdf / img-to-pdf → pdfcpu (multiple images = multi-page output)
-  │     ├─ DB status → "completed" + record output FileMetadata
+  │     ├─ upload output: <scratch>/out/<file> → S3 outputs bucket jobs/<jobId>/<file> (failure → recoverable retry)
+  │     ├─ DB status → "completed" + record output FileMetadata (Path = object key, size = uploaded bytes)
   │     └─ Publish jobs.events.<jobId>.{processing,completed,failed}
   └─ On MaxDeliver exhaustion → publish JobFailed to jobs.dlq.convert-to-pdf
 ```
+
+### Object Storage
+
+Inputs and outputs live in S3-compatible object storage (MinIO in compose), not on a shared volume:
+
+- `payload.InputPaths` carries **object keys** in the uploads bucket. The worker downloads each key to `<scratch>/in/<basename>` before processing, because LibreOffice/pdfcpu need real local files.
+- The output file is uploaded to the outputs bucket as `jobs/{jobID}/{filename}` with an extension-derived `Content-Type`; `file_metadata.path` stores the object key and `size_bytes` the uploaded size.
+- The scratch directory is deleted after every job (success or failure). Download/upload failures are treated as recoverable and retried via NAK + backoff.
 
 ### unoserver Daemon
 
@@ -105,8 +117,13 @@ This worker writes to `processing_jobs` and `file_metadata` (the same tables own
 | `REDIS_PASSWORD` | `""` | Redis password (if required) |
 | `REDIS_DB` | `0` | Redis database number |
 | `NATS_URL` | **Required** | NATS server URL |
-| `UPLOAD_DIR` | `uploads` | Input files directory |
-| `OUTPUT_DIR` | `outputs` | Output files directory |
+| `S3_ENDPOINT` | **Required** | S3-compatible endpoint for data operations (e.g. `minio:9000`) |
+| `S3_ACCESS_KEY` | **Required** | S3 access key |
+| `S3_SECRET_KEY` | **Required** | S3 secret key |
+| `S3_USE_SSL` | `false` | Use TLS to reach the S3 endpoint |
+| `S3_BUCKET_UPLOADS` | `fyredocs-uploads` | Bucket holding job input objects |
+| `S3_BUCKET_OUTPUTS` | `fyredocs-outputs` | Bucket receiving job outputs (`jobs/{jobID}/...`) |
+| `S3_REGION` | `us-east-1` | Signing region (MinIO ignores it; AWS must match) |
 | `WORKER_CONCURRENCY` | `2` | Max concurrent jobs processed in parallel |
 | `UNOSERVER_HOST` | `127.0.0.1` | unoserver daemon host |
 | `UNOSERVER_PORT` | `2002` | unoserver daemon port |
@@ -148,8 +165,8 @@ sequenceDiagram
     participant NATS as JOBS_DISPATCH
     participant W as convert-to-pdf worker
     participant DB as PostgreSQL
+    participant S3 as MinIO / S3
     participant Tool as unoserver / pdfcpu
-    participant Disk as File System
     participant EV as jobs.events.&lt;jobId&gt;.*
 
     JS->>NATS: Publish JobMessage (jobs.dispatch.convert-to-pdf)
@@ -168,6 +185,11 @@ sequenceDiagram
         else proceed
             W->>DB: UPDATE status='processing', progress=20
             W->>EV: processing
+            W->>W: create scratch dir (job-scoped temp)
+            W->>S3: Download InputPaths keys (uploads bucket → scratch/in)
+            alt download fails
+                W->>NATS: NAK with backoff (recoverable)
+            end
             W->>W: startProgressReporter (20→90%, ease-out)
 
             alt office or html
@@ -178,13 +200,17 @@ sequenceDiagram
             else image-to-pdf / img-to-pdf
                 W->>Tool: pdfcpu Import (one image per page)
             end
-            Tool-->>Disk: output file
+            Tool-->>W: output file in scratch/out
 
             W->>W: stop reporter
             alt success
-                W->>DB: INSERT file_metadata (kind=output)
+                W->>S3: Upload output (outputs bucket, jobs/<jobId>/<file>)
+                alt upload fails
+                    W->>NATS: NAK with backoff (recoverable)
+                end
+                W->>DB: INSERT file_metadata (kind=output, path=object key, size=uploaded bytes)
                 W->>DB: status='completed', progress=100
-                W->>EV: completed (with fileSize)
+                W->>EV: completed (with uploaded fileSize)
                 W->>NATS: Ack
             else failure
                 W->>DB: status='failed', reason
@@ -194,6 +220,7 @@ sequenceDiagram
                 end
                 W->>NATS: Ack
             end
+            W->>W: remove scratch dir
         end
     end
 ```
@@ -239,7 +266,7 @@ Example: `[TIMEOUT] context deadline exceeded`
 
 ### Retry / DLQ
 
-NATS handles retries via `MaxDeliver=4` (1 initial + 3 retries) with exponential backoff `10s / 30s / 2m`. Permanent failures (invalid input, unsupported tool, missing input file) are acked immediately to prevent infinite retry. When the delivery count hits 4, the failed payload is published to `jobs.dlq.convert-to-pdf` and the original message is acked.
+NATS handles retries via `MaxDeliver=4` (1 initial + 3 retries) with exponential backoff `10s / 30s / 2m`. Permanent failures (invalid input, unsupported tool, missing input file) are acked immediately to prevent infinite retry. Object-storage download/upload failures and scratch-dir creation failures are marked recoverable and NAKed for redelivery. When the delivery count hits 4, the failed payload is published to `jobs.dlq.convert-to-pdf` and the original message is acked.
 
 ## Deployment
 
@@ -253,26 +280,30 @@ convert-to-pdf:
     DATABASE_URL: postgresql://user:password@db:5432/fyredocs
     REDIS_ADDR: redis:6379
     NATS_URL: nats://nats:4222
-    UPLOAD_DIR: /app/uploads
-    OUTPUT_DIR: /app/outputs
+    S3_ENDPOINT: minio:9000
+    S3_ACCESS_KEY: minioadmin
+    S3_SECRET_KEY: minioadmin
+    S3_BUCKET_UPLOADS: fyredocs-uploads
+    S3_BUCKET_OUTPUTS: fyredocs-outputs
     WORKER_CONCURRENCY: "2"
-  volumes:
-    - uploads_data:/app/uploads
-    - outputs_data:/app/outputs
   depends_on:
     - db
     - redis
     - nats
+    - minio
 ```
 
 ### Local Development
 
 ```bash
-docker compose up -d db redis nats
+docker compose up -d db redis nats minio
 cd convert-to-pdf
 export DATABASE_URL="postgresql://user:password@localhost:5432/fyredocs"
 export REDIS_ADDR="localhost:6379"
 export NATS_URL="nats://localhost:4222"
+export S3_ENDPOINT="localhost:9000"
+export S3_ACCESS_KEY="minioadmin"
+export S3_SECRET_KEY="minioadmin"
 go run main.go
 ```
 

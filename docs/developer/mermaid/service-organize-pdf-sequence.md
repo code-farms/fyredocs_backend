@@ -10,29 +10,38 @@ sequenceDiagram
     participant Worker as organize-pdf worker
     participant Processing as processing.ProcessFile()
     participant PG as PostgreSQL
-    participant Disk as File System
+    participant S3 as MinIO / S3
 
     NATS->>Worker: Fetch message from<br/>jobs.dispatch.organize-pdf
 
-    Worker->>Worker: Unmarshal JobPayload<br/>{jobId, toolType: "split-pdf", inputPaths: ["doc.pdf"], options: {pages: "1-3,5"}}
+    Worker->>Worker: Unmarshal JobPayload<br/>{jobId, toolType: "split-pdf", inputPaths: ["users/u1/doc.pdf"], options: {pages: "1-3,5"}}
 
     Worker->>Worker: Validate toolType in AllowedTools
 
     Worker->>PG: UPDATE processing_jobs<br/>SET status=processing, progress=20
 
-    Worker->>Processing: ProcessFile(ctx, jobId, "split-pdf", ["doc.pdf"], {pages: "1-3,5"}, outputDir)
+    Worker->>Worker: MkdirTemp scratch (job-&lt;jobId&gt;-*)
+    Worker->>S3: DownloadToFile (uploads bucket → scratch/in/doc.pdf)
+    alt download fails
+        Worker->>NATS: NAK with backoff (recoverable)
+    end
 
-    Processing->>Disk: Read input PDF
+    Worker->>Processing: ProcessFile(ctx, jobId, "split-pdf", [scratch/in/doc.pdf], {pages: "1-3,5"}, scratch/out)
+
     Processing->>Processing: Split by page ranges
-    Processing->>Disk: Write individual page PDFs
-    Processing->>Disk: Package into ZIP archive
+    Processing->>Processing: Package into ZIP archive in scratch/out
 
-    Processing-->>Worker: {OutputPath: "outputs/<jobId>.zip", Metadata: {pages: 4}}
+    Processing-->>Worker: {OutputPath: "scratch/out/<jobId>.zip", Metadata: {pages: 4}}
 
-    Worker->>PG: INSERT file_metadata (kind=output)
+    Worker->>S3: UploadFromFile (outputs bucket, jobs/&lt;jobId&gt;/&lt;jobId&gt;.zip) → size
+    alt upload fails
+        Worker->>NATS: NAK with backoff (recoverable)
+    end
+    Worker->>PG: INSERT file_metadata (kind=output, path=object key, size_bytes=uploaded size)
     Worker->>PG: Merge metadata into job
     Worker->>PG: UPDATE status=completed, progress=100
 
+    Worker->>Worker: RemoveAll scratch dir
     Worker->>NATS: ACK message
 ```
 
@@ -44,7 +53,7 @@ sequenceDiagram
     participant Worker as organize-pdf worker
     participant Processing as processing.ProcessFile()
     participant PG as PostgreSQL
-    participant Disk as File System
+    participant S3 as MinIO / S3
 
     NATS->>Worker: Fetch message from<br/>jobs.dispatch.organize-pdf
 
@@ -52,16 +61,17 @@ sequenceDiagram
 
     Worker->>PG: UPDATE processing_jobs SET status=processing, progress=20
 
-    Worker->>Processing: ProcessFile(ctx, jobId, "rotate-pdf", ["doc.pdf"], {rotation: 90, applyToPages: "all"}, outputDir)
+    Worker->>S3: Download input key → scratch/in/doc.pdf
+    Worker->>Processing: ProcessFile(ctx, jobId, "rotate-pdf", [scratch/in/doc.pdf], {rotation: 90, applyToPages: "all"}, scratch/out)
 
     Processing->>Processing: Parse rotation=90, applyToPages="all"
     Processing->>Processing: Build pdfcpu page selection (nil = all pages)
     Processing->>Processing: api.RotateFile(inputPath, outputPath, 90, nil, nil)
-    Processing->>Disk: Write rotated PDF
 
-    Processing-->>Worker: {OutputPath: "outputs/<jobId>.pdf"}
+    Processing-->>Worker: {OutputPath: "scratch/out/<jobId>.pdf"}
 
-    Worker->>PG: INSERT file_metadata (kind=output)
+    Worker->>S3: Upload outputs bucket jobs/&lt;jobId&gt;/&lt;jobId&gt;.pdf
+    Worker->>PG: INSERT file_metadata (kind=output, path=object key)
     Worker->>PG: UPDATE status=completed, progress=100
     Worker->>NATS: ACK message
 ```
@@ -74,23 +84,20 @@ sequenceDiagram
     participant Worker as organize-pdf worker
     participant Processing as processing.ProcessFile()
     participant PG as PostgreSQL
-    participant Disk as File System
+    participant S3 as MinIO / S3
 
-    NATS->>Worker: Fetch message<br/>{toolType: "merge-pdf", inputPaths: ["a.pdf", "b.pdf", "c.pdf"]}
+    NATS->>Worker: Fetch message<br/>{toolType: "merge-pdf", inputPaths: [keys a.pdf, b.pdf, c.pdf]}
 
     Worker->>PG: SET status=processing, progress=20
 
-    Worker->>Processing: ProcessFile(ctx, jobId, "merge-pdf", [3 paths], {}, outputDir)
+    Worker->>S3: Download 3 keys (uploads bucket → scratch/in)
+    Worker->>Processing: ProcessFile(ctx, jobId, "merge-pdf", [3 local paths], {}, scratch/out)
 
-    Processing->>Disk: Read a.pdf
-    Processing->>Disk: Read b.pdf
-    Processing->>Disk: Read c.pdf
     Processing->>Processing: Merge in order
-    Processing->>Disk: Write merged output
+    Processing-->>Worker: {OutputPath in scratch/out, Metadata}
 
-    Processing-->>Worker: {OutputPath, Metadata}
-
-    Worker->>PG: Record output, SET status=completed
+    Worker->>S3: Upload merged output → outputs bucket jobs/&lt;jobId&gt;/...
+    Worker->>PG: Record output (object key + uploaded size), SET status=completed
     Worker->>NATS: ACK
 ```
 
@@ -102,21 +109,20 @@ sequenceDiagram
     participant Worker as organize-pdf worker
     participant Processing as processing.ProcessFile()
     participant PG as PostgreSQL
-    participant Disk as File System
+    participant S3 as MinIO / S3
 
-    NATS->>Worker: Fetch message<br/>{toolType: "extract-pages", inputPaths: ["report.pdf"], options: {pages: "2,4,6-10"}}
+    NATS->>Worker: Fetch message<br/>{toolType: "extract-pages", inputPaths: ["users/u1/report.pdf"], options: {pages: "2,4,6-10"}}
 
     Worker->>PG: SET status=processing
 
-    Worker->>Processing: ProcessFile(ctx, jobId, "extract-pages", ["report.pdf"], {pages: "2,4,6-10"}, outputDir)
+    Worker->>S3: Download report.pdf key → scratch/in
+    Worker->>Processing: ProcessFile(ctx, jobId, "extract-pages", [scratch/in/report.pdf], {pages: "2,4,6-10"}, scratch/out)
 
-    Processing->>Disk: Read report.pdf
     Processing->>Processing: Extract specified pages
-    Processing->>Disk: Write extracted pages PDF
+    Processing-->>Worker: {OutputPath in scratch/out, Metadata}
 
-    Processing-->>Worker: {OutputPath, Metadata}
-
-    Worker->>PG: Record output, SET status=completed
+    Worker->>S3: Upload output → outputs bucket jobs/&lt;jobId&gt;/...
+    Worker->>PG: Record output (object key + uploaded size), SET status=completed
     Worker->>NATS: ACK
 ```
 
@@ -159,13 +165,14 @@ sequenceDiagram
     participant Proc as processing.ProcessFile
     participant PC as pdfcpu
     participant PG as PostgreSQL
-    participant Disk as File System
+    participant S3 as MinIO / S3
     participant EV as JOBS_EVENTS
 
     NATS->>W: msg {toolType: watermark-pdf | sign-pdf | edit-pdf | add-page-numbers, options: {...}}
     W->>PG: status=processing, progress=20
     W->>EV: jobs.events.&lt;jobId&gt;.processing
-    W->>Proc: ProcessFile(toolType, [in.pdf], options, outputDir)
+    W->>S3: Download input key → scratch/in
+    W->>Proc: ProcessFile(toolType, [scratch/in/in.pdf], options, scratch/out)
     alt watermark-pdf
         Proc->>PC: pdfcpu add text or image watermark (position, opacity, fontSize, color)
     else sign-pdf
@@ -175,9 +182,10 @@ sequenceDiagram
     else add-page-numbers
         Proc->>PC: pdfcpu add page numbers (position + format template)
     end
-    PC-->>Disk: outputs/&lt;jobId&gt;.pdf
+    PC-->>Proc: scratch/out/&lt;jobId&gt;.pdf
     Proc-->>W: OutputPath
-    W->>PG: file_metadata kind=output · status=completed · progress=100
+    W->>S3: Upload outputs bucket jobs/&lt;jobId&gt;/&lt;jobId&gt;.pdf
+    W->>PG: file_metadata kind=output (path=object key) · status=completed · progress=100
     W->>EV: jobs.events.&lt;jobId&gt;.completed
     W->>NATS: ACK
 ```
@@ -196,14 +204,16 @@ sequenceDiagram
     alt missing/short password
         W->>PG: status=failed, reason "missing password" / "password too short"
     else
-        W->>Proc: ProcessFile(toolType, [in.pdf], {password})
+        W->>W: Download input key from uploads bucket → scratch/in
+        W->>Proc: ProcessFile(toolType, [scratch/in/in.pdf], {password}, scratch/out)
         alt protect-pdf
             Proc->>PC: pdfcpu encrypt with user/owner password
         else unlock-pdf
             Proc->>PC: pdfcpu decrypt with provided password
         end
-        PC-->>W: outputs/&lt;jobId&gt;.pdf
-        W->>PG: file_metadata + status=completed
+        PC-->>W: scratch/out/&lt;jobId&gt;.pdf
+        W->>W: Upload to outputs bucket jobs/&lt;jobId&gt;/&lt;jobId&gt;.pdf
+        W->>PG: file_metadata (path=object key) + status=completed
     end
     W->>NATS: ACK
 ```

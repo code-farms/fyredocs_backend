@@ -208,6 +208,135 @@ func TestNewProxyStreamsResponses(t *testing.T) {
 	}
 }
 
+func TestNewMinioProxy(t *testing.T) {
+	type captured struct {
+		host  string
+		path  string
+		query string
+	}
+	var got captured
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = captured{host: r.Host, path: r.URL.Path, query: r.URL.RawQuery}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	proxy := newMinioProxy(backend.URL)
+
+	t.Run("uploads bucket: path verbatim and Host preserved", func(t *testing.T) {
+		got = captured{}
+		req := httptest.NewRequest(http.MethodPut,
+			"/fyredocs-uploads/uploads/u1/file.pdf?uploadId=abc&partNumber=1&X-Amz-Signature=sig", nil)
+		req.Host = "localhost:8080" // the origin the URL was presigned for
+		rec := httptest.NewRecorder()
+		proxy.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 from backend, got %d", rec.Code)
+		}
+		if got.path != "/fyredocs-uploads/uploads/u1/file.pdf" {
+			t.Errorf("backend path = %q, want verbatim /fyredocs-uploads/... (no prefix strip)", got.path)
+		}
+		if got.query != "uploadId=abc&partNumber=1&X-Amz-Signature=sig" {
+			t.Errorf("backend query = %q, want presigned query preserved", got.query)
+		}
+		if got.host != "localhost:8080" {
+			t.Errorf("backend Host = %q, want original host localhost:8080 (SigV4 signs it)", got.host)
+		}
+	})
+
+	t.Run("outputs bucket routes through same proxy", func(t *testing.T) {
+		got = captured{}
+		req := httptest.NewRequest(http.MethodGet,
+			"/fyredocs-outputs/jobs/j1/converted.docx?X-Amz-Signature=sig", nil)
+		req.Host = "app.example.com"
+		rec := httptest.NewRecorder()
+		proxy.ServeHTTP(rec, req)
+
+		if got.path != "/fyredocs-outputs/jobs/j1/converted.docx" {
+			t.Errorf("backend path = %q, want verbatim", got.path)
+		}
+		if got.host != "app.example.com" {
+			t.Errorf("backend Host = %q, want app.example.com", got.host)
+		}
+	})
+
+	t.Run("identity headers are stripped", func(t *testing.T) {
+		var gotUserID string
+		strip := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotUserID = r.Header.Get("X-User-ID")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer strip.Close()
+
+		p := newMinioProxy(strip.URL)
+		req := httptest.NewRequest(http.MethodGet, "/fyredocs-outputs/jobs/j1/file.pdf", nil)
+		req.Header.Set("X-User-ID", "spoofed")
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+
+		if gotUserID != "" {
+			t.Errorf("X-User-ID = %q forwarded to MinIO, want stripped", gotUserID)
+		}
+	})
+
+	t.Run("streams immediately", func(t *testing.T) {
+		proxy, ok := newMinioProxy(backend.URL).(*httputil.ReverseProxy)
+		if !ok {
+			t.Fatal("newMinioProxy did not return *httputil.ReverseProxy")
+		}
+		if proxy.FlushInterval != -1 {
+			t.Errorf("FlushInterval = %v, want -1", proxy.FlushInterval)
+		}
+		transport, ok := proxy.Transport.(*http.Transport)
+		if !ok {
+			t.Fatal("minio proxy transport is not *http.Transport")
+		}
+		if transport.MaxIdleConnsPerHost != 50 {
+			t.Errorf("MaxIdleConnsPerHost = %d, want 50 (parallel multipart parts)", transport.MaxIdleConnsPerHost)
+		}
+	})
+}
+
+func TestRegisterServiceRoutesAppliesBodyLimitToUploadRoute(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Drain the body like a real JSON handler would.
+		buf := make([]byte, 32<<10)
+		for {
+			if _, err := r.Body.Read(buf); err != nil {
+				break
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	mux := http.NewServeMux()
+	registerServiceRoutes(mux, []routeConfig{
+		{prefix: "/api/upload", targetBasePath: "/api/uploads", targetURL: backend.URL},
+	})
+
+	t.Run("small JSON body passes", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/upload/init", bytes.NewReader(make([]byte, 512)))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200 for small body, got %d", rec.Code)
+		}
+	})
+
+	t.Run("body over 1 MiB is rejected (upload exemption removed)", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/upload/init", bytes.NewReader(make([]byte, 2<<20)))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		// MaxBytesReader aborts the proxied request mid-body; depending on
+		// where the read fails the proxy surfaces 413 or 502 — never 2xx.
+		if rec.Code < 400 {
+			t.Errorf("expected error status for oversized body on /api/upload, got %d", rec.Code)
+		}
+	})
+}
+
 func TestWithCORSNoOriginHeader(t *testing.T) {
 	called := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

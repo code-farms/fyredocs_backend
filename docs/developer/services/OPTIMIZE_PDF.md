@@ -84,11 +84,21 @@ REDIS_PASSWORD=""
 REDIS_DB="0"
 
 # Processing
-OUTPUT_DIR="outputs"
 NATS_URL="nats://nats:4222"
 PROCESSING_TIMEOUT="30m"   # honoured via NATS AckWait
 PORT="8085"
 WORKER_CONCURRENCY="2"     # parallel jobs per container (semaphore-bounded goroutines; OCR also parallelizes pages internally)
+
+# Object storage (S3 / MinIO) — OUTPUT_DIR has been removed; inputs are
+# downloaded from the uploads bucket to a container-local scratch dir and
+# outputs are uploaded to the outputs bucket under jobs/{jobID}/...
+S3_ENDPOINT="minio:9000"               # required
+S3_ACCESS_KEY="minioadmin"             # required
+S3_SECRET_KEY="minioadmin"             # required
+S3_USE_SSL="false"
+S3_BUCKET_UPLOADS="fyredocs-uploads"
+S3_BUCKET_OUTPUTS="fyredocs-outputs"
+S3_REGION="us-east-1"
 
 # JWT
 JWT_HS256_SECRET="..."
@@ -150,12 +160,21 @@ OCR_DEFAULT_DPI="300"
 │ └─────────────┘ │
 └────────┬────────┘
          │
-    ┌────┴────┐
-    ▼         ▼
-┌───────┐ ┌───────┐
-│ Redis │ │ Postgres│
-└───────┘ └───────┘
+    ┌────┼─────────┐
+    ▼    ▼         ▼
+┌───────┐ ┌────────┐ ┌────────────┐
+│ Redis │ │Postgres│ │ MinIO / S3 │
+└───────┘ └────────┘ └────────────┘
 ```
+
+### Object Storage Flow
+
+Inputs and outputs live in S3-compatible object storage (MinIO in compose), not on a shared volume:
+
+1. `payload.inputPaths` carries **object keys** in the uploads bucket. The worker creates a job-scoped scratch dir (`os.MkdirTemp "job-<jobId>-*"`) and downloads each key to `<scratch>/in/<basename>` — Ghostscript/Tesseract/pdftoppm need real local files.
+2. Processing writes its result to `<scratch>/out`.
+3. The output is uploaded to the outputs bucket as `jobs/{jobID}/{filename}` with an extension-derived `Content-Type`; `file_metadata.path` stores the object key and `size_bytes` the uploaded size.
+4. The scratch dir is removed after every job. Download/upload failures are marked recoverable and retried via NAK + backoff.
 
 ## Docker
 
@@ -198,7 +217,7 @@ sequenceDiagram
     participant NATS as NATS JetStream
     participant W as optimize-pdf Worker
     participant DB as PostgreSQL
-    participant FS as File System
+    participant S3 as MinIO / S3
     participant T as Tool (pdfcpu/GS/Tesseract)
 
     JS->>NATS: Publish JobCreated to dispatch.optimize-pdf
@@ -207,7 +226,11 @@ sequenceDiagram
     W->>W: Validate toolType in AllowedTools
     W->>DB: UPDATE processing_jobs SET status='processing'
 
-    W->>FS: Read input PDF from inputPaths
+    W->>W: Create scratch dir (job-scoped temp)
+    W->>S3: Download inputPaths keys (uploads bucket → scratch/in)
+    alt Download fails
+        W->>NATS: NAK with backoff (recoverable)
+    end
 
     alt compress-pdf
         W->>T: pdfcpu.OptimizeFile(input, output, config)
@@ -220,15 +243,19 @@ sequenceDiagram
     end
 
     alt Processing succeeds
-        T-->>W: Output file produced
-        W->>FS: Write output to output directory
-        W->>DB: INSERT file_metadata (kind='output')
+        T-->>W: Output file produced in scratch/out
+        W->>S3: Upload output (outputs bucket, jobs/<jobId>/<file>)
+        alt Upload fails
+            W->>NATS: NAK with backoff (recoverable)
+        end
+        W->>DB: INSERT file_metadata (kind='output', path=object key, size=uploaded bytes)
         W->>DB: UPDATE processing_jobs SET status='completed', progress=100
         W->>NATS: Ack message
     else Processing fails
         W->>DB: UPDATE processing_jobs SET status='failed', failure_reason=error
         W->>NATS: Ack message
     end
+    W->>W: Remove scratch dir
 ```
 
 ### OCR PDF Multi-Step Flow
@@ -236,13 +263,13 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant W as Worker
-    participant FS as File System
+    participant FS as Scratch Dir (container-local)
     participant PP as pdftoppm
     participant Pool as errgroup Pool (N workers)
     participant TS as Tesseract
     participant PC as pdfcpu
 
-    W->>FS: Read input PDF
+    W->>FS: Read input PDF (downloaded to scratch/in)
     W->>PP: Convert PDF pages to PNG images (configurable DPI)
     PP-->>FS: page1.png, page2.png, ...
 
@@ -255,9 +282,9 @@ sequenceDiagram
     TS-->>FS: page_N.pdf (searchable PDF pages)
 
     W->>PC: Merge all page PDFs into final output
-    PC-->>FS: output.pdf (searchable PDF)
+    PC-->>FS: scratch/out/output.pdf (searchable PDF)
     W->>FS: Cleanup temporary PNG and individual PDF files
-    W-->>W: Return outputPath = output.pdf
+    W-->>W: Return outputPath = scratch/out/output.pdf (then uploaded to outputs bucket)
 ```
 
 ### Compress PDF Flow
@@ -265,10 +292,10 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant W as Worker
-    participant FS as File System
+    participant FS as Scratch Dir (container-local)
     participant GS as Ghostscript
 
-    W->>FS: Read input PDF
+    W->>FS: Read input PDF (downloaded to scratch/in)
     W->>W: Parse quality option (low/medium/high/extreme)
     W->>W: Build Ghostscript args (DPI, threshold, QFactor, grayscale)
     W->>GS: Execute gs with compression args
@@ -276,9 +303,9 @@ sequenceDiagram
     GS->>GS: Compress embedded fonts
     GS->>GS: Apply JPEG quality (high/extreme only)
     GS->>GS: Convert to grayscale (extreme only)
-    GS-->>FS: Compressed output.pdf
+    GS-->>FS: Compressed scratch/out/output.pdf
     W->>FS: Compare file sizes (log compression ratio)
-    W-->>W: Return outputPath + metadata
+    W-->>W: Return outputPath + metadata (output then uploaded to outputs bucket)
 ```
 
 ### Health Check Flow

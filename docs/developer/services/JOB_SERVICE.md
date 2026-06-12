@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Job Service is the central orchestration service for all file processing operations in Fyredocs. It manages the full job lifecycle: receiving file uploads (chunked), creating processing jobs, dispatching work to downstream worker services via NATS JetStream, tracking job status, and serving file downloads. It also handles guest user job tracking through Redis.
+The Job Service is the central orchestration service for all file processing operations in Fyredocs. It manages the full job lifecycle: brokering presigned S3 multipart uploads (file bytes go browser → MinIO/S3 directly, never through this service), creating processing jobs, dispatching work to downstream worker services via NATS JetStream, tracking job status, and redirecting downloads to short-lived presigned URLs. It also handles guest user job tracking through Redis.
 
 **Port**: 8081
 **Type**: REST API (Job Orchestrator)
@@ -10,18 +10,32 @@ The Job Service is the central orchestration service for all file processing ope
 **Database**: PostgreSQL (via GORM)
 **Queue**: NATS JetStream
 **Cache**: Redis
+**Object Storage**: MinIO / AWS S3 / R2 (via `shared/storage`)
 
 ## Service Responsibility
 
-1. **Chunked File Uploads** -- Initialize upload sessions, receive file chunks, assemble completed uploads
+1. **Presigned Multipart Uploads** -- Create S3 multipart upload sessions, presign part URLs, re-presign for resume, finalize and size-verify completed uploads
 2. **Job Creation** -- Validate tool types, create processing jobs in PostgreSQL, dispatch events to NATS
 3. **Job Querying** -- List jobs by tool type with pagination, retrieve individual job details
-4. **Job Deletion** -- Delete jobs and their associated files from disk and database
-5. **File Download** -- Serve completed output files with proper Content-Type and Content-Disposition headers
+4. **Job Deletion** -- Delete jobs from the database and their objects from the uploads/outputs buckets
+5. **File Download** -- 302-redirect to a presigned GET URL with attachment Content-Disposition and the computed Content-Type
 6. **Job History** -- Return full job history for authenticated users
 7. **Guest Job Tracking** -- Manage guest tokens in Redis to allow anonymous users to track their jobs
 8. **Tool-to-Service Routing** -- Use a centralized `ToolServiceMap` to dispatch jobs to the correct worker service
-9. **MIME-Type Validation** -- Validate uploaded file content types using `http.DetectContentType()` against an allowlist per tool category (pdf, word, excel, ppt, image)
+9. **MIME-Type Validation** -- Validate uploaded file content types using `http.DetectContentType()` over the object's first 512 bytes (read via a ranged GET) against an allowlist per tool category (pdf, word, excel, ppt, image)
+
+## Presigned Upload Protocol
+
+File bytes never stream through the job-service. The browser talks to object storage directly using presigned URLs signed against `S3_PUBLIC_ENDPOINT` (typically the API gateway / public MinIO origin):
+
+1. `POST /api/uploads/init` `{fileName, fileSize, contentType}` — the plan size limit (`X-User-Plan-Max-File-MB`) is enforced on the declared size **before** any URL is issued. The service creates an S3 multipart upload at key `uploads/{uploadId}/{sanitizedFileName}` in the uploads bucket and returns `{uploadId, key, partSize, totalParts, urlExpiresAt, parts:[{partNumber,url}]}`. `partSize` comes from `UPLOAD_PART_SIZE_MB` (default 8 MiB, clamped to the S3 5 MiB minimum); `totalParts = ceil(fileSize/partSize)` and is capped at 1000.
+2. The browser `PUT`s each part directly to the presigned URL and collects the returned `ETag`s.
+3. `GET /api/uploads/:uploadId/parts?partNumbers=2,3` — re-presigns part URLs (resume after interruption or URL expiry); all parts when `partNumbers` is omitted.
+4. `POST /api/uploads/:uploadId/complete` `{parts:[{partNumber,etag}]}` — completes the multipart upload, then `StatObject`s the result and re-verifies the **true** size against the plan limit (the declared size at init is client-supplied). Oversized objects are removed and the request gets 413.
+5. `POST /api/{category}/:tool` `{uploadId}` — job creation consumes the uploaded object in place (no copy): existence + size via `StatObject`, MIME sniff via a ranged GET of the first 512 bytes.
+6. `DELETE /api/uploads/:uploadId` — aborts the S3 multipart upload and clears the session (idempotent, 204).
+
+`PUT /api/uploads/:uploadId/chunk` is a one-release migration stub for the retired chunk-streaming protocol: it always answers `410 UPLOAD_PROTOCOL_CHANGED` ("Please refresh the page to continue uploading.") so stale frontend bundles reload into the new flow. Remove it (route + handler) next release.
 10. **Idempotency** -- Two layers, both within a 10-minute window:
     - `Idempotency-Key` header on job creation: returns the original job for the same key.
     - Same-`uploadId` replay: a duplicate `POST` with the same `uploadId(s)` after a successful submit returns the original job instead of `INVALID_INPUT: upload not found`. The mapping `idempotency:upload:<uploadId>` → `<jobId>` is written in Redis right before `releaseUpload` clears the upload state. Multi-upload jobs only dedupe when **all** `uploadId`s map to the same `jobId`. This makes the API self-healing against client double-submits regardless of cause (network retry, second tab, etc.).
@@ -37,16 +51,17 @@ The Job Service is the central orchestration service for all file processing ope
 ## Internal Architecture
 
 ```
-Client
+Client ──(presigned PUT/GET, file bytes)──> MinIO / S3
   |
 API Gateway :8080
   |
-Job Service :8081
-  |--- Upload Handlers (init, chunk, status, complete)
-  |--- Job Handlers (create, list, get, delete, download, history)
+Job Service :8081  (control plane only — no file bytes)
+  |--- Upload Handlers (init, parts, complete, status, abort, chunk[410 stub])
+  |--- Job Handlers (create, list, get, delete, download→302, history)
   |--- Auth Middleware (JWT / Guest Token)
   |--- PostgreSQL (processing_jobs, file_metadata)
-  |--- Redis (upload state, guest job sets, rate limits)
+  |--- Redis (upload sessions, guest job sets, rate limits)
+  |--- MinIO/S3 (uploads + outputs buckets, presigned URLs)
   |--- NATS JetStream (job dispatch to workers)
        |
        +---> convert-from-pdf
@@ -59,9 +74,10 @@ Job Service :8081
 
 | Package | Purpose |
 |---------|---------|
-| `handlers/jobs.go` | Job CRUD, file download, job history |
+| `handlers/jobs.go` | Job CRUD, presigned download redirect, job history |
 | `handlers/sse.go` | SSE endpoint for real-time job status updates via NATS JetStream |
-| `handlers/uploads.go` | Chunked upload init, chunk receive, assembly |
+| `handlers/uploads.go` | Presigned multipart upload protocol (init, parts, complete, status, abort, 410 chunk stub) |
+| `handlers/storage.go` | `ObjectStore` interface (narrow slice of `shared/storage.Client`) + boot-time injection |
 | `handlers/auth.go` | Extract authenticated user ID from auth context |
 | `internal/routing/routing.go` | `ToolServiceMap` -- single source of truth for tool-to-service mapping |
 | `internal/models/` | GORM models for `ProcessingJob` and `FileMetadata` |
@@ -86,12 +102,16 @@ The mapping in `routing.go` is the only authoritative source — these tables in
 
 ### Upload Endpoints
 
+All upload endpoints share the `RATE_LIMIT_UPLOAD` per-IP rate limiter.
+
 | Method | Path | Handler | Description |
 |--------|------|---------|-------------|
-| POST | `/api/uploads/init` | `InitUpload` | Initialize a chunked upload session |
-| PUT | `/api/uploads/:uploadId/chunk?index=N` | `UploadChunk` | Upload a single chunk |
-| GET | `/api/uploads/:uploadId/status` | `GetUploadStatus` | Get upload progress |
-| POST | `/api/uploads/:uploadId/complete` | `CompleteUpload` | Assemble chunks into final file |
+| POST | `/api/uploads/init` | `InitUpload` | Create an S3 multipart upload; returns presigned part URLs (201) |
+| GET | `/api/uploads/:uploadId/parts?partNumbers=2,3` | `GetUploadParts` | Re-presign part URLs (resume / refresh); all parts when omitted |
+| POST | `/api/uploads/:uploadId/complete` | `CompleteUpload` | Complete the multipart upload from client-collected ETags; verifies true size |
+| GET | `/api/uploads/:uploadId/status` | `GetUploadStatus` | Session metadata (fileName, declaredSize, totalParts) |
+| DELETE | `/api/uploads/:uploadId` | `AbortUpload` | Abort the multipart upload + clear session (idempotent, 204) |
+| PUT | `/api/uploads/:uploadId/chunk` | `UploadChunk` | **Retired protocol stub** — always 410 `UPLOAD_PROTOCOL_CHANGED` |
 
 ### Job Endpoints (per tool category)
 
@@ -99,11 +119,13 @@ These are registered under `/api/convert-from-pdf`, `/api/convert-to-pdf`, `/api
 
 | Method | Path | Handler | Description |
 |--------|------|---------|-------------|
-| POST | `/api/{category}/:tool` | `CreateJobFromTool` | Create a processing job |
+| POST | `/api/{category}/:tool` | `CreateJobFromTool` | Create a processing job (per-IP `RATE_LIMIT_JOB_CREATE` limiter) |
 | GET | `/api/{category}/:tool` | `GetJobsByTool` | List jobs by tool (paginated) |
 | GET | `/api/{category}/:tool/:id` | `GetJobByID` | Get single job details |
-| DELETE | `/api/{category}/:tool/:id` | `DeleteJobByID` | Delete job and files |
-| GET | `/api/{category}/:tool/:id/download` | `DownloadJobFile` | Download completed output |
+| DELETE | `/api/{category}/:tool/:id` | `DeleteJobByID` | Delete job rows and remove its objects from the buckets |
+| GET | `/api/{category}/:tool/:id/download` | `DownloadJobFile` | 302 redirect to a 5-minute presigned GET URL (attachment disposition) |
+
+`DownloadJobFile` performs the usual ownership checks (user ID or guest token) and the `status == completed` check **before** presigning. The Location URL carries `response-content-disposition: attachment; filename=...` (built with `mime.FormatMediaType`) and `response-content-type` overrides so object storage serves the file with the correct headers. Jobs whose output predates the S3 migration (FileMetadata.Path is an absolute disk path starting with `/`) return 404 "download link has expired".
 
 Where `{category}` is one of: `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`.
 
@@ -148,9 +170,9 @@ The SSE endpoint creates an ephemeral NATS JetStream consumer on the `JOBS_EVENT
 | Header | Default (absent) | Enforcement |
 |--------|-----------------|-------------|
 | `X-User-Plan-Max-Files` | `5` | Rejects jobs whose file count exceeds the limit; error code `TOO_MANY_FILES` |
-| `X-User-Plan-Max-File-MB` | `10` | Rejects individual files that exceed the size limit (multipart path only); error code `FILE_TOO_LARGE` |
+| `X-User-Plan-Max-File-MB` | `10` | Rejects files that exceed the size limit; error code `FILE_TOO_LARGE` (413) |
 
-Both the JSON (uploadId) and multipart form paths check the file-count limit. The per-file size check (`X-User-Plan-Max-File-MB`) applies only to the multipart path, because the upload service already enforces size on the chunked upload path.
+Both the JSON (uploadId) and multipart form paths check the file-count limit. The per-file size limit is enforced three times on the presigned path — on the declared size at `/init` (before any presigned URL is issued), on the **true** object size at `/complete` (oversized objects are deleted), and against the `MAX_UPLOAD_MB` hard cap when the job consumes the upload — and once on `file.Size` for the direct multipart path.
 
 ## NATS Events / Queues
 
@@ -166,12 +188,14 @@ When a job is created, the service publishes a `JobCreated` event to NATS JetStr
   "eventType": "JobCreated",
   "jobId": "uuid",
   "toolType": "pdf-to-word",
-  "inputPaths": ["/uploads/job-id/file.pdf"],
+  "inputPaths": ["uploads/<uploadId>/file.pdf"],
   "options": { ... },
   "correlationId": "uuid",
   "timestamp": "2024-01-15T10:30:00Z"
 }
 ```
+
+`inputPaths` are **object keys in the uploads bucket** (not filesystem paths): `uploads/{uploadId}/{fileName}` for presigned uploads, `uploads/{jobId}/{fileName}` for direct multipart submissions. Workers download the objects from the uploads bucket and write results to the outputs bucket.
 
 The target service name is resolved via `routing.ServiceForTool(toolType)` and the subject is built with `queue.SubjectForDispatch(serviceName)`.
 
@@ -238,50 +262,59 @@ CREATE INDEX idx_file_metadata_job_id ON file_metadata(job_id);
 
 | Key Pattern | Type | TTL | Purpose |
 |-------------|------|-----|---------|
-| `upload:<uploadId>` | Hash | `UPLOAD_TTL` (default 2h) | Upload session state (fileName, fileSize, totalChunks, createdAt) |
-| `upload:<uploadId>:chunks` | Set | `UPLOAD_TTL` (default 2h) | Set of received chunk indices |
-| `upload:<uploadId>:job` | String | 10 minutes | Maps a consumed `uploadId` → `jobId` so duplicate POSTs return the original job |
+| `upload:<uploadId>` | Hash | `UPLOAD_TTL` (default 30m) | Upload session state: fileName, declaredSize, contentType, bucket, key, s3UploadId, partSize, totalParts, createdAt (+ `size` after `/complete`) |
+| `upload:<uploadId>:chunks` | Set | — | Legacy chunked-protocol key; no longer written, still deleted on abort/release so stale sessions clean up |
+| `idempotency:upload:<uploadId>` | String | 10 minutes | Maps a consumed `uploadId` → `jobId` so duplicate POSTs return the original job |
 | `guest:<token>:jobs` | Set | `GUEST_JOB_TTL` | Job IDs belonging to a guest session |
-| `ratelimit:upload:<ip>` | String | Rate limit window | Upload rate limit counter |
+| `ratelimit:upload:<ip>` | ZSet | Rate limit window | Upload rate limit counter |
+| `ratelimit:jobcreate:<ip>` | ZSet | Rate limit window | Job-creation rate limit counter (`RATE_LIMIT_JOB_CREATE`, default 20/min) |
 | `idempotency:<key>` | String | 10 minutes | Maps idempotency key to job ID for deduplication |
 
 ## Sequence Diagrams
 
-### Chunked Upload Flow
+### Presigned Multipart Upload Flow
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
+    participant C as Client (Browser)
     participant GW as API Gateway
     participant JS as Job Service
     participant R as Redis
-    participant FS as File System
+    participant S3 as MinIO / S3
 
-    C->>GW: POST /api/upload/init {fileName, fileSize, totalChunks}
+    C->>GW: POST /api/uploads/init {fileName, fileSize, contentType}
     GW->>JS: Proxy request
-    JS->>R: HSET upload:<id> {fileName, fileSize, totalChunks, createdAt}
-    JS->>R: EXPIRE upload:<id> 2h
-    JS-->>GW: 201 {uploadId}
-    GW-->>C: 201 {uploadId}
+    JS->>JS: Enforce plan size limit on declared size (413 FILE_TOO_LARGE)
+    JS->>S3: CreateMultipartUpload uploads/<uploadId>/<fileName>
+    JS->>JS: Presign PUT URL for every part (signed against S3_PUBLIC_ENDPOINT)
+    JS->>R: HSET upload:<id> {fileName, declaredSize, bucket, key, s3UploadId, partSize, totalParts}
+    JS->>R: EXPIRE upload:<id> UPLOAD_TTL (30m)
+    JS-->>GW: 201 {uploadId, key, partSize, totalParts, urlExpiresAt, parts[]}
+    GW-->>C: 201
 
-    loop For each chunk
-        C->>GW: PUT /api/upload/<id>/chunk?index=N [chunk data]
-        GW->>JS: Proxy request
-        JS->>FS: Save chunk to uploads/tmp/<id>/<index>.part
-        JS->>R: SADD upload:<id>:chunks N
-        JS-->>GW: 200 {uploadId, receivedChunks, complete}
-        GW-->>C: 200 {uploadId, receivedChunks, complete}
+    loop For each part
+        C->>S3: PUT <presigned part URL> [part bytes] (via gateway/public endpoint)
+        S3-->>C: 200 + ETag header
     end
 
-    Note over JS,R: The UploadChunk handler uses a Redis Lua script (uploadChunkLua) for atomic state updates — checking upload existence, recording the chunk index, and refreshing TTLs in a single round-trip, preventing TOCTOU race conditions.
+    opt Resume / URL expiry
+        C->>JS: GET /api/uploads/<id>/parts?partNumbers=2,3
+        JS-->>C: 200 {parts: re-presigned URLs}
+    end
 
-    C->>GW: POST /api/upload/<id>/complete
+    C->>GW: POST /api/uploads/<id>/complete {parts:[{partNumber,etag}]}
     GW->>JS: Proxy request
-    JS->>R: SCARD upload:<id>:chunks (verify all chunks received)
-    JS->>FS: Assemble chunks into uploads/<id>/<fileName>
-    JS->>FS: Remove tmp/<id>/ chunk directory
-    JS-->>GW: 200 {uploadId}
-    GW-->>C: 200 {uploadId}
+    JS->>JS: part count == totalParts? (400 UPLOAD_INCOMPLETE)
+    JS->>S3: CompleteMultipartUpload(etags)
+    JS->>S3: StatObject → TRUE size
+    alt true size > plan limit
+        JS->>S3: RemoveObject
+        JS->>R: DEL upload:<id>
+        JS-->>C: 413 FILE_TOO_LARGE
+    else within limit
+        JS->>R: HSET upload:<id> size=<true size>; refresh TTL
+        JS-->>C: 200 {uploadId, fileName, size, complete:true}
+    end
 ```
 
 ### Job Creation and Dispatch Flow
@@ -314,24 +347,23 @@ sequenceDiagram
 
     alt JSON body with uploadId
         JS->>R: HGETALL upload:<uploadId>
-        R-->>JS: {fileName, fileSize, ...}
-        JS->>JS: Hardlink (or copy) uploads/<uploadId>/file into uploads/<jobId>/
-        Note over JS,R: Source file and Redis state are NOT removed yet — the upload remains intact so the request can retry on a downstream failure without re-uploading.
-    else Multipart form upload
-        JS->>JS: Save uploaded files directly to uploads/<jobId>/
+        R-->>JS: {fileName, bucket, key, ...}
+        JS->>JS: StatObject(uploads, key) — existence + TRUE size
+        JS->>JS: GetObjectRange(key, 0, 512) → MIME sniff against allowlist
+        Note over JS,R: The object stays at uploads/<uploadId>/... and Redis state is NOT removed yet — the upload remains intact so the request can retry on a downstream failure without re-uploading.
+    else Multipart form upload (direct)
+        JS->>JS: Sniff first 512 bytes, validate MIME
+        JS->>JS: PutObject → uploads/<jobId>/<fileName> (streamed)
     end
 
-    JS->>JS: Validate MIME type (http.DetectContentType) against allowlist
-
     JS->>DB: INSERT processing_job (status=queued)
-    JS->>DB: INSERT file_metadata (kind=input)
+    JS->>DB: INSERT file_metadata (kind=input, path=<object key>)
 
     JS->>JS: routing.ServiceForTool("pdf-to-word") => "convert-from-pdf"
-    JS->>NATS: Publish JobCreated to jobs.dispatch.convert-from-pdf
+    JS->>NATS: Publish JobCreated (inputPaths = object keys) to jobs.dispatch.convert-from-pdf
     NATS-->>W: Deliver JobCreated event
 
-    JS->>R: DEL upload:<uploadId>, upload:<uploadId>:chunks (release upload — only after publish succeeds)
-    JS->>JS: rm -rf uploads/<uploadId>/
+    JS->>R: DEL upload:<uploadId> (release session — only after publish succeeds; object stays for the worker)
 
     opt Idempotency-Key header present
         JS->>R: SET idempotency:<key> <jobId> EX 600
@@ -352,7 +384,7 @@ sequenceDiagram
     participant GW as API Gateway
     participant JS as Job Service
     participant DB as PostgreSQL
-    participant FS as File System
+    participant S3 as MinIO / S3
 
     C->>GW: GET /api/convert-from-pdf/pdf-to-word/<jobId>
     GW->>JS: Proxy request
@@ -362,18 +394,24 @@ sequenceDiagram
     GW-->>C: 200 {job details}
 
     C->>GW: GET /api/convert-from-pdf/pdf-to-word/<jobId>/download
-    GW->>JS: Proxy request (streamed via FlushInterval=-1)
+    GW->>JS: Proxy request
     JS->>DB: SELECT * FROM processing_jobs WHERE id=<jobId>
-    JS->>JS: Check status == 'completed'
+    JS->>JS: Authorize access + check status == 'completed'
     alt Cache hit
         JS->>JS: Load FileMetadata from in-memory cache
     else Cache miss
         JS->>DB: SELECT * FROM file_metadata WHERE job_id=<jobId> AND kind='output'
         JS->>JS: Store FileMetadata in cache
     end
-    JS->>FS: Read output file
-    JS-->>GW: 200 [binary file] Content-Disposition: attachment
-    GW-->>C: 200 [binary file] (streamed)
+    alt Legacy disk path (starts with "/")
+        JS-->>C: 404 NOT_FOUND "download link has expired"
+    else Object key
+        JS->>JS: PresignGet(outputs, key, 5m) + response-content-disposition/type overrides
+        JS-->>GW: 302 Location: <presigned URL>
+        GW-->>C: 302
+        C->>S3: GET <presigned URL> (file bytes served by object storage)
+        S3-->>C: 200 [binary file] Content-Disposition: attachment
+    end
 ```
 
 ### Guest User Flow
@@ -413,11 +451,12 @@ sequenceDiagram
 | `INVALID_INPUT` | 400 | Unsupported tool |
 | `INVALID_INPUT` | 400 | No file uploaded or missing uploadId |
 | `INVALID_INPUT` | 400 | File type mismatch for tool (e.g., non-PDF for pdf-to-word) |
-| `INVALID_INPUT` | 400 | File MIME content type does not match the expected type for the tool |
-| `FILE_TOO_LARGE` | 413 | File size exceeds plan limit from `X-User-Plan-Max-File-MB` (multipart path; default 10 MB) |
+| `INVALID_INPUT` | 400 | File MIME content type (sniffed from the object's first 512 bytes) does not match the expected type for the tool |
+| `INVALID_INPUT` | 400 | Uploaded object missing from the uploads bucket (upload never completed) |
+| `FILE_TOO_LARGE` | 413 | File size exceeds plan limit from `X-User-Plan-Max-File-MB` (direct multipart path; default 10 MB) |
 | `TOO_MANY_FILES` | 400 | Number of files exceeds plan limit from `X-User-Plan-Max-Files` (default 5 files) |
-| `SERVER_ERROR` | 500 | Failed to create upload directory |
-| `SERVER_ERROR` | 500 | Failed to save file |
+| `RATE_LIMIT_EXCEEDED` | 429 | More than `RATE_LIMIT_JOB_CREATE` job creations per IP per window |
+| `SERVER_ERROR` | 500 | Object storage put/stat failed |
 | `SERVER_ERROR` | 500 | Database insert failed |
 | `SERVER_ERROR` | 500 | NATS publish failed |
 
@@ -425,21 +464,23 @@ sequenceDiagram
 
 | Error Code | HTTP Status | Condition |
 |------------|-------------|-----------|
-| `INVALID_INPUT` | 400 | Missing fileName, fileSize, or totalChunks |
-| `INVALID_INPUT` | 400 | Invalid or missing chunk index |
+| `INVALID_INPUT` | 400 | Missing/invalid fileName or fileSize at init; invalid part-number list |
+| `INVALID_INPUT` | 400 | File needs more than 1000 parts at the configured part size |
+| `FILE_TOO_LARGE` | 413 | Declared size (init) or true object size (complete) exceeds the plan limit |
 | `NOT_FOUND` | 404 | Upload session expired or not found in Redis |
-| `BAD_REQUEST` | 400 | Attempting to complete an incomplete upload |
-| `FILE_TOO_LARGE` | 400 | Assembled file exceeds maximum size |
-| `SERVER_ERROR` | 500 | Redis or filesystem failure |
+| `UPLOAD_INCOMPLETE` | 400 | Part count mismatch, or S3 rejected CompleteMultipartUpload (missing/invalid parts) |
+| `UPLOAD_PROTOCOL_CHANGED` | 410 | Legacy `PUT /:uploadId/chunk` called — client must refresh to the presigned protocol |
+| `SERVER_ERROR` | 500 | Redis or object storage failure |
 
 ### Job Query / Download Errors
 
 | Error Code | HTTP Status | Condition |
 |------------|-------------|-----------|
 | `NOT_FOUND` | 404 | Job not found or not authorized |
+| `NOT_FOUND` | 404 | Output predates the S3 migration (legacy disk path) — "download link has expired" |
 | `NOT_READY` | 400 | Download requested but job status is not 'completed' |
 | `UNAUTHORIZED` | 401 | Job history requested without authentication |
-| `SERVER_ERROR` | 500 | Database query failure |
+| `SERVER_ERROR` | 500 | Database query or presign failure |
 
 ### Error Response Format
 
@@ -458,9 +499,9 @@ All errors follow the standard response format:
 ### Cleanup on Failure
 
 When job creation fails partway through:
-- The job directory (`uploads/<jobId>/`) is removed via a deferred cleanup
-- The `jobCreated` flag ensures cleanup only runs if the DB insert did not complete
-- The upload (`upload:<uploadId>` Redis hash and `uploads/<uploadId>/` source dir) is released **only after** the DB transaction commits **and** the `JobCreated` event is published. Any failure before that point leaves the upload intact, so the frontend's retry button can resubmit the same `uploadId` without forcing the user to re-upload. The file is materialised into `uploads/<jobId>/` via a hardlink (with a copy fallback for cross-device cases) so retries land on a fresh `jobDir` while the source remains untouched.
+- `consumeUpload` is **read-only**: it never moves or deletes the uploaded object, so any downstream failure (DB transaction, NATS publish) leaves the object at `uploads/<uploadId>/...` and the Redis session intact. The frontend's retry button can resubmit the same `uploadId` without forcing the user to re-upload.
+- The Redis session (`upload:<uploadId>`) is released **only after** the DB transaction commits **and** the `JobCreated` event is published.
+- Abandoned uploads (object + incomplete multipart uploads) are reaped by the cleanup-worker; the Redis session expires via `UPLOAD_TTL`.
 
 ## Environment Variables
 
@@ -472,18 +513,28 @@ When job creation fails partway through:
 | `REDIS_ADDR` | Redis server address |
 | `JWT_HS256_SECRET` | JWT signing secret (min 32 characters) |
 | `NATS_URL` | NATS server URL |
+| `S3_ENDPOINT` | Internal object-storage address for data operations (e.g. `minio:9000`) |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | Object-storage credentials |
+
+The service fails fast at boot if object storage is misconfigured or the buckets cannot be ensured.
 
 ### Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8081` | HTTP server port |
-| `UPLOAD_DIR` | `uploads` | Base directory for uploaded files |
+| `S3_PUBLIC_ENDPOINT` | `S3_ENDPOINT` | Browser-reachable origin presigned URLs are signed against (e.g. the API gateway) |
+| `S3_BUCKET_UPLOADS` | `fyredocs-uploads` | Bucket for input objects |
+| `S3_BUCKET_OUTPUTS` | `fyredocs-outputs` | Bucket for worker output objects |
+| `S3_REGION` | `us-east-1` | Signing region |
+| `S3_USE_SSL` | `false` | TLS to the internal endpoint |
+| `UPLOAD_PART_SIZE_MB` | `8` | Multipart part size in MiB (clamped to the S3 5 MiB minimum) |
 | `MAX_UPLOAD_MB` | `50` | Server-side hard cap on file size in MB (per-user plan limits are enforced via `X-User-Plan-Max-File-MB` header) |
-| `UPLOAD_TTL` | `2h` | Upload session expiration |
+| `UPLOAD_TTL` | `30m` | Upload session expiration |
 | `GUEST_JOB_TTL` | `30m` | Guest job expiration (no user) |
 | `FREE_JOB_TTL` | `24h` | Free plan user job expiration |
-| `RATE_LIMIT_UPLOAD` | `30` | Upload rate limit per window |
+| `RATE_LIMIT_UPLOAD` | `30` | Upload-endpoint rate limit per IP per window |
+| `RATE_LIMIT_JOB_CREATE` | `20` | Job-creation rate limit per IP per window |
 | `RATE_LIMIT_WINDOW` | `60s` | Rate limit time window |
 | `TRUSTED_PROXIES` | `127.0.0.1,::1` | Trusted proxy IP addresses |
 | `AUTH_DENYLIST_ENABLED` | `true` | Enable token denylist |
@@ -496,15 +547,15 @@ When job creation fails partway through:
 ## Scaling Constraints
 
 1. **Horizontal scaling**: The job-service is stateless (all state in Redis/PostgreSQL/NATS). Multiple instances can run behind a load balancer.
-2. **Database connection pool**: Configured with `MaxOpenConns=20`, `MaxIdleConns=10`, `ConnMaxLifetime=5m`, `ConnMaxIdleTime=2m`. The idle-time bound is shorter than typical managed-Postgres idle-close windows (Neon, RDS Proxy, pgbouncer), which prevents the pool from handing out a half-dead socket. Adjust for high-concurrency deployments.
+2. **Database connection pool**: Configured with `MaxOpenConns=50`, `MaxIdleConns=25`, `ConnMaxLifetime=5m`, `ConnMaxIdleTime=2m`. The pool was raised from 20/10 when uploads moved to presigned URLs: handlers are now short DB-bound requests (no long file streams occupying connections), so each replica sustains far more concurrent requests. The idle-time bound is shorter than typical managed-Postgres idle-close windows (Neon, RDS Proxy, pgbouncer), which prevents the pool from handing out a half-dead socket.
 3. **Postgres-side timeouts**: `Connect()` enriches `DATABASE_URL` via `shared/config.ApplyPostgresDSNDefaults` to set `statement_timeout=15s`, `idle_in_transaction_session_timeout=30s`, and libpq TCP keepalives (`keepalives_idle=30s`, `keepalives_interval=10s`, `keepalives_count=3`). These bound the worst-case hang on a stale or dropped connection. User-set values in `DATABASE_URL` are preserved.
 4. **Per-request transaction timeout**: `CreateJobFromTool` wraps the job-create transaction in a 10-second `context.WithTimeout` so a stuck connection cannot freeze a request beyond that bound.
-5. **File storage**: The service writes to a shared filesystem (`UPLOAD_DIR`). When scaling horizontally, all instances must share the same volume mount.
+5. **File storage**: All files live in object storage (MinIO/S3) — no shared volume is needed; instances are fully interchangeable. File bytes flow browser ↔ object storage via presigned URLs; the service only handles metadata.
 6. **NATS JetStream**: Provides durable message delivery with at-least-once semantics. Workers acknowledge messages after processing. No messages are lost if the job-service restarts.
 7. **Redis dependency**: Upload state and guest tokens rely on Redis. If Redis is unavailable, uploads and guest tracking will fail. Consider Redis Sentinel or Cluster for HA.
 8. **Rate limiting**: Uses Redis-backed rate limiters. All instances share the same counters via Redis.
 9. **Single writer per job**: Each job has a unique UUID. No concurrent writes to the same job record.
-10. **Memory**: `MaxMultipartMemory` is set to 50 MB. Large file uploads are streamed to disk via chunks, not held in memory.
+10. **Memory**: `MaxMultipartMemory` is set to 50 MB for the direct multipart path; presigned uploads never pass file bytes through the service at all (only the first 512 bytes of each object are read for MIME sniffing).
 
 ## Deployment
 
@@ -522,16 +573,18 @@ job-service:
     REDIS_ADDR: redis:6379
     NATS_URL: nats://nats:4222
     JWT_HS256_SECRET: ${JWT_HS256_SECRET}
-    UPLOAD_DIR: /app/uploads
+    S3_ENDPOINT: minio:9000
+    S3_PUBLIC_ENDPOINT: http://localhost:8080
+    S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+    S3_SECRET_KEY: ${S3_SECRET_KEY}
     MAX_UPLOAD_MB: "50"
     GUEST_JOB_TTL: "30m"
     FREE_JOB_TTL: "24h"
-  volumes:
-    - uploads_data:/app/uploads
   depends_on:
     - db
     - redis
     - nats
+    - minio
 ```
 
 ### Local Development
@@ -557,9 +610,9 @@ job-service:
 
 ## Error Logging
 
-All 5xx response sites in handlers (`CreateJobFromTool`, `InitUpload`, `UploadChunk`, `CompleteUpload`, list/delete/history endpoints) emit a structured `slog.Error` via `response.InternalErrorf` before returning. Internal helpers (`consumeUpload`, etc.) call `logger.LogErr` / `logger.LogWarn` at the point of failure detection. Each line carries `op`, `requestId`, and the local IDs (`jobId`, `uploadId`, `tool`) needed to reproduce the failure. See [Error Logging](../architecture/ERROR_LOGGING.md) for the convention.
+All 5xx response sites in handlers (`CreateJobFromTool`, `InitUpload`, `GetUploadParts`, `CompleteUpload`, `AbortUpload`, list/delete/download/history endpoints) emit a structured `slog.Error` via `response.InternalErrorf` before returning. Internal helpers (`consumeUpload`, etc.) call `logger.LogErr` / `logger.LogWarn` at the point of failure detection. Each line carries `op`, `requestId`, and the local IDs (`jobId`, `uploadId`, `tool`) needed to reproduce the failure. See [Error Logging](../architecture/ERROR_LOGGING.md) for the convention.
 
-To debug a user-visible failure, take `meta.requestId` from the API response and grep job-service stdout for that value — the matching `slog.Error` line names the failing `op` (e.g. `db.processing_jobs.transaction`, `create_job_dir`, `redis.upload_chunk_lua`).
+To debug a user-visible failure, take `meta.requestId` from the API response and grep job-service stdout for that value — the matching `slog.Error` line names the failing `op` (e.g. `db.processing_jobs.transaction`, `s3.create_multipart`, `s3.presign_get`).
 
 ## Related Documentation
 

@@ -85,13 +85,117 @@ services:
     networks:
       - fyredocs_net
 
-  # ==================== VOLUME INITIALIZATION ====================
-  volume-init:
-    image: alpine:3.19
-    command: ["sh", "-c", "chown -R 10001:10001 /app/uploads /app/outputs && chmod -R 755 /app/uploads /app/outputs"]
+  # ==================== OBJECT STORAGE (MinIO) ====================
+  # All file bytes live here. Services talk to minio:9000 over the internal
+  # network; browsers reach objects through the api-gateway's presigned-URL
+  # proxy (/fyredocs-uploads/*, /fyredocs-outputs/*) — port 9000 is NOT
+  # published. The console is bound to localhost only for operators.
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
-      - ../files/uploads:/app/uploads
-      - ../files/outputs:/app/outputs
+      - minio_data:/data
+    ports:
+      # Admin console only, loopback only. Object traffic stays internal.
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      # The minio image ships curl but not a standalone mc; the documented
+      # liveness probe is the health endpoint.
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - fyredocs_net
+
+  # One-shot bucket/lifecycle/user bootstrap. Runs to completion before any
+  # service that touches object storage starts (depends_on:
+  # service_completed_successfully). Idempotent — safe on every `up`.
+  #
+  # Lifecycle rules (uploads bucket only):
+  #   - expire objects after 2 days (raw uploads are consumed into jobs
+  #     quickly; anything older is abandoned)
+  #   - abort incomplete multipart uploads after 1 day
+  #   `mc ilm rule add` has no flag for AbortIncompleteMultipartUpload, so the
+  #   full lifecycle document is applied via `mc ilm import`. The expiry-only
+  #   equivalent would be: mc ilm rule add --expire-days 2 local/fyredocs-uploads
+  #
+  # NO lifecycle on the outputs bucket: pro-plan job outputs never expire —
+  # output deletion is DB-driven (cleanup-worker removes objects when the
+  # owning processing_jobs row expires).
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        # Wait for MinIO to accept connections (alias set probes the server)
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
+          echo "waiting for minio..."; sleep 1
+        done
+
+        # Create both buckets (-p: no error if they already exist)
+        mc mb -p local/fyredocs-uploads
+        mc mb -p local/fyredocs-outputs
+
+        # Lifecycle on the uploads bucket: expire after 2d, abort incomplete
+        # multipart uploads after 1d (see header comment for why ilm import)
+        echo '{"Rules":[{"ID":"expire-stale-uploads","Status":"Enabled","Filter":{"Prefix":""},"Expiration":{"Days":2},"AbortIncompleteMultipartUpload":{"DaysAfterInitiation":1}}]}' \
+          | mc ilm import local/fyredocs-uploads
+
+        # Scoped application credentials: services never use the root key.
+        # RW on the two fyredocs buckets only.
+        cat > /tmp/fyredocs-app-policy.json <<'POLICY'
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": ["s3:GetBucketLocation", "s3:ListBucket", "s3:ListBucketMultipartUploads"],
+              "Resource": ["arn:aws:s3:::fyredocs-uploads", "arn:aws:s3:::fyredocs-outputs"]
+            },
+            {
+              "Effect": "Allow",
+              "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
+              "Resource": ["arn:aws:s3:::fyredocs-uploads/*", "arn:aws:s3:::fyredocs-outputs/*"]
+            }
+          ]
+        }
+        POLICY
+        mc admin user add local "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY"
+        mc admin policy create local fyredocs-app /tmp/fyredocs-app-policy.json
+        mc admin policy attach local fyredocs-app --user "$$S3_ACCESS_KEY" || true
+
+        echo "minio-init complete"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      minio:
+        condition: service_healthy
     networks:
       - fyredocs_net
 
@@ -111,6 +215,12 @@ services:
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
+
+      # Object-storage proxy: presigned URLs resolve to this gateway origin
+      # and are relayed verbatim (path + Host preserved) to MinIO.
+      MINIO_URL: http://minio:9000
+      S3_BUCKET_UPLOADS: fyredocs-uploads
+      S3_BUCKET_OUTPUTS: fyredocs-outputs
 
       # JWT Configuration
       JWT_HS256_SECRET: ${JWT_HS256_SECRET}
@@ -158,6 +268,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       auth-service:
         condition: service_started
       job-service:
@@ -263,11 +375,19 @@ services:
       AUTH_DENYLIST_PREFIX: "denylist:jwt"
       AUTH_TRUST_GATEWAY_HEADERS: "false"
 
-      # File Handling
+      # Object storage (MinIO)
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_USE_SSL: "false"
+      S3_BUCKET_UPLOADS: fyredocs-uploads
+      S3_BUCKET_OUTPUTS: fyredocs-outputs
+      # Presigned URLs are signed for the origin browsers actually use (the
+      # gateway). Multi-host: point this at the public origin instead.
+      S3_PUBLIC_ENDPOINT: ${PUBLIC_ORIGIN:-http://localhost:8080}
+      UPLOAD_PART_SIZE_MB: "8"
+
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
-      UPLOAD_DIR: /app/uploads
-      OUTPUT_DIR: /app/outputs
-      MAX_UPLOAD_MB: "50"
       GUEST_JOB_TTL: 30m
       FREE_JOB_TTL: 24h
       UPLOAD_TTL: 30m
@@ -291,15 +411,12 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    volumes:
-      - ../files/uploads:/app/uploads
-      - ../files/outputs:/app/outputs
     depends_on:
       redis:
         condition: service_healthy
       nats:
         condition: service_healthy
-      volume-init:
+      minio-init:
         condition: service_completed_successfully
     networks:
       - fyredocs_net
@@ -317,8 +434,16 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
       NATS_URL: nats://nats:4222
-      UPLOAD_DIR: /app/uploads
-      OUTPUT_DIR: /app/outputs
+
+      # Object storage (MinIO) — workers stream inputs/outputs; /tmp is the
+      # only local scratch space (tmpfs below)
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_USE_SSL: "false"
+      S3_BUCKET_UPLOADS: fyredocs-uploads
+      S3_BUCKET_OUTPUTS: fyredocs-outputs
+
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
       # Parallel jobs per container (pdf2docx/LibreOffice are CPU-heavy)
@@ -326,6 +451,8 @@ services:
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    tmpfs:
+      - /tmp:size=1g
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8082/healthz || exit 1"]
       interval: 10s
@@ -343,13 +470,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    volumes:
-      - ../files/uploads:/app/uploads
-      - ../files/outputs:/app/outputs
     depends_on:
       nats:
         condition: service_healthy
-      volume-init:
+      minio-init:
         condition: service_completed_successfully
     networks:
       - fyredocs_net
@@ -367,19 +491,32 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
       NATS_URL: nats://nats:4222
-      UPLOAD_DIR: /app/uploads
-      OUTPUT_DIR: /app/outputs
+
+      # Object storage (MinIO)
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_USE_SSL: "false"
+      S3_BUCKET_UPLOADS: fyredocs-uploads
+      S3_BUCKET_OUTPUTS: fyredocs-outputs
+
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
       WORKER_CONCURRENCY: "2"
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    tmpfs:
+      - /tmp:size=1g
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8083/healthz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
     deploy:
+      # Horizontal scaling example: now that file state lives in MinIO (no
+      # shared bind mount), workers scale by bumping replicas. NOTE the budget:
+      # resource limits are PER REPLICA — 2 replicas x 1G/2cpu = 2G/4cpu.
+      replicas: 2
       resources:
         limits:
           memory: 1G
@@ -391,13 +528,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    volumes:
-      - ../files/uploads:/app/uploads
-      - ../files/outputs:/app/outputs
     depends_on:
       nats:
         condition: service_healthy
-      volume-init:
+      minio-init:
         condition: service_completed_successfully
     networks:
       - fyredocs_net
@@ -415,13 +549,22 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
       NATS_URL: nats://nats:4222
-      UPLOAD_DIR: /app/uploads
-      OUTPUT_DIR: /app/outputs
+
+      # Object storage (MinIO)
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_USE_SSL: "false"
+      S3_BUCKET_UPLOADS: fyredocs-uploads
+      S3_BUCKET_OUTPUTS: fyredocs-outputs
+
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
       WORKER_CONCURRENCY: "4"
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    tmpfs:
+      - /tmp:size=1g
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8084/healthz || exit 1"]
       interval: 10s
@@ -439,13 +582,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    volumes:
-      - ../files/uploads:/app/uploads
-      - ../files/outputs:/app/outputs
     depends_on:
       nats:
         condition: service_healthy
-      volume-init:
+      minio-init:
         condition: service_completed_successfully
     networks:
       - fyredocs_net
@@ -463,8 +603,15 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
       NATS_URL: nats://nats:4222
-      UPLOAD_DIR: /app/uploads
-      OUTPUT_DIR: /app/outputs
+
+      # Object storage (MinIO)
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_USE_SSL: "false"
+      S3_BUCKET_UPLOADS: fyredocs-uploads
+      S3_BUCKET_OUTPUTS: fyredocs-outputs
+
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
       # OCR
@@ -476,6 +623,8 @@ services:
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    tmpfs:
+      - /tmp:size=1g
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8085/healthz || exit 1"]
       interval: 10s
@@ -493,13 +642,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    volumes:
-      - ../files/uploads:/app/uploads
-      - ../files/outputs:/app/outputs
     depends_on:
       nats:
         condition: service_healthy
-      volume-init:
+      minio-init:
         condition: service_completed_successfully
     networks:
       - fyredocs_net
@@ -553,8 +699,16 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
       PORT: "8088"
-      UPLOAD_DIR: /app/uploads
-      OUTPUT_DIR: /app/outputs
+
+      # Object storage (MinIO) — cleanup deletes objects, aborts stale
+      # multipart uploads
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_USE_SSL: "false"
+      S3_BUCKET_UPLOADS: fyredocs-uploads
+      S3_BUCKET_OUTPUTS: fyredocs-outputs
+
       UPLOAD_TTL: 30m
       CLEANUP_INTERVAL: 5m
       GUEST_JOB_TTL: 30m
@@ -579,13 +733,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    volumes:
-      - ../files/uploads:/app/uploads
-      - ../files/outputs:/app/outputs
     depends_on:
       redis:
         condition: service_healthy
-      volume-init:
+      minio-init:
         condition: service_completed_successfully
     networks:
       - fyredocs_net
@@ -599,3 +750,4 @@ volumes:
   # postgres_data:  # commented out: using Neon cloud database
   redis_data:
   nats_data:
+  minio_data:

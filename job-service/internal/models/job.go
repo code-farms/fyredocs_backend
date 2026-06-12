@@ -32,14 +32,20 @@ func (job *ProcessingJob) BeforeCreate(tx *gorm.DB) (err error) {
 }
 
 type FileMetadata struct {
-	ID             uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	JobID          uuid.UUID      `gorm:"type:uuid;index;not null;constraint:OnDelete:CASCADE" json:"jobId"`
-	ProcessingJob  *ProcessingJob `gorm:"foreignKey:JobID" json:"-"`
-	Kind           string         `gorm:"type:text;not null" json:"kind"`
-	OriginalName   string         `gorm:"type:text;not null" json:"originalName"`
-	Path           string         `gorm:"type:text;not null" json:"-"`
-	SizeBytes      int64          `gorm:"not null" json:"sizeBytes"`
-	CreatedAt      time.Time      `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
+	ID            uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
+	JobID         uuid.UUID      `gorm:"type:uuid;index;not null;constraint:OnDelete:CASCADE" json:"jobId"`
+	ProcessingJob *ProcessingJob `gorm:"foreignKey:JobID" json:"-"`
+	Kind          string         `gorm:"type:text;not null" json:"kind"`
+	OriginalName  string         `gorm:"type:text;not null" json:"originalName"`
+	// Path is the S3/MinIO object key of the file, NOT a filesystem path.
+	// The bucket is derived from Kind: "input" rows live in the uploads
+	// bucket (uploads/{uploadId|jobId}/{fileName}), "output" rows in the
+	// outputs bucket. Rows created before the presigned-upload migration may
+	// still hold absolute disk paths (they start with "/"); those are treated
+	// as expired and are skipped on delete / rejected on download.
+	Path      string    `gorm:"type:text;not null" json:"-"`
+	SizeBytes int64     `gorm:"not null" json:"sizeBytes"`
+	CreatedAt time.Time `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
 }
 
 func (f *FileMetadata) BeforeCreate(tx *gorm.DB) (err error) {

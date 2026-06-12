@@ -54,24 +54,6 @@ func (e *timeoutErr) Error() string   { return "timeout" }
 func (e *timeoutErr) Timeout() bool   { return true }
 func (e *timeoutErr) Temporary() bool { return true }
 
-func TestFilepathBase(t *testing.T) {
-	got := filepathBase("document.pdf")
-	if got != "document.pdf" {
-		t.Errorf("filepathBase('document.pdf') = %q", got)
-	}
-}
-
-func TestOutputDir(t *testing.T) {
-	t.Setenv("OUTPUT_DIR", "")
-	if got := outputDir(); got != "outputs" {
-		t.Errorf("expected 'outputs', got %q", got)
-	}
-	t.Setenv("OUTPUT_DIR", "/custom")
-	if got := outputDir(); got != "/custom" {
-		t.Errorf("expected '/custom', got %q", got)
-	}
-}
-
 func TestClassifyError(t *testing.T) {
 	tests := []struct {
 		name string

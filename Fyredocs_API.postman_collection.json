@@ -48,7 +48,7 @@
 			"type": "string"
 		},
 		{
-			"key": "file_path",
+			"key": "part_url",
 			"value": "",
 			"type": "string"
 		}
@@ -614,6 +614,7 @@
 		},
 		{
 			"name": "2. File Upload",
+			"description": "Presigned S3 multipart upload protocol. File bytes go browser → object storage directly via presigned URLs; the API only brokers the session. Flow: init → PUT each part to its presigned URL (collect ETags) → complete → use uploadId in a job-creation request.",
 			"item": [
 				{
 					"name": "Initialize Upload",
@@ -622,8 +623,8 @@
 							"listen": "test",
 							"script": {
 								"exec": [
-									"pm.test(\"Status code is 200\", function () {",
-									"    pm.response.to.have.status(200);",
+									"pm.test(\"Status code is 201\", function () {",
+									"    pm.response.to.have.status(201);",
 									"});",
 									"",
 									"const response = pm.response.json();",
@@ -633,6 +634,10 @@
 									"if (response.data && response.data.uploadId) {",
 									"    pm.environment.set('upload_id', response.data.uploadId);",
 									"    console.log('Upload ID saved:', response.data.uploadId);",
+									"}",
+									"if (response.data && response.data.parts && response.data.parts.length > 0) {",
+									"    pm.environment.set('part_url', response.data.parts[0].url);",
+									"    console.log('First presigned part URL saved');",
 									"}"
 								],
 								"type": "text/javascript"
@@ -649,7 +654,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"filename\": \"document.pdf\",\n  \"fileSize\": 1048576,\n  \"mimeType\": \"application/pdf\"\n}"
+							"raw": "{\n  \"fileName\": \"document.pdf\",\n  \"fileSize\": 1048576,\n  \"contentType\": \"application/pdf\"\n}"
 						},
 						"url": {
 							"raw": "{{base_url}}/api/upload/init",
@@ -662,11 +667,11 @@
 								"init"
 							]
 						},
-						"description": "Initialize a chunked upload. Returns uploadId for subsequent chunk uploads."
+						"description": "Create an S3 multipart upload and receive presigned PUT URLs for every part. The declared fileSize is checked against the plan limit (413 FILE_TOO_LARGE) before any URL is issued."
 					},
 					"response": [
 						{
-							"name": "200 - Upload Initialized",
+							"name": "201 - Upload Initialized",
 							"originalRequest": {
 								"method": "POST",
 								"header": [
@@ -677,7 +682,7 @@
 								],
 								"body": {
 									"mode": "raw",
-									"raw": "{\n  \"filename\": \"document.pdf\",\n  \"fileSize\": 1048576,\n  \"mimeType\": \"application/pdf\"\n}"
+									"raw": "{\n  \"fileName\": \"document.pdf\",\n  \"fileSize\": 1048576,\n  \"contentType\": \"application/pdf\"\n}"
 								},
 								"url": {
 									"raw": "{{base_url}}/api/upload/init",
@@ -691,36 +696,23 @@
 									]
 								}
 							},
-							"status": "OK",
-							"code": 200,
+							"status": "Created",
+							"code": 201,
 							"header": [
 								{
 									"key": "Content-Type",
 									"value": "application/json"
 								}
 							],
-							"body": "{\n  \"success\": true,\n  \"message\": \"Upload initialized\",\n  \"data\": {\n    \"uploadId\": \"upl_abc123def456\",\n    \"chunkSize\": 1048576,\n    \"totalChunks\": 1\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+							"body": "{\n  \"success\": true,\n  \"message\": \"Upload started successfully\",\n  \"data\": {\n    \"uploadId\": \"3f6f2c9a-1d2e-4b5f-8a9c-0d1e2f3a4b5c\",\n    \"key\": \"uploads/3f6f2c9a-1d2e-4b5f-8a9c-0d1e2f3a4b5c/document.pdf\",\n    \"partSize\": 8388608,\n    \"totalParts\": 1,\n    \"urlExpiresAt\": \"2026-01-15T11:00:00Z\",\n    \"parts\": [\n      {\n        \"partNumber\": 1,\n        \"url\": \"{{base_url}}/fyredocs-uploads/uploads/3f6f2c9a-.../document.pdf?uploadId=...&partNumber=1&X-Amz-Signature=...\"\n      }\n    ]\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
 						}
 					]
 				},
 				{
-					"name": "Upload Chunk",
+					"name": "Upload Part (presigned URL)",
 					"request": {
 						"method": "PUT",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/octet-stream"
-							},
-							{
-								"key": "X-Chunk-Index",
-								"value": "0"
-							},
-							{
-								"key": "X-Total-Chunks",
-								"value": "1"
-							}
-						],
+						"header": [],
 						"body": {
 							"mode": "file",
 							"file": {
@@ -728,7 +720,22 @@
 							}
 						},
 						"url": {
-							"raw": "{{base_url}}/api/upload/{{upload_id}}/chunk",
+							"raw": "{{part_url}}",
+							"host": [
+								"{{part_url}}"
+							]
+						},
+						"description": "PUT the part bytes DIRECTLY to the presigned URL from init (saved as {{part_url}}). The bytes go to object storage, not the API. Save the ETag response header for the complete request. Re-presign expired URLs via 'Get Part URLs'."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Part URLs (re-presign)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/upload/{{upload_id}}/parts?partNumbers=1",
 							"host": [
 								"{{base_url}}"
 							],
@@ -736,32 +743,26 @@
 								"api",
 								"upload",
 								"{{upload_id}}",
-								"chunk"
+								"parts"
+							],
+							"query": [
+								{
+									"key": "partNumbers",
+									"value": "1",
+									"description": "Comma-separated part numbers; omit for all parts"
+								}
 							]
 						},
-						"description": "Upload a file chunk. Use the 'file' body type and select your file."
+						"description": "Re-presign part upload URLs to resume an interrupted upload or refresh expired URLs."
 					},
 					"response": [
 						{
-							"name": "200 - Chunk Uploaded",
+							"name": "200 - Part URLs Refreshed",
 							"originalRequest": {
-								"method": "PUT",
-								"header": [
-									{
-										"key": "Content-Type",
-										"value": "application/octet-stream"
-									},
-									{
-										"key": "X-Chunk-Index",
-										"value": "0"
-									},
-									{
-										"key": "X-Total-Chunks",
-										"value": "1"
-									}
-								],
+								"method": "GET",
+								"header": [],
 								"url": {
-									"raw": "{{base_url}}/api/upload/{{upload_id}}/chunk",
+									"raw": "{{base_url}}/api/upload/{{upload_id}}/parts?partNumbers=1",
 									"host": [
 										"{{base_url}}"
 									],
@@ -769,7 +770,13 @@
 										"api",
 										"upload",
 										"{{upload_id}}",
-										"chunk"
+										"parts"
+									],
+									"query": [
+										{
+											"key": "partNumbers",
+											"value": "1"
+										}
 									]
 								}
 							},
@@ -781,7 +788,7 @@
 									"value": "application/json"
 								}
 							],
-							"body": "{\n  \"success\": true,\n  \"message\": \"Chunk uploaded successfully\",\n  \"data\": {\n    \"chunkIndex\": 0,\n    \"received\": 1048576\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+							"body": "{\n  \"success\": true,\n  \"message\": \"Upload URLs refreshed\",\n  \"data\": {\n    \"uploadId\": \"3f6f2c9a-1d2e-4b5f-8a9c-0d1e2f3a4b5c\",\n    \"partSize\": 8388608,\n    \"urlExpiresAt\": \"2026-01-15T11:30:00Z\",\n    \"parts\": [\n      {\n        \"partNumber\": 1,\n        \"url\": \"{{base_url}}/fyredocs-uploads/uploads/3f6f2c9a-.../document.pdf?uploadId=...&partNumber=1&X-Amz-Signature=...\"\n      }\n    ]\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
 						}
 					]
 				},
@@ -797,13 +804,10 @@
 									"});",
 									"",
 									"const response = pm.response.json();",
-									"pm.test(\"Response indicates success\", function() {",
+									"pm.test(\"Upload is complete\", function() {",
 									"    pm.expect(response.success).to.eql(true);",
-									"});",
-									"if (response.data && response.data.fileUrl) {",
-									"    pm.environment.set('file_path', response.data.fileUrl);",
-									"    console.log('File path saved:', response.data.fileUrl);",
-									"}"
+									"    pm.expect(response.data.complete).to.eql(true);",
+									"});"
 								],
 								"type": "text/javascript"
 							}
@@ -819,7 +823,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"filename\": \"document.pdf\"\n}"
+							"raw": "{\n  \"parts\": [\n    {\n      \"partNumber\": 1,\n      \"etag\": \"<ETag header from the part upload>\"\n    }\n  ]\n}"
 						},
 						"url": {
 							"raw": "{{base_url}}/api/upload/{{upload_id}}/complete",
@@ -833,7 +837,7 @@
 								"complete"
 							]
 						},
-						"description": "Finalize the upload and make the file available for processing."
+						"description": "Finalize the multipart upload from the collected part ETags. The part count must equal totalParts (400 UPLOAD_INCOMPLETE otherwise). The true object size is re-verified against the plan limit (413 FILE_TOO_LARGE; the object is deleted)."
 					},
 					"response": [
 						{
@@ -848,7 +852,7 @@
 								],
 								"body": {
 									"mode": "raw",
-									"raw": "{\n  \"filename\": \"document.pdf\"\n}"
+									"raw": "{\n  \"parts\": [\n    {\n      \"partNumber\": 1,\n      \"etag\": \"9b2cf535f27731c974343645a3985328\"\n    }\n  ]\n}"
 								},
 								"url": {
 									"raw": "{{base_url}}/api/upload/{{upload_id}}/complete",
@@ -871,7 +875,7 @@
 									"value": "application/json"
 								}
 							],
-							"body": "{\n  \"success\": true,\n  \"message\": \"Upload completed successfully\",\n  \"data\": {\n    \"fileUrl\": \"/storage/uploads/usr_abc123/document.pdf\",\n    \"fileSize\": 1048576,\n    \"mimeType\": \"application/pdf\"\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+							"body": "{\n  \"success\": true,\n  \"message\": \"File uploaded successfully!\",\n  \"data\": {\n    \"uploadId\": \"3f6f2c9a-1d2e-4b5f-8a9c-0d1e2f3a4b5c\",\n    \"fileName\": \"document.pdf\",\n    \"size\": 1048576,\n    \"complete\": true\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
 						}
 					]
 				},
@@ -892,7 +896,7 @@
 								"status"
 							]
 						},
-						"description": "Check the status of an upload."
+						"description": "Session metadata for an in-progress upload."
 					},
 					"response": [
 						{
@@ -921,7 +925,100 @@
 									"value": "application/json"
 								}
 							],
-							"body": "{\n  \"success\": true,\n  \"message\": \"Upload status retrieved\",\n  \"data\": {\n    \"uploadId\": \"upl_abc123def456\",\n    \"status\": \"completed\",\n    \"chunksReceived\": 1,\n    \"totalChunks\": 1\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+							"body": "{\n  \"success\": true,\n  \"message\": \"Upload status loaded\",\n  \"data\": {\n    \"uploadId\": \"3f6f2c9a-1d2e-4b5f-8a9c-0d1e2f3a4b5c\",\n    \"fileName\": \"document.pdf\",\n    \"declaredSize\": 1048576,\n    \"totalParts\": 1\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "Abort Upload",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/upload/{{upload_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"upload",
+								"{{upload_id}}"
+							]
+						},
+						"description": "Cancel an in-progress upload: aborts the S3 multipart upload (freeing stored parts) and clears the session. Idempotent — returns 204 even for unknown/expired sessions."
+					},
+					"response": [
+						{
+							"name": "204 - Upload Aborted",
+							"originalRequest": {
+								"method": "DELETE",
+								"header": [],
+								"url": {
+									"raw": "{{base_url}}/api/upload/{{upload_id}}",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"api",
+										"upload",
+										"{{upload_id}}"
+									]
+								}
+							},
+							"status": "No Content",
+							"code": 204,
+							"header": [],
+							"body": ""
+						}
+					]
+				},
+				{
+					"name": "Upload Chunk (RETIRED - 410)",
+					"request": {
+						"method": "PUT",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/upload/{{upload_id}}/chunk",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"upload",
+								"{{upload_id}}",
+								"chunk"
+							]
+						},
+						"description": "One-release migration stub for the retired chunk-streaming protocol. Always returns 410 Gone with code UPLOAD_PROTOCOL_CHANGED. Will be removed next release."
+					},
+					"response": [
+						{
+							"name": "410 - Protocol Changed",
+							"originalRequest": {
+								"method": "PUT",
+								"header": [],
+								"url": {
+									"raw": "{{base_url}}/api/upload/{{upload_id}}/chunk",
+									"host": [
+										"{{base_url}}"
+									],
+									"path": [
+										"api",
+										"upload",
+										"{{upload_id}}",
+										"chunk"
+									]
+								}
+							},
+							"status": "Gone",
+							"code": 410,
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"body": "{\n  \"success\": false,\n  \"message\": \"Please refresh the page to continue uploading.\",\n  \"data\": null,\n  \"error\": {\n    \"code\": \"UPLOAD_PROTOCOL_CHANGED\",\n    \"details\": \"Please refresh the page to continue uploading.\"\n  },\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
 						}
 					]
 				}
@@ -1438,11 +1535,11 @@
 								"download"
 							]
 						},
-						"description": "Download the converted PDF file"
+						"description": "302-redirects to a 5-minute presigned object-storage URL that serves the converted PDF with attachment disposition. Follow the redirect to download the bytes."
 					},
 					"response": [
 						{
-							"name": "200 - File Download",
+							"name": "302 - Redirect to presigned URL",
 							"originalRequest": {
 								"method": "GET",
 								"header": [],
@@ -1460,19 +1557,15 @@
 									]
 								}
 							},
-							"status": "OK",
-							"code": 200,
+							"status": "Found",
+							"code": 302,
 							"header": [
 								{
-									"key": "Content-Type",
-									"value": "application/pdf"
-								},
-								{
-									"key": "Content-Disposition",
-									"value": "attachment; filename=\"document.pdf\""
+									"key": "Location",
+									"value": "{{base_url}}/fyredocs-outputs/outputs/{{job_id}}/document.pdf?response-content-disposition=attachment%3B%20filename%3Ddocument.pdf&response-content-type=application%2Fpdf&X-Amz-Signature=..."
 								}
 							],
-							"body": "<binary PDF data>"
+							"body": ""
 						}
 					]
 				},
@@ -2263,11 +2356,11 @@
 								"download"
 							]
 						},
-						"description": "Download the converted file"
+						"description": "302-redirects to a 5-minute presigned object-storage URL that serves the converted file with attachment disposition. Follow the redirect to download the bytes."
 					},
 					"response": [
 						{
-							"name": "200 - File Download",
+							"name": "302 - Redirect to presigned URL",
 							"originalRequest": {
 								"method": "GET",
 								"header": [],
@@ -2285,19 +2378,15 @@
 									]
 								}
 							},
-							"status": "OK",
-							"code": 200,
+							"status": "Found",
+							"code": 302,
 							"header": [
 								{
-									"key": "Content-Type",
-									"value": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-								},
-								{
-									"key": "Content-Disposition",
-									"value": "attachment; filename=\"document.docx\""
+									"key": "Location",
+									"value": "{{base_url}}/fyredocs-outputs/outputs/{{job_id}}/document.docx?response-content-disposition=attachment%3B%20filename%3Ddocument.docx&response-content-type=application%2Fvnd.openxmlformats-officedocument.wordprocessingml.document&X-Amz-Signature=..."
 								}
 							],
-							"body": "<binary file data>"
+							"body": ""
 						}
 					]
 				},
@@ -3078,11 +3167,11 @@
 								"download"
 							]
 						},
-						"description": "Download the organized PDF file"
+						"description": "302-redirects to a 5-minute presigned object-storage URL that serves the organized PDF with attachment disposition. Follow the redirect to download the bytes."
 					},
 					"response": [
 						{
-							"name": "200 - File Download",
+							"name": "302 - Redirect to presigned URL",
 							"originalRequest": {
 								"method": "GET",
 								"header": [],
@@ -3100,19 +3189,15 @@
 									]
 								}
 							},
-							"status": "OK",
-							"code": 200,
+							"status": "Found",
+							"code": 302,
 							"header": [
 								{
-									"key": "Content-Type",
-									"value": "application/pdf"
-								},
-								{
-									"key": "Content-Disposition",
-									"value": "attachment; filename=\"merged.pdf\""
+									"key": "Location",
+									"value": "{{base_url}}/fyredocs-outputs/outputs/{{job_id}}/merged.pdf?response-content-disposition=attachment%3B%20filename%3Dmerged.pdf&response-content-type=application%2Fpdf&X-Amz-Signature=..."
 								}
 							],
-							"body": "<binary PDF data>"
+							"body": ""
 						}
 					]
 				},
@@ -3583,11 +3668,11 @@
 								"download"
 							]
 						},
-						"description": "Download the optimized PDF file"
+						"description": "302-redirects to a 5-minute presigned object-storage URL that serves the optimized PDF with attachment disposition. Follow the redirect to download the bytes."
 					},
 					"response": [
 						{
-							"name": "200 - File Download",
+							"name": "302 - Redirect to presigned URL",
 							"originalRequest": {
 								"method": "GET",
 								"header": [],
@@ -3605,19 +3690,15 @@
 									]
 								}
 							},
-							"status": "OK",
-							"code": 200,
+							"status": "Found",
+							"code": 302,
 							"header": [
 								{
-									"key": "Content-Type",
-									"value": "application/pdf"
-								},
-								{
-									"key": "Content-Disposition",
-									"value": "attachment; filename=\"compressed.pdf\""
+									"key": "Location",
+									"value": "{{base_url}}/fyredocs-outputs/outputs/{{job_id}}/compressed.pdf?response-content-disposition=attachment%3B%20filename%3Dcompressed.pdf&response-content-type=application%2Fpdf&X-Amz-Signature=..."
 								}
 							],
-							"body": "<binary PDF data>"
+							"body": ""
 						}
 					]
 				},

@@ -13,7 +13,7 @@ sequenceDiagram
     participant Uno as unoserver / unoconvert
     participant LO as libreoffice --headless (fallback)
     participant PG as PostgreSQL
-    participant Disk as File System
+    participant S3 as MinIO / S3
     participant EV as JOBS_EVENTS
 
     NATS->>W: Pull batch (up to WORKER_CONCURRENCY)
@@ -24,20 +24,27 @@ sequenceDiagram
         W->>PG: SELECT status — skip if completed/processing
         W->>PG: UPDATE status=processing, progress=20
         W->>EV: jobs.events.&lt;jobId&gt;.processing
+        W->>W: MkdirTemp scratch (job-&lt;jobId&gt;-*)
+        W->>S3: DownloadToFile per InputPaths key (uploads bucket → scratch/in)
+        alt download fails
+            W->>NATS: NAK with backoff (recoverable)
+        end
         W->>W: startProgressReporter(20→90% ease-out)
-        W->>Proc: ProcessFile(toolType, inputPaths, ...)
+        W->>Proc: ProcessFile(toolType, local inputs, scratch/out)
         Proc->>Uno: unoconvert --convert-to pdf input output
         alt unoserver unreachable
             Proc->>LO: libreoffice --headless --convert-to pdf
         end
-        Uno-->>Disk: output.pdf
-        LO-.->>Disk: output.pdf (fallback path)
-        Proc-->>W: {OutputPath, Metadata}
+        Proc-->>W: {OutputPath in scratch/out, Metadata}
         W->>W: stopProgressReporter
         alt success
-            W->>PG: INSERT file_metadata (kind=output)
+            W->>S3: UploadFromFile (outputs bucket, jobs/&lt;jobId&gt;/&lt;file&gt;)
+            alt upload fails
+                W->>NATS: NAK with backoff (recoverable)
+            end
+            W->>PG: INSERT file_metadata (kind=output, path=object key, size=uploaded bytes)
             W->>PG: UPDATE status=completed, progress=100
-            W->>EV: jobs.events.&lt;jobId&gt;.completed (with fileSize)
+            W->>EV: jobs.events.&lt;jobId&gt;.completed (with uploaded fileSize)
         else failure
             W->>PG: UPDATE status=failed, failure_reason=[CODE] msg
             W->>EV: jobs.events.&lt;jobId&gt;.failed
@@ -45,6 +52,7 @@ sequenceDiagram
                 W->>NATS: Publish jobs.dlq.convert-to-pdf
             end
         end
+        W->>W: RemoveAll scratch dir
         W->>NATS: ACK
     end
     W->>Sem: Release slot
@@ -59,22 +67,24 @@ sequenceDiagram
     participant Proc as processing.ProcessFile
     participant Pdfcpu as pdfcpu
     participant PG as PostgreSQL
-    participant Disk as File System
+    participant S3 as MinIO / S3
     participant EV as JOBS_EVENTS
 
-    NATS->>W: msg {toolType:image-to-pdf, inputPaths:[a.jpg,b.png,c.webp]}
+    NATS->>W: msg {toolType:image-to-pdf, inputPaths:[keys a.jpg,b.png,c.webp]}
     W->>PG: status=processing, progress=20
     W->>EV: processing
+    W->>S3: Download 3 keys (uploads bucket → scratch/in)
     W->>W: startProgressReporter (time-based)
-    W->>Proc: ProcessFile("image-to-pdf", [3 paths], options)
-    Proc->>Disk: Read each image
+    W->>Proc: ProcessFile("image-to-pdf", [3 local paths], options, scratch/out)
     Proc->>Pdfcpu: Import images one per page
-    Pdfcpu-->>Disk: outputs/&lt;jobId&gt;.pdf (3 pages)
+    Pdfcpu-->>Proc: scratch/out/&lt;jobId&gt;.pdf (3 pages)
     Proc-->>W: OutputPath
     W->>W: stop reporter
-    W->>PG: file_metadata (kind=output)
+    W->>S3: Upload outputs bucket jobs/&lt;jobId&gt;/&lt;jobId&gt;.pdf
+    W->>PG: file_metadata (kind=output, path=object key)
     W->>PG: status=completed, progress=100
     W->>EV: completed
+    W->>W: remove scratch dir
     W->>NATS: ACK
 ```
 

@@ -16,8 +16,10 @@ import (
 	"fyredocs/shared/metrics"
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/redisstore"
+	"fyredocs/shared/storage"
 	"fyredocs/shared/telemetry"
 
+	"job-service/handlers"
 	"job-service/internal/authverify"
 	"job-service/internal/models"
 	"job-service/routes"
@@ -34,9 +36,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Pool sized for the presigned-upload protocol: file bytes no longer
+	// stream through this service, so handlers are short DB-bound requests
+	// and the service sustains far more concurrent requests per replica.
 	models.Connect(models.PoolConfig{
-		MaxOpenConns: 20,
-		MaxIdleConns: 10,
+		MaxOpenConns: 50,
+		MaxIdleConns: 25,
 	})
 	models.Migrate()
 	redisstore.Connect()
@@ -50,6 +55,24 @@ func main() {
 		slog.Error("NATS stream setup failed", "error", err)
 		os.Exit(1)
 	}
+
+	// Object storage (MinIO/S3) is load-bearing for every upload, job
+	// creation, and download — fail fast at boot if it is misconfigured.
+	objStore, err := storage.NewFromEnv()
+	if err != nil {
+		slog.Error("object storage init failed", "error", err)
+		os.Exit(1)
+	}
+	storageCtx, storageCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	for _, bucket := range []string{objStore.BucketUploads(), objStore.BucketOutputs()} {
+		if err := objStore.EnsureBucket(storageCtx, bucket); err != nil {
+			storageCancel()
+			slog.Error("object storage bucket setup failed", "bucket", bucket, "error", err)
+			os.Exit(1)
+		}
+	}
+	storageCancel()
+	handlers.SetObjectStore(objStore)
 
 	// Initialize denylist for JWT verification
 	var denylist authverify.TokenDenylist

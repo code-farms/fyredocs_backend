@@ -23,7 +23,7 @@ sequenceDiagram
         GW->>Redis: GET user:plan:<userId>  (ResolvePlan)
         Note over GW: Default to free plan if missing
         GW->>GW: ClearUserHeaders + ApplyUserHeaders<br/>(X-User-ID, X-Role, X-User-Plan, X-Plan-Max-File-MB, X-Plan-Max-Files)
-        GW->>GW: withMaxBodySize 1 MB (skipped on /api/upload/*)
+        GW->>GW: withMaxBodySize 1 MiB (all service routes)
         GW->>JobSvc: Proxy with FlushInterval=-1
         JobSvc-->>GW: 201 {job}
         GW-->>Client: 201 {job}
@@ -52,9 +52,32 @@ sequenceDiagram
         GW->>Redis: SET guest:<token>:jobs
     end
     Note over GW: AuthContext IsGuest=true · X-Guest-Token forwarded
-    GW->>JobSvc: Proxy → /api/uploads/init (path rewritten)
-    JobSvc-->>GW: 201 {uploadId}
-    GW-->>Client: 201 {uploadId} + Set-Cookie guest_token (when newly issued)
+    GW->>JobSvc: Proxy → /api/uploads/init (path rewritten, JSON ≤ 1 MiB)
+    JobSvc-->>GW: 201 {uploadId, presigned URLs}
+    GW-->>Client: 201 {uploadId, presigned URLs} + Set-Cookie guest_token (when newly issued)
+```
+
+## Presigned Object Traffic — MinIO bucket proxy
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant GW as api-gateway :8080
+    participant M as MinIO :9000 (internal only)
+
+    Note over Browser: presigned URL from job-service,<br/>signed for the GATEWAY origin (S3_PUBLIC_ENDPOINT)
+
+    Browser->>GW: PUT /fyredocs-uploads/uploads/&lt;id&gt;/&lt;file&gt;?partNumber=N&X-Amz-Signature=...
+    Note over GW: root mux matches bucket prefix BEFORE CORS/auth —<br/>signature is the credential
+    Note over GW: Director: path verbatim (no strip),<br/>req.Host = original Host (SigV4 signs it),<br/>identity headers stripped
+    GW->>M: relay bytes (minioTransport, MaxIdleConnsPerHost=50, FlushInterval=-1)
+    M->>M: recompute SigV4 against received Host + path
+    M-->>GW: 200 + ETag
+    GW-->>Browser: 200 + ETag
+
+    Browser->>GW: GET /fyredocs-outputs/jobs/&lt;jobId&gt;/&lt;file&gt;?X-Amz-Signature=...
+    GW->>M: relay
+    M-->>Browser: object bytes (streamed, no buffering)
 ```
 
 ## Refresh Token Rotation — passes through to auth-service

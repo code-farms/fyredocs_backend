@@ -1,13 +1,17 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,6 +30,7 @@ import (
 	"fyredocs/shared/queue"
 	"fyredocs/shared/redisstore"
 	"fyredocs/shared/response"
+	"fyredocs/shared/storage"
 
 	"job-service/internal/models"
 	"job-service/internal/routing"
@@ -83,22 +88,12 @@ func CreateJobFromTool(c *gin.Context) {
 		}
 	}
 
-	jobID := uuid.New()
-	uploadDir := uploadBaseDir()
-	jobDir := filepath.Join(uploadDir, jobID.String())
-	// Fix #17: Use 0750 instead of os.ModePerm
-	if err := os.MkdirAll(jobDir, 0750); err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Something went wrong. Please try again.", err,
-			"op", "create_job_dir", "jobDir", jobDir, "tool", toolType, "jobId", jobID)
+	if objStore == nil {
+		response.InternalError(c, "SERVER_ERROR", "File storage is unavailable. Please try again later.")
 		return
 	}
 
-	jobCreated := false
-	defer func() {
-		if !jobCreated {
-			_ = os.RemoveAll(jobDir)
-		}
-	}()
+	jobID := uuid.New()
 
 	var totalSize int64
 	var inputPaths []string
@@ -146,28 +141,23 @@ func CreateJobFromTool(c *gin.Context) {
 
 		optionsRaw = string(uploadReq.Options)
 
-		for idx, uploadID := range uploadIDs {
-			consumed, size, err := consumeUpload(c.Request.Context(), toolType, uploadID, jobDir, idx)
+		for _, uploadID := range uploadIDs {
+			consumed, err := consumeUpload(c.Request.Context(), toolType, uploadID)
 			if err != nil {
 				response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", err.Error(), err,
 					"op", "consume_upload", "uploadId", uploadID, "tool", toolType, "jobId", jobID)
 				return
 			}
 			consumedUploadIDs = append(consumedUploadIDs, uploadID)
-			if err := validateMIMEType(toolType, consumed.Path); err != nil {
-				response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", err.Error(), err,
-					"op", "validate_mime", "uploadId", uploadID, "tool", toolType, "path", consumed.Path)
-				return
-			}
-			totalSize += size
-			inputPaths = append(inputPaths, consumed.Path)
+			totalSize += consumed.Size
+			inputPaths = append(inputPaths, consumed.Key)
 			fileMetas = append(fileMetas, models.FileMetadata{
 				ID:           uuid.New(),
 				JobID:        jobID,
 				Kind:         "input",
 				OriginalName: consumed.OriginalName,
-				Path:         consumed.Path,
-				SizeBytes:    size,
+				Path:         consumed.Key,
+				SizeBytes:    consumed.Size,
 			})
 			if originalName == "" {
 				originalName = consumed.OriginalName
@@ -216,25 +206,25 @@ func CreateJobFromTool(c *gin.Context) {
 					"op", "validate_file_type", "tool", toolType, "fileName", file.Filename)
 				return
 			}
-			dst := filepath.Join(jobDir, filepath.Base(file.Filename))
-			if err := c.SaveUploadedFile(file, dst); err != nil {
+			key, err := storeDirectUpload(c.Request.Context(), toolType, jobID.String(), file)
+			if err != nil {
+				if errors.As(err, new(invalidInputError)) {
+					response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", err.Error(), err,
+						"op", "validate_mime", "tool", toolType, "fileName", file.Filename, "jobId", jobID)
+					return
+				}
 				response.InternalErrorf(c, "SERVER_ERROR", "Something went wrong. Please try again.", err,
-					"op", "save_uploaded_file", "tool", toolType, "dst", dst, "jobId", jobID)
-				return
-			}
-			if err := validateMIMEType(toolType, dst); err != nil {
-				response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", err.Error(), err,
-					"op", "validate_mime", "tool", toolType, "path", dst, "jobId", jobID)
+					"op", "store_direct_upload", "tool", toolType, "fileName", file.Filename, "jobId", jobID)
 				return
 			}
 			totalSize += file.Size
-			inputPaths = append(inputPaths, dst)
+			inputPaths = append(inputPaths, key)
 			fileMetas = append(fileMetas, models.FileMetadata{
 				ID:           uuid.New(),
 				JobID:        jobID,
 				Kind:         "input",
 				OriginalName: file.Filename,
-				Path:         dst,
+				Path:         key,
 				SizeBytes:    file.Size,
 			})
 		}
@@ -319,13 +309,12 @@ func CreateJobFromTool(c *gin.Context) {
 		return
 	}
 
-	jobCreated = true
-
 	// Free the upload slot only after the job is fully committed and queued.
 	// On any failure above this line, the upload state is preserved so the
-	// frontend can retry with the same uploadId without re-uploading. Record
-	// the upload->job mapping before releasing so a duplicate POST with the
-	// same uploadId returns the original job instead of "upload not found".
+	// frontend can retry with the same uploadId without re-uploading (the
+	// object stays at its uploads/{uploadId}/... key). Record the upload->job
+	// mapping before releasing so a duplicate POST with the same uploadId
+	// returns the original job instead of "upload not found".
 	for _, id := range consumedUploadIDs {
 		recordConsumedUpload(c.Request.Context(), id, job.ID.String())
 		releaseUpload(c.Request.Context(), id)
@@ -434,8 +423,17 @@ func DeleteJobByID(c *gin.Context) {
 		slog.Error("failed to fetch file metadata for deletion", "jobId", job.ID, "error", err)
 	}
 	for _, file := range files {
-		if err := os.Remove(file.Path); err != nil {
-			slog.Warn("failed to remove file", "path", file.Path, "error", err)
+		// Legacy rows from the pre-S3 protocol stored absolute disk paths —
+		// there is nothing to remove from object storage for those.
+		if strings.HasPrefix(file.Path, "/") {
+			continue
+		}
+		if objStore == nil {
+			slog.Warn("object store unavailable, skipping object removal", "path", file.Path)
+			continue
+		}
+		if err := objStore.RemoveObject(c.Request.Context(), bucketFor(file.Kind), file.Path); err != nil {
+			slog.Warn("failed to remove object", "path", file.Path, "kind", file.Kind, "error", err)
 		}
 	}
 	if err := models.DB.Where("job_id = ?", job.ID).Delete(&models.FileMetadata{}).Error; err != nil {
@@ -485,10 +483,36 @@ func DownloadJobFile(c *gin.Context) {
 	}
 
 	fileName, contentType := outputFileName(job.ToolType, job.FileName, job.Metadata)
-	// Fix #6: Use mime.FormatMediaType for safe Content-Disposition
-	c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": fileName}))
-	c.Header("Content-Type", contentType)
-	c.File(outputFile.Path)
+	redirectToOutput(c, outputFile.Path, fileName, contentType)
+}
+
+// downloadURLExpiry is how long a presigned output download URL stays valid.
+const downloadURLExpiry = 5 * time.Minute
+
+// redirectToOutput 302-redirects the client to a short-lived presigned GET
+// URL for the output object, forcing attachment disposition (RFC-safe via
+// mime.FormatMediaType) and the computed content type. Legacy rows whose Path
+// is an absolute disk path (pre-S3 protocol) can no longer be served and
+// yield 404.
+func redirectToOutput(c *gin.Context, key string, fileName string, contentType string) {
+	if strings.HasPrefix(key, "/") {
+		response.NotFound(c, "NOT_FOUND", "This download link has expired. Please process your file again.")
+		return
+	}
+	if objStore == nil {
+		response.InternalError(c, "SERVER_ERROR", "File storage is unavailable. Please try again later.")
+		return
+	}
+	params := url.Values{}
+	params.Set("response-content-disposition", mime.FormatMediaType("attachment", map[string]string{"filename": fileName}))
+	params.Set("response-content-type", contentType)
+	signed, err := objStore.PresignGet(c.Request.Context(), objStore.BucketOutputs(), key, downloadURLExpiry, params)
+	if err != nil {
+		response.InternalErrorf(c, "SERVER_ERROR", "Could not prepare the download. Please try again.", err,
+			"op", "s3.presign_get", "key", key)
+		return
+	}
+	c.Redirect(http.StatusFound, signed)
 }
 
 func GetJobHistory(c *gin.Context) {
@@ -516,83 +540,103 @@ func GetJobHistory(c *gin.Context) {
 	response.OKWithMeta(c, "Job history loaded", toJobResponses(jobs), &response.Meta{Page: page, Limit: limit})
 }
 
+// consumedUpload describes an uploaded object that a new job will consume.
 type consumedUpload struct {
-	Path         string
+	// Key is the object key inside the uploads bucket
+	// (uploads/{uploadId}/{fileName}).
+	Key          string
 	OriginalName string
+	Size         int64
 }
 
-// consumeUpload materialises an uploaded file into jobDir without removing the
-// source. The Redis state and original upload directory are intentionally left
-// in place so the caller can retry on a downstream failure (MIME validation,
-// DB transaction, queue publish) without forcing the user to re-upload. The
+// consumeUpload validates a completed presigned-multipart upload session for
+// job creation: the Redis state must exist, the object must exist in the
+// uploads bucket (its true size comes from StatObject, never from the
+// client), and its first 512 bytes must sniff to a MIME type allowed for the
+// tool. Nothing is moved or deleted here — the object stays at its
+// uploads/{uploadId}/... key (workers read it from there) and the Redis state
+// is preserved so the caller can retry on a downstream failure (DB
+// transaction, queue publish) without forcing the user to re-upload. The
 // caller must invoke releaseUpload after the job is committed to free the
 // upload slot.
-func consumeUpload(ctx context.Context, toolType string, uploadID string, jobDir string, index int) (consumedUpload, int64, error) {
+func consumeUpload(ctx context.Context, toolType string, uploadID string) (consumedUpload, error) {
 	if uploadID == "" {
-		return consumedUpload{}, 0, fmt.Errorf("uploadId is required")
+		return consumedUpload{}, fmt.Errorf("uploadId is required")
 	}
 	if redisstore.Client == nil {
-		return consumedUpload{}, 0, logger.LogErr(ctx, "consume_upload.redis_unavailable",
+		return consumedUpload{}, logger.LogErr(ctx, "consume_upload.redis_unavailable",
 			fmt.Errorf("redis client is nil"), "uploadId", uploadID)
+	}
+	if objStore == nil {
+		return consumedUpload{}, logger.LogErr(ctx, "consume_upload.storage_unavailable",
+			fmt.Errorf("object store is nil"), "uploadId", uploadID)
 	}
 	state, err := redisstore.Client.HGetAll(ctx, uploadStateKey(uploadID)).Result()
 	if err != nil {
 		if err == redis.Nil {
 			logger.LogWarn(ctx, "consume_upload.not_found", err, "uploadId", uploadID)
-			return consumedUpload{}, 0, fmt.Errorf("upload not found")
+			return consumedUpload{}, fmt.Errorf("upload not found")
 		}
 		logger.LogErr(ctx, "consume_upload.redis_hgetall", err, "uploadId", uploadID)
-		return consumedUpload{}, 0, fmt.Errorf("failed to read upload state")
+		return consumedUpload{}, fmt.Errorf("failed to read upload state")
 	}
 	if len(state) == 0 {
-		return consumedUpload{}, 0, fmt.Errorf("upload not found")
+		return consumedUpload{}, fmt.Errorf("upload not found")
 	}
 	fileName := state["fileName"]
 	if fileName == "" {
-		return consumedUpload{}, 0, logger.LogErr(ctx, "consume_upload.missing_filename",
+		return consumedUpload{}, logger.LogErr(ctx, "consume_upload.missing_filename",
 			fmt.Errorf("redis upload state has no fileName"), "uploadId", uploadID)
 	}
 	if err := validateFileType(toolType, fileName); err != nil {
-		return consumedUpload{}, 0, err
+		return consumedUpload{}, err
 	}
-	sourcePath := filepath.Join(uploadBaseDir(), uploadID, fileName)
-	if _, err := os.Stat(sourcePath); err != nil {
-		logger.LogErr(ctx, "consume_upload.source_stat", err, "uploadId", uploadID, "sourcePath", sourcePath)
-		return consumedUpload{}, 0, fmt.Errorf("assembled file missing")
+	key := state["key"]
+	if key == "" {
+		return consumedUpload{}, logger.LogErr(ctx, "consume_upload.missing_key",
+			fmt.Errorf("redis upload state has no object key"), "uploadId", uploadID)
+	}
+	bucket := state["bucket"]
+	if bucket == "" {
+		bucket = objStore.BucketUploads()
 	}
 
-	destName := uniqueUploadFileName(uploadID, fileName, index)
-	destPath := filepath.Join(jobDir, destName)
-	if err := linkOrCopyFile(sourcePath, destPath); err != nil {
-		logger.LogErr(ctx, "consume_upload.link_or_copy", err,
-			"uploadId", uploadID, "sourcePath", sourcePath, "destPath", destPath)
-		return consumedUpload{}, 0, fmt.Errorf("failed to move upload")
-	}
-	info, err := os.Stat(destPath)
+	info, err := objStore.StatObject(ctx, bucket, key)
 	if err != nil {
-		return consumedUpload{}, 0, logger.LogErr(ctx, "consume_upload.dest_stat", err,
-			"uploadId", uploadID, "destPath", destPath)
+		if storage.IsNotFound(err) {
+			logger.LogWarn(ctx, "consume_upload.object_missing", err, "uploadId", uploadID, "key", key)
+			return consumedUpload{}, fmt.Errorf("uploaded file not found — please finish uploading first")
+		}
+		logger.LogErr(ctx, "consume_upload.stat", err, "uploadId", uploadID, "key", key)
+		return consumedUpload{}, fmt.Errorf("failed to verify the uploaded file")
 	}
-	if info.Size() > maxUploadBytes() {
-		return consumedUpload{}, 0, fmt.Errorf("file exceeds maximum size")
+	if info.Size > maxUploadBytes() {
+		return consumedUpload{}, fmt.Errorf("file exceeds maximum size")
 	}
 
-	return consumedUpload{Path: destPath, OriginalName: fileName}, info.Size(), nil
+	head, err := objStore.GetObjectRange(ctx, bucket, key, 0, sniffLen)
+	if err != nil {
+		logger.LogErr(ctx, "consume_upload.sniff_read", err, "uploadId", uploadID, "key", key)
+		return consumedUpload{}, fmt.Errorf("failed to verify the uploaded file")
+	}
+	if err := validateMIMEHead(toolType, head); err != nil {
+		return consumedUpload{}, err
+	}
+
+	return consumedUpload{Key: key, OriginalName: fileName, Size: info.Size}, nil
 }
 
-// releaseUpload clears the Redis state and removes the source upload directory
-// for a successfully consumed upload. Failures are logged but never returned —
-// the job has already been queued and a stuck upload record will be cleaned up
-// by the cleanup-worker / TTL.
+// releaseUpload clears the Redis session state for a successfully consumed
+// upload. The object itself is NOT removed — workers read it from its
+// uploads/{uploadId}/... key; the cleanup-worker reaps it later. Failures are
+// logged but never returned — the job has already been queued and a stuck
+// upload record will be cleaned up by the Redis TTL.
 func releaseUpload(ctx context.Context, uploadID string) {
 	if uploadID == "" || redisstore.Client == nil {
 		return
 	}
-	if err := redisstore.Client.Del(ctx, uploadStateKey(uploadID), uploadStateKey(uploadID)+":chunks").Err(); err != nil {
+	if err := redisstore.Client.Del(ctx, uploadStateKey(uploadID), uploadChunkSetKey(uploadID)).Err(); err != nil {
 		slog.Warn("failed to clear upload state", "uploadId", uploadID, "error", err)
-	}
-	if err := os.RemoveAll(filepath.Join(uploadBaseDir(), uploadID)); err != nil {
-		slog.Warn("failed to remove upload directory", "uploadId", uploadID, "error", err)
 	}
 }
 
@@ -649,49 +693,58 @@ func findExistingJobForUploads(ctx context.Context, uploadIDs []string) (*models
 	return &existing, true
 }
 
-func uniqueUploadFileName(uploadID string, fileName string, index int) string {
-	base := filepath.Base(fileName)
-	if uploadID == "" {
-		return base
+// sniffLen is how many leading bytes feed http.DetectContentType (the
+// maximum the standard library considers).
+const sniffLen = 512
+
+// invalidInputError marks failures caused by the client's file content (e.g.
+// a MIME sniff mismatch) so handlers can map them to 400 instead of 500.
+type invalidInputError struct{ msg string }
+
+func (e invalidInputError) Error() string { return e.msg }
+
+// storeDirectUpload streams one multipart file straight into the uploads
+// bucket under uploads/{jobID}/{fileName}, teeing off the first 512 bytes for
+// MIME validation without buffering the whole file in memory. Used by the
+// direct-multipart job-creation branch (API clients / small files); browser
+// uploads use the presigned multipart protocol instead. Returns the object
+// key. MIME/file-name failures are returned as invalidInputError.
+func storeDirectUpload(ctx context.Context, toolType string, jobID string, fh *multipart.FileHeader) (string, error) {
+	fileName := sanitizeFileName(fh.Filename)
+	if fileName == "" {
+		return "", invalidInputError{msg: "invalid file name"}
 	}
-	return fmt.Sprintf("%s_%d_%s", uploadID, index, base)
+	src, err := fh.Open()
+	if err != nil {
+		return "", fmt.Errorf("open multipart file: %w", err)
+	}
+	defer src.Close()
+
+	head := make([]byte, sniffLen)
+	n, err := io.ReadFull(src, head)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return "", fmt.Errorf("read multipart file head: %w", err)
+	}
+	head = head[:n]
+	if err := validateMIMEHead(toolType, head); err != nil {
+		return "", invalidInputError{msg: err.Error()}
+	}
+
+	key := fmt.Sprintf("uploads/%s/%s", jobID, fileName)
+	body := io.MultiReader(bytes.NewReader(head), src)
+	if err := objStore.PutObject(ctx, objStore.BucketUploads(), key, body, fh.Size, http.DetectContentType(head)); err != nil {
+		return "", err
+	}
+	return key, nil
 }
 
-// linkOrCopyFile materialises src at dst without removing src. It first tries
-// a hardlink (zero-copy on the same filesystem) and falls back to a byte copy
-// when hardlinking is not supported (cross-device, EXDEV, or filesystems that
-// disallow links). Leaving src intact is what makes the upload retry-safe.
-func linkOrCopyFile(src string, dst string) error {
-	if err := os.Link(src, dst); err == nil {
-		return nil
+// bucketFor maps a FileMetadata kind to the bucket holding its object:
+// inputs live in the uploads bucket, outputs in the outputs bucket.
+func bucketFor(kind string) string {
+	if kind == "input" {
+		return objStore.BucketUploads()
 	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-
-	copied := false
-	defer func() {
-		_ = out.Close()
-		if !copied {
-			_ = os.Remove(dst)
-		}
-	}()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	if err := out.Sync(); err != nil {
-		return err
-	}
-	copied = true
-	return nil
+	return objStore.BucketOutputs()
 }
 
 func normalizeToolType(toolType string) (string, error) {
@@ -926,9 +979,12 @@ func mimeCategory(toolType string) string {
 	}
 }
 
-// validateMIMEType reads the first 512 bytes of the file and checks that
-// the detected MIME type is in the allowlist for the given tool type.
-func validateMIMEType(toolType string, filePath string) error {
+// validateMIMEHead checks that the MIME type detected from the first bytes
+// of a file (http.DetectContentType over up to 512 bytes) is in the allowlist
+// for the given tool type. Callers pass the object's leading bytes — read via
+// GetObjectRange for presigned uploads or teed off the multipart stream for
+// direct uploads.
+func validateMIMEHead(toolType string, head []byte) error {
 	category := mimeCategory(toolType)
 	if category == "" {
 		return nil // unknown category, skip MIME check
@@ -938,18 +994,10 @@ func validateMIMEType(toolType string, filePath string) error {
 		return nil
 	}
 
-	f, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to open file for MIME detection")
+	if len(head) > sniffLen {
+		head = head[:sniffLen]
 	}
-	defer f.Close()
-
-	buf := make([]byte, 512)
-	n, err := f.Read(buf)
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("failed to read file for MIME detection")
-	}
-	detected := http.DetectContentType(buf[:n])
+	detected := http.DetectContentType(head)
 
 	for _, a := range allowed {
 		if detected == a {

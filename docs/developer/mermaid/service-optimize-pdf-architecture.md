@@ -23,6 +23,8 @@ graph TB
             CONSUMER["JetStream Pull Consumer<br/>Durable: optimize-pdf<br/>Filter: jobs.dispatch.optimize-pdf"]
             MSGLOOP["Message Loop<br/>(Fetch 1, 30s wait)"]
             DISPATCH["Tool Dispatcher"]
+            STAGE["fetchInputs()<br/>(uploads bucket → scratch/in)"]
+            STORE["storeOutput()<br/>(scratch/out → outputs bucket jobs/&lt;jobId&gt;/...)"]
         end
 
         subgraph Processing["processing package"]
@@ -42,16 +44,20 @@ graph TB
     NATS["NATS JetStream<br/>JOBS_DISPATCH"] -->|jobs.dispatch.optimize-pdf| CONSUMER
     CONSUMER --> MSGLOOP --> DISPATCH
 
-    DISPATCH --> PROC
+    DISPATCH --> STAGE --> PROC
     PROC --> COMPRESS
     PROC --> REPAIR
     PROC --> OCR
+    PROC --> STORE
 
     DISPATCH -->|Update status| DB_CONN
     DB_CONN --> PG[(PostgreSQL)]
     HEALTHZ -->|Ping| Redis[(Redis)]
     HEALTHZ -->|Check connected| NATS
-    PROC --> Disk[(File System<br/>outputs/)]
+    MINIO[("MinIO / S3<br/>uploads + outputs buckets")]
+    STAGE -->|DownloadToFile| MINIO
+    STORE -->|UploadFromFile| MINIO
+    PROC --> Scratch[(container-local scratch dir<br/>job-&lt;jobId&gt;-* · removed after job)]
 ```
 
 ## Allowed Tool Types

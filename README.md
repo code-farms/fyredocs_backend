@@ -19,44 +19,50 @@ The script generates a JWT secret, starts all services with Docker Compose, and 
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **API Gateway** | 8080 | Reverse proxy, CORS, JWT/guest verification, plan resolution, SPA hosting |
+| **API Gateway** | 8080 | Reverse proxy, CORS, JWT/guest verification, plan resolution, SPA hosting, presigned MinIO proxy (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`) |
 | **Auth Service** | 8086 | Signup, login, refresh-token rotation with DB-backed sessions, plan management |
-| **Job Service** | 8081 | Chunked uploads, job creation, NATS publish, SSE streaming, history |
+| **Job Service** | 8081 | Presigned (multipart) uploads to MinIO, job creation, NATS publish, SSE streaming, history |
 | **Convert From PDF** | 8082 | PDF → DOCX (pdf2docx + LibreOffice fallback) / XLSX / PPTX (image-based) / Image / HTML / Text / ODF |
-| **Convert To PDF** | 8083 | Word / Excel / PowerPoint / HTML / Image → PDF (LibreOffice via unoserver) |
+| **Convert To PDF** | 8083 | Word / Excel / PowerPoint / HTML / Image → PDF (LibreOffice via unoserver); ships with 2 replicas |
 | **Organize PDF** | 8084 | Merge, split, rotate, extract, remove, watermark, protect, unlock, sign, edit, page numbers (pdfcpu) |
 | **Optimize PDF** | 8085 | Compress, repair, OCR (Ghostscript / Tesseract) |
 | **Analytics Service** | 8087 | Business / engagement / reliability metrics, NATS subscriber |
-| **Cleanup Worker** | 8088 | Background TTL cleanup of jobs, uploads, orphaned dirs (health/metrics endpoints only) |
+| **Cleanup Worker** | 8088 | Background TTL cleanup of jobs, upload sessions, and their MinIO objects; aborts stale multipart uploads (health/metrics endpoints only) |
+| **MinIO** | — (internal) | Object storage for all file bytes (`fyredocs-uploads`, `fyredocs-outputs`); bootstrapped by the one-shot `minio-init` container (buckets, lifecycle rules, scoped app user) |
 
 ## Request Flow
 
 ```
 Client → API Gateway (:8080)
-            │  • CORS, security headers, body-size limit (1MB except uploads)
+            │  • CORS, security headers, body-size limit (1MB on all service routes)
             │  • JWT/guest token verification
             │  • Plan info resolution from Redis cache
             │
+            ├─ /fyredocs-uploads/*   → MinIO (presigned PUT/multipart parts — no auth, Host preserved for SigV4)
+            ├─ /fyredocs-outputs/*   → MinIO (presigned GET downloads)
             ├─ /auth/*               → Auth Service (:8086)
-            ├─ /api/upload/*         → Job Service (:8081, rewritten to /api/uploads/*)
+            ├─ /api/upload/*         → Job Service (:8081, rewritten to /api/uploads/*; JSON init/complete only)
             ├─ /api/jobs/*           → Job Service (:8081)
             ├─ /api/{convert-from,convert-to,organize,optimize}-pdf/* → Job Service (:8081)
             ├─ /admin/*              → Analytics Service (:8087)
             └─ /                     → SPA static files (when SPA_DIR is set)
                           │
                           ▼
-                    NATS JetStream  (jobs.dispatch.<service-name>)
+                    NATS JetStream  (jobs.dispatch.<service-name> — payloads carry object keys, not bytes)
                           │
         ┌─────────────────┼──────────────────┬──────────────────┐
         ▼                 ▼                  ▼                  ▼
-  convert-from-pdf  convert-to-pdf     organize-pdf      optimize-pdf
+  convert-from-pdf  convert-to-pdf ×2   organize-pdf      optimize-pdf
+        │                 │                  │                  │
+        │   download input from MinIO → process in tmpfs → upload output to MinIO
         │                 │                  │                  │
         └────────┬────────┴────────┬─────────┴────────┬─────────┘
                  ▼                 ▼                  ▼
-            PostgreSQL (status update)   Filesystem (output)   NATS jobs.events.<jobId>.* (progress / completed / failed)
+            PostgreSQL (status)   MinIO (jobs/<jobId>/output)   NATS jobs.events.<jobId>.* (progress / completed / failed)
                                                                        │
                                                                        ▼
                                                               SSE stream → client
+                                                              (download via presigned URL through the gateway)
 ```
 
 ## Technology Stack
@@ -65,6 +71,7 @@ Client → API Gateway (:8080)
 - **Web Framework**: Gin (services) + net/http (api-gateway)
 - **Database**: PostgreSQL 15 (per-service schema, UUIDv7 IDs, pooled DSN)
 - **Cache / Sessions**: Redis 7 (token denylist, upload state, rate limiting, plan cache, cleanup lock)
+- **Object Storage**: MinIO (S3-compatible) — buckets `fyredocs-uploads` / `fyredocs-outputs`, presigned URLs proxied same-origin through the gateway
 - **Message Bus**: NATS JetStream — streams: `JOBS_DISPATCH`, `JOBS_EVENTS`, `JOBS_DLQ`, `ANALYTICS`
 - **Document Processing**: LibreOffice + unoserver, pdf2docx, pdfcpu, Poppler, Ghostscript, Tesseract OCR
 - **Auth**: JWT (HS256) with HTTP-only cookies, refresh-token rotation, DB-backed sessions

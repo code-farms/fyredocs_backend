@@ -19,6 +19,7 @@ The Convert From PDF service converts PDF files to other formats including image
 6. **PDF to PDF/A** - Convert PDF to archival PDF/A format
 6. **Job Processing** - Pick jobs from Redis queue and process them
 7. **Status Updates** - Update job status and progress in database
+8. **Object storage I/O** - Download input objects from the S3 uploads bucket into a container-local scratch directory; upload the conversion output to the S3 outputs bucket under `jobs/{jobID}/...`
 
 ## Architecture
 
@@ -31,7 +32,10 @@ convert-from-pdf worker
   ├─ Validate AllowedTools[toolType]
   ├─ Duplicate-job guard (skip if already completed/processing)
   ├─ Update DB → status='processing', progress=20
-  ├─ Run processing.ProcessFile():
+  ├─ Create scratch dir (os.MkdirTemp "job-<jobId>-*", removed when done)
+  ├─ Download inputs: S3 uploads bucket keys (payload.inputPaths) → <scratch>/in/
+  │  (download failure → recoverable, NAK + backoff)
+  ├─ Run processing.ProcessFile() on local files, output to <scratch>/out:
   │     ├─ pdf-to-image      → pdftoppm (Poppler) → single PNG or ZIP
   │     ├─ pdf-to-word/docx  → pdf2docx (primary) → LibreOffice writer_pdf_import (fallback)
   │     ├─ pdf-to-excel/xlsx → LibreOffice Calc (writer_pdf_import → xlsx)
@@ -40,10 +44,21 @@ convert-from-pdf worker
   │     ├─ pdf-to-text/txt   → pdftotext
   │     ├─ pdf-to-pdfa       → Ghostscript (PDF/A-2b)
   │     └─ pdf-to-odt/ods/odp → LibreOffice writer_pdf_import → odt/ods/odp
-  ├─ DB → status='completed', progress=100; INSERT file_metadata (kind=output)
+  ├─ Upload output: <scratch>/out/<file> → S3 outputs bucket jobs/<jobId>/<file>
+  │  (upload failure → recoverable, NAK + backoff)
+  ├─ DB → status='completed', progress=100; INSERT file_metadata
+  │  (kind=output, path=object key, size_bytes=uploaded size)
   ├─ Publish jobs.events.<jobId>.{processing,completed,failed}
   └─ On MaxDeliver exhaustion → publish JobFailed to jobs.dlq.convert-from-pdf
 ```
+
+### Object Storage
+
+Inputs and outputs live in S3-compatible object storage (MinIO in compose), not on a shared volume:
+
+- `payload.inputPaths` carries **object keys** in the uploads bucket. The worker downloads each key to `<scratch>/in/<basename>` before processing, because LibreOffice/pdf2docx/Ghostscript/Poppler need real local files.
+- The output is uploaded to the outputs bucket as `jobs/{jobID}/{filename}` with an extension-derived `Content-Type`; `file_metadata.path` stores the object key and `size_bytes` the uploaded size.
+- The scratch directory is deleted after every job (success or failure). Download/upload failures are treated as recoverable and retried via NAK + backoff.
 
 ## Supported Tools
 
@@ -399,8 +414,13 @@ curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-odp \
 | `REDIS_ADDR` | **Required** | Redis server address |
 | `REDIS_PASSWORD` | `""` | Redis password (if required) |
 | `REDIS_DB` | `0` | Redis database number |
-| `UPLOAD_DIR` | `/app/uploads` | Input files directory |
-| `OUTPUT_DIR` | `/app/outputs` | Output files directory |
+| `S3_ENDPOINT` | **Required** | S3-compatible endpoint for data operations (e.g. `minio:9000`) |
+| `S3_ACCESS_KEY` | **Required** | S3 access key |
+| `S3_SECRET_KEY` | **Required** | S3 secret key |
+| `S3_USE_SSL` | `false` | Use TLS to reach the S3 endpoint |
+| `S3_BUCKET_UPLOADS` | `fyredocs-uploads` | Bucket holding job input objects |
+| `S3_BUCKET_OUTPUTS` | `fyredocs-outputs` | Bucket receiving job outputs (`jobs/{jobID}/...`) |
+| `S3_REGION` | `us-east-1` | Signing region (MinIO ignores it; AWS must match) |
 | `QUEUE_PREFIX` | `queue` | Redis queue key prefix |
 | `MAX_RETRIES` | `3` | Max retry attempts for failed jobs |
 | `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing (currently honoured via NATS `AckWait` rather than a context deadline in code) |
@@ -458,16 +478,17 @@ convert-from-pdf:
   environment:
     DATABASE_URL: postgresql://user:password@db:5432/fyredocs
     REDIS_ADDR: redis:6379
-    UPLOAD_DIR: /app/uploads
-    OUTPUT_DIR: /app/outputs
+    S3_ENDPOINT: minio:9000
+    S3_ACCESS_KEY: minioadmin
+    S3_SECRET_KEY: minioadmin
+    S3_BUCKET_UPLOADS: fyredocs-uploads
+    S3_BUCKET_OUTPUTS: fyredocs-outputs
     MAX_RETRIES: "3"
     PROCESSING_TIMEOUT: 30m
-  volumes:
-    - uploads_data:/app/uploads
-    - outputs_data:/app/outputs
   depends_on:
     - db
     - redis
+    - minio
 ```
 
 ### Local Development
@@ -494,6 +515,9 @@ convert-from-pdf:
    cd convert-from-pdf
    export DATABASE_URL="postgresql://user:password@localhost:5432/fyredocs"
    export REDIS_ADDR="localhost:6379"
+   export S3_ENDPOINT="localhost:9000"
+   export S3_ACCESS_KEY="minioadmin"
+   export S3_SECRET_KEY="minioadmin"
    go run main.go
    ```
 
@@ -566,7 +590,7 @@ sequenceDiagram
     participant NATS as NATS JetStream
     participant W as convert-from-pdf Worker
     participant DB as PostgreSQL
-    participant FS as File System
+    participant S3 as MinIO / S3
     participant LO as LibreOffice/Poppler/GS
 
     JS->>NATS: Publish JobCreated to jobs.dispatch.convert-from-pdf
@@ -575,13 +599,20 @@ sequenceDiagram
     W->>W: Validate toolType in AllowedTools
     W->>DB: UPDATE processing_jobs SET status='processing'
 
-    W->>FS: Read input file from inputPaths
-    W->>LO: Execute conversion (tool-specific command)
+    W->>W: Create scratch dir (job-scoped temp)
+    W->>S3: Download inputPaths keys (uploads bucket → scratch/in)
+    alt Download fails
+        W->>NATS: NAK with backoff (recoverable)
+    end
+    W->>LO: Execute conversion (tool-specific command, output to scratch/out)
 
     alt Conversion succeeds
-        LO-->>W: Output file(s) produced
-        W->>FS: Write output to output directory
-        W->>DB: INSERT file_metadata (kind='output')
+        LO-->>W: Output file produced in scratch/out
+        W->>S3: Upload output (outputs bucket, jobs/<jobId>/<file>)
+        alt Upload fails
+            W->>NATS: NAK with backoff (recoverable)
+        end
+        W->>DB: INSERT file_metadata (kind='output', path=object key, size=uploaded bytes)
         W->>DB: UPDATE processing_jobs SET status='completed', progress=100
         W->>NATS: Ack message
     else Conversion fails
@@ -589,6 +620,7 @@ sequenceDiagram
         W->>DB: UPDATE processing_jobs SET status='failed', failure_reason=error
         W->>NATS: Ack message (no redelivery for permanent failures)
     end
+    W->>W: Remove scratch dir
 ```
 
 ### PDF-to-Image Conversion Detail

@@ -18,6 +18,7 @@ import (
 	"fyredocs/shared/metrics"
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/redisstore"
+	"fyredocs/shared/storage"
 	"fyredocs/shared/telemetry"
 
 	"convert-to-pdf/internal/models"
@@ -33,6 +34,12 @@ func main() {
 	models.Connect()
 	models.Migrate()
 	redisstore.Connect()
+
+	store, err := storage.NewFromEnv()
+	if err != nil {
+		slog.Error("object storage init failed", "error", err)
+		os.Exit(1)
+	}
 
 	if err := natsconn.Connect(); err != nil {
 		slog.Error("NATS connection failed", "error", err)
@@ -73,6 +80,7 @@ func main() {
 		JS:          natsconn.JS,
 		RedisClient: redisstore.Client,
 		DB:          models.DB,
+		Storage:     store,
 	})
 
 	r := gin.New()

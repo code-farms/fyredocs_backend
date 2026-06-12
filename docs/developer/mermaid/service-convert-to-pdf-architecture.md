@@ -26,7 +26,9 @@ graph TB
             SEM["Semaphore chan struct{} sized to WORKER_CONCURRENCY"]
             DISPATCH["processMessage()<br/>(per-msg goroutine)"]
             DUP_GUARD["Duplicate-job guard<br/>(skip if already processing/completed)"]
+            STAGE["fetchInputs()<br/>(uploads bucket → scratch/in)"]
             PROG["Time-based progressReporter<br/>(20→90% ease-out · publishes events)"]
+            STORE["storeOutput()<br/>(scratch/out → outputs bucket jobs/&lt;jobId&gt;/...)"]
         end
 
         subgraph Processing["processing package"]
@@ -50,8 +52,10 @@ graph TB
     NATS["NATS JetStream<br/>JOBS_DISPATCH"] -->|jobs.dispatch.convert-to-pdf| CONSUMER
     CONSUMER --> FETCH --> SEM --> DISPATCH
     DISPATCH --> DUP_GUARD
-    DUP_GUARD --> PROG
+    DUP_GUARD --> STAGE
+    STAGE --> PROG
     PROG --> PROC
+    PROC --> STORE
 
     PROC --> OFFICE
     OFFICE --> UNO
@@ -62,7 +66,10 @@ graph TB
     DISPATCH -->|jobs.events.&lt;jobId&gt;.{processing,completed,failed}| EVENTS["JOBS_EVENTS stream"]
     DISPATCH -.->|on MaxDeliver| DLQ_PUB
 
-    OFFICE & IMG --> Disk[(File System · outputs/)]
+    MINIO[("MinIO / S3<br/>uploads + outputs buckets")]
+    STAGE -->|DownloadToFile| MINIO
+    STORE -->|UploadFromFile| MINIO
+    OFFICE & IMG --> Scratch[(container-local scratch dir<br/>job-&lt;jobId&gt;-* · removed after job)]
     JOB_MODEL & FILE_MODEL --> PG[(PostgreSQL)]
 
     HEALTHZ -->|PING| Redis[(Redis)]
@@ -114,12 +121,14 @@ graph LR
     CTP --> |shared/natsconn| NATSConn
     CTP --> |shared/redisstore| RedisStore
     CTP --> |shared/queue| Queue
+    CTP --> |shared/storage| Storage
     CTP --> |internal/models| Models
     CTP --> |internal/worker| WorkerPkg
     CTP --> |processing| ProcessingPkg
 
     NATSConn --> NATS["NATS JetStream"]
     Queue --> NATS
+    Storage --> |minio-go| S3[(MinIO / S3)]
     Models --> |GORM + UUIDv7| PG[(PostgreSQL)]
     RedisStore --> Redis[(Redis)]
     WorkerPkg --> |google/uuid| UUID

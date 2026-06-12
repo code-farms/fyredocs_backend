@@ -25,7 +25,9 @@ graph TB
             FETCH["Fetch 1 msg / 30s wait"]
             DISPATCH["processMessage()"]
             DUP_GUARD["Duplicate-job guard"]
+            STAGE["fetchInputs()<br/>(uploads bucket → scratch/in)"]
             PROG["Progress reporting<br/>(real callback for pdf2docx ticking;<br/>time-based otherwise)"]
+            STORE["storeOutput()<br/>(scratch/out → outputs bucket jobs/&lt;jobId&gt;/...)"]
         end
 
         subgraph Processing["processing package"]
@@ -54,7 +56,8 @@ graph TB
 
     NATS["NATS JetStream<br/>JOBS_DISPATCH"] -->|jobs.dispatch.convert-from-pdf| CONSUMER
     CONSUMER --> FETCH --> DISPATCH
-    DISPATCH --> DUP_GUARD --> PROG --> PROC
+    DISPATCH --> DUP_GUARD --> STAGE --> PROG --> PROC
+    PROC --> STORE
 
     PROC -->|pdf-to-image / pdf-to-img| PDF_IMG
     PROC -->|pdf-to-word / pdf-to-docx| PDF2DOCX
@@ -71,7 +74,10 @@ graph TB
     DISPATCH -->|jobs.events.&lt;jobId&gt;.{processing,completed,failed}| EVENTS["JOBS_EVENTS stream"]
     DISPATCH -.->|on MaxDeliver| DLQ_PUB
 
-    PDF_IMG & PDF2DOCX & LO_DOCX_FALLBACK & LO_XLSX & PDF_PPT_IMG & POP_HTML & POP_TEXT & GS & LO_ODF --> Disk[(File System · outputs/)]
+    MINIO[("MinIO / S3<br/>uploads + outputs buckets")]
+    STAGE -->|DownloadToFile| MINIO
+    STORE -->|UploadFromFile| MINIO
+    PDF_IMG & PDF2DOCX & LO_DOCX_FALLBACK & LO_XLSX & PDF_PPT_IMG & POP_HTML & POP_TEXT & GS & LO_ODF --> Scratch[(container-local scratch dir<br/>job-&lt;jobId&gt;-* · removed after job)]
     JOB_MODEL & FILE_MODEL --> PG[(PostgreSQL)]
     HEALTHZ --> Redis[(Redis)]
     HEALTHZ --> NATS
@@ -155,12 +161,14 @@ graph LR
     CFP --> |shared/natsconn| NATSConn
     CFP --> |shared/redisstore| RedisStore
     CFP --> |shared/queue| Queue
+    CFP --> |shared/storage| Storage
     CFP --> |internal/models| Models
     CFP --> |internal/worker| WorkerPkg
     CFP --> |processing| ProcessingPkg
 
     NATSConn --> NATS["NATS JetStream"]
     Queue --> NATS
+    Storage --> |minio-go| S3[(MinIO / S3)]
     Models --> |GORM + UUIDv7| PG[(PostgreSQL)]
     RedisStore --> Redis[(Redis)]
     WorkerPkg --> |google/uuid| UUID

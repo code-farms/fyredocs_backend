@@ -10,28 +10,36 @@ sequenceDiagram
     participant Worker as optimize-pdf worker
     participant Processing as processing.ProcessFile()
     participant PG as PostgreSQL
-    participant Disk as File System
+    participant S3 as MinIO / S3
 
     NATS->>Worker: Fetch message from<br/>jobs.dispatch.optimize-pdf
 
-    Worker->>Worker: Unmarshal JobPayload<br/>{jobId, toolType: "compress-pdf",<br/>inputPaths: ["large.pdf"],<br/>options: {quality: "medium"}}
+    Worker->>Worker: Unmarshal JobPayload<br/>{jobId, toolType: "compress-pdf",<br/>inputPaths: ["users/u1/large.pdf"],<br/>options: {quality: "medium"}}
 
     Worker->>Worker: Validate toolType in AllowedTools
 
     Worker->>PG: UPDATE processing_jobs<br/>SET status=processing, progress=20
 
-    Worker->>Processing: ProcessFile(ctx, jobId, "compress-pdf",<br/>["large.pdf"], {quality: "medium"}, outputDir)
+    Worker->>Worker: MkdirTemp scratch (job-&lt;jobId&gt;-*)
+    Worker->>S3: DownloadToFile (uploads bucket → scratch/in/large.pdf)
+    alt download fails
+        Worker->>NATS: NAK with backoff (recoverable)
+    end
 
-    Processing->>Disk: Read large.pdf (e.g., 50 MB)
+    Worker->>Processing: ProcessFile(ctx, jobId, "compress-pdf",<br/>[scratch/in/large.pdf], {quality: "medium"}, scratch/out)
+
     Processing->>Processing: Compress with quality settings
-    Processing->>Disk: Write compressed output (e.g., 12 MB)
+    Processing-->>Worker: {OutputPath: "scratch/out/compressed.pdf",<br/>Metadata: {originalSize: 50MB, compressedSize: 12MB}}
 
-    Processing-->>Worker: {OutputPath: "outputs/compressed.pdf",<br/>Metadata: {originalSize: 50MB, compressedSize: 12MB}}
-
-    Worker->>PG: INSERT file_metadata (kind=output)
+    Worker->>S3: UploadFromFile (outputs bucket, jobs/&lt;jobId&gt;/compressed.pdf) → size
+    alt upload fails
+        Worker->>NATS: NAK with backoff (recoverable)
+    end
+    Worker->>PG: INSERT file_metadata (kind=output, path=object key, size_bytes=uploaded size)
     Worker->>PG: Merge compression metadata
     Worker->>PG: UPDATE status=completed, progress=100
 
+    Worker->>Worker: RemoveAll scratch dir
     Worker->>NATS: ACK message
 ```
 
@@ -43,22 +51,21 @@ sequenceDiagram
     participant Worker as optimize-pdf worker
     participant Processing as processing.ProcessFile()
     participant PG as PostgreSQL
-    participant Disk as File System
+    participant S3 as MinIO / S3
 
-    NATS->>Worker: Fetch message<br/>{toolType: "ocr-pdf", inputPaths: ["scanned.pdf"], options: {language: "en"}}
+    NATS->>Worker: Fetch message<br/>{toolType: "ocr-pdf", inputPaths: ["users/u1/scanned.pdf"], options: {language: "en"}}
 
     Worker->>PG: SET status=processing, progress=20
 
-    Worker->>Processing: ProcessFile(ctx, jobId, "ocr-pdf",<br/>["scanned.pdf"], {language: "en"}, outputDir)
+    Worker->>S3: Download scanned.pdf key → scratch/in
+    Worker->>Processing: ProcessFile(ctx, jobId, "ocr-pdf",<br/>[scratch/in/scanned.pdf], {language: "en"}, scratch/out)
 
-    Processing->>Disk: Read scanned PDF
     Processing->>Processing: Run OCR engine<br/>(extract text from images)
     Processing->>Processing: Add searchable text layer
-    Processing->>Disk: Write OCR-enhanced PDF
+    Processing-->>Worker: {OutputPath in scratch/out, Metadata}
 
-    Processing-->>Worker: {OutputPath, Metadata}
-
-    Worker->>PG: Record output, merge metadata
+    Worker->>S3: Upload OCR-enhanced PDF → outputs bucket jobs/&lt;jobId&gt;/...
+    Worker->>PG: Record output (object key + uploaded size), merge metadata
     Worker->>PG: SET status=completed, progress=100
     Worker->>NATS: ACK
 ```
@@ -71,21 +78,20 @@ sequenceDiagram
     participant Worker as optimize-pdf worker
     participant Processing as processing.ProcessFile()
     participant PG as PostgreSQL
-    participant Disk as File System
+    participant S3 as MinIO / S3
 
-    NATS->>Worker: Fetch message<br/>{toolType: "repair-pdf", inputPaths: ["corrupted.pdf"]}
+    NATS->>Worker: Fetch message<br/>{toolType: "repair-pdf", inputPaths: ["users/u1/corrupted.pdf"]}
 
     Worker->>PG: SET status=processing, progress=20
 
-    Worker->>Processing: ProcessFile(ctx, jobId, "repair-pdf",<br/>["corrupted.pdf"], {}, outputDir)
+    Worker->>S3: Download corrupted.pdf key → scratch/in
+    Worker->>Processing: ProcessFile(ctx, jobId, "repair-pdf",<br/>[scratch/in/corrupted.pdf], {}, scratch/out)
 
-    Processing->>Disk: Read corrupted PDF
     Processing->>Processing: Analyze and repair structure
-    Processing->>Disk: Write repaired PDF
+    Processing-->>Worker: {OutputPath in scratch/out, Metadata}
 
-    Processing-->>Worker: {OutputPath, Metadata}
-
-    Worker->>PG: Record output, SET status=completed
+    Worker->>S3: Upload repaired PDF → outputs bucket jobs/&lt;jobId&gt;/...
+    Worker->>PG: Record output (object key + uploaded size), SET status=completed
     Worker->>NATS: ACK
 ```
 

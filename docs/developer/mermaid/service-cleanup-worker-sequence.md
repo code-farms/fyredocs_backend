@@ -10,6 +10,7 @@ sequenceDiagram
     participant Cfg as shared/config
     participant DB as PostgreSQL
     participant R as Redis
+    participant S3 as MinIO (shared/storage)
     participant HTTP as Gin :8088
     participant Cleanup as runCleanup()
 
@@ -18,16 +19,20 @@ sequenceDiagram
     Main->>Main: telemetry.Init("cleanup-worker")
     Main->>DB: models.Connect() + Migrate()
     Main->>R: redisstore.Connect()
+    Main->>S3: storage.NewFromEnv()
+    alt S3_* config missing
+        Main->>Main: log error + os.Exit(1) (fail-fast)
+    end
     Main->>HTTP: ListenAndServe :8088 (/healthz, /readyz, /metrics)
     Main->>Main: Start ticker (CLEANUP_INTERVAL, default 15m)
 
     loop Forever
-        Main->>Cleanup: runCleanup(ctx)
+        Main->>Cleanup: runCleanup(ctx, store)
         Cleanup->>R: SETNX cleanup-worker:lock TTL=10m
         alt Lock acquired
-            Cleanup->>Cleanup: cleanupExpiredJobs(ctx)
-            Cleanup->>Cleanup: cleanupUploadState(ctx)
-            Cleanup->>Cleanup: cleanupOrphanedDirs(ctx)
+            Cleanup->>Cleanup: cleanupExpiredJobs(ctx, store)
+            Cleanup->>Cleanup: cleanupUploadState(ctx, store)
+            Cleanup->>Cleanup: abortStaleMultipartUploads(ctx, store)
             Cleanup->>Cleanup: backfillExpiry(ctx)
             Cleanup->>R: DEL cleanup-worker:lock
         else Lock held by another replica
@@ -43,7 +48,7 @@ sequenceDiagram
 sequenceDiagram
     participant CW as cleanup-worker
     participant PG as PostgreSQL
-    participant Disk as File System
+    participant S3 as MinIO
 
     loop Until batch < 100
         CW->>PG: SELECT * FROM processing_jobs<br/>WHERE expires_at IS NOT NULL<br/>AND expires_at <= NOW() LIMIT 100
@@ -56,13 +61,16 @@ sequenceDiagram
         CW->>PG: SELECT * FROM file_metadata WHERE job_id IN (jobIds[])
         PG-->>CW: files[]
 
-        Note over CW: group files by job_id
-        loop For each job
-            loop For each file
-                CW->>Disk: os.Remove(file.Path)
+        Note over CW: removeJobObjects(files)
+        loop For each file
+            alt path starts with "/" (legacy filesystem path)
+                CW->>CW: skip — log once,<br/>migrate via scripts/migrate-files-to-minio.sh
+            else kind == "input"
+                CW->>S3: RemoveObject(fyredocs-uploads, path)
+            else kind == "output"
+                CW->>S3: RemoveObject(fyredocs-outputs, path)
             end
-            CW->>Disk: os.Remove uploads/&lt;jobId&gt;/
-            CW->>Disk: os.Remove outputs/&lt;jobId&gt;/
+            Note over S3: missing object == success (idempotent)
         end
 
         CW->>PG: DELETE FROM file_metadata WHERE job_id IN (jobIds[])
@@ -76,20 +84,27 @@ sequenceDiagram
 sequenceDiagram
     participant CW as cleanup-worker
     participant R as Redis
-    participant Disk as File System
+    participant PG as PostgreSQL
+    participant S3 as MinIO
 
     CW->>R: SCAN 0 MATCH upload:* COUNT 100
     R-->>CW: keys
 
     loop For each key (skip :chunks)
-        CW->>R: HGET upload:&lt;id&gt; createdAt
-        R-->>CW: RFC3339 timestamp
-        CW->>CW: time.Since(createdAt) > UPLOAD_TTL (2h)?
+        CW->>R: HGETALL upload:&lt;id&gt;
+        R-->>CW: {createdAt, key, s3UploadId, ...}
+        CW->>CW: time.Since(createdAt) > UPLOAD_TTL?
 
         alt Yes — stale
             CW->>R: DEL upload:&lt;id&gt; upload:&lt;id&gt;:chunks
-            alt id parses as UUID
-                CW->>Disk: os.RemoveAll(uploads/tmp/&lt;id&gt;/)
+            opt hash has s3UploadId
+                CW->>S3: AbortMultipart(fyredocs-uploads, key, s3UploadId)
+            end
+            CW->>PG: SELECT count(*) FROM file_metadata WHERE path = &lt;key&gt;
+            alt count == 0 (never consumed by a job)
+                CW->>S3: RemoveObject(fyredocs-uploads, key)
+            else consumed — referenced by a job
+                CW->>CW: keep object (Phase 1 cleans it with the job)
             end
         else No — keep
             CW->>CW: skip
@@ -97,43 +112,23 @@ sequenceDiagram
     end
 ```
 
-## Phase 3 — cleanupOrphanedDirs
+## Phase 3 — abortStaleMultipartUploads
 
 ```mermaid
 sequenceDiagram
     participant CW as cleanup-worker
-    participant Disk as File System
-    participant PG as PostgreSQL
-    participant R as Redis
+    participant S3 as MinIO
 
-    Note over CW: Phase 3a — uploads/
-    CW->>Disk: ReadDir(uploads/)
-    Disk-->>CW: entries
+    CW->>S3: ListIncompleteUploads(fyredocs-uploads, olderThan=24h)
+    S3-->>CW: [{key, uploadId, initiated}, ...]
 
-    Note over CW: Collect UUID-named dirs (skip 'tmp')
-    CW->>PG: SELECT id FROM processing_jobs WHERE id IN (candidates)
-    PG-->>CW: existingIds[]
-
-    loop For each candidate not in existingIds
-        CW->>R: EXISTS upload:&lt;id&gt;
-        alt active upload session
-            CW->>CW: skip (a job will consume this soon)
-        else no active session
-            CW->>Disk: os.RemoveAll(uploads/&lt;id&gt;/)
-        end
+    loop For each stale incomplete upload
+        CW->>S3: AbortMultipart(fyredocs-uploads, key, uploadId)
+        Note over S3: unknown upload == success (idempotent)
+        CW->>CW: log("aborted stale multipart upload")
     end
 
-    Note over CW: Phase 3b — outputs/
-    CW->>Disk: ReadDir(outputs/)
-    Disk-->>CW: entries
-
-    Note over CW: Match regex ^[a-z]+_&lt;uuid&gt;_
-    CW->>PG: SELECT id FROM processing_jobs WHERE id IN (extracted jobIds)
-    PG-->>CW: existingIds[]
-
-    loop For each output file with unmatched jobId
-        CW->>Disk: os.Remove(outputs/&lt;file&gt;)
-    end
+    Note over CW,S3: Backstop: bucket lifecycle aborts<br/>incomplete multiparts after 1 day anyway
 ```
 
 ## Phase 4 — backfillExpiry
@@ -159,13 +154,12 @@ sequenceDiagram
 flowchart TD
     A["Ticker fires"] --> B{"SETNX cleanup-worker:lock<br/>(TTL 10m)"}
     B -->|Locked elsewhere| Z["Skip cycle"]
-    B -->|Acquired| C["Phase 1: cleanupExpiredJobs"]
-    C --> D["Phase 2: cleanupUploadState"]
-    D --> E["Phase 3a: orphan upload dirs"]
-    E --> F["Phase 3b: orphan output files"]
-    F --> G["Phase 4: backfill legacy expires_at"]
-    G --> H["DEL cleanup-worker:lock"]
-    H --> Z
+    B -->|Acquired| C["Phase 1: cleanupExpiredJobs<br/>(RemoveObject per metadata row)"]
+    C --> D["Phase 2: cleanupUploadState<br/>(DEL + AbortMultipart + RemoveObject)"]
+    D --> E["Phase 3: abortStaleMultipartUploads"]
+    E --> F["Phase 4: backfill legacy expires_at"]
+    F --> G["DEL cleanup-worker:lock"]
+    G --> Z
 ```
 
 ## Timing Diagram
@@ -184,12 +178,12 @@ gantt
     section Tick 1 (under SETNX lock)
     Phase 1 expired jobs     :p1, 14:00, 3s
     Phase 2 upload state     :p2, after p1, 2s
-    Phase 3 orphans          :p3, after p2, 2s
+    Phase 3 stale multiparts :p3, after p2, 2s
     Phase 4 backfill         :p4, after p3, 1s
 
     section Tick 2
     Phase 1 expired jobs     :q1, 29:00, 3s
     Phase 2 upload state     :q2, after q1, 2s
-    Phase 3 orphans          :q3, after q2, 2s
+    Phase 3 stale multiparts :q3, after q2, 2s
     Phase 4 backfill         :q4, after q3, 1s
 ```

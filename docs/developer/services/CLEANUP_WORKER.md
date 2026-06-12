@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Cleanup Worker is a background service that maintains system hygiene by cleaning up expired uploads, jobs, and their associated files. It runs on a scheduled interval and ensures that temporary files and expired data don't accumulate over time.
+The Cleanup Worker is a background service that maintains system hygiene by cleaning up expired jobs, expired upload sessions, and their associated objects in MinIO object storage. It runs on a scheduled interval and ensures that expired data does not accumulate over time.
 
 **Port**: 8088
 **Type**: Background Worker with HTTP health/metrics server
@@ -10,11 +10,12 @@ The Cleanup Worker is a background service that maintains system hygiene by clea
 
 ## Responsibilities
 
-1. **Expired Upload Cleanup** - Delete upload sessions and chunks that have expired
-2. **Expired Job Cleanup** - Delete jobs and output files past their expiration time
-3. **Orphaned File Cleanup** - Remove files without associated database records
-4. **Queue Management** - Clean up stale queue entries
-5. **Storage Management** - Prevent disk space exhaustion
+1. **Expired Job Cleanup** - Delete jobs past their expiration time and remove their input/output objects from MinIO
+2. **Expired Upload Session Cleanup** - Delete stale `upload:*` Redis state, abort the associated S3 multipart upload, and remove never-consumed upload objects
+3. **Stale Multipart Abort** - Abort incomplete multipart uploads older than 24h (belt-and-braces ahead of the bucket lifecycle rule)
+4. **Expiry Backfill** - Backfill `expires_at` on legacy authenticated jobs
+
+The worker no longer touches any filesystem — there is no shared volume. All file bytes live in MinIO (see [Object Storage](../architecture/object-storage.md)).
 
 ## Architecture
 
@@ -30,49 +31,21 @@ Cleanup Worker (Background Loop)
              ↓
    ┌─────────┴─────────────┐
    ▼                       ▼
-   ├ Phase 1: cleanupExpiredJobs   (DB-driven, batch=100)
-   ├ Phase 2: cleanupUploadState   (Redis SCAN upload:*)
-   ├ Phase 3: cleanupOrphanedDirs  (FS scan vs DB)
-   └ Phase 4: backfillExpiry       (UPDATE legacy authenticated jobs)
+   ├ Phase 1: cleanupExpiredJobs           (DB-driven, batch=100, RemoveObject per file)
+   ├ Phase 2: cleanupUploadState           (Redis SCAN upload:* → AbortMultipart + RemoveObject)
+   ├ Phase 3: abortStaleMultipartUploads   (ListIncompleteUploads > 24h → AbortMultipart)
+   └ Phase 4: backfillExpiry               (UPDATE legacy authenticated jobs)
              ↓
    Release lock (DEL)
 ```
 
-The worker runs as a **scratch container** with the shared healthcheck binary. It exposes `/healthz`, `/readyz`, and `/metrics` on port `8088` but does **not** consume from NATS — it operates directly on PostgreSQL, Redis, and the filesystem.
+The worker exposes `/healthz`, `/readyz`, and `/metrics` on port `8088` but does **not** consume from NATS — it operates directly on PostgreSQL, Redis, and MinIO via `fyredocs/shared/storage`. The storage client is initialized fail-fast at startup (`storage.NewFromEnv()`); the process exits if `S3_*` configuration is missing.
 
 When scaled to multiple replicas, the Redis SETNX lock ensures only one instance runs cleanup per tick. Other replicas skip the cycle if the lock is already held.
 
 ## Cleanup Operations
 
-### 1. Expired Upload Cleanup
-
-**Criteria**: Uploads older than `UPLOAD_TTL` (default: 2 hours)
-
-**Process**:
-1. Query uploads table for expired uploads
-   ```sql
-   SELECT id, file_path FROM uploads
-   WHERE expires_at < NOW() AND NOT consumed
-   ```
-2. Delete upload directory and chunks
-   ```
-   /app/uploads/{upload_id}/
-   ├── chunks/
-   │   ├── chunk_0
-   │   ├── chunk_1
-   │   └── chunk_2
-   └── {filename}
-   ```
-3. Delete upload record from database
-
-**Files Cleaned**:
-- Individual chunks in `chunks/` directory
-- Assembled file (if upload was completed)
-- Upload session metadata
-
----
-
-### 2. Expired Job Cleanup
+### 1. Expired Job Cleanup
 
 **Criteria**: Jobs where `expires_at IS NOT NULL` and `expires_at <= NOW()` — applies to any user type. The `expires_at` value is set at job-creation time by `job-service` based on the user's plan:
 
@@ -87,35 +60,44 @@ When scaled to multiple replicas, the Redis SETNX lock ensures only one instance
    WHERE expires_at IS NOT NULL AND expires_at <= NOW()
    LIMIT 100
    ```
-2. Delete each file referenced in `file_metadata`
-3. Remove the empty job upload directory (`/app/uploads/{job_id}/`)
-4. Remove the empty job output directory (`/app/outputs/{job_id}/`)
-5. Delete `file_metadata` records from database
-6. Delete `processing_jobs` record from database
+2. Batch-fetch all `file_metadata` rows for the batch (single query)
+3. For each row, delete the object: `RemoveObject(bucketFor(kind), path)`
+   - `kind = "input"` → uploads bucket (`fyredocs-uploads`)
+   - `kind = "output"` → outputs bucket (`fyredocs-outputs`)
+   - Rows whose `path` starts with `/` are **legacy filesystem paths** from before the migration — they are skipped (logged once per batch) and handled by the one-off [`scripts/migrate-files-to-minio.sh`](../../../scripts/migrate-files-to-minio.sh)
+   - A missing object is treated as success (idempotent across retries)
+4. Batch-delete `file_metadata` records from database
+5. Batch-delete `processing_jobs` records from database
 
-**Files Cleaned**:
-- Input files: `/app/uploads/{job_id}/{filename}`
-- Output files: `/app/outputs/{job_id}/{filename}`
-- Empty job directories: `/app/uploads/{job_id}/`, `/app/outputs/{job_id}/`
+**Objects Cleaned**:
+- Input objects: `fyredocs-uploads/uploads/{uploadId}/{fileName}`
+- Output objects: `fyredocs-outputs/jobs/{jobId}/{outputName}`
 
 ---
 
-### 3. Orphaned File/Directory Cleanup
+### 2. Expired Upload Session Cleanup
 
-**Criteria**: Upload directories or output files on disk with no matching `processing_jobs` record
+**Criteria**: Redis `upload:*` hashes older than `UPLOAD_TTL` (default: 2 hours, deployment sets 30m)
 
 **Process**:
-1. Scan `/app/uploads/` for UUID-named directories (skip `tmp`, `.gitkeep`)
-2. For each directory, check if a matching `processing_jobs` record exists
-3. If no job record exists, check Redis for an active upload session (`upload:<uuid>` key)
-4. If neither a job record nor an active upload exists → `os.RemoveAll(dir)` (removes directory and any leftover files)
-5. Scan `/app/outputs/` for files matching `{prefix}_{jobID}_{timestamp}.{ext}` pattern
-6. Extract job UUID from filename, check if matching record exists
-7. If no record exists → `os.Remove(file)`
+1. `SCAN` Redis for `upload:*` keys (skipping `:chunks` suffixes)
+2. `HGETALL` each hash; parse `createdAt`
+3. If older than `UPLOAD_TTL`:
+   - `DEL` the Redis state keys
+   - If the hash carries an `s3UploadId`: `AbortMultipart(uploads, key, s3UploadId)` — frees orphaned parts immediately
+   - If the object key is **not referenced** by any `file_metadata` row (`WHERE path = <key>`), `RemoveObject(uploads, key)`. A consumed upload's key *is* referenced by a job, so consumed objects are left for Phase 1 to clean with the job. On a DB error the object is kept (never delete what cannot be proven unreferenced).
 
-**When this triggers**: Catches directories/files left behind when the old cleanup code deleted DB records but not directories, or when files are left after incomplete processing.
+---
 
-> **Note**: The Redis check in step 3 prevents a race condition where uploaded files waiting to be consumed by a job could be prematurely deleted. Upload directories use upload UUIDs (not job UUIDs), so they never match `processing_jobs` records until a job consumes them.
+### 3. Stale Multipart Abort
+
+**Criteria**: Incomplete multipart uploads in the uploads bucket initiated more than **24 hours** ago
+
+**Process**:
+1. `ListIncompleteUploads(fyredocs-uploads, 24h)`
+2. `AbortMultipart` each result
+
+**When this triggers**: Catches multipart uploads whose Redis session vanished without an abort (crash, manual Redis flush). The bucket lifecycle rule (`AbortIncompleteMultipartUpload` after 1 day) is the final backstop; this phase reclaims space sooner and emits logs/metrics.
 
 ---
 
@@ -151,9 +133,12 @@ The cleanup worker exposes a lightweight HTTP server for health checks, readines
 | `REDIS_ADDR` | **Required** | Redis server address |
 | `REDIS_PASSWORD` | `""` | Redis password (if required) |
 | `REDIS_DB` | `0` | Redis database number |
-| `UPLOAD_DIR` | `/app/uploads` | Directory for uploaded files |
-| `OUTPUT_DIR` | `/app/outputs` | Directory for output files |
-| `UPLOAD_TTL` | `2h` | How long an upload session in Redis (`upload:<id>`) can live before Phase 2 deletes it and the on-disk chunk dir |
+| `S3_ENDPOINT` | **Required** | MinIO/S3 endpoint, e.g. `minio:9000` |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | **Required** | Scoped app credentials (created by `minio-init`) |
+| `S3_USE_SSL` | `false` | TLS to the S3 endpoint |
+| `S3_BUCKET_UPLOADS` | `fyredocs-uploads` | Bucket holding raw uploads |
+| `S3_BUCKET_OUTPUTS` | `fyredocs-outputs` | Bucket holding processed outputs |
+| `UPLOAD_TTL` | `2h` | How long an upload session in Redis (`upload:<id>`) can live before Phase 2 reaps it (state + multipart + object) |
 | `FREE_JOB_TTL` | `24h` | TTL applied by Phase 4 backfill to legacy authenticated jobs that were created before plan-based expiration was wired up |
 | `CLEANUP_INTERVAL` | `15m` | How often the ticker fires |
 
@@ -169,9 +154,9 @@ The cleanup worker exposes a lightweight HTTP server for health checks, readines
 
 ```
 Every 15 minutes (under Redis SETNX lock):
-  ├─ Phase 1: Delete expired jobs (any user, expires_at <= NOW) and their files/directories
-  ├─ Phase 2: Clean up Redis upload:* sessions older than UPLOAD_TTL and their on-disk chunks
-  ├─ Phase 3: Remove orphaned upload dirs and output files (no matching DB record)
+  ├─ Phase 1: Delete expired jobs (any user, expires_at <= NOW), RemoveObject per file_metadata row
+  ├─ Phase 2: Reap Redis upload:* sessions older than UPLOAD_TTL (DEL state, AbortMultipart, RemoveObject if unconsumed)
+  ├─ Phase 3: Abort incomplete multipart uploads older than 24h
   └─ Phase 4: Backfill expires_at on legacy authenticated-user jobs (user_id IS NOT NULL AND expires_at IS NULL)
 ```
 
@@ -189,23 +174,15 @@ environment:
 
 ## Storage Management
 
-### Disk Space Monitoring
+The worker is one of three layers that keep object storage bounded:
 
-The cleanup worker helps prevent disk space exhaustion by:
-
-1. **Regularly removing expired data**
-2. **Cleaning up failed job artifacts**
-3. **Removing incomplete uploads**
-
-### Estimated Cleanup Impact
-
-**Typical Scenario** (100 jobs/hour):
-- Without cleanup: ~5 GB/day accumulation
-- With cleanup (2h TTL): ~500 MB average usage
+1. **Cleanup worker** (this service) — DB/Redis-driven deletion, the primary mechanism
+2. **Bucket lifecycle rules** (applied by `minio-init`, uploads bucket only) — expire objects after 2 days, abort incomplete multipart uploads after 1 day
+3. **No lifecycle on the outputs bucket** — pro-plan outputs never expire; output deletion is exclusively DB-driven by Phase 1
 
 **File Retention** (TTLs are set at job creation time by `job-service`, except where noted):
-- Active uploads: Until consumed by a job, or until `UPLOAD_TTL` (default `2h`) expires the Redis session
-- Completed jobs (pro user): No expiration (`expires_at = NULL`)
+- Active uploads: until consumed by a job, until `UPLOAD_TTL` expires the Redis session, or at most 2 days (bucket lifecycle)
+- Completed jobs (pro user): no expiration (`expires_at = NULL`)
 - Completed jobs (free user): TTL set from plan info; legacy rows backfilled to `FREE_JOB_TTL` (default `24h`) by Phase 4
 - Completed jobs (guest): TTL set by job-service (guest TTL is not configured in cleanup-worker)
 - Failed jobs: same TTL as completed (still rows in `processing_jobs`)
@@ -217,28 +194,34 @@ The cleanup worker helps prevent disk space exhaustion by:
 ```yaml
 cleanup-worker:
   build:
-    context: ./cleanup-worker
+    context: ..
+    dockerfile: cleanup-worker/Dockerfile
   environment:
     DATABASE_URL: postgresql://user:password@db:5432/fyredocs
     REDIS_ADDR: redis:6379
-    UPLOAD_DIR: /app/uploads
-    OUTPUT_DIR: /app/outputs
-    UPLOAD_TTL: 2h
-    CLEANUP_INTERVAL: 15m
+    S3_ENDPOINT: minio:9000
+    S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+    S3_SECRET_KEY: ${S3_SECRET_KEY}
+    S3_USE_SSL: "false"
+    S3_BUCKET_UPLOADS: fyredocs-uploads
+    S3_BUCKET_OUTPUTS: fyredocs-outputs
+    UPLOAD_TTL: 30m
+    CLEANUP_INTERVAL: 5m
     FREE_JOB_TTL: 24h
-  volumes:
-    - uploads_data:/app/uploads
-    - outputs_data:/app/outputs
   depends_on:
-    - db
-    - redis
+    redis:
+      condition: service_healthy
+    minio-init:
+      condition: service_completed_successfully
 ```
+
+No volumes — the worker is stateless.
 
 ### Local Development
 
 1. Start dependencies:
    ```bash
-   docker compose up -d db redis
+   docker compose -f deployment/docker-compose.yml up -d redis minio minio-init
    ```
 
 2. Run worker:
@@ -246,8 +229,8 @@ cleanup-worker:
    cd cleanup-worker
    export DATABASE_URL="postgresql://user:password@localhost:5432/fyredocs"
    export REDIS_ADDR="localhost:6379"
-   export UPLOAD_DIR="./uploads"
-   export OUTPUT_DIR="./outputs"
+   export S3_ENDPOINT="localhost:9000"   # publish 9000 locally or port-forward
+   export S3_ACCESS_KEY=... S3_SECRET_KEY=...
    go run main.go
    ```
 
@@ -257,27 +240,25 @@ cleanup-worker:
 
 1. **Multiple replicas supported**: A Redis distributed lock ensures only one instance runs cleanup at a time. Additional replicas provide high availability.
 2. **Resource Limits**: Minimal CPU/memory requirements (256MB sufficient)
-3. **Volume Access**: Must have read/write access to uploads and outputs volumes
+3. **Credentials**: Use the scoped app user (`minio-init` provisions it), never the MinIO root credentials
 4. **Logging**: Enable structured logging for audit trail
-5. **Monitoring**: Track cleanup metrics (files deleted, space freed)
+5. **Monitoring**: Track cleanup metrics (objects deleted, multiparts aborted)
 
 ## Logging
 
 ### Log Levels
 
-- **INFO**: Cleanup cycles started/completed
-- **WARN**: File deletion failures
-- **ERROR**: Database errors, critical issues
+- **INFO**: Cleanup cycles started/completed, stale multiparts aborted
+- **WARN**: Object/multipart deletion failures, legacy paths skipped
+- **ERROR**: Database errors, ListIncompleteUploads failures, critical issues
 
 ### Sample Logs
 
 ```
-INFO  [cleanup-worker] Starting cleanup cycle
-INFO  [cleanup-worker] Found 5 expired uploads
-INFO  [cleanup-worker] Deleted 5 upload directories (15.3 MB)
-INFO  [cleanup-worker] Found 12 expired jobs
-INFO  [cleanup-worker] Deleted 12 job files (45.7 MB)
-INFO  [cleanup-worker] Cleanup cycle completed (61.0 MB freed)
+INFO  [cleanup-worker] cleanup-worker started interval=5m
+WARN  [cleanup-worker] skipping legacy filesystem path(s); run scripts/migrate-files-to-minio.sh path=/app/uploads/... jobId=...
+INFO  [cleanup-worker] aborted stale multipart upload key=uploads/abc/file.pdf initiated=...
+INFO  [cleanup-worker] backfilled expires_at for old jobs count=12
 ```
 
 ### Viewing Logs
@@ -298,9 +279,9 @@ docker compose logs cleanup-worker | grep ERROR
 ### Key Metrics to Track
 
 1. **Cleanup Cycle Duration**: Should complete within seconds
-2. **Files Deleted per Cycle**: Indicates cleanup load
-3. **Disk Space Freed**: Total MB/GB freed
-4. **Error Rate**: File deletion failures
+2. **Objects Deleted per Cycle**: Indicates cleanup load
+3. **Stale Multiparts Aborted**: Should trend to zero in steady state
+4. **Error Rate**: Object deletion failures
 5. **Database Query Performance**: Cleanup queries should be fast
 
 ### Health Indicators
@@ -308,12 +289,12 @@ docker compose logs cleanup-worker | grep ERROR
 **Healthy**:
 - Regular cleanup cycles every `CLEANUP_INTERVAL`
 - Low error rate (< 1%)
-- Stable disk usage
+- Stable bucket usage
 
 **Unhealthy**:
 - Cleanup cycles taking > 30 seconds
 - High error rate (> 5%)
-- Growing disk usage despite cleanup
+- Growing bucket usage despite cleanup
 
 ### Monitoring Commands
 
@@ -321,18 +302,15 @@ docker compose logs cleanup-worker | grep ERROR
 # Check if worker is running
 docker compose ps cleanup-worker
 
-# Monitor disk usage
-docker compose exec cleanup-worker df -h /app/uploads /app/outputs
+# Bucket usage (mc alias configured against the MinIO console/API)
+mc du fyredocs/fyredocs-uploads
+mc du fyredocs/fyredocs-outputs
 
-# Count files in directories
-docker compose exec cleanup-worker find /app/uploads -type f | wc -l
-docker compose exec cleanup-worker find /app/outputs -type f | wc -l
+# Incomplete multipart uploads
+mc ls --incomplete fyredocs/fyredocs-uploads
 
 # Check database for expired records
-docker compose exec db psql -U user -d fyredocs -c \
-  "SELECT COUNT(*) FROM uploads WHERE expires_at < NOW();"
-
-docker compose exec db psql -U user -d fyredocs -c \
+psql "$DATABASE_URL" -c \
   "SELECT COUNT(*) FROM processing_jobs WHERE expires_at < NOW();"
 ```
 
@@ -340,7 +318,7 @@ docker compose exec db psql -U user -d fyredocs -c \
 
 ### Cleanup Not Running
 
-**Symptoms**: Files accumulating, disk usage growing
+**Symptoms**: Bucket usage growing, expired jobs lingering
 
 **Solutions**:
 ```bash
@@ -354,94 +332,45 @@ docker compose logs cleanup-worker | tail -50
 docker compose restart cleanup-worker
 
 # Verify environment variables
-docker compose exec cleanup-worker env | grep -E "(DATABASE_URL|CLEANUP_INTERVAL)"
+docker compose exec cleanup-worker env | grep -E "(DATABASE_URL|CLEANUP_INTERVAL|S3_)"
 ```
 
-### File Deletion Failures
+### Object Deletion Failures
 
-**Symptoms**: Warnings in logs about file deletion failures
+**Symptoms**: Warnings in logs about `failed to remove object`
 
 **Possible Causes**:
-1. Permission issues
-2. Files locked by other processes
-3. Disk I/O errors
+1. Wrong/expired `S3_ACCESS_KEY`/`S3_SECRET_KEY` (re-run `minio-init`)
+2. App policy missing `s3:DeleteObject` on the bucket
+3. MinIO unreachable from the worker network
 
 **Solutions**:
 ```bash
-# Check file permissions
-docker compose exec cleanup-worker ls -la /app/uploads/
+# Verify credentials work
+docker compose logs minio-init
 
-# Check volume mounts
-docker compose exec cleanup-worker df -h
-
-# Manual cleanup (if needed)
-docker compose exec cleanup-worker rm -rf /app/uploads/{expired-id}
+# Verify MinIO health
+docker compose exec cleanup-worker wget -qO- http://minio:9000/minio/health/live
 ```
 
-### Database Connection Issues
+### Legacy Path Warnings
 
-**Symptoms**: Errors connecting to database
+**Symptoms**: `skipping legacy filesystem path(s)` warnings every cycle
 
-**Solutions**:
+**Cause**: `file_metadata` rows created before the object-storage migration still carry absolute filesystem paths.
+
+**Solution**: Run the one-off migration (dry-run first):
 ```bash
-# Test database connection
-docker compose exec cleanup-worker pg_isready -h db -U user -d fyredocs
-
-# Check database logs
-docker compose logs db | tail -50
-
-# Restart database and worker
-docker compose restart db cleanup-worker
+DATABASE_URL=... MC_ALIAS=fyredocs ./scripts/migrate-files-to-minio.sh
+DATABASE_URL=... MC_ALIAS=fyredocs ./scripts/migrate-files-to-minio.sh --execute
 ```
 
-### High Disk Usage Despite Cleanup
-
-**Symptoms**: Disk usage growing even with cleanup running
+### High Bucket Usage Despite Cleanup
 
 **Possible Causes**:
 1. `UPLOAD_TTL` (or job-service-side `GUEST_JOB_TTL` / plan TTLs) too long
-2. Orphaned files (no database records)
-3. Pro user jobs not expiring (by design)
-
-**Solutions**:
-```bash
-# Check for orphaned files
-docker compose exec cleanup-worker find /app/uploads -type f -mtime +1
-
-# Reduce upload session TTL
-# In docker-compose.yml:
-environment:
-  UPLOAD_TTL: "1h"      # Shorter expiration
-
-# Manual cleanup of old files
-docker compose exec cleanup-worker \
-  find /app/uploads -type f -mtime +7 -delete
-
-# Check for large files
-docker compose exec cleanup-worker \
-  find /app/outputs -type f -size +100M -ls
-```
-
-### Worker Crashes or Restarts
-
-**Symptoms**: Worker keeps restarting
-
-**Solutions**:
-```bash
-# Check crash logs
-docker compose logs cleanup-worker --since 1h
-
-# Check memory usage
-docker stats cleanup-worker
-
-# Increase memory limit if needed
-# In docker-compose.yml:
-cleanup-worker:
-  deploy:
-    resources:
-      limits:
-        memory: 512M
-```
+2. Pro user jobs not expiring (by design)
+3. Incomplete multipart uploads piling up (check Phase 3 logs and `mc ls --incomplete`)
 
 ## Performance Optimization
 
@@ -449,22 +378,19 @@ cleanup-worker:
 
 1. **Index Database Columns**:
    ```sql
-   CREATE INDEX IF NOT EXISTS idx_uploads_expires_at
-   ON uploads(expires_at);
-
    CREATE INDEX IF NOT EXISTS idx_jobs_expires_at
    ON processing_jobs(expires_at);
+
+   CREATE INDEX IF NOT EXISTS idx_file_metadata_path
+   ON file_metadata(path);
    ```
 
-2. **Batch Deletions**: Delete files in batches instead of one-by-one
+2. **Batch Deletions**: Jobs are processed in batches of 100; DB deletes are batched per cycle
 
-3. **Parallel Processing**: Delete files from multiple directories concurrently
-
-### Reducing Disk I/O
+### Reducing Load
 
 1. **Longer Intervals**: Increase `CLEANUP_INTERVAL` to reduce frequency
 2. **Off-Peak Cleanup**: Schedule cleanup during low-traffic periods
-3. **Incremental Deletion**: Delete a limited number of files per cycle
 
 ## Sequence Diagrams
 
@@ -476,119 +402,51 @@ sequenceDiagram
     participant CW as Cleanup Worker
     participant DB as PostgreSQL
     participant R as Redis
-    participant FS as File System
+    participant S3 as MinIO
 
     T->>CW: Tick (trigger cleanup cycle)
+    CW->>R: SETNX cleanup-worker:lock (TTL 10m)
 
     Note over CW: Phase 1: Expired Job Cleanup
     CW->>DB: SELECT * FROM processing_jobs WHERE expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 100
-
-    loop For each expired job (batched)
-        CW->>DB: SELECT * FROM file_metadata WHERE job_id = <id>
-        loop For each file
-            CW->>FS: os.Remove(file.Path)
+    CW->>DB: SELECT * FROM file_metadata WHERE job_id IN (...)
+    loop For each file_metadata row
+        alt path starts with "/" (legacy)
+            CW->>CW: skip (log once, migrate via script)
+        else object key
+            CW->>S3: RemoveObject(bucketFor(kind), path)
         end
-        CW->>DB: DELETE FROM file_metadata WHERE job_id = <id>
-        CW->>DB: DELETE FROM processing_jobs WHERE id = <id>
     end
+    CW->>DB: DELETE FROM file_metadata WHERE job_id IN (...)
+    CW->>DB: DELETE FROM processing_jobs WHERE id IN (...)
 
     Note over CW: Phase 2: Expired Upload State Cleanup
     CW->>R: SCAN 0 MATCH upload:* COUNT 100
-
     loop For each upload key
-        CW->>R: HGET <key> createdAt
-        CW->>CW: Check if age > UPLOAD_TTL
-        alt Upload expired
+        CW->>R: HGETALL <key>
+        alt age > UPLOAD_TTL
             CW->>R: DEL <key> <key>:chunks
-            CW->>FS: os.RemoveAll(uploads/tmp/<uploadId>/)
+            opt hash has s3UploadId
+                CW->>S3: AbortMultipart(uploads, key, s3UploadId)
+            end
+            CW->>DB: SELECT count(*) FROM file_metadata WHERE path = <key>
+            alt not consumed by a job
+                CW->>S3: RemoveObject(uploads, key)
+            end
         end
     end
 
-    Note over CW: Phase 3: Orphaned Directory/File Cleanup
-    CW->>FS: ReadDir(uploads/)
-    loop For each UUID directory
-        CW->>DB: SELECT count(*) FROM processing_jobs WHERE id = <dirName>
-        alt No matching job
-            CW->>FS: os.RemoveAll(uploads/<dirName>/)
-        end
-    end
-    CW->>FS: ReadDir(outputs/)
-    loop For each output file
-        CW->>CW: Extract jobID from filename regex
-        CW->>DB: SELECT count(*) FROM processing_jobs WHERE id = <jobID>
-        alt No matching job
-            CW->>FS: os.Remove(outputs/<filename>)
-        end
+    Note over CW: Phase 3: Stale Multipart Abort
+    CW->>S3: ListIncompleteUploads(uploads, olderThan=24h)
+    loop For each stale upload
+        CW->>S3: AbortMultipart(uploads, key, uploadId)
     end
 
     Note over CW: Phase 4: Backfill Expiry for Legacy Jobs
     CW->>DB: UPDATE processing_jobs SET expires_at = created_at + FREE_JOB_TTL WHERE user_id IS NOT NULL AND expires_at IS NULL
 
+    CW->>R: DEL cleanup-worker:lock
     Note over CW: Cycle complete, wait for next tick
-```
-
-### Expired Job Cleanup Detail
-
-```mermaid
-sequenceDiagram
-    participant CW as Cleanup Worker
-    participant DB as PostgreSQL
-    participant FS as File System
-
-    CW->>DB: SELECT * FROM processing_jobs WHERE expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 100
-    DB-->>CW: [job1, job2, ..., jobN]
-
-    loop For each job
-        CW->>DB: SELECT * FROM file_metadata WHERE job_id = job.ID
-        DB-->>CW: [file1, file2]
-
-        CW->>FS: os.Remove(file1.Path)
-        alt File exists
-            FS-->>CW: OK
-        else File already deleted
-            CW->>CW: Log warning, continue
-        end
-
-        CW->>FS: os.Remove(file2.Path)
-        CW->>FS: os.Remove(uploads/{job.ID}/) [remove empty dir]
-        CW->>FS: os.Remove(outputs/{job.ID}/) [remove empty dir]
-        CW->>DB: DELETE FROM file_metadata WHERE job_id = job.ID
-        CW->>DB: DELETE FROM processing_jobs WHERE id = job.ID
-    end
-
-    Note over CW: If 100 jobs found, loop again (pagination)
-    alt len(jobs) == 100
-        CW->>DB: SELECT next batch...
-    else len(jobs) < 100
-        CW->>CW: Done with job cleanup
-    end
-```
-
-### Upload State Cleanup Detail
-
-```mermaid
-sequenceDiagram
-    participant CW as Cleanup Worker
-    participant R as Redis
-    participant FS as File System
-
-    CW->>R: SCAN 0 MATCH upload:* COUNT 100
-    R-->>CW: [upload:abc123, upload:abc123:chunks, upload:def456]
-
-    loop For each key (skip :chunks keys)
-        CW->>R: HGET upload:abc123 createdAt
-        R-->>CW: "2024-01-15T08:00:00Z"
-
-        CW->>CW: time.Since(createdAt) > UPLOAD_TTL?
-
-        alt Upload expired
-            CW->>R: DEL upload:abc123 upload:abc123:chunks
-            CW->>CW: Parse uploadId from key
-            CW->>FS: os.RemoveAll(uploads/tmp/abc123/)
-        else Upload still valid
-            CW->>CW: Skip
-        end
-    end
 ```
 
 ### Startup and Lifecycle
@@ -599,6 +457,7 @@ sequenceDiagram
     participant CW as Cleanup Worker
     participant DB as PostgreSQL
     participant R as Redis
+    participant S3 as MinIO
 
     OS->>CW: Start process
     CW->>CW: LoadConfig()
@@ -607,11 +466,12 @@ sequenceDiagram
     CW->>DB: Connect (PostgreSQL)
     CW->>DB: Migrate (ensure tables exist)
     CW->>R: Connect (Redis)
+    CW->>S3: storage.NewFromEnv() — exit(1) if S3_* missing
 
     CW->>CW: Create ticker (CLEANUP_INTERVAL)
 
     loop Forever
-        CW->>CW: runCleanup()
+        CW->>CW: runCleanup(ctx, store)
         CW->>CW: Wait for next tick
     end
 ```
@@ -623,32 +483,33 @@ sequenceDiagram
 | Error Type | Impact | Handling |
 |------------|--------|----------|
 | Database query failure | Jobs not cleaned up | Log error, skip to next phase |
-| File deletion failure (permission) | Orphaned files on disk | Log warning, continue with other files |
-| File not found on disk | No impact (already cleaned) | Log warning, delete DB record anyway |
-| Redis SCAN failure | Upload state not cleaned | Log error, skip upload cleanup |
-| Redis DEL failure | Stale upload keys remain | Log warning, will retry next cycle |
+| RemoveObject failure | Orphaned object in bucket | Log warning, continue; lifecycle rule is the backstop for uploads |
+| Object already missing | No impact | `RemoveObject` treats missing as success; DB record deleted anyway |
+| AbortMultipart on unknown upload | No impact | Treated as success (idempotent) |
+| `file_metadata WHERE path = ?` query failure | Upload object kept | Fail safe: never delete what cannot be proven unreferenced |
+| Redis SCAN failure | Upload state not cleaned | Log error, retry next cycle |
+| ListIncompleteUploads failure | Stale multiparts remain | Log error; bucket lifecycle aborts them after 1 day |
 | Database DELETE failure | Stale DB records remain | Log error, will retry next cycle |
 
 ### Failure Recovery
 
 The cleanup worker is designed for resilience:
-1. **Idempotent operations**: Deleting a file or record that does not exist is treated as a warning, not an error
+1. **Idempotent operations**: Removing a missing object or aborting an unknown multipart upload is success, not an error
 2. **Batched processing**: Jobs are processed in batches of 100 to limit memory usage
 3. **Independent phases**: Upload cleanup runs even if job cleanup fails
 4. **Automatic retry**: Any items missed in one cycle will be caught in the next cycle
-5. **No NATS dependency**: The cleanup worker does not use NATS -- it operates directly on the database and filesystem
+5. **Defense in depth**: Bucket lifecycle rules (uploads: expire 2d, abort incomplete multipart 1d) back up the worker
+6. **No NATS dependency**: The cleanup worker does not use NATS — it operates directly on the database, Redis, and MinIO
 
 ## Related Documentation
 
+- [Object Storage](../architecture/object-storage.md) - MinIO topology, buckets, lifecycle
 - [Job Service](./JOB_SERVICE.md) - Job orchestration and file management
-- [Convert From PDF](./CONVERT_FROM_PDF.md) - PDF conversion worker
-- [Convert To PDF](./CONVERT_TO_PDF.md) - Document conversion worker
 - [Main README](../../README.md) - Overall architecture
 
 ## Support
 
 For issues:
 - Check logs: `docker compose logs -f cleanup-worker`
-- Monitor disk: `docker compose exec cleanup-worker df -h /app`
-- Inspect database: Query uploads and processing_jobs tables
-- Manual cleanup: Use `find` and `rm` commands in container
+- Inspect buckets: `mc du fyredocs/fyredocs-uploads`, `mc ls --incomplete fyredocs/fyredocs-uploads`
+- Inspect database: Query `processing_jobs` and `file_metadata` tables

@@ -27,38 +27,56 @@ func SetupRouter(r *gin.Engine) {
 		Window:      window,
 	})
 
+	// Job creation publishes to NATS and writes to Postgres — rate-limit it
+	// separately from the (cheap) presign-only upload endpoints.
+	jobCreateLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
+		RedisClient: redisstore.Client,
+		KeyPrefix:   "ratelimit:jobcreate",
+		MaxRequests: config.GetEnvInt("RATE_LIMIT_JOB_CREATE", 20),
+		Window:      window,
+	})
+
 	api := r.Group("/api")
 	{
+		// Presigned multipart upload protocol: the browser gets presigned part
+		// URLs from /init (or re-presigned from /parts), PUTs file bytes
+		// directly to MinIO/S3, then calls /complete with the part ETags.
 		uploads := api.Group("/uploads", uploadLimiter.RateLimitByIP())
 		uploads.POST("/init", handlers.InitUpload)
-		uploads.PUT("/:uploadId/chunk", handlers.UploadChunk)
-		uploads.GET("/:uploadId/status", handlers.GetUploadStatus)
+		uploads.GET("/:uploadId/parts", handlers.GetUploadParts)
 		uploads.POST("/:uploadId/complete", handlers.CompleteUpload)
+		uploads.GET("/:uploadId/status", handlers.GetUploadStatus)
+		uploads.DELETE("/:uploadId", handlers.AbortUpload)
+		// One-release migration stub for the retired chunk-streaming protocol:
+		// always answers 410 UPLOAD_PROTOCOL_CHANGED. Remove this route (and
+		// handlers.UploadChunk) in the release after the frontend ships the
+		// presigned protocol.
+		uploads.PUT("/:uploadId/chunk", handlers.UploadChunk)
 
 		convertFrom := api.Group("/convert-from-pdf")
 		convertFrom.GET("/:tool", handlers.GetJobsByTool)
-		convertFrom.POST("/:tool", handlers.CreateJobFromTool)
+		convertFrom.POST("/:tool", jobCreateLimiter.RateLimitByIP(), handlers.CreateJobFromTool)
 		convertFrom.GET("/:tool/:id", handlers.GetJobByID)
 		convertFrom.DELETE("/:tool/:id", handlers.DeleteJobByID)
 		convertFrom.GET("/:tool/:id/download", handlers.DownloadJobFile)
 
 		convertTo := api.Group("/convert-to-pdf")
 		convertTo.GET("/:tool", handlers.GetJobsByTool)
-		convertTo.POST("/:tool", handlers.CreateJobFromTool)
+		convertTo.POST("/:tool", jobCreateLimiter.RateLimitByIP(), handlers.CreateJobFromTool)
 		convertTo.GET("/:tool/:id", handlers.GetJobByID)
 		convertTo.DELETE("/:tool/:id", handlers.DeleteJobByID)
 		convertTo.GET("/:tool/:id/download", handlers.DownloadJobFile)
 
 		organizePdf := api.Group("/organize-pdf")
 		organizePdf.GET("/:tool", handlers.GetJobsByTool)
-		organizePdf.POST("/:tool", handlers.CreateJobFromTool)
+		organizePdf.POST("/:tool", jobCreateLimiter.RateLimitByIP(), handlers.CreateJobFromTool)
 		organizePdf.GET("/:tool/:id", handlers.GetJobByID)
 		organizePdf.DELETE("/:tool/:id", handlers.DeleteJobByID)
 		organizePdf.GET("/:tool/:id/download", handlers.DownloadJobFile)
 
 		optimizePdf := api.Group("/optimize-pdf")
 		optimizePdf.GET("/:tool", handlers.GetJobsByTool)
-		optimizePdf.POST("/:tool", handlers.CreateJobFromTool)
+		optimizePdf.POST("/:tool", jobCreateLimiter.RateLimitByIP(), handlers.CreateJobFromTool)
 		optimizePdf.GET("/:tool/:id", handlers.GetJobByID)
 		optimizePdf.DELETE("/:tool/:id", handlers.DeleteJobByID)
 		optimizePdf.GET("/:tool/:id/download", handlers.DownloadJobFile)

@@ -15,13 +15,24 @@ info:
     Authenticated users get persistent job storage. Guest users get temporary
     jobs that expire after a configurable TTL.
 
-    ## Chunked Uploads
-    Large files are uploaded via a chunked upload flow:
-    1. `POST /api/upload/init` to create an upload session
-    2. `PUT /api/upload/{uploadId}/chunk?index=N` to send each chunk
-    3. `POST /api/upload/{uploadId}/complete` to assemble the file
+    ## Presigned Multipart Uploads
+    File bytes are uploaded directly to object storage (MinIO/S3) through
+    presigned URLs — they never pass through the application services:
+    1. `POST /api/upload/init` creates an S3 multipart upload and returns a
+       presigned PUT URL for every part.
+    2. The browser `PUT`s each part to its presigned URL and collects the
+       returned `ETag` response headers.
+    3. `GET /api/upload/{uploadId}/parts` re-presigns part URLs to resume an
+       interrupted upload or refresh expired URLs.
+    4. `POST /api/upload/{uploadId}/complete` finalizes the upload from the
+       collected part ETags and verifies the true object size against the
+       caller's plan limit.
+    5. `DELETE /api/upload/{uploadId}` cancels an in-progress upload.
 
     The resulting `uploadId` is then passed when creating a processing job.
+
+    The legacy chunk endpoint (`PUT /api/upload/{uploadId}/chunk`) is retired
+    and always returns `410 UPLOAD_PROTOCOL_CHANGED`.
 
     ## Rate Limiting
     Endpoints are rate-limited per IP. Rate limit headers are included in responses:
@@ -42,7 +53,7 @@ tags:
   - name: Authentication
     description: User registration, login, logout, and profile
   - name: Uploads
-    description: Chunked file upload management
+    description: Presigned S3 multipart upload management (file bytes go browser → object storage directly)
   - name: Convert From PDF
     description: Convert PDF files to other formats (Word, Excel, PowerPoint, Image, OCR)
   - name: Convert To PDF
@@ -578,12 +589,15 @@ paths:
   /api/upload/init:
     post:
       tags: [Uploads]
-      summary: Initialize a chunked upload
+      summary: Initialize a presigned multipart upload
       description: |
-        Creates a new upload session and returns an `uploadId`.
-        Use this ID to upload individual chunks and complete the upload.
-        The `fileSize` is validated against the caller's plan limit from the
-        `X-User-Plan-Max-File-MB` header (default: 10 MB for anonymous users).
+        Creates an S3 multipart upload in the uploads bucket and returns a
+        presigned PUT URL for every part. The browser uploads file bytes
+        directly to object storage — they never pass through the application.
+        The declared `fileSize` is validated against the caller's plan limit
+        from the `X-User-Plan-Max-File-MB` header (default: 10 MB for
+        anonymous users) **before** any URL is issued; the true object size is
+        re-verified on complete.
       operationId: initUpload
       requestBody:
         required: true
@@ -593,7 +607,67 @@ paths:
               $ref: "#/components/schemas/UploadInitRequest"
       responses:
         "201":
-          description: Upload initialized
+          description: Upload session created; presigned part URLs issued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/UploadInitResponse"
+        "400":
+          description: Invalid input, or the file would need more than 1000 parts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "413":
+          description: Declared file size exceeds plan limit
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      error:
+                        $ref: "#/components/schemas/APIError"
+                        example:
+                          code: FILE_TOO_LARGE
+                          details: "File size exceeds the 25MB limit for your plan"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/upload/{uploadId}/parts:
+    get:
+      tags: [Uploads]
+      summary: Re-presign part upload URLs
+      description: |
+        Returns fresh presigned PUT URLs for the requested part numbers of an
+        in-progress upload — used to resume an interrupted upload or refresh
+        expired URLs. When `partNumbers` is omitted, every part is re-presigned.
+      operationId: getUploadParts
+      parameters:
+        - name: uploadId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The upload session ID
+        - name: partNumbers
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Comma-separated 1-based part numbers (e.g. "2,3"); all parts when omitted
+      responses:
+        "200":
+          description: Part URLs re-presigned
           content:
             application/json:
               schema:
@@ -607,10 +681,51 @@ paths:
                           uploadId:
                             type: string
                             format: uuid
+                          partSize:
+                            type: integer
+                            format: int64
+                          urlExpiresAt:
+                            type: string
+                            format: date-time
+                          parts:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/UploadPartURL"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "413":
-          description: File exceeds plan size limit
+        "404":
+          description: Upload session expired or not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/upload/{uploadId}/chunk:
+    put:
+      tags: [Uploads]
+      summary: "[Retired] Upload a single chunk"
+      deprecated: true
+      description: |
+        One-release migration stub for the retired chunk-streaming protocol.
+        Always returns `410 Gone` with code `UPLOAD_PROTOCOL_CHANGED` so stale
+        frontend bundles reload into the presigned multipart flow. This route
+        will be removed in the next release.
+      operationId: uploadChunk
+      parameters:
+        - name: uploadId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The upload session ID
+      responses:
+        "410":
+          description: Upload protocol changed — refresh the page
           content:
             application/json:
               schema:
@@ -621,74 +736,14 @@ paths:
                       error:
                         $ref: "#/components/schemas/APIError"
                         example:
-                          code: FILE_TOO_LARGE
-                          details: "file size exceeds your plan limit of 25 MB"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-        "500":
-          $ref: "#/components/responses/InternalError"
-
-  /api/upload/{uploadId}/chunk:
-    put:
-      tags: [Uploads]
-      summary: Upload a single chunk
-      description: |
-        Uploads a single chunk for the given upload session.
-        The `index` query parameter specifies the zero-based chunk index.
-      operationId: uploadChunk
-      parameters:
-        - name: uploadId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-          description: The upload session ID
-        - name: index
-          in: query
-          required: true
-          schema:
-            type: integer
-            minimum: 0
-          description: Zero-based chunk index
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required: [chunk]
-              properties:
-                chunk:
-                  type: string
-                  format: binary
-                  description: The chunk file data
-      responses:
-        "200":
-          description: Chunk uploaded
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/APIResponse"
-                  - type: object
-                    properties:
-                      data:
-                        $ref: "#/components/schemas/UploadStatus"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-        "500":
-          $ref: "#/components/responses/InternalError"
+                          code: UPLOAD_PROTOCOL_CHANGED
+                          details: "Please refresh the page to continue uploading."
 
   /api/upload/{uploadId}/status:
     get:
       tags: [Uploads]
       summary: Get upload session status
-      description: Returns the current status of a chunked upload session.
+      description: Returns the session metadata of an in-progress upload.
       operationId: getUploadStatus
       parameters:
         - name: uploadId
@@ -718,11 +773,12 @@ paths:
   /api/upload/{uploadId}/complete:
     post:
       tags: [Uploads]
-      summary: Complete a chunked upload
+      summary: Complete a presigned multipart upload
       description: |
-        Assembles all uploaded chunks into a single file.
-        All chunks must have been uploaded before calling this endpoint.
-        Returns the `uploadId` and internal `storedPath`.
+        Finalizes the S3 multipart upload from the client-collected part ETags.
+        The part count must equal `totalParts` from init. After completion the
+        service stats the object and re-verifies the **true** size against the
+        caller's plan limit — oversized objects are deleted and 413 returned.
       operationId: completeUpload
       parameters:
         - name: uploadId
@@ -732,9 +788,15 @@ paths:
             type: string
             format: uuid
           description: The upload session ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadCompleteRequest"
       responses:
         "200":
-          description: Upload completed
+          description: Upload completed and size-verified
           content:
             application/json:
               schema:
@@ -748,16 +810,31 @@ paths:
                           uploadId:
                             type: string
                             format: uuid
-                          storedPath:
+                          fileName:
                             type: string
+                          size:
+                            type: integer
+                            format: int64
+                            description: True object size in bytes
+                          complete:
+                            type: boolean
+                            example: true
         "400":
-          description: Upload is incomplete (not all chunks received)
+          description: Part count mismatch or object storage rejected the part list
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/APIResponse"
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      error:
+                        $ref: "#/components/schemas/APIError"
+                        example:
+                          code: UPLOAD_INCOMPLETE
+                          details: "Expected 3 uploaded parts but received 2. Please finish uploading all parts first."
         "413":
-          description: Assembled file exceeds plan size limit
+          description: True object size exceeds plan limit (object is deleted)
           content:
             application/json:
               schema:
@@ -769,9 +846,34 @@ paths:
                         $ref: "#/components/schemas/APIError"
                         example:
                           code: FILE_TOO_LARGE
-                          details: "file size exceeds your plan limit of 25 MB"
+                          details: "File size exceeds the 25MB limit for your plan"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/upload/{uploadId}:
+    delete:
+      tags: [Uploads]
+      summary: Abort an in-progress upload
+      description: |
+        Cancels an in-progress upload: the S3 multipart upload is aborted
+        (freeing stored parts) and the session is removed. Idempotent —
+        aborting an unknown or expired session still returns 204.
+      operationId: abortUpload
+      parameters:
+        - name: uploadId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The upload session ID
+      responses:
+        "204":
+          description: Upload aborted (or already gone)
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -785,7 +887,7 @@ paths:
       description: |
         Creates a new processing job to convert a PDF to the specified format.
         Files can be submitted either as multipart form data or by referencing
-        a previously completed chunked upload via `uploadId`.
+        a previously completed presigned multipart upload via `uploadId`.
       operationId: createConvertFromPdfJob
       security:
         - BearerAuth: []
@@ -929,9 +1031,12 @@ paths:
       tags: [Convert From PDF]
       summary: Download the converted file
       description: |
-        Downloads the output file for a completed job.
-        The job must have status `completed`. Returns the file as a binary
-        attachment with the appropriate Content-Type header.
+        Redirects to a short-lived (5 minute) presigned object-storage URL for
+        the output file of a completed job. The job must have status
+        `completed` and the caller must own it. The presigned URL forces
+        `Content-Disposition: attachment` with the computed output file name
+        and the correct Content-Type. Follow the redirect to receive the file
+        bytes directly from object storage.
       operationId: downloadConvertFromPdfJob
       security:
         - BearerAuth: []
@@ -941,34 +1046,13 @@ paths:
         - <<: *toolConvertFromParam
         - <<: *jobIdParam
       responses:
-        "200":
-          description: File download
+        "302":
+          description: Redirect to a presigned download URL (expires in 5 minutes)
           headers:
-            Content-Disposition:
+            Location:
               schema:
                 type: string
-                example: attachment; filename="document.docx"
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
-            application/vnd.openxmlformats-officedocument.wordprocessingml.document:
-              schema:
-                type: string
-                format: binary
-            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
-              schema:
-                type: string
-                format: binary
-            application/vnd.openxmlformats-officedocument.presentationml.presentation:
-              schema:
-                type: string
-                format: binary
-            application/zip:
-              schema:
-                type: string
-                format: binary
+                example: "http://localhost:8080/fyredocs-outputs/outputs/<jobId>/document.docx?response-content-disposition=attachment%3B%20filename%3Ddocument.docx&X-Amz-Signature=..."
         "400":
           description: Job not yet completed
           content:
@@ -976,7 +1060,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/APIResponse"
         "404":
-          $ref: "#/components/responses/NotFound"
+          description: Job not found, not authorized, or the download link has expired (legacy pre-S3 output)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   # ==========================================================================
   # Convert To PDF
@@ -1130,9 +1220,11 @@ paths:
       tags: [Convert To PDF]
       summary: Download the converted file
       description: |
-        Downloads the output file for a completed job. Returns the file as
-        a binary attachment. The Content-Type will be `application/pdf` for
-        most tools, `application/zip` for split-pdf and multi-page pdf-to-image, or `image/png` for single-page pdf-to-image.
+        Redirects to a short-lived (5 minute) presigned object-storage URL for
+        the output file of a completed job. The presigned URL forces
+        `Content-Disposition: attachment`; the Content-Type will be
+        `application/pdf` for most tools or `application/zip` for multi-file
+        outputs.
       operationId: downloadConvertToPdfJob
       security:
         - BearerAuth: []
@@ -1142,22 +1234,12 @@ paths:
         - <<: *toolConvertToParam
         - <<: *jobIdParam
       responses:
-        "200":
-          description: File download
+        "302":
+          description: Redirect to a presigned download URL (expires in 5 minutes)
           headers:
-            Content-Disposition:
+            Location:
               schema:
                 type: string
-                example: attachment; filename="document.pdf"
-          content:
-            application/pdf:
-              schema:
-                type: string
-                format: binary
-            application/zip:
-              schema:
-                type: string
-                format: binary
         "400":
           description: Job not yet completed
           content:
@@ -1165,7 +1247,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/APIResponse"
         "404":
-          $ref: "#/components/responses/NotFound"
+          description: Job not found, not authorized, or the download link has expired (legacy pre-S3 output)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   # ==========================================================================
   # Organize PDF
@@ -1177,7 +1265,7 @@ paths:
       description: |
         Creates a new job to organize a PDF (merge, split, remove pages, etc.).
         The organize-pdf service accepts multipart file uploads or JSON with
-        an `uploadId` from a completed chunked upload.
+        an `uploadId` from a completed presigned multipart upload.
       operationId: createOrganizePdfJob
       security:
         - BearerAuth: []
@@ -1324,22 +1412,12 @@ paths:
         - <<: *toolOrganizeParam
         - <<: *jobIdParam
       responses:
-        "200":
-          description: File download
+        "302":
+          description: Redirect to a presigned download URL (expires in 5 minutes; forces attachment disposition)
           headers:
-            Content-Disposition:
+            Location:
               schema:
                 type: string
-                example: attachment; filename="document.pdf"
-          content:
-            application/pdf:
-              schema:
-                type: string
-                format: binary
-            application/zip:
-              schema:
-                type: string
-                format: binary
         "400":
           description: Job not yet completed
           content:
@@ -1347,7 +1425,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/APIResponse"
         "404":
-          $ref: "#/components/responses/NotFound"
+          description: Job not found, not authorized, or the download link has expired (legacy pre-S3 output)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   # ==========================================================================
   # Optimize PDF
@@ -1502,18 +1586,12 @@ paths:
         - <<: *toolOptimizeParam
         - <<: *jobIdParam
       responses:
-        "200":
-          description: File download
+        "302":
+          description: Redirect to a presigned download URL (expires in 5 minutes; forces attachment disposition)
           headers:
-            Content-Disposition:
+            Location:
               schema:
                 type: string
-                example: attachment; filename="document.pdf"
-          content:
-            application/pdf:
-              schema:
-                type: string
-                format: binary
         "400":
           description: Job not yet completed
           content:
@@ -1521,7 +1599,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/APIResponse"
         "404":
-          $ref: "#/components/responses/NotFound"
+          description: Job not found, not authorized, or the download link has expired (legacy pre-S3 output)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   # ==========================================================================
   # Jobs (history)
@@ -2211,22 +2295,81 @@ components:
     # -- Upload Schemas --
     UploadInitRequest:
       type: object
-      required: [fileName, fileSize, totalChunks]
+      required: [fileName, fileSize]
       properties:
         fileName:
           type: string
-          description: Original file name
+          description: Original file name (sanitized to its base name server-side)
           example: document.pdf
         fileSize:
           type: integer
           format: int64
-          description: Total file size in bytes
+          description: Total file size in bytes (validated against the plan limit; re-verified against the true object size on complete)
           example: 5242880
-        totalChunks:
+        contentType:
+          type: string
+          description: MIME content type of the file (defaults to application/octet-stream)
+          example: application/pdf
+
+    UploadPartURL:
+      type: object
+      properties:
+        partNumber:
           type: integer
-          description: Number of chunks the file is split into
           minimum: 1
-          example: 5
+          description: 1-based S3 part number
+          example: 1
+        url:
+          type: string
+          description: Presigned PUT URL for this part — the browser uploads the part bytes directly to object storage
+          example: "http://localhost:8080/fyredocs-uploads/uploads/<uploadId>/document.pdf?uploadId=...&partNumber=1&X-Amz-Signature=..."
+
+    UploadInitResponse:
+      type: object
+      properties:
+        uploadId:
+          type: string
+          format: uuid
+          description: Upload session identifier
+        key:
+          type: string
+          description: Object key the file will live at in the uploads bucket
+          example: "uploads/<uploadId>/document.pdf"
+        partSize:
+          type: integer
+          format: int64
+          description: Size of every part except possibly the last, in bytes (UPLOAD_PART_SIZE_MB, default 8 MiB)
+          example: 8388608
+        totalParts:
+          type: integer
+          description: Number of parts the client must upload (max 1000)
+          example: 3
+        urlExpiresAt:
+          type: string
+          format: date-time
+          description: When the presigned part URLs expire (re-presign via GET /parts after this)
+        parts:
+          type: array
+          items:
+            $ref: "#/components/schemas/UploadPartURL"
+
+    UploadCompleteRequest:
+      type: object
+      required: [parts]
+      properties:
+        parts:
+          type: array
+          description: Every uploaded part with the ETag returned by object storage. The count must equal totalParts.
+          items:
+            type: object
+            required: [partNumber, etag]
+            properties:
+              partNumber:
+                type: integer
+                minimum: 1
+              etag:
+                type: string
+                description: ETag response header from the part upload
 
     UploadStatus:
       type: object
@@ -2238,20 +2381,13 @@ components:
         fileName:
           type: string
           description: Original file name
-        fileSize:
+        declaredSize:
           type: integer
           format: int64
-          description: Total file size in bytes
-        totalChunks:
+          description: File size in bytes as declared at init (the true size is verified on complete)
+        totalParts:
           type: integer
-          description: Expected number of chunks
-        receivedChunks:
-          type: integer
-          format: int64
-          description: Number of chunks received so far
-        complete:
-          type: boolean
-          description: Whether all chunks have been received
+          description: Expected number of parts
 
     # -- Job Schemas --
     CreateJobRequest:

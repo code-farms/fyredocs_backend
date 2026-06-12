@@ -19,10 +19,12 @@ graph TB
 
         subgraph Routes["Route Groups"]
             subgraph UploadRoutes["/api/uploads (rate-limited 30/min)"]
-                INIT["POST /init"]
-                CHUNK["PUT /:uploadId/chunk?index=N"]
-                STATUS["GET /:uploadId/status"]
+                INIT["POST /init (presign multipart)"]
+                PARTS["GET /:uploadId/parts (re-presign)"]
                 COMPLETE["POST /:uploadId/complete"]
+                STATUS["GET /:uploadId/status"]
+                ABORT["DELETE /:uploadId"]
+                CHUNK["PUT /:uploadId/chunk → 410 stub"]
             end
 
             subgraph CFRoutes["/api/convert-from-pdf"]
@@ -64,9 +66,10 @@ graph TB
         end
 
         subgraph Handlers
-            UH["Upload Handlers<br/>(chunked upload + Redis Lua atomic chunk recording)"]
-            JH["Job Handlers<br/>(CreateJobFromTool · GetJobsByTool · GetJobByID · DeleteJobByID · DownloadJobFile · GetJobHistory)"]
+            UH["Upload Handlers<br/>(presigned S3 multipart: init · re-presign · complete · abort)"]
+            JH["Job Handlers<br/>(CreateJobFromTool · GetJobsByTool · GetJobByID · DeleteJobByID · DownloadJobFile→302 · GetJobHistory)"]
             SSEH["SSE Handler<br/>(ephemeral NATS consumer · FilterSubject scoped to jobId)"]
+            OS["ObjectStore interface<br/>(shared/storage.Client injected at boot)"]
         end
 
         subgraph Internal
@@ -80,6 +83,7 @@ graph TB
 
         subgraph RateLimiting
             RL_UPLOAD["ratelimit:upload:&lt;ip&gt; · 30/min"]
+            RL_JOBCREATE["ratelimit:jobcreate:&lt;ip&gt; · 20/min (POST /:tool)"]
         end
 
         subgraph Models["internal/models (GORM)"]
@@ -100,7 +104,10 @@ graph TB
     SSE_ROUTE --> SSEH
 
     UH --> Redis[(Redis)]
-    UH --> Disk[(uploads/)]
+    UH --> OS
+    JH --> OS
+    OS --> S3[("MinIO / S3<br/>uploads + outputs buckets")]
+    Browser["Browser"] -.->|presigned PUT parts / presigned GET download| S3
     JH --> JOB
     JH --> FM
     JH --> IDEMP
@@ -129,8 +136,8 @@ flowchart TD
     D -->|No| E{"Body type?"}
     E -->|JSON uploadIds| E1["Look up by Upload→Job map<br/>(replay safety)"]
     E1 -->|hit| Z
-    E1 -->|miss| F["consumeUpload(uploadId): move file from uploads/tmp/&lt;id&gt;/ to uploads/&lt;jobId&gt;/<br/>+ MIME validation"]
-    E -->|multipart| G["SaveUploadedFile to uploads/&lt;jobId&gt;/<br/>+ MIME validation"]
+    E1 -->|miss| F["consumeUpload(uploadId): StatObject(uploads, key) for true size<br/>+ ranged-GET MIME sniff (read-only, object stays in place)"]
+    E -->|multipart| G["storeDirectUpload: PutObject → uploads/&lt;jobId&gt;/&lt;file&gt;<br/>+ 512-byte tee MIME sniff"]
     F --> H
     G --> H
     H["Build ProcessingJob (UUIDv7) + FileMetadata rows<br/>in single DB transaction"]
@@ -214,6 +221,9 @@ graph LR
     JS --> |shared/natsconn| NATSConn
     JS --> |shared/queue| Queue
     JS --> |shared/response| Response
+    JS --> |shared/storage| Storage
+
+    Storage --> |minio-go/v7| S3[("MinIO / S3")]
 
     JS --> |internal/authverify| AuthVerify
     JS --> |internal/models| Models
