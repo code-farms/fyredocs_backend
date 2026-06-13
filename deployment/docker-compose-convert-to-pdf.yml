@@ -10,7 +10,7 @@ services:
       - "8083:8083"
     environment:
       PORT: "8083"
-      DATABASE_URL: ${DATABASE_URL:-postgresql://neondb_owner:npg_K5jWhYGb7eJX@ep-wandering-glitter-anyd1fj9-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: redis:6379
       TRUSTED_PROXIES: 172.18.0.0/16,127.0.0.1,::1
       QUEUE_PREFIX: queue
@@ -18,12 +18,12 @@ services:
       PROCESSING_TIMEOUT: 30m
 
       # Object storage (files live in MinIO/S3, not on a shared volume)
-      S3_ENDPOINT: minio:9000
+      S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_USE_SSL: "false"
-      S3_BUCKET_UPLOADS: fyredocs-uploads
-      S3_BUCKET_OUTPUTS: fyredocs-outputs
+      S3_USE_SSL: "${S3_USE_SSL:-false}"
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
     env_file:
       - ../.env
     tmpfs:

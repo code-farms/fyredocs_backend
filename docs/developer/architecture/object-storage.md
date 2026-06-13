@@ -94,9 +94,11 @@ imported):
 }]}
 ```
 
-- `fyredocs-uploads`: objects expire after **2 days**; incomplete multipart
-  uploads are aborted after **1 day**. Uploads are consumed into jobs within
-  minutes, so anything older is abandoned.
+- `fyredocs-uploads`: objects expire after `UPLOAD_EXPIRE_DAYS` (**default 2**);
+  incomplete multipart uploads are aborted after `UPLOAD_ABORT_INCOMPLETE_DAYS`
+  (**default 1**). Uploads are consumed into jobs within minutes, so anything
+  older is abandoned. Both are set on `minio-init` and overridable via the
+  deployment `.env`.
 - `fyredocs-outputs`: **no lifecycle rule.** Pro-plan outputs never expire;
   deletion is exclusively DB-driven (cleanup-worker removes the object when
   the owning `processing_jobs` row passes `expires_at`).
@@ -159,6 +161,12 @@ Swapping MinIO for AWS S3/R2 is an env-var change (`S3_ENDPOINT`,
 Gateway-only: `MINIO_URL` (default `http://minio:9000`) — upstream for the
 bucket proxy routes. Job-service-only: `UPLOAD_PART_SIZE_MB` (default `8`) —
 presigned multipart part size.
+
+Compose/`minio-init`-only (not read by services): `MINIO_IMAGE`,
+`MINIO_MC_IMAGE` (pinned image tags), `UPLOAD_EXPIRE_DAYS` (default `2`) and
+`UPLOAD_ABORT_INCOMPLETE_DAYS` (default `1`) for the uploads-bucket lifecycle.
+Every value above has a compose default — nothing is hardcoded; all are
+overridable from `deployment/.env`.
 
 ## Related documentation
 

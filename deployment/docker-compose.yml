@@ -91,7 +91,7 @@ services:
   # proxy (/fyredocs-uploads/*, /fyredocs-outputs/*) — port 9000 is NOT
   # published. The console is bound to localhost only for operators.
   minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-04-22T22-12-26Z}
     restart: always
     command: server /data --console-address ":9001"
     environment:
@@ -140,7 +140,7 @@ services:
   # output deletion is DB-driven (cleanup-worker removes objects when the
   # owning processing_jobs row expires).
   minio-init:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    image: ${MINIO_MC_IMAGE:-minio/mc:RELEASE.2025-04-16T18-13-26Z}
     restart: "no"
     entrypoint: ["/bin/sh", "-ec"]
     command:
@@ -151,29 +151,30 @@ services:
         done
 
         # Create both buckets (-p: no error if they already exist)
-        mc mb -p local/fyredocs-uploads
-        mc mb -p local/fyredocs-outputs
+        mc mb -p "local/$$S3_BUCKET_UPLOADS"
+        mc mb -p "local/$$S3_BUCKET_OUTPUTS"
 
-        # Lifecycle on the uploads bucket: expire after 2d, abort incomplete
-        # multipart uploads after 1d (see header comment for why ilm import)
-        echo '{"Rules":[{"ID":"expire-stale-uploads","Status":"Enabled","Filter":{"Prefix":""},"Expiration":{"Days":2},"AbortIncompleteMultipartUpload":{"DaysAfterInitiation":1}}]}' \
-          | mc ilm import local/fyredocs-uploads
+        # Lifecycle on the uploads bucket: expire after EXPIRE_DAYS, abort
+        # incomplete multipart uploads after ABORT_DAYS (see header for why
+        # ilm import rather than `mc ilm rule add`).
+        echo '{"Rules":[{"ID":"expire-stale-uploads","Status":"Enabled","Filter":{"Prefix":""},"Expiration":{"Days":'"$$UPLOAD_EXPIRE_DAYS"'},"AbortIncompleteMultipartUpload":{"DaysAfterInitiation":'"$$UPLOAD_ABORT_INCOMPLETE_DAYS"'}}]}' \
+          | mc ilm import "local/$$S3_BUCKET_UPLOADS"
 
         # Scoped application credentials: services never use the root key.
         # RW on the two fyredocs buckets only.
-        cat > /tmp/fyredocs-app-policy.json <<'POLICY'
+        cat > /tmp/fyredocs-app-policy.json <<POLICY
         {
           "Version": "2012-10-17",
           "Statement": [
             {
               "Effect": "Allow",
               "Action": ["s3:GetBucketLocation", "s3:ListBucket", "s3:ListBucketMultipartUploads"],
-              "Resource": ["arn:aws:s3:::fyredocs-uploads", "arn:aws:s3:::fyredocs-outputs"]
+              "Resource": ["arn:aws:s3:::$$S3_BUCKET_UPLOADS", "arn:aws:s3:::$$S3_BUCKET_OUTPUTS"]
             },
             {
               "Effect": "Allow",
               "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
-              "Resource": ["arn:aws:s3:::fyredocs-uploads/*", "arn:aws:s3:::fyredocs-outputs/*"]
+              "Resource": ["arn:aws:s3:::$$S3_BUCKET_UPLOADS/*", "arn:aws:s3:::$$S3_BUCKET_OUTPUTS/*"]
             }
           ]
         }
@@ -188,6 +189,10 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
+      UPLOAD_EXPIRE_DAYS: ${UPLOAD_EXPIRE_DAYS:-2}
+      UPLOAD_ABORT_INCOMPLETE_DAYS: ${UPLOAD_ABORT_INCOMPLETE_DAYS:-1}
     logging:
       driver: "json-file"
       options:
@@ -218,9 +223,9 @@ services:
 
       # Object-storage proxy: presigned URLs resolve to this gateway origin
       # and are relayed verbatim (path + Host preserved) to MinIO.
-      MINIO_URL: http://minio:9000
-      S3_BUCKET_UPLOADS: fyredocs-uploads
-      S3_BUCKET_OUTPUTS: fyredocs-outputs
+      MINIO_URL: ${MINIO_URL:-http://minio:9000}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
 
       # JWT Configuration
       JWT_HS256_SECRET: ${JWT_HS256_SECRET}
@@ -287,7 +292,7 @@ services:
     restart: always
     environment:
       PORT: "8086"
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ep-wandering-glitter-anyd1fj9-pooler.c-6.us-east-1.aws.neon.tech/${POSTGRES_DB:-neondb}?sslmode=require}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
@@ -355,7 +360,7 @@ services:
     restart: always
     environment:
       PORT: "8081"
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ep-wandering-glitter-anyd1fj9-pooler.c-6.us-east-1.aws.neon.tech/${POSTGRES_DB:-neondb}?sslmode=require}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
@@ -376,16 +381,16 @@ services:
       AUTH_TRUST_GATEWAY_HEADERS: "false"
 
       # Object storage (MinIO)
-      S3_ENDPOINT: minio:9000
+      S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_USE_SSL: "false"
-      S3_BUCKET_UPLOADS: fyredocs-uploads
-      S3_BUCKET_OUTPUTS: fyredocs-outputs
+      S3_USE_SSL: "${S3_USE_SSL:-false}"
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
       # Presigned URLs are signed for the origin browsers actually use (the
       # gateway). Multi-host: point this at the public origin instead.
       S3_PUBLIC_ENDPOINT: ${PUBLIC_ORIGIN:-http://localhost:8080}
-      UPLOAD_PART_SIZE_MB: "8"
+      UPLOAD_PART_SIZE_MB: "${UPLOAD_PART_SIZE_MB:-8}"
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
       GUEST_JOB_TTL: 30m
@@ -429,7 +434,7 @@ services:
     restart: always
     environment:
       PORT: "8082"
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ep-wandering-glitter-anyd1fj9-pooler.c-6.us-east-1.aws.neon.tech/${POSTGRES_DB:-neondb}?sslmode=require}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
@@ -437,12 +442,12 @@ services:
 
       # Object storage (MinIO) — workers stream inputs/outputs; /tmp is the
       # only local scratch space (tmpfs below)
-      S3_ENDPOINT: minio:9000
+      S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_USE_SSL: "false"
-      S3_BUCKET_UPLOADS: fyredocs-uploads
-      S3_BUCKET_OUTPUTS: fyredocs-outputs
+      S3_USE_SSL: "${S3_USE_SSL:-false}"
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
@@ -486,19 +491,19 @@ services:
     restart: always
     environment:
       PORT: "8083"
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ep-wandering-glitter-anyd1fj9-pooler.c-6.us-east-1.aws.neon.tech/${POSTGRES_DB:-neondb}?sslmode=require}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
       NATS_URL: nats://nats:4222
 
       # Object storage (MinIO)
-      S3_ENDPOINT: minio:9000
+      S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_USE_SSL: "false"
-      S3_BUCKET_UPLOADS: fyredocs-uploads
-      S3_BUCKET_OUTPUTS: fyredocs-outputs
+      S3_USE_SSL: "${S3_USE_SSL:-false}"
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
       WORKER_CONCURRENCY: "2"
@@ -544,19 +549,19 @@ services:
     restart: always
     environment:
       PORT: "8084"
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ep-wandering-glitter-anyd1fj9-pooler.c-6.us-east-1.aws.neon.tech/${POSTGRES_DB:-neondb}?sslmode=require}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
       NATS_URL: nats://nats:4222
 
       # Object storage (MinIO)
-      S3_ENDPOINT: minio:9000
+      S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_USE_SSL: "false"
-      S3_BUCKET_UPLOADS: fyredocs-uploads
-      S3_BUCKET_OUTPUTS: fyredocs-outputs
+      S3_USE_SSL: "${S3_USE_SSL:-false}"
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
       WORKER_CONCURRENCY: "4"
@@ -598,19 +603,19 @@ services:
     restart: always
     environment:
       PORT: "8085"
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ep-wandering-glitter-anyd1fj9-pooler.c-6.us-east-1.aws.neon.tech/${POSTGRES_DB:-neondb}?sslmode=require}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
       NATS_URL: nats://nats:4222
 
       # Object storage (MinIO)
-      S3_ENDPOINT: minio:9000
+      S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_USE_SSL: "false"
-      S3_BUCKET_UPLOADS: fyredocs-uploads
-      S3_BUCKET_OUTPUTS: fyredocs-outputs
+      S3_USE_SSL: "${S3_USE_SSL:-false}"
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
@@ -658,7 +663,7 @@ services:
     restart: always
     environment:
       PORT: "8087"
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ep-wandering-glitter-anyd1fj9-pooler.c-6.us-east-1.aws.neon.tech/${POSTGRES_DB:-neondb}?sslmode=require}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       NATS_URL: nats://nats:4222
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
@@ -694,7 +699,7 @@ services:
       dockerfile: cleanup-worker/Dockerfile
     restart: always
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ep-wandering-glitter-anyd1fj9-pooler.c-6.us-east-1.aws.neon.tech/${POSTGRES_DB:-neondb}?sslmode=require}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
@@ -702,12 +707,12 @@ services:
 
       # Object storage (MinIO) — cleanup deletes objects, aborts stale
       # multipart uploads
-      S3_ENDPOINT: minio:9000
+      S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_USE_SSL: "false"
-      S3_BUCKET_UPLOADS: fyredocs-uploads
-      S3_BUCKET_OUTPUTS: fyredocs-outputs
+      S3_USE_SSL: "${S3_USE_SSL:-false}"
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
 
       UPLOAD_TTL: 30m
       CLEANUP_INTERVAL: 5m
