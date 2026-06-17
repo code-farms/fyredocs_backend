@@ -138,11 +138,33 @@ print_step "Waiting for services to be ready..."
 #     echo -n "."
 #     sleep 1
 # done
-echo -n "Checking Neon Database connectivity... "
-if [ -n "${DATABASE_URL:-}" ] && psql "${DATABASE_URL}" -c "SELECT 1" &> /dev/null 2>&1; then
-    print_success "Neon Database reachable!"
+# Provider-agnostic Postgres reachability probe. Works for any DATABASE_URL
+# (Neon, RDS, Supabase, a local/in-compose Postgres, ...). Prefers a host psql
+# if present; otherwise runs psql inside a throwaway container so the check
+# needs no host tooling. The containerized probe joins the compose network, so
+# it can reach both external hosts and in-compose db services.
+echo -n "Checking database connectivity... "
+db_check() {
+    [ -n "${DATABASE_URL:-}" ] || return 2
+    if command -v psql &> /dev/null; then
+        PGCONNECT_TIMEOUT=5 psql "${DATABASE_URL}" -c "SELECT 1" &> /dev/null && return 0
+    fi
+    if command -v docker &> /dev/null; then
+        local net args
+        net=$(docker network ls --format '{{.Name}}' | grep -E '(^|_)fyredocs_net$' | head -1)
+        args=(run --rm -e PGCONNECT_TIMEOUT=5)
+        [ -n "$net" ] && args+=(--network "$net")
+        args+=(postgres:16-alpine psql "${DATABASE_URL}" -c "SELECT 1")
+        docker "${args[@]}" &> /dev/null && return 0
+    fi
+    return 1
+}
+if db_check; then
+    print_success "Database reachable!"
+elif [ -z "${DATABASE_URL:-}" ]; then
+    print_warning "DATABASE_URL not set — skipping connectivity check"
 else
-    print_warning "Could not verify Neon Database (psql not installed or network issue) — continuing anyway"
+    print_warning "Could not verify database connectivity — continuing anyway (services run their own readiness checks)"
 fi
 
 echo -n "Waiting for API Gateway... "
