@@ -31,6 +31,9 @@ func SetupRouter(r *gin.Engine) {
 		admin.GET("/metrics/system", handlers.SystemHealth)
 		admin.GET("/metrics/server-performance", handlers.ServerPerformance)
 		admin.GET("/metrics/api-performance", handlers.APIPerformance)
+		admin.GET("/metrics/executive", handlers.ExecutiveOverview)
+		admin.GET("/metrics/revenue", handlers.RevenueMetrics)
+		admin.GET("/metrics/acquisition", handlers.AcquisitionMetrics)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -55,8 +56,9 @@ func ServerPerformance(c *gin.Context) {
 	}
 
 	response.OK(c, "Server performance retrieved", gin.H{
-		"system":   systemInfo,
-		"services": services,
+		"system":       systemInfo,
+		"services":     services,
+		"servicesList": buildServicesList(services),
 		"availability": gin.H{
 			"totalServices":     totalServices,
 			"healthyServices":   healthyCount,
@@ -64,6 +66,52 @@ func ServerPerformance(c *gin.Context) {
 			"uptimePercent":     uptimePercent,
 		},
 	})
+}
+
+// buildServicesList flattens the keyed services map into a table-friendly,
+// name-sorted slice for the frontend service table.
+func buildServicesList(services gin.H) []gin.H {
+	names := make([]string, 0, len(services))
+	for name := range services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	rows := make([]gin.H, 0, len(services))
+	for _, name := range names {
+		info, ok := services[name].(gin.H)
+		if !ok {
+			continue
+		}
+		row := gin.H{
+			"name":        name,
+			"status":      stringField(info, "status"),
+			"uptime":      stringField(info, "uptime"),
+			"goVersion":   stringField(info, "goVersion"),
+			"goroutines":  info["goroutines"],
+			"heapAllocMB": 0.0,
+			"heapInuseMB": 0.0,
+			"sysMB":       0.0,
+		}
+		if mem, ok := info["memory"].(gin.H); ok {
+			row["heapAllocMB"] = mem["heapAllocMB"]
+			row["heapInuseMB"] = mem["heapInuseMB"]
+			row["sysMB"] = mem["sysMB"]
+		}
+		if errMsg, ok := info["error"].(string); ok && errMsg != "" {
+			row["error"] = errMsg
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// stringField safely reads a string value from a gin.H map.
+func stringField(m gin.H, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 func getSystemInfo() gin.H {

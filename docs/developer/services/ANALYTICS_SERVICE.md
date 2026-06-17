@@ -52,9 +52,12 @@ Events are persisted to the `analytics_events` PostgreSQL table for querying.
 | GET | `/admin/metrics/business?days=30&inactiveDays=30` | Business metrics (signups, plan changes, churn, conversion) |
 | GET | `/admin/metrics/growth?days=30` | Growth metrics (DAU/WAU/MAU, stickiness, activation, retention cohorts, funnel) |
 | GET | `/admin/metrics/engagement?days=30` | Engagement metrics (tool trends, jobs/user, file sizes, guest vs registered, power users) |
-| GET | `/admin/metrics/reliability?days=30` | Reliability metrics (success/failure rates, processing time p50/p95, tool errors, plan limit hits) |
+| GET | `/admin/metrics/reliability?days=30` | Reliability metrics (success/failure rates, processing time p50/p95, tool errors, plan limit hits). Also returns `processingTimeTrend` (daily p50/p95/p99 latency, seconds) and `failureCategories` (daily failure counts bucketed into timeout/validation/processing/infrastructure/other from the `[ERROR_CODE]` prefix in `metadata.failureReason`). |
 | GET | `/admin/metrics/system` | System health (ingestion rate, active users, processing lag, event breakdown) |
-| GET | `/admin/metrics/server-performance` | Server performance (CPU, memory, storage, uptime, service availability, Go runtime per service) |
+| GET | `/admin/metrics/server-performance` | Server performance (CPU, memory, storage, uptime, service availability, Go runtime per service). Also returns `servicesList`: a name-sorted, table-friendly array of per-service rows (name, status, uptime, goroutines, heapAllocMB, heapInuseMB, sysMB, goVersion, error?). |
+| GET | `/admin/metrics/executive?days=30` | Executive overview: 8 KPIs (totalUsers, activeUsers, revenue, jobsCreated, successRate, apiRequests, apiErrorRate, activeServers) each with `current`, `previous`, and a daily `sparkline`. `revenue` is ESTIMATED (see `/revenue`); `apiRequests`/`apiErrorRate` are null until the metrics sampler is deployed. |
+| GET | `/admin/metrics/revenue?days=30` | **Estimated** revenue from the active plan distribution × the configured `PLAN_PRICES` map (no billing integration). Returns `mrr`, `arr`, `previousMrr`, `byPlan`, a daily `trend`, `planChanges` (upgrades/downgrades ranked by price), `prices`, `currency`, and `estimated: true`. |
+| GET | `/admin/metrics/acquisition?days=30` | Signup counts grouped by acquisition channel (organic/referral/paid/campaign/direct/unknown), classified from referrer/UTM in `user.signup` metadata. Returns `channels` (with percent), `daily`, `topReferrers`, and a `previous` period comparison. Signups without referrer/UTM metadata bucket as `unknown`. |
 | GET | `/admin/metrics/api-performance` | API performance (per-endpoint latency p50/p95/p99, throughput, error rates, slowest/most-erroring endpoints). Supports query params: `page` (default 1), `limit` (default 50, max 200), `search` (partial path match), `method` (exact HTTP method), `sortBy` (requests\|avgLatencyMs\|p50LatencyMs\|p95LatencyMs\|p99LatencyMs\|errorRate\|path\|method), `sortDir` (asc\|desc). Returns paginated endpoints with `meta` containing `page`, `limit`, `total`. |
 
 ### Infrastructure
@@ -107,6 +110,8 @@ Events are persisted to the `analytics_events` PostgreSQL table for querying.
 | TRUSTED_PROXIES | 127.0.0.1,::1 | Trusted proxy addresses |
 | SERVICE_URLS | api-gateway=http://api-gateway:8080,auth-service=http://auth-service:8086,job-service=http://job-service:8081,convert-from-pdf=http://convert-from-pdf:8082,convert-to-pdf=http://convert-to-pdf:8083,organize-pdf=http://organize-pdf:8084,optimize-pdf=http://optimize-pdf:8085,cleanup-worker=http://cleanup-worker:8088 | Service name=URL pairs for performance scraping |
 | API_GATEWAY_METRICS_URL | http://api-gateway:8080/metrics | API gateway Prometheus metrics URL |
+| PLAN_PRICES | anonymous=0,free=0,pro=12 | Comma-separated `plan=monthlyPrice` pairs used to compute **estimated** revenue (MRR/ARR). No billing integration. |
+| PLAN_CURRENCY | USD | Currency code reported with estimated revenue figures. |
 | OTEL_EXPORTER_OTLP_ENDPOINT | http://localhost:4318 | OpenTelemetry collector |
 
 ## Authentication

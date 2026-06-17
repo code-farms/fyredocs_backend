@@ -95,6 +95,56 @@ func ReliabilityMetrics(c *gin.Context) {
 		ORDER BY failed DESC
 	`, since, now).Scan(&toolErrors)
 
+	// Daily processing-time percentiles (p50/p95/p99) for the latency trend chart.
+	type latencyTrendRow struct {
+		Date string  `json:"date"`
+		P50  float64 `json:"p50"`
+		P95  float64 `json:"p95"`
+		P99  float64 `json:"p99"`
+	}
+	var latencyTrend []latencyTrendRow
+	models.DB.Raw(`
+		SELECT DATE(created.created_at) as date,
+			COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed.created_at - created.created_at))), 0) as p50,
+			COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed.created_at - created.created_at))), 0) as p95,
+			COALESCE(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed.created_at - created.created_at))), 0) as p99
+		FROM analytics_events created
+		JOIN analytics_events completed
+			ON completed.job_id = created.job_id
+			AND completed.event_type = 'job.completed'
+		WHERE created.event_type = 'job.created'
+			AND created.job_id IS NOT NULL
+			AND created.created_at >= ? AND created.created_at < ?
+		GROUP BY DATE(created.created_at)
+		ORDER BY date ASC
+	`, since, now).Scan(&latencyTrend)
+
+	// Daily failure counts bucketed by root-cause category, parsed from the
+	// "[ERROR_CODE] message" prefix stored in metadata.failureReason (camelCase).
+	type failureCategoryRow struct {
+		Date     string `json:"date"`
+		Category string `json:"category"`
+		Count    int64  `json:"count"`
+	}
+	var failureCategories []failureCategoryRow
+	models.DB.Raw(`
+		SELECT DATE(created_at) as date,
+			CASE substring(metadata->>'failureReason' FROM '^\[([A-Z_]+)\]')
+				WHEN 'TIMEOUT'           THEN 'timeout'
+				WHEN 'INVALID_PAYLOAD'   THEN 'validation'
+				WHEN 'UNSUPPORTED_TOOL'  THEN 'validation'
+				WHEN 'CONVERSION_FAILED' THEN 'processing'
+				WHEN 'OUTPUT_FAILED'     THEN 'infrastructure'
+				ELSE 'other'
+			END as category,
+			COUNT(*) as count
+		FROM analytics_events
+		WHERE event_type = 'job.failed'
+			AND created_at >= ? AND created_at < ?
+		GROUP BY DATE(created_at), category
+		ORDER BY date ASC
+	`, since, now).Scan(&failureCategories)
+
 	// Plan limit hit frequency
 	type limitHitRow struct {
 		Date     string `json:"date"`
@@ -127,7 +177,9 @@ func ReliabilityMetrics(c *gin.Context) {
 			"p50Seconds": processingTime.P50Seconds,
 			"p95Seconds": processingTime.P95Seconds,
 		},
-		"toolErrors":    toolErrors,
-		"planLimitHits": limitHits,
+		"toolErrors":          toolErrors,
+		"planLimitHits":       limitHits,
+		"processingTimeTrend": latencyTrend,
+		"failureCategories":   failureCategories,
 	})
 }
