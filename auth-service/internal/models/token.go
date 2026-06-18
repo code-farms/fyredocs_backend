@@ -48,6 +48,21 @@ func StoreSession(db *gorm.DB, sessionID, userID uuid.UUID, accessToken string, 
 	return db.Create(&session).Error
 }
 
+// StoreAccessOnlySession inserts a session that has only an access token and no
+// refresh token, used for short-lived proxy-login (impersonation) sessions.
+// refresh_token_hash is omitted so it is stored as NULL — the unique index on
+// that column treats NULLs as distinct, so multiple access-only sessions can
+// coexist. The session row still makes the impersonation revocable.
+func StoreAccessOnlySession(db *gorm.DB, sessionID, userID uuid.UUID, accessToken string, accessExpiresAt time.Time) error {
+	session := UserSession{
+		ID:              sessionID,
+		UserID:          userID,
+		AccessTokenHash: HashToken(accessToken),
+		AccessExpiresAt: accessExpiresAt,
+	}
+	return db.Omit("RefreshTokenHash", "RefreshExpiresAt").Create(&session).Error
+}
+
 // FindSessionByRefreshHash finds an active session by its refresh token hash.
 func FindSessionByRefreshHash(db *gorm.DB, refreshHash string) (*UserSession, error) {
 	var session UserSession

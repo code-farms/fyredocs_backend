@@ -577,6 +577,71 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /auth/proxy-login:
+    post:
+      tags: [Authentication]
+      summary: Proxy login (admin impersonation)
+      description: |
+        Lets a caller with role `admin` or `super-admin` obtain a short-lived
+        access token for another user. The issued token carries an
+        `impersonated_by` claim, uses a short TTL (`PROXY_LOGIN_TTL`), and is
+        **not** paired with a refresh token — it cannot be renewed and expires
+        on its own. The access cookie is set to the target user's token and the
+        action is audit-logged. Requires `PROXY_LOGIN_ENABLED=true`.
+      operationId: proxyLogin
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId:
+                  type: string
+                  format: uuid
+                  description: ID of the user to impersonate
+      responses:
+        "200":
+          description: Impersonation session started
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          user:
+                            $ref: "#/components/schemas/User"
+                          accessExpiresAt:
+                            type: integer
+                            format: int64
+                            description: Access token expiry (epoch milliseconds)
+                          impersonatedBy:
+                            type: string
+                            format: uuid
+                            description: ID of the admin who started the session
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Caller is not an admin, or proxy login is disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   # Note: there is no /auth/guest endpoint. Guest sessions are managed entirely
   # by the API gateway via the `guest_token` HttpOnly cookie. The gateway issues
   # the cookie automatically on first contact and validates it against
@@ -1707,6 +1772,44 @@ paths:
   # ==========================================================================
   # Admin Analytics
   # ==========================================================================
+  /api/dashboard:
+    get:
+      tags: [Admin Analytics]
+      summary: Unified role-aware dashboard
+      description: |
+        Single landing endpoint for every authenticated user. The server filters
+        the payload by role (from the gateway-set `X-User-Role`): `admin` /
+        `super-admin` receive `data.role:"admin"` with system KPIs, regular users
+        receive `data.role:"user"` with personal KPIs scoped to their own
+        `user_id`. Guests are rejected. Computed from analytics-service's own
+        event store — there is no separate `/admin/dashboard`.
+      operationId: getDashboard
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+          description: Look-back window in days
+      responses:
+        "200":
+          description: Role-filtered dashboard payload (data.role is "admin" or "user")
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Guests do not have a dashboard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
   /admin/metrics/overview:
     get:
       tags: [Admin Analytics]

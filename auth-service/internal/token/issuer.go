@@ -15,6 +15,9 @@ type Claims struct {
 	Role    string   `json:"role,omitempty"`
 	Scope   []string `json:"scope,omitempty"`
 	IsGuest bool     `json:"is_guest,omitempty"`
+	// ImpersonatedBy is set only on proxy-login tokens and carries the user ID
+	// of the admin who initiated the impersonation. Empty on normal tokens.
+	ImpersonatedBy string `json:"impersonated_by,omitempty"`
 }
 
 type Issuer struct {
@@ -68,6 +71,36 @@ func (i *Issuer) IssueAccessToken(userID, role string, scope []string, ttl time.
 		},
 		Role:  strings.TrimSpace(role),
 		Scope: scope,
+	}
+
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenStr, err = tok.SignedString(i.hmacSecret)
+	return tokenStr, jti, expiresAt, err
+}
+
+// IssueImpersonationToken creates a signed access JWT for proxy login. It is
+// identical to IssueAccessToken but stamps the impersonated_by claim with the
+// admin's user ID so the token is auditable downstream. The caller is expected
+// to use a short TTL and to NOT issue a paired refresh token.
+func (i *Issuer) IssueImpersonationToken(userID, role string, scope []string, impersonatedBy string, ttl time.Duration) (tokenStr string, jti string, expiresAt time.Time, err error) {
+	if i == nil || len(i.hmacSecret) == 0 {
+		return "", "", time.Time{}, fmt.Errorf("issuer not configured")
+	}
+	now := time.Now()
+	jti = uuid.NewString()
+	expiresAt = now.Add(ttl)
+	claims := Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        jti,
+			Subject:   strings.TrimSpace(userID),
+			Issuer:    i.issuer,
+			Audience:  []string{i.audience},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+		},
+		Role:           strings.TrimSpace(role),
+		Scope:          scope,
+		ImpersonatedBy: strings.TrimSpace(impersonatedBy),
 	}
 
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

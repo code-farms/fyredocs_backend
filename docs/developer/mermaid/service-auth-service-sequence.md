@@ -284,3 +284,34 @@ sequenceDiagram
     PG-->>AS: rows_affected
     AS->>AS: log("cleaned up expired reset tokens", count)
 ```
+
+## Proxy Login — Admin Impersonation
+
+```mermaid
+sequenceDiagram
+    participant Admin as Admin (browser)
+    participant GW as api-gateway :8080
+    participant AS as auth-service :8086
+    participant PG as PostgreSQL
+    participant Redis
+    participant NATS
+
+    Admin->>GW: POST /auth/proxy-login {"userId"} (admin access cookie)
+    GW->>GW: Verify admin token (protected route)
+    GW->>AS: Proxy (auth-required)
+    AS->>AS: PROXY_LOGIN_ENABLED? role in {admin, super-admin}? not self?
+    alt disabled / not allowed / self
+        AS-->>Admin: 403 PROXY_LOGIN_DISABLED / FORBIDDEN<br/>or 400 INVALID_TARGET
+    else
+        AS->>PG: SELECT users WHERE id=:targetId
+        alt target missing
+            AS-->>Admin: 404 USER_NOT_FOUND
+        else
+            AS->>AS: IssueImpersonationToken(target, impersonated_by=adminId, PROXY_LOGIN_TTL)
+            AS->>PG: INSERT user_sessions (access hash only, refresh_token_hash NULL)
+            AS->>Redis: SET user:plan:&lt;targetId&gt; (limits) EX PROXY_LOGIN_TTL
+            AS->>NATS: Publish analytics.events.user.proxy_login {adminId, targetRole}
+            AS-->>Admin: 200 {user, accessExpiresAt, impersonatedBy} + access cookie (no refresh)
+        end
+    end
+```

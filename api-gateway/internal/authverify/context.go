@@ -15,6 +15,9 @@ type AuthContext struct {
 	PlanMaxFileSizeMB  int
 	PlanMaxFilesPerJob int
 	IsGuest            bool
+	// ImpersonatedBy is the admin user ID when this request is an impersonation
+	// (proxy login) session; empty otherwise.
+	ImpersonatedBy string
 }
 
 type authContextKey struct{}
@@ -63,6 +66,9 @@ func ApplyUserHeaders(header http.Header, authCtx AuthContext) {
 	if authCtx.PlanMaxFilesPerJob > 0 {
 		header.Set("X-User-Plan-Max-Files", strconv.Itoa(authCtx.PlanMaxFilesPerJob))
 	}
+	if strings.TrimSpace(authCtx.ImpersonatedBy) != "" {
+		header.Set("X-Impersonated-By", authCtx.ImpersonatedBy)
+	}
 }
 
 func ClearUserHeaders(header http.Header) {
@@ -75,4 +81,5 @@ func ClearUserHeaders(header http.Header) {
 	header.Del("X-User-Plan")
 	header.Del("X-User-Plan-Max-File-MB")
 	header.Del("X-User-Plan-Max-Files")
+	header.Del("X-Impersonated-By")
 }

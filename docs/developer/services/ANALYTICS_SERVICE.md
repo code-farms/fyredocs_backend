@@ -39,6 +39,21 @@ Events are persisted to the `analytics_events` PostgreSQL table for querying.
 
 ## Routes
 
+### Unified Dashboard (any authenticated user)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/dashboard?days=30` | Role-aware landing summary. Reads the gateway-set `X-User-Role` / `X-User-ID` headers and filters the payload **server-side** by role, so a single endpoint serves everyone and no separate `/admin/dashboard` route is needed. Computed entirely from this service's own `analytics_events` table. |
+
+Behaviour by caller:
+- **No `X-User-ID`** → `401 UNAUTHORIZED`. **`X-User-Role: guest`** → `403 FORBIDDEN`.
+- **`admin` / `super-admin`** → `data.role: "admin"` with a system summary:
+  `period`, `today` (signups, logins, dau, guestSessions, jobsCreated/Completed/Failed),
+  `totalUsers`, `toolUsage` (top 10), `planDistribution`.
+- **regular user** → `data.role: "user"` with personal KPIs scoped to their
+  `user_id`: `jobs` (total/completed/failed), `bytesProcessed`, `toolUsage`,
+  `recentActivity` (daily counts), `plan` (from `X-User-Plan`, fallback latest
+  event), `memberSince`.
+
 ### Admin Endpoints (require `X-User-Role: super-admin` header)
 | Method | Path | Description |
 |--------|------|-------------|

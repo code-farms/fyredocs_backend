@@ -198,6 +198,77 @@ func TestIssueAccessTokenReturnsTTLDrivenExpiry(t *testing.T) {
 	}
 }
 
+func TestIssueImpersonationTokenClaims(t *testing.T) {
+	secret := []byte("test-secret-key-32-chars-long!!")
+	issuer := &Issuer{
+		hmacSecret: secret,
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
+	}
+
+	before := time.Now()
+	tokenStr, jti, expiresAt, err := issuer.IssueImpersonationToken("target-1", "user", nil, "admin-9", 30*time.Minute)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tokenStr == "" || jti == "" {
+		t.Fatal("expected non-empty token and jti")
+	}
+
+	expected := before.Add(30 * time.Minute)
+	if expiresAt.Before(expected.Add(-time.Second)) || expiresAt.After(expected.Add(time.Second)) {
+		t.Errorf("expiresAt %v not within 1s of expected %v", expiresAt, expected)
+	}
+
+	parsed, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		return secret, nil
+	})
+	if err != nil {
+		t.Fatalf("failed to parse token: %v", err)
+	}
+	claims := parsed.Claims.(*Claims)
+	if claims.Subject != "target-1" {
+		t.Errorf("expected subject 'target-1', got %q", claims.Subject)
+	}
+	if claims.Role != "user" {
+		t.Errorf("expected role 'user', got %q", claims.Role)
+	}
+	if claims.ImpersonatedBy != "admin-9" {
+		t.Errorf("expected impersonated_by 'admin-9', got %q", claims.ImpersonatedBy)
+	}
+}
+
+func TestIssueImpersonationTokenNilIssuer(t *testing.T) {
+	var issuer *Issuer
+	_, _, _, err := issuer.IssueImpersonationToken("target-1", "user", nil, "admin-9", time.Hour)
+	if err == nil {
+		t.Error("expected error for nil issuer")
+	}
+}
+
+func TestIssueAccessTokenHasNoImpersonatedBy(t *testing.T) {
+	secret := []byte("test-secret-key-32-chars-long!!")
+	issuer := &Issuer{
+		hmacSecret: secret,
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
+	}
+
+	tokenStr, _, _, err := issuer.IssueAccessToken("user-1", "user", nil, time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	parsed, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		return secret, nil
+	})
+	if err != nil {
+		t.Fatalf("failed to parse token: %v", err)
+	}
+	if claims := parsed.Claims.(*Claims); claims.ImpersonatedBy != "" {
+		t.Errorf("expected empty impersonated_by on a normal token, got %q", claims.ImpersonatedBy)
+	}
+}
+
 func TestIssueRefreshTokenValid(t *testing.T) {
 	issuer := &Issuer{
 		hmacSecret: []byte("test-secret-key-32-chars-long!!"),

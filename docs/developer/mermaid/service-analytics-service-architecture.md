@@ -90,3 +90,27 @@ sequenceDiagram
     AS-->>GW: JSON {todaySignups, DAU, jobs, errors, ...}
     GW-->>Admin: forward
 ```
+
+## Unified Dashboard Read Path (role-aware)
+
+```mermaid
+sequenceDiagram
+    participant U as Any authenticated user
+    participant GW as api-gateway :8080
+    participant AS as analytics-service :8087
+    participant DB as PostgreSQL
+
+    U->>GW: GET /api/dashboard (Cookie: access_token)
+    GW->>GW: Verify JWT · forward X-User-ID / X-User-Role / X-User-Plan
+    GW->>AS: Proxy to /api/dashboard
+    AS->>AS: Branch on X-User-Role
+    alt no X-User-ID / guest
+        AS-->>U: 401 UNAUTHORIZED / 403 FORBIDDEN
+    else admin or super-admin
+        AS->>DB: System-wide aggregations from analytics_events
+        AS-->>U: {role:"admin", today, totalUsers, toolUsage, planDistribution}
+    else regular user
+        AS->>DB: Aggregations WHERE user_id = caller
+        AS-->>U: {role:"user", jobs, bytesProcessed, toolUsage, recentActivity, plan, memberSince}
+    end
+```

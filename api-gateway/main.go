@@ -153,6 +153,11 @@ func main() {
 			targetBasePath: "/admin",
 			targetURL:      analyticsServiceURL,
 		},
+		{
+			prefix:         "/api/dashboard",
+			targetBasePath: "/api/dashboard",
+			targetURL:      analyticsServiceURL,
+		},
 	}
 
 	mux := http.NewServeMux()

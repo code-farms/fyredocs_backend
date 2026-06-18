@@ -24,6 +24,7 @@ The Auth Service is a dedicated microservice responsible for user signup, login,
 9. **Rate Limiting** — Login / signup / refresh / forgot-password / reset-password endpoints are IP-throttled via Redis.
 10. **Background Cleanup** — A 1-hour ticker calls `models.DeleteExpiredSessions` and `models.DeleteExpiredResetTokens` to prune expired rows.
 11. **Password Reset** — `POST /auth/forgot-password` issues a single-use, 1-hour magic-link token and emails it via Resend; `POST /auth/reset-password` consumes the token, updates the bcrypt hash, and revokes every active session for the user.
+12. **Proxy Login (Admin Impersonation)** — `POST /auth/proxy-login` lets an `admin`/`super-admin` mint a short-lived access token for another user. The token carries an `impersonated_by` claim, has a short TTL (`PROXY_LOGIN_TTL`), and is **not** paired with a refresh token, so the session cannot be silently renewed and expires on its own. The action is audit-logged (`slog`) and published as a `user.proxy_login` analytics event. Gated by `PROXY_LOGIN_ENABLED`.
 
 > Guest sessions are **not** issued by this service. The api-gateway issues and verifies guest tokens directly via cookies.
 
@@ -97,6 +98,7 @@ Auth Service :8086
 | GET | `/auth/profile` | `Profile` | Get current user profile (alternate envelope) |
 | POST | `/auth/logout` | `Logout` | Deny access token, delete session row, clear cookies, drop plan cache |
 | PUT | `/auth/plan` | `ChangePlan` | Change user's `plan_name`; refresh Redis plan cache; publish `plan.changed` to NATS |
+| POST | `/auth/proxy-login` | `ProxyLogin` | **Admin impersonation.** Caller must be `admin`/`super-admin`. Mints a short-lived, refresh-less access token for the target user (`{"userId": "<uuid>"}`), sets the access cookie, and audit-logs the action. Requires `PROXY_LOGIN_ENABLED=true`. |
 
 ### Internal Endpoints (not exposed via gateway)
 
@@ -434,6 +436,36 @@ sequenceDiagram
     AS-->>Admin: 200 {revokedCount}
 ```
 
+### Proxy Login (Admin Impersonation)
+
+```mermaid
+sequenceDiagram
+    participant Admin as Admin (browser)
+    participant GW as API Gateway
+    participant AS as Auth Service
+    participant DB as PostgreSQL
+    participant R as Redis
+
+    Admin->>GW: POST /auth/proxy-login {userId} (admin token)
+    GW->>GW: Verify admin token (protected route)
+    GW->>AS: forward request
+    AS->>AS: PROXY_LOGIN_ENABLED? caller role in {admin, super-admin}?
+    alt disabled or not allowed
+        AS-->>Admin: 403 PROXY_LOGIN_DISABLED / FORBIDDEN
+    else
+        AS->>DB: SELECT target user by id
+        alt target missing
+            AS-->>Admin: 404 USER_NOT_FOUND
+        else
+            AS->>AS: IssueImpersonationToken(target, impersonated_by=admin, short TTL)
+            AS->>DB: StoreAccessOnlySession (no refresh hash)
+            AS->>R: cache target plan info (TTL)
+            AS->>AS: audit log + publish user.proxy_login
+            AS-->>Admin: 200 {user, accessExpiresAt, impersonatedBy} + access cookie
+        end
+    end
+```
+
 ## Error Flows
 
 ### Authentication Errors
@@ -450,6 +482,10 @@ sequenceDiagram
 | `RATE_LIMIT_EXCEEDED` | 429 | Too many attempts |
 | `INVALID_PLAN` | 400 | `ChangePlan` with unknown plan name |
 | `SAME_PLAN` | 400 | `ChangePlan` to current plan |
+| `PROXY_LOGIN_DISABLED` | 403 | `ProxyLogin` while `PROXY_LOGIN_ENABLED=false` |
+| `FORBIDDEN` | 403 | `ProxyLogin` caller is not `admin`/`super-admin` |
+| `INVALID_TARGET` | 400 | `ProxyLogin` target equals the caller (self-impersonation) |
+| `USER_NOT_FOUND` | 404 | `ProxyLogin` target user does not exist |
 | `SERVER_ERROR` | 500 | Database / token issuance failure |
 
 ### Error Response Format
@@ -575,6 +611,7 @@ Rate limits are per IP and enforced via Redis-backed middleware.
 | `RATE_LIMIT_REFRESH` | `10` | Max refresh attempts per window |
 | `RATE_LIMIT_FORGOT_PASSWORD` | `3` | Max forgot-password requests per window |
 | `RATE_LIMIT_RESET_PASSWORD` | `5` | Max reset-password attempts per window |
+| `RATE_LIMIT_PROXY_LOGIN` | `5` | Max proxy-login attempts per window |
 | `RATE_LIMIT_WINDOW` | `60s` | Rate-limit time window |
 
 ### Password Reset / Email
@@ -585,6 +622,13 @@ Rate limits are per IP and enforced via Redis-backed middleware.
 | `RESET_EMAIL_FROM` | `no-reply@fyredocs.com` | From address. Must be on a domain verified in the Resend dashboard, otherwise Resend will only deliver to the account owner. |
 | `APP_BASE_URL` | `http://localhost:5173` | Used to build the magic link: `${APP_BASE_URL}/reset-password?token=<raw>`. |
 | `PASSWORD_RESET_TOKEN_TTL` | `1h` | Lifetime of a password reset token. |
+
+### Proxy Login (Admin Impersonation)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PROXY_LOGIN_ENABLED` | `true` | When `false`, `POST /auth/proxy-login` returns `403 PROXY_LOGIN_DISABLED`. |
+| `PROXY_LOGIN_TTL` | `30m` | Lifetime of an impersonation access token (no refresh token is issued). |
 
 ### Other
 

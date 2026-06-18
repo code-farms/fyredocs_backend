@@ -46,6 +46,7 @@ Telemetry → Metrics → Request-ID → SecurityHeaders
             ├─ /api/jobs/*                                  → JOB_SERVICE_URL
             ├─ /api/{convert-from,convert-to,organize,optimize}-pdf/* → JOB_SERVICE_URL
             ├─ /admin/*                                     → ANALYTICS_SERVICE_URL
+            ├─ /api/dashboard                               → ANALYTICS_SERVICE_URL  (role-aware, any authenticated user)
             └─ /                                            → SPA_DIR static files (when set)
 ```
 
@@ -66,7 +67,8 @@ All `/api/*` traffic is proxied to **job-service**. Workers are not exposed publ
 | `/api/convert-to-pdf/*` | `JOB_SERVICE_URL` | Office/Image → PDF |
 | `/api/organize-pdf/*` | `JOB_SERVICE_URL` | Merge, split, rotate, watermark, sign, etc. |
 | `/api/optimize-pdf/*` | `JOB_SERVICE_URL` | Compress, repair, OCR |
-| `/admin/*` | `ANALYTICS_SERVICE_URL` | Admin / analytics dashboards |
+| `/admin/*` | `ANALYTICS_SERVICE_URL` | Admin / analytics dashboards (super-admin only, enforced by the service) |
+| `/api/dashboard` | `ANALYTICS_SERVICE_URL` | Unified role-aware dashboard summary; the service filters by `X-User-Role` (admin/super-admin → system KPIs, user → personal KPIs, guest → 403) |
 | `/healthz` | api-gateway (local) | Liveness — pings Redis |
 | `/metrics` | api-gateway (local) | Prometheus metrics |
 | `/` (catch-all) | static SPA from `SPA_DIR` (when set) | Frontend bundle, with `/index.html` fallback for client-side routing |

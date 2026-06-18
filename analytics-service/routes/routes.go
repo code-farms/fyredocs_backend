@@ -14,6 +14,11 @@ func SetupRouter(r *gin.Engine) {
 	r.GET("/healthz", handlers.HealthCheck)
 	r.GET("/readyz", handlers.ReadyCheck)
 
+	// Unified, role-aware dashboard for every authenticated user. Role is
+	// enforced inside the handler (admin/super-admin vs regular user), so this
+	// sits outside the super-admin-only /admin group.
+	r.GET("/api/dashboard", handlers.Dashboard)
+
 	admin := r.Group("/admin")
 	admin.Use(adminAuth())
 	{

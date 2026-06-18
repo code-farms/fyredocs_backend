@@ -63,6 +63,13 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 		Window:      window,
 	})
 
+	proxyLoginLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
+		RedisClient: redisClient,
+		KeyPrefix:   "ratelimit:proxy_login",
+		MaxRequests: config.GetEnvInt("RATE_LIMIT_PROXY_LOGIN", 5),
+		Window:      window,
+	})
+
 	// Public auth routes — no token verification needed
 	publicAuth := r.Group("/auth")
 	{
@@ -81,6 +88,7 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 		protectedAuth.GET("/profile", authEndpoints.Profile)
 		protectedAuth.POST("/logout", authEndpoints.Logout)
 		protectedAuth.PUT("/plan", authEndpoints.ChangePlan)
+		protectedAuth.POST("/proxy-login", proxyLoginLimiter.RateLimitByIP(), authEndpoints.ProxyLogin)
 	}
 
 	// Internal service-to-service API (not exposed via gateway)
