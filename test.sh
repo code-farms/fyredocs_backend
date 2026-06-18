@@ -21,6 +21,10 @@ ALL_SERVICES=(
   organize-pdf
   optimize-pdf
   cleanup-worker
+  analytics-service
+  document-service
+  user-service
+  notification-service
 )
 
 VERBOSE=""

@@ -120,7 +120,7 @@ test.bat
 test.bat -v api-gateway
 ```
 
-Available services: `shared`, `api-gateway`, `auth-service`, `job-service`, `convert-to-pdf`, `convert-from-pdf`, `organize-pdf`, `optimize-pdf`, `cleanup-worker`, `analytics-service`
+Available services: `shared`, `api-gateway`, `auth-service`, `job-service`, `convert-to-pdf`, `convert-from-pdf`, `organize-pdf`, `optimize-pdf`, `cleanup-worker`, `analytics-service`, `document-service`, `user-service`, `notification-service`
 
 ## License
 

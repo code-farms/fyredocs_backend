@@ -11,4 +11,7 @@ use (
 	./organize-pdf
 	./shared
 	./job-service
+	./document-service
+	./user-service
+	./notification-service
 )

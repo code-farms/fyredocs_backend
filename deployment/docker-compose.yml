@@ -217,6 +217,9 @@ services:
       JOB_SERVICE_URL: http://job-service:8081
       AUTH_SERVICE_URL: http://auth-service:8086
       ANALYTICS_SERVICE_URL: http://analytics-service:8087
+      DOCUMENT_SERVICE_URL: http://document-service:8089
+      USER_SERVICE_URL: http://user-service:8090
+      NOTIFICATION_SERVICE_URL: http://notification-service:8091
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
@@ -280,6 +283,12 @@ services:
       job-service:
         condition: service_started
       analytics-service:
+        condition: service_started
+      document-service:
+        condition: service_started
+      user-service:
+        condition: service_started
+      notification-service:
         condition: service_started
     networks:
       - fyredocs_net
@@ -671,6 +680,119 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     healthcheck:
       test: ["CMD", "./healthcheck", "http://localhost:8087/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      nats:
+        condition: service_healthy
+    networks:
+      - fyredocs_net
+
+  # ==================== DOCUMENT SERVICE ====================
+  document-service:
+    build:
+      context: ..
+      dockerfile: document-service/Dockerfile
+    restart: always
+    environment:
+      PORT: "8089"
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
+      NATS_URL: nats://nats:4222
+      USER_SERVICE_URL: http://user-service:8090
+      NOTIFICATION_SERVICE_URL: http://notification-service:8091
+      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+
+      # Observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    healthcheck:
+      test: ["CMD", "./healthcheck", "http://localhost:8089/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      nats:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+      notification-service:
+        condition: service_started
+    networks:
+      - fyredocs_net
+
+  # ==================== USER SERVICE ====================
+  user-service:
+    build:
+      context: ..
+      dockerfile: user-service/Dockerfile
+    restart: always
+    environment:
+      PORT: "8090"
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
+      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+
+      # Observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    healthcheck:
+      test: ["CMD", "./healthcheck", "http://localhost:8090/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - fyredocs_net
+
+  # ==================== NOTIFICATION SERVICE ====================
+  notification-service:
+    build:
+      context: ..
+      dockerfile: notification-service/Dockerfile
+    restart: always
+    environment:
+      PORT: "8091"
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
+      NATS_URL: nats://nats:4222
+      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+
+      # Observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    healthcheck:
+      test: ["CMD", "./healthcheck", "http://localhost:8091/healthz"]
       interval: 10s
       timeout: 5s
       retries: 3

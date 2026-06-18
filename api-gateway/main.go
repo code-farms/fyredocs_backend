@@ -78,6 +78,9 @@ func main() {
 	jobServiceURL := config.GetEnv("JOB_SERVICE_URL", "http://job-service:8081")
 	authServiceURL := config.GetEnv("AUTH_SERVICE_URL", jobServiceURL) // Phase 2: separate auth-service
 	analyticsServiceURL := config.GetEnv("ANALYTICS_SERVICE_URL", "http://analytics-service:8087")
+	documentServiceURL := config.GetEnv("DOCUMENT_SERVICE_URL", "http://document-service:8089")
+	userServiceURL := config.GetEnv("USER_SERVICE_URL", "http://user-service:8090")
+	notificationServiceURL := config.GetEnv("NOTIFICATION_SERVICE_URL", "http://notification-service:8091")
 
 	routes := []routeConfig{
 		{
@@ -114,6 +117,36 @@ func main() {
 			prefix:         "/api/jobs",
 			targetBasePath: "/api/jobs",
 			targetURL:      jobServiceURL,
+		},
+		{
+			prefix:         "/api/documents",
+			targetBasePath: "/api/documents",
+			targetURL:      documentServiceURL,
+		},
+		{
+			prefix:         "/api/folders",
+			targetBasePath: "/api/folders",
+			targetURL:      documentServiceURL,
+		},
+		{
+			prefix:         "/api/tags",
+			targetBasePath: "/api/tags",
+			targetURL:      documentServiceURL,
+		},
+		{
+			prefix:         "/api/exports",
+			targetBasePath: "/api/exports",
+			targetURL:      documentServiceURL,
+		},
+		{
+			prefix:         "/api/orgs",
+			targetBasePath: "/api/orgs",
+			targetURL:      userServiceURL,
+		},
+		{
+			prefix:         "/api/notifications",
+			targetBasePath: "/api/notifications",
+			targetURL:      notificationServiceURL,
 		},
 		{
 			prefix:         "/admin",
