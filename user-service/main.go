@@ -51,6 +51,7 @@ func main() {
 	}
 
 	srv := &http.Server{Addr: ":" + port, Handler: r}
+	config.ApplyServerTimeouts(srv, false)
 
 	go func() {
 		slog.Info("user-service listening", "port", port)

@@ -68,6 +68,8 @@ func main() {
 	}
 
 	srv := &http.Server{Addr: ":" + port, Handler: r}
+	// streaming=true: document-service streams file exports, so WriteTimeout stays unset.
+	config.ApplyServerTimeouts(srv, true)
 
 	go func() {
 		slog.Info("document-service listening", "port", port)

@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	fyredocs/shared v0.0.0
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/redis/go-redis/v9 v9.14.0
 )
@@ -46,6 +47,7 @@ require (
 	github.com/quic-go/quic-go v0.54.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.0 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.41.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.41.0 // indirect

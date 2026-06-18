@@ -627,6 +627,32 @@ When a backend service is unreachable:
 - [Object Storage](../architecture/object-storage.md) - MinIO topology and presigned flow
 - [Main README](../README.md) - Overall architecture and deployment
 
+## Per-plan API rate limiting
+
+All `/api/*` routes pass through a Redis sliding-window limiter
+(`internal/ratelimit`) that runs **after** auth resolution, so it can key by
+plan and identity:
+
+- **Key**: `apilimit:{plan}:user:{userID}` for authenticated users,
+  `apilimit:{plan}:ip:{clientIP}` for anonymous/guest requests (client IP taken
+  from `X-Forwarded-For`, else `RemoteAddr`).
+- **Ceilings per window** (`RATE_LIMIT_API_WINDOW`, default `1m`):
+  `RATE_LIMIT_API_ANON` (30), `RATE_LIMIT_API_FREE` (120), `RATE_LIMIT_API_PRO` (600).
+- **Excluded**: `/auth/*` (limited by auth-service), `/metrics`, `/healthz`, the
+  SPA, and the presigned MinIO bucket proxies.
+- **On limit**: `429` with the standard envelope (`RATE_LIMIT_EXCEEDED`),
+  `X-RateLimit-Limit/Remaining/Reset` and `Retry-After` headers.
+- **Fail-open**: a Redis error or nil client allows the request (logged).
+
+## HTTP server timeouts
+
+The gateway sets `ReadHeaderTimeout` (10s), `ReadTimeout` (30s) and
+`IdleTimeout` (120s) (via `config.ApplyServerTimeouts`) for slowloris/slow-client
+protection. `WriteTimeout` is intentionally left **unset** because the gateway
+proxies long file downloads and SSE streams; `proxyTransport.ResponseHeaderTimeout`
+(5m) bounds upstream stalls instead. All timeouts are overridable via the
+`HTTP_*_TIMEOUT` env vars.
+
 ## Support
 
 For issues or questions:

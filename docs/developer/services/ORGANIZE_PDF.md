@@ -747,6 +747,15 @@ When retries are exhausted (MaxDeliver reached), the failed job payload is publi
 
 Part of the Fyredocs project.
 
+## tmpfs capacity guard
+
+Before downloading, the worker sums input object sizes and rejects jobs whose
+projected footprint (`inputs × (1 + TMPFS_OUTPUT_FACTOR_PCT/100)`) exceeds
+`TMPFS_BUDGET_MB` (default 900, under the 1 GiB tmpfs), and serializes jobs
+larger than `LARGE_JOB_THRESHOLD_MB` (default 100) through a per-pod semaphore
+so two large jobs never co-occupy the scratch area. See
+`internal/worker/tmpfs.go`.
+
 ## Support
 
 For issues and questions:

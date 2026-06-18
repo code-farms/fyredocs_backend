@@ -19,14 +19,23 @@ type fakeStorage struct {
 	downloadErr error
 	uploadErr   error
 	uploadSize  int64
+	objectSize  int64
+	statErr     error
 }
 
 func newFakeStorage() *fakeStorage {
-	return &fakeStorage{contentType: map[string]string{}, uploadSize: 42}
+	return &fakeStorage{contentType: map[string]string{}, uploadSize: 42, objectSize: 1024}
 }
 
 func (f *fakeStorage) BucketUploads() string { return "test-uploads" }
 func (f *fakeStorage) BucketOutputs() string { return "test-outputs" }
+
+func (f *fakeStorage) GetObjectSize(ctx context.Context, bucket, key string) (int64, error) {
+	if f.statErr != nil {
+		return 0, f.statErr
+	}
+	return f.objectSize, nil
+}
 
 func (f *fakeStorage) DownloadToFile(ctx context.Context, bucket, key, localPath string) error {
 	if f.downloadErr != nil {

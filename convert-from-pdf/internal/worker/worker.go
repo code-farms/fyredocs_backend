@@ -221,6 +221,29 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 	}
 	defer os.RemoveAll(scratch)
 
+	// Capacity guard: reject jobs whose projected scratch footprint would
+	// exceed the worker's tmpfs budget, and serialize large jobs so two of them
+	// never exhaust the shared scratch area concurrently.
+	totalInput, err := totalInputSize(ctx, cfg.Storage, payload.InputPaths)
+	if err != nil {
+		// Stat failures are network-ish: retry via the recoverable path.
+		handleFailure(cfg, msg, payload, markRecoverable(err), logger)
+		return
+	}
+	if projected := projectedFootprint(totalInput); projected > tmpfsBudgetBytes() {
+		handleFailure(cfg, msg, payload, fmt.Errorf("job too large for worker scratch space: projected %d MiB exceeds budget %d MiB (increase TMPFS_BUDGET_MB and the tmpfs mount, or route to a larger worker)", projected/bytesPerMiB, tmpfsBudgetBytes()/bytesPerMiB), logger)
+		return
+	}
+	if totalInput > largeJobThresholdBytes() {
+		select {
+		case largeJobSem <- struct{}{}:
+			defer func() { <-largeJobSem }()
+		case <-ctx.Done():
+			handleFailure(cfg, msg, payload, markRecoverable(ctx.Err()), logger)
+			return
+		}
+	}
+
 	localInputs, err := fetchInputs(ctx, cfg.Storage, scratch, payload.InputPaths)
 	if err != nil {
 		// Download failures are network-ish: retry via the recoverable path.
@@ -239,6 +262,10 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 	defer jobCancel()
 
 	// Progress callback that only increases, never decreases, the DB value.
+	// DB writes are throttled (advance only on a meaningful delta or interval)
+	// to cut per-job write volume; NATS progress events are always published so
+	// the SSE progress bar stays smooth.
+	throttle := newProgressThrottle(20)
 	onProgress := func(percent int) {
 		clamped := percent
 		if clamped < 20 {
@@ -247,10 +274,12 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 		if clamped > 90 {
 			clamped = 90
 		}
-		if err := cfg.DB.Model(&models.ProcessingJob{}).
-			Where("id = ? AND progress < ?", jobID, clamped).
-			Update("progress", clamped).Error; err != nil {
-			logger.Warn("failed to update progress", "jobId", jobID, "error", err)
+		if throttle.shouldWrite(clamped) {
+			if err := cfg.DB.Model(&models.ProcessingJob{}).
+				Where("id = ? AND progress < ?", jobID, clamped).
+				Update("progress", clamped).Error; err != nil {
+				logger.Warn("failed to update progress", "jobId", jobID, "error", err)
+			}
 		}
 		publishStatusEvent(cfg.JS, jobID, payload.ToolType, "processing", clamped, "")
 	}

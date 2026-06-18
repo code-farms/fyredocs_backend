@@ -145,6 +145,7 @@ func main() {
 	}
 
 	srv := &http.Server{Addr: ":" + port, Handler: r}
+	config.ApplyServerTimeouts(srv, false)
 	go func() {
 		slog.Info("optimize-pdf listening", "port", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

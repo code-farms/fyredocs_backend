@@ -738,4 +738,22 @@ redis://redis:6379/0
 
 ---
 
+## Memory bounding & eviction
+
+The Redis container runs with `--maxmemory ${REDIS_MAXMEMORY:-400mb}
+--maxmemory-policy volatile-lru` (set in `deployment/docker-compose.yml`), and
+the container memory limit is 512 MB so `maxmemory` always has headroom and
+Redis is never OOM-killed.
+
+`volatile-lru` evicts only keys that carry a TTL. This is safe because **every**
+Fyredocs Redis key has a TTL — plan cache (8h), JWT denylist (8h), upload
+sessions (30m), and the API/auth rate-limit ZSETs (2× window). No TTL-less key
+exists to be evicted.
+
+> ⚠️ Residual risk: under sustained memory exhaustion an in-flight `upload:{id}`
+> session (30m TTL) could be evicted, breaking that upload. Mitigation: keep the
+> memory headroom above and alert on Redis `used_memory` / `evicted_keys`.
+
+---
+
 **Built with Redis 7 for high-performance job queuing and caching** ⚡

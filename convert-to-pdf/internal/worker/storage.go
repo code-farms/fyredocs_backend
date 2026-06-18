@@ -14,6 +14,7 @@ import (
 type Storage interface {
 	DownloadToFile(ctx context.Context, bucket, key, localPath string) error
 	UploadFromFile(ctx context.Context, bucket, key, localPath, contentType string) (int64, error)
+	GetObjectSize(ctx context.Context, bucket, key string) (int64, error)
 	BucketUploads() string
 	BucketOutputs() string
 }

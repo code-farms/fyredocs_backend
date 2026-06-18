@@ -111,6 +111,7 @@ func main() {
 	}
 
 	srv := &http.Server{Addr: ":" + port, Handler: r}
+	config.ApplyServerTimeouts(srv, false)
 	go func() {
 		slog.Info("cleanup-worker HTTP server listening", "port", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -70,8 +71,8 @@ func main() {
 	go worker.Run(ctx, worker.WorkerConfig{
 		ServiceName: "convert-to-pdf",
 		AllowedTools: map[string]bool{
-			"word-to-pdf":  true,
-			"ppt-to-pdf":   true, "powerpoint-to-pdf": true,
+			"word-to-pdf": true,
+			"ppt-to-pdf":  true, "powerpoint-to-pdf": true,
 			"excel-to-pdf": true,
 			"html-to-pdf":  true,
 			"image-to-pdf": true, "img-to-pdf": true,
@@ -140,18 +141,23 @@ func main() {
 			checks["postgres"] = "ok"
 		}
 
-		// Check unoserver (informational — does not affect readiness since
-		// officeToPDF falls back to direct LibreOffice invocation).
-		unoPort := os.Getenv("UNOSERVER_PORT")
-		if unoPort == "" {
-			unoPort = "2002"
+		// Check the unoserver daemon pool (informational — does not affect
+		// readiness since officeToPDF falls back to direct LibreOffice). Healthy
+		// if at least one pooled daemon port is accepting connections.
+		host := processing.UnoserverHost()
+		up := 0
+		ports := processing.UnoserverPorts()
+		for _, p := range ports {
+			conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, p), 1*time.Second)
+			if err == nil {
+				conn.Close()
+				up++
+			}
 		}
-		conn, err := net.DialTimeout("tcp", "127.0.0.1:"+unoPort, 1*time.Second)
-		if err != nil {
+		if up == 0 {
 			checks["unoserver"] = "unavailable (fallback active)"
 		} else {
-			conn.Close()
-			checks["unoserver"] = "ok"
+			checks["unoserver"] = fmt.Sprintf("ok (%d/%d daemons up)", up, len(ports))
 		}
 
 		if !ready {
@@ -167,6 +173,7 @@ func main() {
 	}
 
 	srv := &http.Server{Addr: ":" + port, Handler: r}
+	config.ApplyServerTimeouts(srv, false)
 	go func() {
 		slog.Info("convert-to-pdf listening", "port", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -187,4 +194,3 @@ func main() {
 		slog.Error("server shutdown error", "error", err)
 	}
 }
-

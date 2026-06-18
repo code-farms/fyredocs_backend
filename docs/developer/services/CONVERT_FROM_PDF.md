@@ -736,6 +736,24 @@ When retries are exhausted (MaxDeliver reached), the failed job payload is publi
 - [Auth Service](./AUTH_SERVICE.md) - Authentication and user management
 - [API Gateway](./API_GATEWAY.md) - Request routing
 
+## Progress DB-write throttle
+
+The progress callback can fire many times per job. To cut DB load, writes are
+throttled by `progressThrottle` (`internal/worker/progress.go`): the DB
+`progress` column advances only when progress rises by at least
+`PROGRESS_DB_MIN_DELTA` percent (default 10) or after `PROGRESS_DB_MIN_INTERVAL`
+(default 10s), while NATS/SSE progress events are still published on every
+callback so the client progress bar stays smooth. The no-regress
+`WHERE progress < ?` guard on the UPDATE is retained.
+
+## tmpfs capacity guard
+
+Before downloading, the worker sums input object sizes and rejects jobs whose
+projected footprint (`inputs × (1 + TMPFS_OUTPUT_FACTOR_PCT/100)`) exceeds
+`TMPFS_BUDGET_MB` (default 900, under the 1 GiB tmpfs), and serializes jobs
+larger than `LARGE_JOB_THRESHOLD_MB` (default 100) through a per-pod semaphore.
+See `internal/worker/tmpfs.go`.
+
 ## Support
 
 For issues:

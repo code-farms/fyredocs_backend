@@ -68,6 +68,8 @@ func main() {
 	}
 
 	srv := &http.Server{Addr: ":" + port, Handler: r}
+	// streaming=true: notification-service exposes SSE, so WriteTimeout stays unset.
+	config.ApplyServerTimeouts(srv, true)
 
 	go func() {
 		slog.Info("notification-service listening", "port", port)

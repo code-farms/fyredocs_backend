@@ -234,6 +234,17 @@ func (c *Client) StatObject(ctx context.Context, bucket, key string) (ObjectInfo
 	}, nil
 }
 
+// GetObjectSize returns the size in bytes of bucket/key. It is a thin
+// convenience wrapper over StatObject for callers that only need the size
+// (e.g. capacity/budget checks before downloading into a bounded scratch area).
+func (c *Client) GetObjectSize(ctx context.Context, bucket, key string) (int64, error) {
+	info, err := c.StatObject(ctx, bucket, key)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size, nil
+}
+
 // IsNotFound reports whether err represents a missing object/bucket.
 func IsNotFound(err error) bool {
 	resp := minio.ToErrorResponse(unwrapAll(err))

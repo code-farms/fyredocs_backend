@@ -35,10 +35,17 @@ info:
     and always returns `410 UPLOAD_PROTOCOL_CHANGED`.
 
     ## Rate Limiting
-    Endpoints are rate-limited per IP. Rate limit headers are included in responses:
-    - `X-RateLimit-Limit` - Maximum requests per window
-    - `X-RateLimit-Remaining` - Remaining requests in current window
-    - `X-RateLimit-Reset` - Unix timestamp when the window resets
+    Two layers of rate limiting apply, both returning `429` with rate-limit
+    headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`)
+    and a `Retry-After` header:
+
+    - **Auth endpoints** (`/auth/*`) are limited per IP by auth-service
+      (`RATE_LIMIT_LOGIN`, `RATE_LIMIT_SIGNUP`, etc.).
+    - **All `/api/*` endpoints** are limited at the gateway with a per-plan
+      sliding window, keyed by authenticated user (or client IP for anonymous
+      requests): `RATE_LIMIT_API_ANON` (default 30/min), `RATE_LIMIT_API_FREE`
+      (default 120/min), `RATE_LIMIT_API_PRO` (default 600/min) per
+      `RATE_LIMIT_API_WINDOW` (default 1m).
   version: 1.0.0
   contact:
     name: Fyredocs Team

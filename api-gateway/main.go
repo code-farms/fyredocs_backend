@@ -15,6 +15,7 @@ import (
 
 	"api-gateway/internal/authverify"
 	"api-gateway/internal/plancache"
+	"api-gateway/internal/ratelimit"
 	"fyredocs/shared/config"
 	"fyredocs/shared/logger"
 	"fyredocs/shared/metrics"
@@ -203,8 +204,8 @@ func main() {
 	}
 
 	authMiddleware := authverify.HTTPAuthMiddleware(authverify.HTTPMiddlewareOptions{
-		Verifier:   verifier,
-		GuestStore: guestStore,
+		Verifier:    verifier,
+		GuestStore:  guestStore,
 		PublicPaths: []string{"/auth/login", "/auth/signup", "/auth/refresh", "/auth/plans"},
 		ResolvePlan: func(r *http.Request, authCtx *authverify.AuthContext) {
 			info := plancache.GetPlanInfo(r.Context(), redisClient, authCtx.UserID)
@@ -212,6 +213,17 @@ func main() {
 			authCtx.PlanMaxFileSizeMB = info.MaxFileMB
 			authCtx.PlanMaxFilesPerJob = info.MaxFiles
 		},
+	})
+
+	// Per-plan sliding-window rate limiting on /api/* routes. Runs inside the
+	// auth middleware so the resolved AuthContext (user ID + plan) is available
+	// for keying; fails open on Redis errors.
+	rateLimit := ratelimit.Middleware(ratelimit.Config{
+		Client:    redisClient,
+		Window:    config.GetEnvDuration("RATE_LIMIT_API_WINDOW", time.Minute),
+		AnonLimit: config.GetEnvInt("RATE_LIMIT_API_ANON", 30),
+		FreeLimit: config.GetEnvInt("RATE_LIMIT_API_FREE", 120),
+		ProLimit:  config.GetEnvInt("RATE_LIMIT_API_PRO", 600),
 	})
 
 	// Object-storage proxy: browsers upload/download file bytes via presigned
@@ -227,7 +239,7 @@ func main() {
 	root := http.NewServeMux()
 	root.Handle("/"+bucketUploads+"/", minioProxy)
 	root.Handle("/"+bucketOutputs+"/", minioProxy)
-	root.Handle("/", withCORS(authMiddleware(mux), corsConfig{
+	root.Handle("/", withCORS(authMiddleware(rateLimit(mux)), corsConfig{
 		allowedOrigins:   corsOrigins,
 		allowedMethods:   corsMethods,
 		allowedHeaders:   corsHeaders,
@@ -246,6 +258,9 @@ func main() {
 		Addr:    ":" + port,
 		Handler: handler,
 	}
+	// streaming=true: the gateway proxies long file downloads and SSE streams,
+	// so WriteTimeout must stay unset. Header/read/idle timeouts still apply.
+	config.ApplyServerTimeouts(srv, true)
 
 	go func() {
 		slog.Info("api-gateway listening", "port", port)
@@ -482,4 +497,3 @@ func spaFileServer(dir string) http.Handler {
 		fileServer.ServeHTTP(w, r)
 	})
 }
-

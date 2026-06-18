@@ -36,7 +36,11 @@ services:
   redis:
     image: redis:7-alpine
     restart: always
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    # maxmemory caps Redis well under the container limit so it never gets
+    # OOM-killed; volatile-lru evicts only keys that carry a TTL. Every Fyredocs
+    # Redis key has a TTL (plan cache 8h, JWT denylist 8h, upload sessions 30m,
+    # rate-limit ZSETs 2x window), so nothing TTL-less is ever evicted.
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory ${REDIS_MAXMEMORY:-400mb} --maxmemory-policy volatile-lru
     volumes:
       - redis_data:/data
     healthcheck:
@@ -47,7 +51,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 512M
           cpus: '0.5'
         reservations:
           memory: 64M
@@ -531,6 +535,11 @@ services:
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
       WORKER_CONCURRENCY: "2"
+      # unoserver (LibreOffice) daemon pool — match to WORKER_CONCURRENCY so
+      # Office→PDF conversions run in parallel instead of serializing on one
+      # daemon. Each instance adds ~150-300 MB RAM; raise the memory limit below
+      # before increasing this.
+      UNOSERVER_INSTANCES: "2"
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"

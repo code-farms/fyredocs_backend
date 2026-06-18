@@ -74,6 +74,7 @@ func main() {
 		Addr:    ":" + port,
 		Handler: r,
 	}
+	config.ApplyServerTimeouts(srv, false)
 
 	go func() {
 		slog.Info("analytics-service listening", "port", port)

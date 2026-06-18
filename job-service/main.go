@@ -112,6 +112,9 @@ func main() {
 		Addr:    ":" + port,
 		Handler: r,
 	}
+	// streaming=true: job-service serves SSE job-event streams, so WriteTimeout
+	// must stay unset to avoid severing long-lived connections.
+	config.ApplyServerTimeouts(srv, true)
 
 	go func() {
 		slog.Info("job-service listening", "port", port)

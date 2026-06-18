@@ -27,6 +27,7 @@ graph TB
         subgraph InnerChain["Service-route chain"]
             CORS["withCORS<br/>(allowed origins · credentials · preflight)"]
             AUTHMW["authverify.HTTPAuthMiddleware<br/>+ ResolvePlan callback"]
+            RATELIMIT["ratelimit.Middleware<br/>(per-plan sliding window on /api/* · Redis · 429)"]
             BODYLIMIT["withMaxBodySize 1 MiB<br/>(ALL service routes — /api/upload is JSON-only)"]
         end
 
@@ -69,7 +70,7 @@ graph TB
     Client[Browser/CLI/SPA] --> TRACE --> METRICS --> REQID --> SEC --> ROOT
 
     ROOT -->|/fyredocs-uploads/* · /fyredocs-outputs/*| PROXY_UP & PROXY_OUT
-    ROOT -->|everything else| CORS --> AUTHMW --> BODYLIMIT --> MUX
+    ROOT -->|everything else| CORS --> AUTHMW --> RATELIMIT --> BODYLIMIT --> MUX
 
     AUTHMW --> VERIFIER
     AUTHMW --> DENYLIST
@@ -108,7 +109,8 @@ flowchart LR
     M --> S3[MinIO]
     R -->|other| F[withCORS<br/>preflight short-circuit]
     F --> G[authverify.<br/>HTTPAuthMiddleware<br/>+ ResolvePlan]
-    G --> H[withMaxBodySize 1 MiB<br/>all service routes]
+    G --> RL[ratelimit.Middleware<br/>per-plan /api/* · 429]
+    RL --> H[withMaxBodySize 1 MiB<br/>all service routes]
     H --> I[http.ServeMux<br/>route match]
     I --> J[httputil.<br/>ReverseProxy<br/>FlushInterval=-1]
     J --> K[Backend Service]
