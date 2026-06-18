@@ -208,6 +208,52 @@ func TestNewProxyStreamsResponses(t *testing.T) {
 	}
 }
 
+// TestNewProxyForwardsExactPrefixWithoutTrailingSlash guards against the
+// dashboard redirect-loop regression: an exact-prefix request must forward
+// verbatim (no appended trailing slash), or upstream Gin routers answer with a
+// 301 and the browser fetch loops on the same path.
+func TestNewProxyForwardsExactPrefixWithoutTrailingSlash(t *testing.T) {
+	type captured struct {
+		path  string
+		query string
+	}
+	var got captured
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = captured{path: r.URL.Path, query: r.URL.RawQuery}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	handler := newProxy(routeConfig{
+		targetURL:      backend.URL,
+		prefix:         "/api/dashboard",
+		targetBasePath: "/api/dashboard",
+	})
+
+	t.Run("exact prefix forwards without trailing slash and keeps query", func(t *testing.T) {
+		got = captured{}
+		req := httptest.NewRequest(http.MethodGet, "/api/dashboard?days=30", nil)
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+
+		if got.path != "/api/dashboard" {
+			t.Errorf("path = %q, want %q (no trailing slash)", got.path, "/api/dashboard")
+		}
+		if got.query != "days=30" {
+			t.Errorf("query = %q, want %q", got.query, "days=30")
+		}
+	})
+
+	t.Run("sub-path still forwards verbatim", func(t *testing.T) {
+		got = captured{}
+		req := httptest.NewRequest(http.MethodGet, "/api/dashboard/foo", nil)
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+
+		if got.path != "/api/dashboard/foo" {
+			t.Errorf("path = %q, want %q", got.path, "/api/dashboard/foo")
+		}
+	})
+}
+
 func TestNewMinioProxy(t *testing.T) {
 	type captured struct {
 		host  string

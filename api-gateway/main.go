@@ -361,10 +361,13 @@ func newProxy(cfg routeConfig) http.Handler {
 	proxy.Transport = proxyTransport
 	proxy.FlushInterval = -1 // stream responses immediately (critical for file downloads)
 	proxy.Director = func(req *http.Request) {
+		// Strip the gateway prefix and re-root the request under the upstream's
+		// base path. An exact-prefix match (e.g. GET /api/dashboard) yields an
+		// empty remainder; joinPath then forwards targetBasePath verbatim. We
+		// must NOT default the remainder to "/" here — that would append a
+		// trailing slash (/api/dashboard/), which upstream Gin routers answer
+		// with a 301 redirect, making the browser fetch loop on the same path.
 		targetPath := strings.TrimPrefix(req.URL.Path, cfg.prefix)
-		if targetPath == "" {
-			targetPath = "/"
-		}
 		req.URL.Scheme = target.Scheme
 		req.URL.Host = target.Host
 		req.URL.Path = joinPath(cfg.targetBasePath, targetPath)

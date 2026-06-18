@@ -75,6 +75,8 @@ All `/api/*` traffic is proxied to **job-service**. Workers are not exposed publ
 
 **Job dispatch is NATS, not Redis.** The gateway is HTTP-only — it never touches the JOBS_DISPATCH stream directly. `job-service` is the only publisher.
 
+**Path rewriting.** For each service route the gateway strips the matched `prefix` and re-roots the remainder under the upstream's `targetBasePath`. An exact-prefix request (e.g. `GET /api/dashboard`) leaves an empty remainder and is forwarded **verbatim** as `targetBasePath` — the gateway does **not** append a trailing slash. This is load-bearing: upstream Gin routers run with `RedirectTrailingSlash` enabled, so a stray `/api/dashboard/` would be answered with a 301 and the browser `fetch` would loop on the same path. The query string is always preserved.
+
 ### Proxy Transport Configuration
 
 The reverse proxy uses a custom `http.Transport` tuned for long-running conversions:
