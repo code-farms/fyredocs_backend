@@ -289,6 +289,7 @@ PORT="8084"
 NATS_URL="nats://nats:4222"
 PROCESSING_TIMEOUT="5m"    # honoured via NATS AckWait (pdfcpu ops are fast)
 WORKER_CONCURRENCY="4"     # parallel jobs per container (semaphore-bounded goroutines)
+RESULT_CACHE_TTL_SECONDS="3600"  # result-cache entry TTL (keep <= outputs bucket TTL); 0 disables
 ```
 
 ### Object Storage (S3 / MinIO)
@@ -321,6 +322,15 @@ AUTH_DENYLIST_ENABLED="true"
 AUTH_DENYLIST_PREFIX="denylist:jwt"
 AUTH_TRUST_GATEWAY_HEADERS="false"
 ```
+
+## Result Caching
+
+Identical jobs are deduplicated. Before downloading inputs, the worker derives a cache key from the tool type, the canonicalised options, and the **content identity of every input** — the latter via each upload object's ETag, fetched with a cheap `StatObject` (no download). The key is looked up in Redis (`rescache:v1:organize-pdf:<sha256>`):
+
+- **Hit:** the previously produced output is verified to still exist (it may have been TTL-cleaned), then **server-side copied** (`CopyObject`, no bytes through the worker) to the new job's output key. The download and the pdfcpu operation are skipped entirely.
+- **Miss:** the job runs normally; on success the output key + metadata are written to Redis with `RESULT_CACHE_TTL_SECONDS`.
+
+Caching is **best-effort**: any cache-path error (Redis down, stat/copy failure, expired output) logs and falls through to a normal run, so it can never fail a job. Disabled when Redis is unavailable or `RESULT_CACHE_TTL_SECONDS=0`.
 
 ## Dependencies
 

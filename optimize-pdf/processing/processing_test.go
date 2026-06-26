@@ -14,6 +14,28 @@ func TestProcessFileNoInputs(t *testing.T) {
 	}
 }
 
+func TestOCRMaxWorkers(t *testing.T) {
+	// Explicit override is honored.
+	t.Setenv("OCR_MAX_WORKERS", "8")
+	if got := ocrMaxWorkers(); got != 8 {
+		t.Errorf("OCR_MAX_WORKERS=8 → %d, want 8", got)
+	}
+	// Values below 1 clamp to 1.
+	t.Setenv("OCR_MAX_WORKERS", "0")
+	if got := ocrMaxWorkers(); got != 1 {
+		t.Errorf("OCR_MAX_WORKERS=0 → %d, want 1", got)
+	}
+	// Unset/invalid falls back to a CPU-sized pool capped at 4.
+	t.Setenv("OCR_MAX_WORKERS", "")
+	if got := ocrMaxWorkers(); got < 1 || got > 4 {
+		t.Errorf("default OCR workers = %d, want 1..4", got)
+	}
+	t.Setenv("OCR_MAX_WORKERS", "notnum")
+	if got := ocrMaxWorkers(); got < 1 || got > 4 {
+		t.Errorf("invalid OCR_MAX_WORKERS → %d, want fallback 1..4", got)
+	}
+}
+
 func TestProcessFileUnsupportedTool(t *testing.T) {
 	_, err := ProcessFile(context.Background(), uuid.New(), "unknown-tool", []string{"/tmp/test.pdf"}, nil, t.TempDir())
 	if err == nil {

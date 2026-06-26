@@ -1,8 +1,8 @@
 package storage
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -138,6 +138,20 @@ func TestIntegration(t *testing.T) {
 	if err != nil || string(head) != "hello" {
 		t.Fatalf("GetObjectRange: %v %q", err, head)
 	}
+
+	// Server-side copy must produce an identical object at the destination key.
+	copyKey := "it/test-object-copy.txt"
+	if err := c.CopyObject(ctx, cfg.BucketUploads, key, cfg.BucketOutputs, copyKey); err != nil {
+		t.Fatalf("CopyObject: %v", err)
+	}
+	cinfo, err := c.StatObject(ctx, cfg.BucketOutputs, copyKey)
+	if err != nil || cinfo.Size != int64(len(body)) {
+		t.Fatalf("StatObject(copy): %v size=%d", err, cinfo.Size)
+	}
+	if err := c.RemoveObject(ctx, cfg.BucketOutputs, copyKey); err != nil {
+		t.Fatalf("RemoveObject(copy): %v", err)
+	}
+
 	if err := c.RemoveObject(ctx, cfg.BucketUploads, key); err != nil {
 		t.Fatalf("RemoveObject: %v", err)
 	}

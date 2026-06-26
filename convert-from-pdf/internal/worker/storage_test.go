@@ -8,23 +8,30 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"fyredocs/shared/storage"
 )
 
 // fakeStorage implements the Storage interface for tests. It records
 // download/upload calls and supports error injection.
 type fakeStorage struct {
-	downloads   []string // "bucket/key"
-	uploads     []string // "bucket/key"
-	contentType map[string]string
-	downloadErr error
-	uploadErr   error
-	uploadSize  int64
-	objectSize  int64
-	statErr     error
+	downloads     []string // "bucket/key"
+	uploads       []string // "bucket/key"
+	copies        []string // "srcBucket/srcKey->dstBucket/dstKey"
+	contentType   map[string]string
+	etagByKey     map[string]string // "bucket/key" -> ETag
+	defaultETag   string
+	downloadErr   error
+	uploadErr     error
+	uploadSize    int64
+	objectSize    int64
+	statErr       error
+	statObjectErr error
+	copyErr       error
 }
 
 func newFakeStorage() *fakeStorage {
-	return &fakeStorage{contentType: map[string]string{}, uploadSize: 42, objectSize: 1024}
+	return &fakeStorage{contentType: map[string]string{}, etagByKey: map[string]string{}, defaultETag: "etag-default", uploadSize: 42, objectSize: 1024}
 }
 
 func (f *fakeStorage) BucketUploads() string { return "test-uploads" }
@@ -35,6 +42,25 @@ func (f *fakeStorage) GetObjectSize(ctx context.Context, bucket, key string) (in
 		return 0, f.statErr
 	}
 	return f.objectSize, nil
+}
+
+func (f *fakeStorage) StatObject(ctx context.Context, bucket, key string) (storage.ObjectInfo, error) {
+	if f.statObjectErr != nil {
+		return storage.ObjectInfo{}, f.statObjectErr
+	}
+	etag := f.defaultETag
+	if v, ok := f.etagByKey[bucket+"/"+key]; ok {
+		etag = v
+	}
+	return storage.ObjectInfo{Key: key, Size: f.objectSize, ETag: etag}, nil
+}
+
+func (f *fakeStorage) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error {
+	if f.copyErr != nil {
+		return f.copyErr
+	}
+	f.copies = append(f.copies, srcBucket+"/"+srcKey+"->"+dstBucket+"/"+dstKey)
+	return nil
 }
 
 func (f *fakeStorage) DownloadToFile(ctx context.Context, bucket, key, localPath string) error {

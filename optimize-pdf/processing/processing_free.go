@@ -17,6 +17,29 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// ocrMaxWorkers returns the OCR page-worker pool size. It defaults to
+// min(NumCPU, 4) to bound concurrent tesseract memory on small hosts, and is
+// overridable via OCR_MAX_WORKERS (values < 1 clamp to 1) so larger boxes can
+// use more cores for multi-page scans.
+func ocrMaxWorkers() int {
+	if v := os.Getenv("OCR_MAX_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			if n < 1 {
+				return 1
+			}
+			return n
+		}
+	}
+	workers := runtime.NumCPU()
+	if workers > 4 {
+		workers = 4
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	return workers
+}
+
 func compressPDF(ctx context.Context, inputPath string, outputPath string, options map[string]interface{}) (map[string]interface{}, error) {
 	slog.Info("compressing PDF", "input", inputPath)
 
@@ -245,15 +268,11 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 	sort.Strings(imageFiles)
 	slog.Info("PDF to image conversion complete", "imageCount", len(imageFiles))
 
-	// Process pages in parallel using a worker pool sized to available CPUs
-	// (capped at 4 to avoid excessive memory usage from concurrent tesseract).
-	workers := runtime.NumCPU()
-	if workers > 4 {
-		workers = 4
-	}
-	if workers < 1 {
-		workers = 1
-	}
+	// Process pages in parallel using a worker pool. Defaults to a CPU-sized
+	// pool capped at 4 to bound tesseract memory on small hosts; OCR_MAX_WORKERS
+	// raises (or lowers) that cap on larger boxes where memory is not the
+	// constraint.
+	workers := ocrMaxWorkers()
 
 	pdfFiles := make([]string, len(imageFiles))
 	var mu sync.Mutex // guards slog calls for cleaner output

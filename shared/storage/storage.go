@@ -318,3 +318,16 @@ func (c *Client) UploadFromFile(ctx context.Context, bucket, key, localPath, con
 	}
 	return info.Size, nil
 }
+
+// CopyObject performs a server-side copy of srcBucket/srcKey to
+// dstBucket/dstKey. No object bytes pass through this process, so it is far
+// cheaper than download+upload — used by workers to materialise a cached
+// result under a new job's output key.
+func (c *Client) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error {
+	src := minio.CopySrcOptions{Bucket: srcBucket, Object: srcKey}
+	dst := minio.CopyDestOptions{Bucket: dstBucket, Object: dstKey}
+	if _, err := c.mc.CopyObject(ctx, dst, src); err != nil {
+		return fmt.Errorf("storage: copy %s/%s → %s/%s: %w", srcBucket, srcKey, dstBucket, dstKey, err)
+	}
+	return nil
+}

@@ -44,17 +44,34 @@ func (p *unoserverPool) release(port string) {
 	p.ports <- port
 }
 
-// unoserverInstances reads UNOSERVER_INSTANCES, defaulting to 2 to match the
-// default WORKER_CONCURRENCY for convert-to-pdf. Values < 1 fall back to 1.
+// unoserverInstances reads UNOSERVER_INSTANCES. When set, it is honored
+// (values < 1 clamp to 1). When unset, it defaults to WORKER_CONCURRENCY + 1 so
+// there is one warm daemon per concurrent job plus a spare — keeping the slow
+// cold-start LibreOffice fallback effectively unreachable even as concurrency
+// is raised on larger hosts.
 func unoserverInstances() int {
-	n, err := strconv.Atoi(os.Getenv("UNOSERVER_INSTANCES"))
-	if err != nil || n < 1 {
-		if err != nil {
-			return 2
+	if v := os.Getenv("UNOSERVER_INSTANCES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			if n < 1 {
+				return 1
+			}
+			return n
 		}
-		return 1
 	}
-	return n
+	return workerConcurrency() + 1
+}
+
+// workerConcurrency mirrors the worker package's WORKER_CONCURRENCY default (2)
+// without importing it, so the daemon pool can size itself to the job
+// concurrency. Read here rather than imported to keep the processing package
+// independent of the worker package.
+func workerConcurrency() int {
+	if v := os.Getenv("WORKER_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 2
 }
 
 // UnoserverPorts returns the consecutive ports the unoserver daemons listen on

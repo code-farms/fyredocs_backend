@@ -479,8 +479,12 @@ services:
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
-      # Parallel jobs per container (pdf2docx/LibreOffice are CPU-heavy)
-      WORKER_CONCURRENCY: "2"
+      # Parallel jobs per container (pdf2docx/LibreOffice are CPU-heavy).
+      # Overridable per host: on a VS-32-class box (16 cores) try 3-4.
+      WORKER_CONCURRENCY: "${CONVERT_FROM_PDF_CONCURRENCY:-2}"
+      # Result cache: identical input+tool+options reuse a prior output. Keep at
+      # or below the outputs bucket TTL. Set to 0 to disable caching.
+      RESULT_CACHE_TTL_SECONDS: "${RESULT_CACHE_TTL_SECONDS:-3600}"
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
@@ -534,12 +538,16 @@ services:
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
-      WORKER_CONCURRENCY: "2"
-      # unoserver (LibreOffice) daemon pool — match to WORKER_CONCURRENCY so
-      # Office→PDF conversions run in parallel instead of serializing on one
-      # daemon. Each instance adds ~150-300 MB RAM; raise the memory limit below
-      # before increasing this.
-      UNOSERVER_INSTANCES: "2"
+      # Overridable per host: on a VS-32-class box (16 cores) try 3-4.
+      WORKER_CONCURRENCY: "${CONVERT_TO_PDF_CONCURRENCY:-2}"
+      # unoserver (LibreOffice) daemon pool. Leave UNSET to auto-size to
+      # WORKER_CONCURRENCY + 1 (one warm daemon per concurrent job plus a spare),
+      # which keeps the slow cold-start LibreOffice fallback unreachable. Set
+      # explicitly only to pin it. Each instance adds ~150-300 MB RAM; raise the
+      # memory limit below before increasing concurrency.
+      UNOSERVER_INSTANCES: "${UNOSERVER_INSTANCES:-}"
+      # Result cache (see convert-from-pdf). 0 disables.
+      RESULT_CACHE_TTL_SECONDS: "${RESULT_CACHE_TTL_SECONDS:-3600}"
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
@@ -551,10 +559,11 @@ services:
       timeout: 5s
       retries: 3
     deploy:
-      # Horizontal scaling example: now that file state lives in MinIO (no
-      # shared bind mount), workers scale by bumping replicas. NOTE the budget:
-      # resource limits are PER REPLICA — 2 replicas x 1G/2cpu = 2G/4cpu.
-      replicas: 2
+      # On a single box, prefer raising WORKER_CONCURRENCY + UNOSERVER_INSTANCES
+      # within one replica over running multiple replicas (avoids duplicate
+      # LibreOffice daemon pools competing for the same cores). Scale out by
+      # replicas only when adding a second host. NOTE limits are PER REPLICA.
+      replicas: ${CONVERT_TO_PDF_REPLICAS:-1}
       resources:
         limits:
           memory: 1G
@@ -597,7 +606,10 @@ services:
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
-      WORKER_CONCURRENCY: "4"
+      # pdfcpu ops are pure-Go and cheap, so concurrency can run higher.
+      WORKER_CONCURRENCY: "${ORGANIZE_PDF_CONCURRENCY:-4}"
+      # Result cache (see convert-from-pdf). 0 disables.
+      RESULT_CACHE_TTL_SECONDS: "${RESULT_CACHE_TTL_SECONDS:-3600}"
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
@@ -655,9 +667,14 @@ services:
       # OCR
       OCR_DEFAULT_LANGUAGE: ${OCR_DEFAULT_LANGUAGE:-eng}
       OCR_DEFAULT_DPI: ${OCR_DEFAULT_DPI:-150}
+      # OCR page-worker pool. Unset → min(NumCPU, 4) to bound tesseract memory.
+      # On a VS-32-class box (32 GB) raise to ~6 to speed up multi-page scans.
+      OCR_MAX_WORKERS: "${OCR_MAX_WORKERS:-}"
 
       # Parallel jobs per container (kept low — OCR parallelizes pages internally)
-      WORKER_CONCURRENCY: "2"
+      WORKER_CONCURRENCY: "${OPTIMIZE_PDF_CONCURRENCY:-2}"
+      # Result cache (see convert-from-pdf). 0 disables.
+      RESULT_CACHE_TTL_SECONDS: "${RESULT_CACHE_TTL_SECONDS:-3600}"
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"

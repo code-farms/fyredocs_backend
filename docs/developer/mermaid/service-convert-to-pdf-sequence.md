@@ -2,6 +2,34 @@
 
 Request flows through the `convert-to-pdf` worker service.
 
+## Result Cache Short-Circuit
+
+Checked before download on every job: identical input + tool + options reuse a prior output, skipping the LibreOffice/pdfcpu conversion entirely. Best-effort — any cache error falls through to a normal run.
+
+```mermaid
+sequenceDiagram
+    participant W as convert-to-pdf worker
+    participant Cache as Redis (result cache)
+    participant S3 as MinIO / S3
+    participant PG as PostgreSQL
+    participant EV as JOBS_EVENTS
+
+    W->>S3: StatObject(uploads) per input &rarr; ETags (no download)
+    W->>Cache: GET rescache:v1:convert-to-pdf:sha256(toolType+options+ETags)
+    alt cache hit
+        W->>S3: StatObject(outputs) verify cached output exists
+        alt output present
+            W->>S3: CopyObject cached output &rarr; jobs/&lt;jobId&gt;/&lt;file&gt; (server-side)
+            W->>PG: INSERT file_metadata + UPDATE status=completed, progress=100
+            W->>EV: completed (download + conversion skipped)
+        else expired / missing
+            Note over W: fall through to normal conversion
+        end
+    else miss
+        Note over W: normal conversion; on success SET cache key (TTL=RESULT_CACHE_TTL_SECONDS)
+    end
+```
+
 ## Job Processing — Office (word/excel/ppt/html)
 
 ```mermaid

@@ -24,6 +24,7 @@ import (
 	"convert-to-pdf/internal/models"
 
 	"fyredocs/shared/queue"
+	"fyredocs/shared/storage"
 )
 
 type ProcessResult struct {
@@ -114,6 +115,7 @@ func startProgressReporter(db *gorm.DB, js jetstream.JetStream, jobID uuid.UUID,
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 		start := time.Now()
+		lastPct := -1
 		for {
 			select {
 			case <-ctx.Done():
@@ -128,6 +130,12 @@ func startProgressReporter(db *gorm.DB, js jetstream.JetStream, jobID uuid.UUID,
 				if pct > maxPct {
 					pct = maxPct
 				}
+				// Skip redundant writes once progress plateaus (e.g. the estimate
+				// elapsed and pct is pinned at maxPct) to cut DB write amplification.
+				if pct == lastPct {
+					continue
+				}
+				lastPct = pct
 				updateJobStatus(db, jobID, "processing", pct, "")
 				publishStatusEvent(js, jobID, toolType, "processing", pct, "")
 			}
@@ -301,6 +309,28 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 		}
 	}
 
+	// Result-cache lookup: identical inputs+tool+options short-circuit the whole
+	// download+convert pipeline. Best-effort — any failure falls through to a
+	// normal conversion.
+	cache := newCacheStore(cfg.RedisClient)
+	ttl := cacheTTL()
+	var cacheKey string
+	cacheable := cache != nil && ttl > 0
+	if cacheable {
+		if etags, err := inputETags(ctx, cfg.Storage, payload.InputPaths); err == nil {
+			cacheKey = buildCacheKey(payload.ToolType, payload.Options, etags)
+			if tryServeFromCache(ctx, cfg, cache, cacheKey, payload, jobID, logger) {
+				if err := msg.Ack(); err != nil {
+					logger.Error("failed to ack cached message", "jobId", payload.JobID, "error", err)
+				}
+				return
+			}
+		} else {
+			logger.Warn("cache: stat inputs failed, skipping cache", "jobId", payload.JobID, "error", err)
+			cacheable = false
+		}
+	}
+
 	// Stage inputs: download from the uploads bucket into a job-scoped
 	// scratch directory (subprocess tools need real local files).
 	scratch, err := os.MkdirTemp("", "job-"+payload.JobID+"-")
@@ -393,6 +423,16 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 	}
 
 	mergeMetadata(cfg.DB, jobID, result.Metadata, logger)
+
+	// Populate the result cache so future identical jobs short-circuit. TTL is
+	// kept at/below the output object lifecycle; the on-hit existence check
+	// guards against drift.
+	if cacheable && cacheKey != "" {
+		if data, err := json.Marshal(cachedResult{OutputKey: outKey, Metadata: result.Metadata}); err == nil {
+			cache.set(ctx, cacheKey, string(data), ttl)
+		}
+	}
+
 	updateJobStatus(cfg.DB, jobID, "completed", 100, "")
 	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "completed", 100, "", outSize)
 	clearFailure(cfg.DB, jobID)
@@ -401,6 +441,50 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 		logger.Error("failed to ack message", "jobId", payload.JobID, "error", err)
 	}
 	logger.Info("job completed", "jobId", payload.JobID, "correlationId", payload.CorrelationID)
+}
+
+// tryServeFromCache attempts to satisfy the job from a previously cached
+// result. It returns true only when the job has been fully completed (output
+// materialised, recorded, status set, event published) — the caller then acks.
+// Any failure (cache miss, TTL-expired output, copy/record error) returns false
+// so the caller falls through to a normal conversion.
+func tryServeFromCache(ctx context.Context, cfg WorkerConfig, cache cacheStore, key string, payload JobPayload, jobID uuid.UUID, logger *slog.Logger) bool {
+	raw, ok := cache.get(ctx, key)
+	if !ok {
+		return false
+	}
+	var cv cachedResult
+	if err := json.Unmarshal([]byte(raw), &cv); err != nil || cv.OutputKey == "" {
+		return false
+	}
+
+	// The cached output may have been removed by TTL cleanup; verify before use.
+	info, err := cfg.Storage.StatObject(ctx, cfg.Storage.BucketOutputs(), cv.OutputKey)
+	if err != nil {
+		if storage.IsNotFound(err) {
+			logger.Info("cache hit but output expired, recomputing", "jobId", payload.JobID)
+		} else {
+			logger.Warn("cache: stat output failed, recomputing", "jobId", payload.JobID, "error", err)
+		}
+		return false
+	}
+
+	dstKey := "jobs/" + payload.JobID + "/" + path.Base(cv.OutputKey)
+	if err := cfg.Storage.CopyObject(ctx, cfg.Storage.BucketOutputs(), cv.OutputKey, cfg.Storage.BucketOutputs(), dstKey); err != nil {
+		logger.Warn("cache: copy output failed, recomputing", "jobId", payload.JobID, "error", err)
+		return false
+	}
+	if err := recordOutput(cfg.DB, jobID, dstKey, info.Size); err != nil {
+		logger.Warn("cache: record output failed, recomputing", "jobId", payload.JobID, "error", err)
+		return false
+	}
+
+	mergeMetadata(cfg.DB, jobID, cv.Metadata, logger)
+	updateJobStatus(cfg.DB, jobID, "completed", 100, "")
+	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "completed", 100, "", info.Size)
+	clearFailure(cfg.DB, jobID)
+	logger.Info("job completed from cache", "jobId", payload.JobID, "correlationId", payload.CorrelationID)
+	return true
 }
 
 func handleFailure(cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err error, logger *slog.Logger) {

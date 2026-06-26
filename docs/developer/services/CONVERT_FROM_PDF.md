@@ -425,7 +425,17 @@ curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-odp \
 | `MAX_RETRIES` | `3` | Max retry attempts for failed jobs |
 | `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing (currently honoured via NATS `AckWait` rather than a context deadline in code) |
 | `WORKER_CONCURRENCY` | `2` | Max concurrent jobs processed in parallel (semaphore-bounded goroutines; one slow conversion no longer blocks the rest) |
+| `RESULT_CACHE_TTL_SECONDS` | `3600` | Lifetime of result-cache entries. Keep ≤ outputs bucket TTL. `0` disables caching. |
 | `NATS_URL` | **Required** | NATS server URL |
+
+## Result Caching
+
+Identical jobs are deduplicated. Before downloading inputs, the worker derives a cache key from the tool type, the canonicalised options, and the **content identity of every input** — the latter via each upload object's ETag, fetched with a cheap `StatObject` (no download). The key is looked up in Redis (`rescache:v1:convert-from-pdf:<sha256>`):
+
+- **Hit:** the previously produced output is verified to still exist (it may have been TTL-cleaned), then **server-side copied** (`CopyObject`, no bytes through the worker) to the new job's output key. The download and the pdf2docx/LibreOffice conversion are skipped entirely.
+- **Miss:** the job runs normally; on success the output key + metadata are written to Redis with `RESULT_CACHE_TTL_SECONDS`.
+
+Caching is **best-effort**: any cache-path error (Redis down, stat/copy failure, expired output) logs and falls through to a normal run, so it can never fail a job. Disabled when Redis is unavailable or `RESULT_CACHE_TTL_SECONDS=0`.
 
 ## Dependencies
 

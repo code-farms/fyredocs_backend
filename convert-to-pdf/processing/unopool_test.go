@@ -9,9 +9,20 @@ import (
 func TestUnoserverPortsDefault(t *testing.T) {
 	t.Setenv("UNOSERVER_PORT", "2002")
 	t.Setenv("UNOSERVER_INSTANCES", "")
+	t.Setenv("WORKER_CONCURRENCY", "")
+	// Unset instances default to WORKER_CONCURRENCY (2) + 1 = 3 daemons, so the
+	// pool always has a warm spare beyond the concurrent job count.
 	ports := UnoserverPorts()
-	if len(ports) != 2 || ports[0] != "2002" || ports[1] != "2003" {
-		t.Fatalf("default ports = %v, want [2002 2003]", ports)
+	if len(ports) != 3 || ports[0] != "2002" || ports[1] != "2003" || ports[2] != "2004" {
+		t.Fatalf("default ports = %v, want [2002 2003 2004]", ports)
+	}
+}
+
+func TestUnoserverInstancesTracksConcurrency(t *testing.T) {
+	t.Setenv("UNOSERVER_INSTANCES", "")
+	t.Setenv("WORKER_CONCURRENCY", "4")
+	if got := unoserverInstances(); got != 5 {
+		t.Errorf("instances with concurrency=4 = %d, want 5 (concurrency+1)", got)
 	}
 }
 
@@ -39,9 +50,11 @@ func TestUnoserverInstancesFloors(t *testing.T) {
 	if got := unoserverInstances(); got != 1 {
 		t.Errorf("instances(-5) = %d, want 1", got)
 	}
+	// A non-numeric value is treated as unset → WORKER_CONCURRENCY(2)+1 = 3.
 	t.Setenv("UNOSERVER_INSTANCES", "garbage")
-	if got := unoserverInstances(); got != 2 {
-		t.Errorf("instances(garbage) = %d, want 2 (default)", got)
+	t.Setenv("WORKER_CONCURRENCY", "")
+	if got := unoserverInstances(); got != 3 {
+		t.Errorf("instances(garbage) = %d, want 3 (default concurrency+1)", got)
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"fyredocs/shared/storage"
 )
 
 // Storage is the narrow object-storage surface the worker needs. It is
@@ -15,6 +17,8 @@ type Storage interface {
 	DownloadToFile(ctx context.Context, bucket, key, localPath string) error
 	UploadFromFile(ctx context.Context, bucket, key, localPath, contentType string) (int64, error)
 	GetObjectSize(ctx context.Context, bucket, key string) (int64, error)
+	StatObject(ctx context.Context, bucket, key string) (storage.ObjectInfo, error)
+	CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error
 	BucketUploads() string
 	BucketOutputs() string
 }
