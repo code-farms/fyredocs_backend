@@ -115,8 +115,17 @@ AUTH_DENYLIST_ENABLED="true"
 # OCR
 OCR_DEFAULT_LANGUAGE="eng"
 OCR_DEFAULT_DPI="300"
-OCR_MAX_WORKERS=""         # OCR page-pool cap; unset = min(NumCPU,4). Raise (~6) on large hosts
+OCR_MAX_WORKERS=""         # OCR page-pool cap; unset = min(NumCPU,4). Auto-sized by deploy.sh's 70% budget (see below); pin only to override
 ```
+
+### Scaling / memory bounding
+
+Peak tesseract memory ≈ `WORKER_CONCURRENCY × OCR_MAX_WORKERS` processes, each
+~250 MB. `deploy.sh`'s 70% resource budget sizes **both** knobs from a single
+slot budget derived from this container's scaled memory cap, so their product
+fits the cap and the container cannot OOM-kill itself on any host (a tiny laptop
+collapses to `1 × 1`; a large VPS scales both up). Pin either value in `.env`
+only to override the auto-sizing.
 
 ## Result Caching
 

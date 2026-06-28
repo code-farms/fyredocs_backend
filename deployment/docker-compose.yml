@@ -51,8 +51,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
-          cpus: '0.5'
+          memory: ${REDIS_MEM_LIMIT:-512M}
+          cpus: "${REDIS_CPU_LIMIT:-0.5}"
         reservations:
           memory: 64M
     logging:
@@ -77,8 +77,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: '0.5'
+          memory: ${NATS_MEM_LIMIT:-256M}
+          cpus: "${NATS_CPU_LIMIT:-0.5}"
         reservations:
           memory: 64M
     logging:
@@ -116,8 +116,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
-          cpus: '1.0'
+          memory: ${MINIO_MEM_LIMIT:-1G}
+          cpus: "${MINIO_CPU_LIMIT:-1.0}"
         reservations:
           memory: 256M
     logging:
@@ -268,8 +268,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: '0.5'
+          memory: ${API_GATEWAY_MEM_LIMIT:-256M}
+          cpus: "${API_GATEWAY_CPU_LIMIT:-0.5}"
         reservations:
           memory: 64M
     logging:
@@ -363,8 +363,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: '0.5'
+          memory: ${AUTH_SERVICE_MEM_LIMIT:-256M}
+          cpus: "${AUTH_SERVICE_CPU_LIMIT:-0.5}"
         reservations:
           memory: 64M
     logging:
@@ -435,8 +435,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
-          cpus: '1.0'
+          memory: ${JOB_SERVICE_MEM_LIMIT:-512M}
+          cpus: "${JOB_SERVICE_CPU_LIMIT:-1.0}"
         reservations:
           memory: 128M
     logging:
@@ -498,8 +498,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
-          cpus: '2.0'
+          memory: ${CONVERT_FROM_PDF_MEM_LIMIT:-1G}
+          cpus: "${CONVERT_FROM_PDF_CPU_LIMIT:-2.0}"
         reservations:
           memory: 512M
     logging:
@@ -566,8 +566,8 @@ services:
       replicas: ${CONVERT_TO_PDF_REPLICAS:-1}
       resources:
         limits:
-          memory: 1G
-          cpus: '2.0'
+          memory: ${CONVERT_TO_PDF_MEM_LIMIT:-1G}
+          cpus: "${CONVERT_TO_PDF_CPU_LIMIT:-2.0}"
         reservations:
           memory: 512M
     logging:
@@ -623,8 +623,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
-          cpus: '2.0'
+          memory: ${ORGANIZE_PDF_MEM_LIMIT:-1G}
+          cpus: "${ORGANIZE_PDF_CPU_LIMIT:-2.0}"
         reservations:
           memory: 512M
     logging:
@@ -688,8 +688,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
-          cpus: '2.0'
+          memory: ${OPTIMIZE_PDF_MEM_LIMIT:-1G}
+          cpus: "${OPTIMIZE_PDF_CPU_LIMIT:-2.0}"
         reservations:
           memory: 512M
     logging:
@@ -727,8 +727,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: '0.5'
+          memory: ${ANALYTICS_SERVICE_MEM_LIMIT:-256M}
+          cpus: "${ANALYTICS_SERVICE_CPU_LIMIT:-0.5}"
         reservations:
           memory: 64M
     logging:
@@ -766,8 +766,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: '0.5'
+          memory: ${DOCUMENT_SERVICE_MEM_LIMIT:-256M}
+          cpus: "${DOCUMENT_SERVICE_CPU_LIMIT:-0.5}"
         reservations:
           memory: 64M
     logging:
@@ -806,8 +806,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: '0.5'
+          memory: ${USER_SERVICE_MEM_LIMIT:-256M}
+          cpus: "${USER_SERVICE_CPU_LIMIT:-0.5}"
         reservations:
           memory: 64M
     logging:
@@ -840,8 +840,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: '0.5'
+          memory: ${NOTIFICATION_SERVICE_MEM_LIMIT:-256M}
+          cpus: "${NOTIFICATION_SERVICE_CPU_LIMIT:-0.5}"
         reservations:
           memory: 64M
     logging:
@@ -892,8 +892,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: '0.5'
+          memory: ${CLEANUP_WORKER_MEM_LIMIT:-256M}
+          cpus: "${CLEANUP_WORKER_CPU_LIMIT:-0.5}"
         reservations:
           memory: 64M
     logging:

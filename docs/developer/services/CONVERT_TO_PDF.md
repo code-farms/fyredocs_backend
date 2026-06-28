@@ -338,15 +338,24 @@ instead of serializing on one port.
 - The entrypoint launches `UNOSERVER_INSTANCES` daemons (default 2) on
   consecutive ports from `UNOSERVER_PORT` (2002, 2003, …), each with its own
   LibreOffice `--user-installation` profile (required — a shared profile
-  conflicts on the lock).
+  conflicts on the lock). `deploy.sh` always **pins** `UNOSERVER_INSTANCES`
+  explicitly (see Sizing below), so the entrypoint's daemon count and the Go
+  pool's `UnoserverPorts()` always agree — leaving it unset risks the Go pool
+  expecting `WORKER_CONCURRENCY + 1` ports while the entrypoint launches only 2.
 - `processing.tryUnoconvert` acquires a port from a buffered-channel pool
   (`unopool.go`), bounding concurrent conversions to the pool size and blocking
   when all daemons are busy; the port is released **before** any direct-LibreOffice
   fallback so the fallback never holds a daemon slot.
 - `UnoserverPorts()` is the single source of truth shared by the pool and the
   `/healthz` check (healthy if ≥1 daemon port is reachable).
-- **Sizing**: match `UNOSERVER_INSTANCES` to `WORKER_CONCURRENCY`; each daemon
-  uses ~150–300 MB RAM, so raise the container memory limit before increasing it.
+- **Sizing**: handled automatically by `deploy.sh`'s 70% resource budget — it
+  derives `UNOSERVER_INSTANCES` from this container's *scaled* memory cap
+  (~300 MB per daemon + ~200 MB Go overhead), bounded by its CPU allowance and
+  6, then sets `WORKER_CONCURRENCY = instances − 1`. Because the pool is sized
+  to fit the cap, the container cannot OOM-kill itself regardless of host size.
+  To pin manually, set `UNOSERVER_INSTANCES`/`CONVERT_TO_PDF_CONCURRENCY` in
+  `.env` (deploy.sh honors a pre-set value) — but a pin larger than the auto
+  size can exceed the memory cap and risk an OOM-kill.
 
 ## tmpfs capacity guard
 

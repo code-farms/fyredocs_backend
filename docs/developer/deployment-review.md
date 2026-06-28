@@ -206,33 +206,39 @@ docker compose exec redis redis-cli
 
 ---
 
-### 7. No Resource Limits on Containers
+### 7. No Resource Limits on Containers — RESOLVED
 
 **Severity:** MEDIUM
 
-No CPU or memory limits on any container. A single runaway PDF conversion (LibreOffice, Tesseract, Ghostscript) could consume all host memory and kill other services via OOM.
+Originally no CPU or memory limits on any container — a single runaway PDF
+conversion (LibreOffice, Tesseract, Ghostscript) could consume all host memory
+and OOM-kill other services.
 
-**Fix:** Add resource constraints, especially on PDF worker services:
+**Resolution:** Every service now carries `deploy.resources.limits` (memory +
+cpus), and `deploy.sh` auto-computes them so the **whole stack stays under a
+configurable percentage of the host's total RAM/CPU** (`RESOURCE_BUDGET_PCT`,
+default 70, clamped 50–90; ~80 on a dedicated VPS), on any machine, with no
+specs hardcoded:
 
-```yaml
-# For PDF workers (resource-intensive)
-deploy:
-  resources:
-    limits:
-      memory: 1G
-      cpus: '2.0'
-    reservations:
-      memory: 256M
+- "Total available" is read from `docker info` (`.MemTotal` / `.NCPU`) — the full
+  host on a Linux VPS, the Docker Desktop VM's allocation on macOS.
+- `MEM_BUDGET = PCT% × MemTotal`, `CPU_BUDGET = PCT% × NCPU`. The budget is
+  distributed across the 15 containers by **responsibility-based weights**
+  (memory: LibreOffice/OCR workers + MinIO get the bulk, redis and light CRUD
+  services stay lean; CPU: the heavy workers **and the api-gateway** — on every
+  request's hot path and proxying object bytes — get real shares, near-idle
+  services a sliver), so **Σ(limits) ≤ budget** guarantees the aggregate cap
+  even with everything maxed at once.
+- Each service's limit is exposed as `${<SERVICE>_MEM_LIMIT:-<default>}` /
+  `${<SERVICE>_CPU_LIMIT:-<default>}` in `docker-compose.yml`; deploy.sh exports
+  the computed values (exported env wins over the `.env` defaults). A plain
+  `docker compose up` without deploy.sh falls back to the built-in defaults.
+- Worker pools (`*_CONCURRENCY`, `OCR_MAX_WORKERS`, `UNOSERVER_INSTANCES`) are
+  derived from each worker's *scaled* memory cap, so no pool can be sized past
+  the RAM its own container is allowed.
 
-# For lightweight services (api-gateway, auth, cleanup)
-deploy:
-  resources:
-    limits:
-      memory: 256M
-      cpus: '0.5'
-    reservations:
-      memory: 64M
-```
+Preview for any host: `./deployment/deploy.sh --dry-run` (override with
+`MEM_TOTAL_MB=… NCPU=… ` to model a different box).
 
 ---
 

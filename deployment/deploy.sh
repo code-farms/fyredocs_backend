@@ -8,6 +8,15 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 cd "$ROOT_DIR"
 
+# --print-budget / --dry-run: compute and show the resource budget for this
+# host (RESOURCE_BUDGET_PCT%, default 70), then exit without building anything.
+DRY_RUN=0
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run|--print-budget) DRY_RUN=1 ;;
+    esac
+done
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -35,6 +44,168 @@ print_error() {
     echo -e "${RED}✗ $1${NC}"
 }
 
+# ---------------------------------------------------------------------------
+# compute_resource_budget
+#
+# Caps the WHOLE stack at RESOURCE_BUDGET_PCT% (default 70) of the machine's
+# total available RAM and CPU,
+# on any host, without hardcoding specs. "Total available" is read from
+# `docker info` (.MemTotal / .NCPU): on a Linux VPS that is the full host; on
+# macOS Docker Desktop it is the VM's allocation (raise the VM and this picks
+# it up next run). Override with MEM_TOTAL_MB / NCPU env vars (used for the
+# --dry-run "what would a bigger box get?" check).
+#
+# The budget is distributed across the 15 containers by responsibility-based
+# weights (see the MEMW/CPUW tables below), so the absolute numbers scale to the
+# budget on any host. Because a container can never exceed its own cgroup limit,
+# Σ(limits) ≤ budget guarantees the whole project stays within the cap.
+#
+# Worker pools (concurrency / OCR workers / unoserver instances) are then
+# derived from each worker's SCALED memory cap, so a pool can never be sized
+# past the RAM its own container is allowed — no per-container OOM-kill on any
+# host, and the unoserver instance count is pinned (entrypoint and Go pool
+# agree, fixing the port/daemon mismatch).
+# ---------------------------------------------------------------------------
+compute_resource_budget() {
+    # Parallel indexed arrays (bash 3.2 safe — macOS system bash has no
+    # associative arrays). Order: name, mem weight (MB), cpu weight (tenths).
+    local NAMES=(redis nats minio api-gateway auth-service job-service \
+        convert-from-pdf convert-to-pdf organize-pdf optimize-pdf \
+        analytics-service document-service user-service notification-service cleanup-worker)
+    # Weights reflect each service's real responsibilities (not the old 8 GB-box
+    # limits). Memory: LibreOffice/OCR workers + MinIO get the bulk; redis and
+    # the light Go CRUD services stay lean. CPU: the heavy workers AND the
+    # api-gateway — which sits on every request's hot path and proxies object
+    # bytes to/from MinIO — get real shares; near-idle services get a sliver.
+    # Sums are computed below so the arrays can be retuned in isolation.
+    #              redis nats minio  gw auth  job   cF  cT org opt  an doc usr ntf cln
+    local MEMW=(     8   12   34   14    7   18   48  48  24  46    6   6   6   6   6)
+    local CPUW=(     2    2    7   10    2    5   18  18  12  18    1   1   1   1   1)
+    local MEMW_SUM=0 CPUW_SUM=0 wi
+    for wi in "${!MEMW[@]}"; do
+        MEMW_SUM=$(( MEMW_SUM + MEMW[wi] )); CPUW_SUM=$(( CPUW_SUM + CPUW[wi] ))
+    done
+    # heavy-worker mem (MB) + cpu (hundredths) captured in the loop for pools
+    local MEM_TO CH_TO MEM_CF CH_CF MEM_ORG CH_ORG MEM_OPT CH_OPT MEM_REDIS
+
+    # --- total available (docker info, overridable) ---
+    if [ -z "${MEM_TOTAL_MB:-}" ]; then
+        local mem_bytes
+        mem_bytes=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
+        MEM_TOTAL_MB=$(( mem_bytes / 1048576 ))
+    fi
+    if [ -z "${NCPU:-}" ]; then
+        NCPU=$(docker info --format '{{.NCPU}}' 2>/dev/null || echo 0)
+    fi
+
+    if [ "${MEM_TOTAL_MB:-0}" -le 0 ] || [ "${NCPU:-0}" -le 0 ]; then
+        print_warning "Could not read host RAM/CPU from 'docker info' (is Docker running?)."
+        print_warning "Skipping 70% auto-budget — compose built-in defaults apply."
+        return 0
+    fi
+
+    # --- budget percentage (configurable; default 70, clamped to a sane range) ---
+    # Lower = more headroom for the OS/page-cache/burst; higher = more throughput
+    # on a dedicated box. >90 risks the host OOM-killer on spiky LibreOffice/OCR
+    # bursts; <50 wastes the box.
+    local PCT="${RESOURCE_BUDGET_PCT:-70}"
+    case "$PCT" in *[!0-9]*|"") PCT=70 ;; esac    # non-numeric → default
+    [ "$PCT" -gt 90 ] && PCT=90
+    [ "$PCT" -lt 50 ] && PCT=50
+
+    local MEM_BUDGET=$(( MEM_TOTAL_MB * PCT / 100 ))  # MB, floor
+    local CPU_BUDGET_H=$(( NCPU * PCT ))              # (PCT/100) * NCPU, in hundredths
+
+    print_step "Resource Budget (${PCT}% cap)"
+    printf "  Host available (docker info): %s MB RAM, %s CPU\n" "$MEM_TOTAL_MB" "$NCPU"
+    printf "  %d%% project budget:           %s MB RAM, %d.%02d CPU\n" \
+        "$PCT" "$MEM_BUDGET" "$((CPU_BUDGET_H/100))" "$((CPU_BUDGET_H%100))"
+    printf "  %-22s %10s %8s\n" "SERVICE" "MEM" "CPU"
+    printf "  %-22s %10s %8s\n" "----------------------" "----------" "--------"
+
+    local mem_sum=0 cpu_sum_h=0
+    local i name var mem cpu_h
+    for i in "${!NAMES[@]}"; do
+        name="${NAMES[$i]}"
+        mem=$(( MEM_BUDGET * MEMW[i] / MEMW_SUM ))            # MB, floor
+        cpu_h=$(( CPU_BUDGET_H * CPUW[i] / CPUW_SUM ))        # hundredths of a core, floor
+        [ "$cpu_h" -lt 1 ] && cpu_h=1                         # never advertise 0.00 cpus
+        var=$(echo "$name" | tr 'a-z-' 'A-Z_')
+        export "${var}_MEM_LIMIT=${mem}m"
+        export "${var}_CPU_LIMIT=$(printf '%d.%02d' $((cpu_h/100)) $((cpu_h%100)))"
+        mem_sum=$(( mem_sum + mem ))
+        cpu_sum_h=$(( cpu_sum_h + cpu_h ))
+        printf "  %-22s %9sm %5d.%02d\n" "$name" "$mem" "$((cpu_h/100))" "$((cpu_h%100))"
+        # stash heavy-worker mem/cpu for pool derivation below
+        case "$name" in
+            convert-to-pdf)   MEM_TO=$mem;  CH_TO=$cpu_h ;;
+            convert-from-pdf) MEM_CF=$mem;  CH_CF=$cpu_h ;;
+            organize-pdf)     MEM_ORG=$mem; CH_ORG=$cpu_h ;;
+            optimize-pdf)     MEM_OPT=$mem; CH_OPT=$cpu_h ;;
+            redis)            MEM_REDIS=$mem ;;
+        esac
+    done
+    printf "  %-22s %9sm %5d.%02d   (Σ ≤ budget)\n" "TOTAL" "$mem_sum" \
+        "$((cpu_sum_h/100))" "$((cpu_sum_h%100))"
+
+    # --- pools derived from each worker's SCALED caps ---
+    # Pool COUNT is bounded by memory (so it can't OOM its own container) and by
+    # a CPU "slots" allowance of ~2 per allocated core (workers are partly
+    # IO-bound; the cgroup cpu limit throttles real usage regardless). min 1.
+    local U_TO=$((  CH_TO  * 2 / 100 )); [ "$U_TO"  -lt 1 ] && U_TO=1
+    local U_CF=$((  CH_CF  * 2 / 100 )); [ "$U_CF"  -lt 1 ] && U_CF=1
+    local U_ORG=$(( CH_ORG * 2 / 100 )); [ "$U_ORG" -lt 1 ] && U_ORG=1
+    local U_OPT=$(( CH_OPT * 2 / 100 )); [ "$U_OPT" -lt 1 ] && U_OPT=1
+
+    # Each pool: auto-size from the scaled caps, but honor a value the operator
+    # pinned in .env (explicit opt-out wins). The mem/cpu LIMITS above stay
+    # always-auto so the 70% cap can never be accidentally removed.
+    # convert-to-pdf: ~300 MB per unoserver daemon, ~200 MB Go/buffer overhead.
+    local insts=$(( (MEM_TO - 200) / 300 )); [ "$insts" -lt 1 ] && insts=1
+    [ "$insts" -gt "$U_TO" ] && insts=$U_TO
+    [ "$insts" -gt 6 ] && insts=6
+    [ -n "${UNOSERVER_INSTANCES:-}" ] && insts="$UNOSERVER_INSTANCES"
+    export UNOSERVER_INSTANCES="$insts"
+    local cto=$(( insts - 1 )); [ "$cto" -lt 1 ] && cto=1
+    [ -n "${CONVERT_TO_PDF_CONCURRENCY:-}" ] && cto="$CONVERT_TO_PDF_CONCURRENCY"
+    export CONVERT_TO_PDF_CONCURRENCY="$cto"
+
+    # optimize-pdf: peak tesseract processes ≈ concurrency × ocr_workers, each
+    # ~250 MB. Size both from one slot budget (~100 MB Go overhead) so the
+    # product fits the container cap. OCR page-pool capped at U_OPT and 6.
+    local opt_slots=$(( (MEM_OPT - 100) / 250 )); [ "$opt_slots" -lt 1 ] && opt_slots=1
+    local ocr=$opt_slots
+    [ "$ocr" -gt "$U_OPT" ] && ocr=$U_OPT
+    [ "$ocr" -gt 6 ] && ocr=6
+    [ -n "${OCR_MAX_WORKERS:-}" ] && ocr="$OCR_MAX_WORKERS"
+    export OCR_MAX_WORKERS="$ocr"
+    local opt_conc=$(( opt_slots / ocr )); [ "$opt_conc" -lt 1 ] && opt_conc=1
+    [ "$opt_conc" -gt "$U_OPT" ] && opt_conc=$U_OPT
+    [ -n "${OPTIMIZE_PDF_CONCURRENCY:-}" ] && opt_conc="$OPTIMIZE_PDF_CONCURRENCY"
+    export OPTIMIZE_PDF_CONCURRENCY="$opt_conc"
+
+    # convert-from-pdf: ~300 MB per job (pdf2docx/LibreOffice).
+    local cf=$(( (MEM_CF - 150) / 300 )); [ "$cf" -lt 1 ] && cf=1
+    [ "$cf" -gt "$U_CF" ] && cf=$U_CF
+    [ -n "${CONVERT_FROM_PDF_CONCURRENCY:-}" ] && cf="$CONVERT_FROM_PDF_CONCURRENCY"
+    export CONVERT_FROM_PDF_CONCURRENCY="$cf"
+
+    # organize-pdf: pdfcpu is pure-Go and cheap, ~96 MB per job; cap 8.
+    local org=$(( (MEM_ORG - 64) / 96 )); [ "$org" -lt 1 ] && org=1
+    [ "$org" -gt "$U_ORG" ] && org=$U_ORG
+    [ "$org" -gt 8 ] && org=8
+    [ -n "${ORGANIZE_PDF_CONCURRENCY:-}" ] && org="$ORGANIZE_PDF_CONCURRENCY"
+    export ORGANIZE_PDF_CONCURRENCY="$org"
+
+    # redis maxmemory kept under the redis container cap (existing pattern).
+    export REDIS_MAXMEMORY="$(( MEM_REDIS * 75 / 100 ))mb"
+
+    echo ""
+    printf "  Derived pools: convert-to=%s (unoserver %s)  convert-from=%s  organize=%s  optimize=%s (ocr-workers=%s)\n" \
+        "$cto" "$insts" "$cf" "$org" "$opt_conc" "$ocr"
+    printf "  redis maxmemory: %s\n" "$REDIS_MAXMEMORY"
+}
+
 # Check requirements
 if ! command -v openssl &> /dev/null; then
     print_error "openssl is required but not installed."
@@ -50,6 +221,16 @@ if [ -f "$ENV_FILE" ]; then
     set +a
 else
     print_warning "No .env file found — using server environment variables"
+fi
+
+# Compute and apply the 70% RAM/CPU budget for THIS host (exports per-service
+# *_MEM_LIMIT / *_CPU_LIMIT and derived worker pools; exported env wins over
+# the COMPOSE_ENV_FILES values during ${VAR} substitution).
+compute_resource_budget
+if [ "$DRY_RUN" = "1" ]; then
+    echo ""
+    print_success "Dry run — budget shown above, no build or deploy performed."
+    exit 0
 fi
 
 # Validate required environment variables
