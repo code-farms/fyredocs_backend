@@ -124,7 +124,7 @@ compute_resource_budget() {
     printf "  %-22s %10s %8s\n" "----------------------" "----------" "--------"
 
     local mem_sum=0 cpu_sum_h=0
-    local i name var mem cpu_h
+    local i name var mem cpu_h res
     for i in "${!NAMES[@]}"; do
         name="${NAMES[$i]}"
         mem=$(( MEM_BUDGET * MEMW[i] / MEMW_SUM ))            # MB, floor
@@ -133,6 +133,10 @@ compute_resource_budget() {
         var=$(echo "$name" | tr 'a-z-' 'A-Z_')
         export "${var}_MEM_LIMIT=${mem}m"
         export "${var}_CPU_LIMIT=$(printf '%d.%02d' $((cpu_h/100)) $((cpu_h%100)))"
+        # reservation = 50% of the scaled limit, so it is ALWAYS <= the limit
+        # (Docker rejects reservation > limit). Floor at 6 MB.
+        res=$(( mem * 50 / 100 )); [ "$res" -lt 6 ] && res=6
+        export "${var}_MEM_RESERVATION=${res}m"
         mem_sum=$(( mem_sum + mem ))
         cpu_sum_h=$(( cpu_sum_h + cpu_h ))
         printf "  %-22s %9sm %5d.%02d\n" "$name" "$mem" "$((cpu_h/100))" "$((cpu_h%100))"

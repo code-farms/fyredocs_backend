@@ -54,7 +54,7 @@ services:
           memory: ${REDIS_MEM_LIMIT:-512M}
           cpus: "${REDIS_CPU_LIMIT:-0.5}"
         reservations:
-          memory: 64M
+          memory: ${REDIS_MEM_RESERVATION:-64M}
     logging:
       driver: "json-file"
       options:
@@ -80,7 +80,7 @@ services:
           memory: ${NATS_MEM_LIMIT:-256M}
           cpus: "${NATS_CPU_LIMIT:-0.5}"
         reservations:
-          memory: 64M
+          memory: ${NATS_MEM_RESERVATION:-64M}
     logging:
       driver: "json-file"
       options:
@@ -119,7 +119,7 @@ services:
           memory: ${MINIO_MEM_LIMIT:-1G}
           cpus: "${MINIO_CPU_LIMIT:-1.0}"
         reservations:
-          memory: 256M
+          memory: ${MINIO_MEM_RESERVATION:-256M}
     logging:
       driver: "json-file"
       options:
@@ -271,7 +271,7 @@ services:
           memory: ${API_GATEWAY_MEM_LIMIT:-256M}
           cpus: "${API_GATEWAY_CPU_LIMIT:-0.5}"
         reservations:
-          memory: 64M
+          memory: ${API_GATEWAY_MEM_RESERVATION:-64M}
     logging:
       driver: "json-file"
       options:
@@ -366,7 +366,7 @@ services:
           memory: ${AUTH_SERVICE_MEM_LIMIT:-256M}
           cpus: "${AUTH_SERVICE_CPU_LIMIT:-0.5}"
         reservations:
-          memory: 64M
+          memory: ${AUTH_SERVICE_MEM_RESERVATION:-64M}
     logging:
       driver: "json-file"
       options:
@@ -438,7 +438,7 @@ services:
           memory: ${JOB_SERVICE_MEM_LIMIT:-512M}
           cpus: "${JOB_SERVICE_CPU_LIMIT:-1.0}"
         reservations:
-          memory: 128M
+          memory: ${JOB_SERVICE_MEM_RESERVATION:-128M}
     logging:
       driver: "json-file"
       options:
@@ -501,7 +501,7 @@ services:
           memory: ${CONVERT_FROM_PDF_MEM_LIMIT:-1G}
           cpus: "${CONVERT_FROM_PDF_CPU_LIMIT:-2.0}"
         reservations:
-          memory: 512M
+          memory: ${CONVERT_FROM_PDF_MEM_RESERVATION:-512M}
     logging:
       driver: "json-file"
       options:
@@ -569,7 +569,7 @@ services:
           memory: ${CONVERT_TO_PDF_MEM_LIMIT:-1G}
           cpus: "${CONVERT_TO_PDF_CPU_LIMIT:-2.0}"
         reservations:
-          memory: 512M
+          memory: ${CONVERT_TO_PDF_MEM_RESERVATION:-512M}
     logging:
       driver: "json-file"
       options:
@@ -626,7 +626,7 @@ services:
           memory: ${ORGANIZE_PDF_MEM_LIMIT:-1G}
           cpus: "${ORGANIZE_PDF_CPU_LIMIT:-2.0}"
         reservations:
-          memory: 512M
+          memory: ${ORGANIZE_PDF_MEM_RESERVATION:-512M}
     logging:
       driver: "json-file"
       options:
@@ -691,7 +691,7 @@ services:
           memory: ${OPTIMIZE_PDF_MEM_LIMIT:-1G}
           cpus: "${OPTIMIZE_PDF_CPU_LIMIT:-2.0}"
         reservations:
-          memory: 512M
+          memory: ${OPTIMIZE_PDF_MEM_RESERVATION:-512M}
     logging:
       driver: "json-file"
       options:
@@ -730,7 +730,7 @@ services:
           memory: ${ANALYTICS_SERVICE_MEM_LIMIT:-256M}
           cpus: "${ANALYTICS_SERVICE_CPU_LIMIT:-0.5}"
         reservations:
-          memory: 64M
+          memory: ${ANALYTICS_SERVICE_MEM_RESERVATION:-64M}
     logging:
       driver: "json-file"
       options:
@@ -769,7 +769,7 @@ services:
           memory: ${DOCUMENT_SERVICE_MEM_LIMIT:-256M}
           cpus: "${DOCUMENT_SERVICE_CPU_LIMIT:-0.5}"
         reservations:
-          memory: 64M
+          memory: ${DOCUMENT_SERVICE_MEM_RESERVATION:-64M}
     logging:
       driver: "json-file"
       options:
@@ -809,7 +809,7 @@ services:
           memory: ${USER_SERVICE_MEM_LIMIT:-256M}
           cpus: "${USER_SERVICE_CPU_LIMIT:-0.5}"
         reservations:
-          memory: 64M
+          memory: ${USER_SERVICE_MEM_RESERVATION:-64M}
     logging:
       driver: "json-file"
       options:
@@ -843,7 +843,7 @@ services:
           memory: ${NOTIFICATION_SERVICE_MEM_LIMIT:-256M}
           cpus: "${NOTIFICATION_SERVICE_CPU_LIMIT:-0.5}"
         reservations:
-          memory: 64M
+          memory: ${NOTIFICATION_SERVICE_MEM_RESERVATION:-64M}
     logging:
       driver: "json-file"
       options:
@@ -895,7 +895,7 @@ services:
           memory: ${CLEANUP_WORKER_MEM_LIMIT:-256M}
           cpus: "${CLEANUP_WORKER_CPU_LIMIT:-0.5}"
         reservations:
-          memory: 64M
+          memory: ${CLEANUP_WORKER_MEM_RESERVATION:-64M}
     logging:
       driver: "json-file"
       options:
