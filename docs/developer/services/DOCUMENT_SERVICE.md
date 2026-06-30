@@ -83,3 +83,12 @@ Stateless → horizontally scalable behind the gateway. Reads (list/search) are 
 - Presigned-upload finalize that creates a document; jobs reference `document_id`.
 - Publish `document.*` events to NATS for indexing/notifications.
 - Shares, exports, activity log; organization scoping via user-service.
+
+## Performance
+- `GET /api/documents` runs a `COUNT(*)` (total for pagination) and the page
+  `Find` as two **independent** queries. They are dispatched concurrently
+  (`handlers/documents.go`) so the handler costs ~one DB round-trip instead of
+  two — meaningful because the database is remote. The two builders each call a
+  `buildQuery()` closure that produces a fresh, independent `*gorm.DB`, so no
+  statement is shared across goroutines; filter query-params are read into locals
+  first because `gin.Context`'s lazy form parsing is not concurrency-safe.

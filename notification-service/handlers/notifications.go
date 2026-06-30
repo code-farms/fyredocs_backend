@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -110,13 +111,29 @@ func RequireUser() gin.HandlerFunc {
 // ListNotifications returns the caller's recent notifications + unread count.
 func ListNotifications(c *gin.Context) {
 	uid, _ := userID(c)
-	var items []models.Notification
-	if err := models.DB.Where("user_id = ?", uid).Order("created_at DESC").Limit(50).Find(&items).Error; err != nil {
+
+	// The page fetch and the unread count are independent reads against a remote
+	// DB; run them concurrently to collapse two sequential round-trips into one.
+	var (
+		items   []models.Notification
+		unread  int64
+		listErr error
+		wg      sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		listErr = models.DB.Where("user_id = ?", uid).Order("created_at DESC").Limit(50).Find(&items).Error
+	}()
+	go func() {
+		defer wg.Done()
+		models.DB.Model(&models.Notification{}).Where("user_id = ? AND read_at IS NULL", uid).Count(&unread)
+	}()
+	wg.Wait()
+	if listErr != nil {
 		response.InternalError(c, "LIST_FAILED", "Could not load notifications.")
 		return
 	}
-	var unread int64
-	models.DB.Model(&models.Notification{}).Where("user_id = ? AND read_at IS NULL", uid).Count(&unread)
 
 	response.OK(c, "Notifications retrieved", gin.H{"notifications": items, "unreadCount": unread})
 }

@@ -124,10 +124,10 @@ func BusinessMetrics(c *gin.Context) {
 			"rate":         conversionRate,
 		},
 		"churn": gin.H{
-			"inactiveDays":       inactiveDays,
-			"churnedUsers":       churnedUsers,
+			"inactiveDays":        inactiveDays,
+			"churnedUsers":        churnedUsers,
 			"previousActiveUsers": previousActiveUsers,
-			"churnRate":          churnRate,
+			"churnRate":           churnRate,
 		},
 		"revenue": gin.H{
 			"mrr":  nil,

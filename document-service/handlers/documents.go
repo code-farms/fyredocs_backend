@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -71,36 +72,65 @@ func ListDocuments(c *gin.Context) {
 
 	// Trash view lists soft-deleted documents (excluded from normal queries).
 	trashed := c.Query("trashed") == "true"
-	base := models.DB.Model(&models.Document{})
-	if trashed {
-		base = models.DB.Unscoped().Model(&models.Document{})
-	}
-	q := scopeOwned(base, uid, orgID)
-	if trashed {
-		q = q.Where("documents.deleted_at IS NOT NULL")
-	}
-	if status := strings.TrimSpace(c.Query("status")); status != "" {
-		q = q.Where("documents.status = ?", status)
-	}
-	if folder := strings.TrimSpace(c.Query("folderId")); folder != "" {
-		if fid, err := uuid.Parse(folder); err == nil {
-			q = q.Where("documents.folder_id = ?", fid)
+
+	// Read filters into locals up front: the two query builders below run on
+	// separate goroutines, and gin.Context's lazy form parsing is not safe for
+	// concurrent access.
+	status := strings.TrimSpace(c.Query("status"))
+	folder := strings.TrimSpace(c.Query("folderId"))
+	tagID := strings.TrimSpace(c.Query("tagId"))
+	search := strings.TrimSpace(c.Query("q"))
+
+	// buildQuery returns a fresh, fully-filtered query. Each call builds an
+	// independent *gorm.DB statement, so the count and the page fetch can run
+	// concurrently without sharing (and racing on) one statement.
+	buildQuery := func() *gorm.DB {
+		base := models.DB.Model(&models.Document{})
+		if trashed {
+			base = models.DB.Unscoped().Model(&models.Document{})
 		}
-	}
-	if tagID := strings.TrimSpace(c.Query("tagId")); tagID != "" {
-		if tid, err := uuid.Parse(tagID); err == nil {
-			q = q.Joins("JOIN document_tags dt ON dt.document_id = documents.id").Where("dt.tag_id = ?", tid)
+		q := scopeOwned(base, uid, orgID)
+		if trashed {
+			q = q.Where("documents.deleted_at IS NOT NULL")
 		}
-	}
-	if search := strings.TrimSpace(c.Query("q")); search != "" {
-		q = q.Where("documents.search_vector @@ websearch_to_tsquery('english', ?)", search)
+		if status != "" {
+			q = q.Where("documents.status = ?", status)
+		}
+		if folder != "" {
+			if fid, err := uuid.Parse(folder); err == nil {
+				q = q.Where("documents.folder_id = ?", fid)
+			}
+		}
+		if tagID != "" {
+			if tid, err := uuid.Parse(tagID); err == nil {
+				q = q.Joins("JOIN document_tags dt ON dt.document_id = documents.id").Where("dt.tag_id = ?", tid)
+			}
+		}
+		if search != "" {
+			q = q.Where("documents.search_vector @@ websearch_to_tsquery('english', ?)", search)
+		}
+		return q
 	}
 
-	var total int64
-	q.Count(&total)
-
-	var docs []models.Document
-	if err := q.Preload("Tags").Order("documents.created_at DESC").Limit(limit).Offset(offset).Find(&docs).Error; err != nil {
+	// The total count and the page fetch are independent reads against a remote
+	// DB; run them concurrently to collapse two sequential round-trips into one.
+	var (
+		total   int64
+		docs    []models.Document
+		listErr error
+		wg      sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		buildQuery().Count(&total)
+	}()
+	go func() {
+		defer wg.Done()
+		listErr = buildQuery().Preload("Tags").Order("documents.created_at DESC").Limit(limit).Offset(offset).Find(&docs).Error
+	}()
+	wg.Wait()
+	if listErr != nil {
 		response.InternalError(c, "LIST_FAILED", "Could not load documents.")
 		return
 	}

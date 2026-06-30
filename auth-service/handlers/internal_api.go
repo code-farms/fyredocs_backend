@@ -31,9 +31,9 @@ func GetUserPlan(c *gin.Context) {
 		return
 	}
 
-	var plan models.SubscriptionPlan
-	if err := models.DB.Where("name = ?", user.PlanName).First(&plan).Error; err != nil {
-		logger.LogWarn(c.Request.Context(), "db.subscription_plans.lookup_fallback", err,
+	plan, ok := lookupPlan(user.PlanName)
+	if !ok {
+		logger.LogWarn(c.Request.Context(), "db.subscription_plans.lookup_fallback", nil,
 			"userId", user.ID, "planName", user.PlanName)
 		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
 	}

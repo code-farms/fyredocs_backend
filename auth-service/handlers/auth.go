@@ -194,8 +194,8 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 		return
 	}
 
-	var plan models.SubscriptionPlan
-	if err := models.DB.Where("name = ?", user.PlanName).First(&plan).Error; err != nil {
+	plan, ok := lookupPlan(user.PlanName)
+	if !ok {
 		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
 	}
 
@@ -236,8 +236,8 @@ func (ae *AuthEndpoints) Me(c *gin.Context) {
 		return
 	}
 
-	var plan models.SubscriptionPlan
-	if err := models.DB.Where("name = ?", user.PlanName).First(&plan).Error; err != nil {
+	plan, ok := lookupPlan(user.PlanName)
+	if !ok {
 		plan = models.SubscriptionPlan{Name: user.PlanName}
 	}
 
@@ -252,8 +252,8 @@ func (ae *AuthEndpoints) Profile(c *gin.Context) {
 		return
 	}
 
-	var plan models.SubscriptionPlan
-	if err := models.DB.Where("name = ?", user.PlanName).First(&plan).Error; err != nil {
+	plan, ok := lookupPlan(user.PlanName)
+	if !ok {
 		plan = models.SubscriptionPlan{Name: user.PlanName}
 	}
 
@@ -287,8 +287,8 @@ func (ae *AuthEndpoints) Logout(c *gin.Context) {
 }
 
 func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
-	var plan models.SubscriptionPlan
-	if err := models.DB.Where("name = ?", user.PlanName).First(&plan).Error; err != nil {
+	plan, ok := lookupPlan(user.PlanName)
+	if !ok {
 		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
 	}
 
@@ -586,9 +586,9 @@ func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 const planCacheKeyPrefix = "user:plan:"
 
 type planCacheEntry struct {
-	Plan       string `json:"plan"`
-	MaxFileMB  int    `json:"max_file_mb"`
-	MaxFiles   int    `json:"max_files"`
+	Plan      string `json:"plan"`
+	MaxFileMB int    `json:"max_file_mb"`
+	MaxFiles  int    `json:"max_files"`
 }
 
 func (ae *AuthEndpoints) cachePlanInfo(ctx context.Context, userID string, plan models.SubscriptionPlan, ttl time.Duration) {

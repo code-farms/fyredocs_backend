@@ -163,16 +163,16 @@ func getSelfServiceInfo() gin.H {
 	}
 
 	return gin.H{
-		"status":    "healthy",
-		"uptime":    uptime,
-		"goVersion": runtime.Version(),
+		"status":     "healthy",
+		"uptime":     uptime,
+		"goVersion":  runtime.Version(),
 		"goroutines": runtime.NumGoroutine(),
 		"memory": gin.H{
-			"heapAllocMB":   roundMB(memStats.HeapAlloc),
-			"heapInuseMB":   roundMB(memStats.HeapInuse),
-			"stackInuseMB":  roundMB(memStats.StackInuse),
-			"sysMB":         roundMB(memStats.Sys),
-			"numGC":         memStats.NumGC,
+			"heapAllocMB":    roundMB(memStats.HeapAlloc),
+			"heapInuseMB":    roundMB(memStats.HeapInuse),
+			"stackInuseMB":   roundMB(memStats.StackInuse),
+			"sysMB":          roundMB(memStats.Sys),
+			"numGC":          memStats.NumGC,
 			"gcPauseTotalMs": float64(memStats.PauseTotalNs) / 1e6,
 		},
 	}

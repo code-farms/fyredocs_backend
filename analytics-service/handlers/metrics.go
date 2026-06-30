@@ -175,10 +175,10 @@ func PlanDistribution(c *gin.Context) {
 	since := time.Now().UTC().AddDate(0, 0, -days)
 
 	type planRow struct {
-		PlanName   string `json:"planName"`
-		Users      int64  `json:"users"`
-		Jobs       int64  `json:"jobs"`
-		LimitHits  int64  `json:"limitHits"`
+		PlanName  string `json:"planName"`
+		Users     int64  `json:"users"`
+		Jobs      int64  `json:"jobs"`
+		LimitHits int64  `json:"limitHits"`
 	}
 
 	var rows []planRow

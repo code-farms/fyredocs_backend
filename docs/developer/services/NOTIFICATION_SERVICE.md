@@ -45,3 +45,10 @@ Health: `GET /healthz`, `GET /readyz`. All `/api/notifications/*` require `X-Use
 - Email + webhook channels (a dedicated `NOTIFY` stream consumed for fan-out).
 - More event types: export ready, share received, plan-limit, security events.
 - Real-time push to the SPA via the gateway SSE channel (instead of polling).
+
+## Performance
+- `GET /api/notifications` returns the recent items and the unread count. These
+  are two **independent** queries, dispatched concurrently
+  (`handlers/notifications.go`), so the handler costs ~one DB round-trip instead
+  of two — meaningful because the database is remote. Each goroutine writes its
+  own result variable and builds a fresh statement off `models.DB`.

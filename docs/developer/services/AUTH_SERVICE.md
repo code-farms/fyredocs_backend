@@ -846,6 +846,24 @@ All 5xx response sites in `Signup`, `Login`, `Refresh`, `respondWithTokens`, `Ch
 
 To debug a failed signup/login, take `meta.requestId` from the response and grep auth-service stdout — the matching log line names the failing `op` (e.g. `db.users.create`, `bcrypt.generate_password_hash`, `issue_access_token.login`).
 
+## Performance
+
+- **Subscription-plan lookup is cached in-process** (`handlers/plancache.go`,
+  `lookupPlan`). Plans are a tiny, rarely-changing set but were previously read
+  by name from the database on every login, refresh, `/me`, `/profile`, and the
+  internal `GetUserPlan` call. With a remote database each of those reads is a
+  full network round-trip, so the lookup is cached by plan name for
+  `PLAN_CACHE_TTL` (default 5m). This removes one round-trip from each of those
+  endpoints — e.g. `/auth/me` dropped from ~480 ms to ~280 ms (one round-trip),
+  and login lost its plan round-trip.
+- Trade-off: a change to a plan's *definition* (e.g. raising its max file size)
+  takes up to `PLAN_CACHE_TTL` to propagate. A user *switching* plans is
+  unaffected — that changes their `user.PlanName`, which keys a different cache
+  entry. Set `PLAN_CACHE_TTL=0` to disable caching.
+- Login latency is otherwise bound by bcrypt (cost-10 password verification,
+  intentional) plus the mandatory session-row insert; both are inherent and not
+  cached.
+
 ## Related Documentation
 
 - [API Gateway](./API_GATEWAY.md) — Request routing, JWT verification, plan resolution

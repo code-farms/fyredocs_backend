@@ -209,7 +209,7 @@ func TestSetRefreshTokenCookie(t *testing.T) {
 				t.Error("expected HttpOnly=true")
 			}
 			if cookie.MaxAge != int((7 * 24 * time.Hour).Seconds()) {
-				t.Errorf("expected MaxAge %d, got %d", int((7*24*time.Hour).Seconds()), cookie.MaxAge)
+				t.Errorf("expected MaxAge %d, got %d", int((7 * 24 * time.Hour).Seconds()), cookie.MaxAge)
 			}
 		}
 	}

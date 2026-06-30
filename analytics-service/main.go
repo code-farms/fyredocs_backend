@@ -30,9 +30,14 @@ func main() {
 	shutdownTracer := telemetry.Init("analytics-service")
 	defer shutdownTracer(context.Background())
 
+	// The dashboard handler fans out up to ~10 independent queries concurrently
+	// (the DB is remote, so this collapses many sequential round-trips into one).
+	// Keep enough idle connections warm to serve a full fan-out without opening
+	// fresh connections — a new connection to a remote Postgres pays a TLS
+	// handshake round-trip that would otherwise erode the parallelism gain.
 	models.Connect(models.PoolConfig{
-		MaxOpenConns: 10,
-		MaxIdleConns: 5,
+		MaxOpenConns: 20,
+		MaxIdleConns: 15,
 	})
 	models.Migrate()
 
