@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -10,8 +13,25 @@ import (
 	"github.com/google/uuid"
 
 	"analytics-service/internal/models"
+	"fyredocs/shared/config"
+	"fyredocs/shared/redisstore"
 	"fyredocs/shared/response"
 )
+
+// dashboardCacheTTL bounds how stale a cached dashboard may be. 0 disables the
+// cache entirely (the handler then always computes from the DB).
+var dashboardCacheTTL = config.GetEnvDuration("DASHBOARD_CACHE_TTL", 30*time.Second)
+
+// dashboardCacheKey namespaces the cached payload by audience + the `days`
+// window. The admin dashboard is system-wide (identical for every admin), so it
+// is not keyed by user; the user dashboard is scoped to its own user_id. The
+// v1 prefix lets a payload-shape change invalidate every entry at once.
+func dashboardCacheKey(role, userID string, days int) string {
+	if role == "admin" || role == "super-admin" {
+		return fmt.Sprintf("cache:dashboard:v1:admin:d%d", days)
+	}
+	return fmt.Sprintf("cache:dashboard:v1:user:%s:d%d", userID, days)
+}
 
 // Dashboard is the unified, role-aware landing endpoint. Every authenticated
 // user hits the same path; the payload is filtered server-side by role:
@@ -36,17 +56,44 @@ func Dashboard(c *gin.Context) {
 		return
 	}
 
+	days := queryInt(c, "days", 30)
+	key := dashboardCacheKey(role, userID, days)
+	ctx := c.Request.Context()
+
+	// Cache hit: serve the stored payload without touching the DB. Any Redis
+	// error falls through to the direct compute path — the cache must never
+	// turn a working endpoint into a 5xx.
+	if dashboardCacheTTL > 0 && redisstore.Client != nil {
+		if raw, err := redisstore.Client.Get(ctx, key).Bytes(); err == nil && len(raw) > 0 {
+			response.OK(c, "Dashboard retrieved", json.RawMessage(raw))
+			return
+		}
+	}
+
+	var data gin.H
 	if role == "admin" || role == "super-admin" {
-		adminDashboard(c)
+		data = adminDashboard(c, days)
+	} else {
+		data = userDashboard(c, userID, days)
+	}
+	if data == nil {
+		// The compute function already wrote an error response.
 		return
 	}
-	userDashboard(c, userID)
+
+	if dashboardCacheTTL > 0 && redisstore.Client != nil {
+		if b, err := json.Marshal(data); err == nil {
+			if err := redisstore.Client.Set(ctx, key, b, dashboardCacheTTL).Err(); err != nil {
+				slog.Warn("dashboard cache write failed", "error", err, "key", key)
+			}
+		}
+	}
+	response.OK(c, "Dashboard retrieved", data)
 }
 
 // adminDashboard returns a curated system-wide summary, reusing the query
 // shapes from Overview/ToolUsage/PlanDistribution.
-func adminDashboard(c *gin.Context) {
-	days := queryInt(c, "days", 30)
+func adminDashboard(c *gin.Context, days int) gin.H {
 	now := time.Now().UTC()
 	since := now.AddDate(0, 0, -days)
 	today := now.Truncate(24 * time.Hour)
@@ -123,7 +170,7 @@ func adminDashboard(c *gin.Context) {
 		},
 	)
 
-	response.OK(c, "Dashboard retrieved", gin.H{
+	return gin.H{
 		"role": "admin",
 		"period": gin.H{
 			"days": days,
@@ -143,7 +190,7 @@ func adminDashboard(c *gin.Context) {
 		"totalUsers":       totalUsers,
 		"toolUsage":        byTool,
 		"planDistribution": byPlan,
-	})
+	}
 }
 
 // parallelQueries runs independent, side-effect-free DB queries concurrently and
@@ -164,15 +211,15 @@ func parallelQueries(fns ...func()) {
 	wg.Wait()
 }
 
-// userDashboard returns personal KPIs scoped to one user_id.
-func userDashboard(c *gin.Context, userIDStr string) {
+// userDashboard returns the personal-KPI payload scoped to one user_id, or nil
+// after writing its own error response (the caller then stops).
+func userDashboard(c *gin.Context, userIDStr string, days int) gin.H {
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
 		response.Err(c, http.StatusUnauthorized, "UNAUTHORIZED", "Please log in to view your dashboard.")
-		return
+		return nil
 	}
 
-	days := queryInt(c, "days", 30)
 	now := time.Now().UTC()
 	since := now.AddDate(0, 0, -days)
 
@@ -255,7 +302,7 @@ func userDashboard(c *gin.Context, userIDStr string) {
 		},
 	)
 
-	response.OK(c, "Dashboard retrieved", gin.H{
+	return gin.H{
 		"role": "user",
 		"period": gin.H{
 			"days": days,
@@ -272,5 +319,5 @@ func userDashboard(c *gin.Context, userIDStr string) {
 		"recentActivity": recentActivity,
 		"plan":           plan,
 		"memberSince":    memberSince,
-	})
+	}
 }

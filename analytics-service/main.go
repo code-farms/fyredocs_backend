@@ -15,6 +15,7 @@ import (
 	"fyredocs/shared/logger"
 	"fyredocs/shared/metrics"
 	"fyredocs/shared/natsconn"
+	"fyredocs/shared/redisstore"
 	"fyredocs/shared/telemetry"
 
 	"analytics-service/handlers"
@@ -40,6 +41,9 @@ func main() {
 		MaxIdleConns: 15,
 	})
 	models.Migrate()
+
+	// Redis backs the short-TTL /api/dashboard response cache.
+	redisstore.Connect()
 
 	if err := natsconn.Connect(); err != nil {
 		slog.Error("NATS connection failed", "error", err)
@@ -102,4 +106,3 @@ func main() {
 	subs.Stop()
 	slog.Info("analytics-service exited")
 }
-

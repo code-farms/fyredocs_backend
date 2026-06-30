@@ -127,6 +127,10 @@ Behaviour by caller:
 | API_GATEWAY_METRICS_URL | http://api-gateway:8080/metrics | API gateway Prometheus metrics URL |
 | PLAN_PRICES | anonymous=0,free=0,pro=12 | Comma-separated `plan=monthlyPrice` pairs used to compute **estimated** revenue (MRR/ARR). No billing integration. |
 | PLAN_CURRENCY | USD | Currency code reported with estimated revenue figures. |
+| REDIS_ADDR | redis:6379 | Redis host:port (backs the dashboard response cache) |
+| REDIS_PASSWORD | — | Redis password |
+| REDIS_DB | 0 | Redis logical DB index |
+| DASHBOARD_CACHE_TTL | 30s | TTL for the `/api/dashboard` response cache. `0` disables caching. |
 | OTEL_EXPORTER_OTLP_ENDPOINT | http://localhost:4318 | OpenTelemetry collector |
 
 ## Authentication
@@ -154,3 +158,13 @@ UPDATE users SET role = 'super-admin' WHERE email = 'your@email.com';
 - The DB pool (`main.go`) is sized to keep a full dashboard fan-out warm
   (MaxOpenConns 20 / MaxIdleConns 15) so concurrent queries don't pay a fresh
   connection's TLS handshake to a remote Postgres.
+- **Dashboard response cache (Redis):** `GET /api/dashboard` responses are cached
+  in Redis with a short TTL (`DASHBOARD_CACHE_TTL`, default 30s). Keys are
+  `cache:dashboard:v1:user:<userID>:d<days>` (per user) and
+  `cache:dashboard:v1:admin:d<days>` (system-wide). A cache hit serves the stored
+  JSON without any DB access (~2–3 ms vs ~20–47 ms uncached, scaling with the
+  user's event volume). Invalidation is TTL-only — no write-path coupling — so a
+  dashboard may be up to TTL stale; this is acceptable for KPI tiles. Any Redis
+  error degrades gracefully to a direct DB compute (the endpoint never 5xxes on a
+  cache fault). It is the **only** API response cached; other reads were left
+  direct because the co-located DB already makes them single-digit-ms.

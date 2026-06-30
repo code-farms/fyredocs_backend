@@ -752,6 +752,10 @@ services:
       PORT: "8087"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       NATS_URL: nats://nats:4222
+      # Redis backs the short-TTL /api/dashboard response cache.
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_DB: "0"
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
       # Observability
@@ -777,6 +781,8 @@ services:
       db:
         condition: service_healthy
       nats:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - fyredocs_net
