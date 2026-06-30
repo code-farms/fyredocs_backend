@@ -69,7 +69,7 @@ Client → API Gateway (:8080)
 
 - **Language**: Go 1.25
 - **Web Framework**: Gin (services) + net/http (api-gateway)
-- **Database**: PostgreSQL 15 (per-service schema, UUIDv7 IDs, pooled DSN)
+- **Database**: PostgreSQL 18 (per-service schema, UUIDv7 IDs, pooled DSN)
 - **Cache / Sessions**: Redis 7 (token denylist, upload state, rate limiting, plan cache, cleanup lock)
 - **Object Storage**: MinIO (S3-compatible) — buckets `fyredocs-uploads` / `fyredocs-outputs`, presigned URLs proxied same-origin through the gateway
 - **Message Bus**: NATS JetStream — streams: `JOBS_DISPATCH`, `JOBS_EVENTS`, `JOBS_DLQ`, `ANALYTICS`

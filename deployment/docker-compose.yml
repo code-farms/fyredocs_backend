@@ -3,35 +3,60 @@ name: fyredocs
 services:
   # ==================== INFRASTRUCTURE ====================
 
-  # --- PostgreSQL commented out: using Neon cloud database ---
-  # db:
-  #   image: postgres:15-alpine
-  #   restart: always
-  #   environment:
-  #     POSTGRES_DB: ${POSTGRES_DB:-fyredocs}
-  #     POSTGRES_USER: ${POSTGRES_USER}
-  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-fyredocs}"]
-  #     interval: 5s
-  #     timeout: 5s
-  #     retries: 5
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         memory: 512M
-  #         cpus: '1.0'
-  #       reservations:
-  #         memory: 128M
-  #   logging:
-  #     driver: "json-file"
-  #     options:
-  #       max-size: "10m"
-  #       max-file: "3"
-  #   networks:
-  #     - fyredocs_net
+  # --- Self-managed, co-located PostgreSQL ---
+  # Runs on the same Docker network as the services, so every query is a
+  # localhost hop (<1ms) instead of a cross-region round-trip to a cloud DB.
+  # Data persists in the named volume `postgres_data` across restarts, rebuilds,
+  # and `down`/`up`. It is ONLY lost by `down -v` / `docker volume rm` /
+  # `docker volume prune` — never use those on this stack. Off-host durability
+  # is the daily pg_dump backup, not the volume.
+  db:
+    image: postgres:18-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fyredocs}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    # Tuned for this stack: the sum of per-service connection pools is ~155, so
+    # max_connections is raised well above Postgres's default of 100. shared_buffers
+    # / work_mem are sized conservatively because Postgres shares the VPS with the
+    # app and the heavy LibreOffice/OCR/Ghostscript conversions — raise them (and
+    # the memory limit) if the VPS has spare RAM, or add PgBouncer to multiplex
+    # connections and keep max_connections low.
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - work_mem=8MB
+    # NOTE: postgres:18+ stores data in a major-version subdirectory and expects
+    # the volume mounted at /var/lib/postgresql (NOT /var/lib/postgresql/data as
+    # in <=17). Mounting at the old path makes 18 refuse to start.
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-fyredocs}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.5'
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - fyredocs_net
 
   redis:
     image: redis:7-alpine
@@ -373,6 +398,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
       nats:
@@ -445,6 +472,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
       nats:
@@ -508,6 +537,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      db:
+        condition: service_healthy
       nats:
         condition: service_healthy
       minio-init:
@@ -576,6 +607,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      db:
+        condition: service_healthy
       nats:
         condition: service_healthy
       minio-init:
@@ -633,6 +666,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      db:
+        condition: service_healthy
       nats:
         condition: service_healthy
       minio-init:
@@ -698,6 +733,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      db:
+        condition: service_healthy
       nats:
         condition: service_healthy
       minio-init:
@@ -737,6 +774,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      db:
+        condition: service_healthy
       nats:
         condition: service_healthy
     networks:
@@ -776,6 +815,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      db:
+        condition: service_healthy
       nats:
         condition: service_healthy
       user-service:
@@ -815,6 +856,9 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - fyredocs_net
 
@@ -850,6 +894,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      db:
+        condition: service_healthy
       nats:
         condition: service_healthy
     networks:
@@ -902,6 +948,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
       minio-init:
@@ -915,7 +963,7 @@ networks:
     driver: bridge
 
 volumes:
-  # postgres_data:  # commented out: using Neon cloud database
+  postgres_data:
   redis_data:
   nats_data:
   minio_data:

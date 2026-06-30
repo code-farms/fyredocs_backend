@@ -88,11 +88,9 @@ The ~240 ms floor and the 2–5 s cold-starts are *infrastructural* — no amoun
 application code beats the speed of light to another continent. In priority
 order:
 
-1. **Co-locate the app and the database.** Run the services in the same region as
-   the database (or move the database to the services' region). This collapses
-   the ~240 ms round-trip to ~1–5 ms and would make every endpoint above
-   roughly 50–200× faster on the DB portion — a far larger win than any code
-   change. This is the single highest-impact action.
+1. **Co-locate the app and the database.** ✅ **IMPLEMENTED** — see
+   "Co-located Postgres (implemented)" below. Running Postgres as a container on
+   the same Docker network collapsed the ~240 ms round-trip to <1 ms.
 2. **Disable Neon autosuspend** (or set a generous "suspend after" / use a
    non-scale-to-zero compute) to eliminate the 2–5 s first-request cold-starts
    that intermittent users feel most.
@@ -115,3 +113,57 @@ order:
   `gin.Context` form parsing is not concurrency-safe.
 - **In-process TTL cache** (`lookupPlan`, auth-service) — for tiny,
   rarely-changing reference tables read on hot paths against a remote DB.
+
+## Co-located Postgres (implemented)
+
+The database was moved off Neon to a **self-managed, co-located Postgres
+container** (`db` service in `deployment/docker-compose.yml`) on the same Docker
+network as the services. Each query is now a localhost hop instead of a
+cross-continent round-trip.
+
+**Measured (isolated, warm) — Neon vs co-located:**
+
+| Endpoint | Neon (orig) | After code fixes | **Co-located DB** |
+|---|---|---|---|
+| `GET /api/dashboard` | ~2000 ms | ~520 ms | **~4 ms** |
+| `GET /auth/me` | ~480 ms | ~280 ms | **~4 ms** |
+| `GET /api/notifications` | ~490 ms | ~295 ms | **~2 ms** |
+| `GET /api/documents` | ~490 ms | ~285 ms | **~2 ms** |
+| `GET /api/jobs/history` | ~245 ms | ~245 ms | **~3 ms** |
+| `POST /auth/login` | ~3200 ms | ~2300 ms | **~110 ms** (now bcrypt-bound) |
+
+Reads dropped ~100×; login is now dominated by bcrypt as predicted. The
+application-level parallelization/caching still helps (fewer round-trips), but
+the round-trip itself is now sub-millisecond, so absolute latency is tiny.
+
+**Key implementation details:**
+- `db`: `postgres:18-alpine`, named volume `postgres_data` (data persists across
+  restarts/rebuilds/redeploys; `deploy.sh` uses `down` **without** `-v`).
+  Verified: `docker compose restart db` preserved all rows.
+- **postgres:18 mount-path change:** the volume is mounted at
+  `/var/lib/postgresql` (NOT `/var/lib/postgresql/data` as in ≤17). PG18 stores
+  data in a major-version subdirectory; mounting at the old path makes it refuse
+  to start ("unused mount/volume"). This bit us during the upgrade.
+- **Data migrated from Neon** (not a fresh start): `pg_dump` of the Neon DB
+  (PG17, ~9.7 MB, `--no-owner --no-privileges`) restored into the fresh PG18
+  `fyredocs` database. All 14 populated tables matched Neon exactly (19 users,
+  13 documents, 46 jobs, 426 analytics events, …) and are writable; service
+  `AutoMigrate` ran clean against the restored schema (no-op). The Neon dump
+  procedure: `pg_dump "<neon-url>" --no-owner --no-privileges | psql "<local-url>"`
+  from a `postgres:18-alpine` container joined to `fyredocs_net`.
+- Tuned flags: `max_connections=200` (sum of per-service pools ~155),
+  `shared_buffers=256MB`, `work_mem=8MB`. Under k6 `mixed-realistic` load, peak
+  was **19/200** connections — ample headroom; PgBouncer is the scale path if
+  pools grow.
+- All 11 DB-using services `depends_on: db {condition: service_healthy}`;
+  schema + `subscription_plans` seed are created automatically on first boot by
+  each service's `Migrate()`/`seedPlans()`.
+- **DSN fix:** `shared/config/postgres_dsn.go` no longer appends libpq
+  keepalive params (`keepalives*`). The pgx driver forwards them to the server,
+  and a standard Postgres rejects them (`FATAL: unrecognized configuration
+  parameter "keepalives_idle"`); Neon's pooler had silently ignored them.
+- The previous Neon `DATABASE_URL` is retained (commented) in `deployment/.env`
+  for rollback.
+
+**Remaining self-managed responsibilities:** single VPS = SPOF (no managed
+HA/PITR); add a daily `pg_dump` with an off-host copy; monitor disk/RAM.

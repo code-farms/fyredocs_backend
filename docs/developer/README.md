@@ -50,7 +50,7 @@ Fyredocs uses a true microservices architecture. Each service is independently d
 ### Prerequisites
 - Go 1.25+
 - Docker & Docker Compose
-- PostgreSQL 15
+- PostgreSQL 18
 - Redis 7
 - NATS Server with JetStream
 - LibreOffice, Ghostscript, Poppler, Tesseract OCR (for document processing services)

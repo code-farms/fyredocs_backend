@@ -24,10 +24,13 @@ func TestApplyPostgresDSNDefaults_URIInjectsAllDefaults(t *testing.T) {
 		"sslmode":                             "require",
 		"statement_timeout":                   "15000",
 		"idle_in_transaction_session_timeout": "30000",
-		"keepalives":                          "1",
-		"keepalives_idle":                     "30",
-		"keepalives_interval":                 "10",
-		"keepalives_count":                    "3",
+	}
+	// libpq keepalive params must NOT be injected — pgx forwards them to the
+	// server, which rejects them as unrecognized configuration parameters.
+	for _, k := range []string{"keepalives", "keepalives_idle", "keepalives_interval", "keepalives_count"} {
+		if v := q.Get(k); v != "" {
+			t.Errorf("param %q should not be injected, got %q", k, v)
+		}
 	}
 	for k, v := range wants {
 		if got := q.Get(k); got != v {
@@ -37,7 +40,9 @@ func TestApplyPostgresDSNDefaults_URIInjectsAllDefaults(t *testing.T) {
 }
 
 func TestApplyPostgresDSNDefaults_PreservesUserSetValues(t *testing.T) {
-	// User sets a longer statement_timeout. The helper must not clobber it.
+	// User sets a longer statement_timeout and an explicit keepalive. The helper
+	// must not clobber existing values (it only fills in missing defaults), and
+	// it must not strip params the user chose to set themselves.
 	dsn := "postgresql://user:pw@host/db?sslmode=require&statement_timeout=60000&keepalives_idle=120"
 	got := ApplyPostgresDSNDefaults(dsn)
 	q := parseURIQuery(t, got)
@@ -45,10 +50,7 @@ func TestApplyPostgresDSNDefaults_PreservesUserSetValues(t *testing.T) {
 		t.Errorf("statement_timeout was overwritten: got %q, want 60000", v)
 	}
 	if v := q.Get("keepalives_idle"); v != "120" {
-		t.Errorf("keepalives_idle was overwritten: got %q, want 120", v)
-	}
-	if v := q.Get("keepalives_interval"); v != "10" {
-		t.Errorf("keepalives_interval default missing: got %q", v)
+		t.Errorf("user-set keepalives_idle was dropped/overwritten: got %q, want 120", v)
 	}
 }
 
@@ -68,12 +70,13 @@ func TestApplyPostgresDSNDefaults_KeyValueDSN(t *testing.T) {
 	for _, want := range []string{
 		"statement_timeout=15000",
 		"idle_in_transaction_session_timeout=30000",
-		"keepalives=1",
-		"keepalives_idle=30",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("kv DSN missing %q: got %q", want, got)
 		}
+	}
+	if strings.Contains(got, "keepalives") {
+		t.Errorf("kv DSN must not inject libpq keepalive params: got %q", got)
 	}
 	for _, preserve := range []string{"host=localhost", "user=test", "dbname=app", "sslmode=disable"} {
 		if !strings.Contains(got, preserve) {
