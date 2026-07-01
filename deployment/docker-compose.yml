@@ -983,9 +983,14 @@ services:
       BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET}
       BACKUP_PREFIX: ${BACKUP_PREFIX:-postgres/}
       BACKUP_INTERVAL: ${BACKUP_INTERVAL:-3600}
-      BACKUP_RETAIN: ${BACKUP_RETAIN:-48}
+      BACKUP_RETAIN: ${BACKUP_RETAIN:-10}
       # true = back up only registered users' outputs (exclude guest jobs)
       BACKUP_FILES_REGISTERED_ONLY: ${BACKUP_FILES_REGISTERED_ONLY:-false}
+      # Empty-source protection: skip (don't overwrite/prune) when source looks
+      # wiped, and alert. See backup.sh.
+      BACKUP_MIN_USERS: ${BACKUP_MIN_USERS:-1}
+      BACKUP_MAX_DELETE: ${BACKUP_MAX_DELETE:-}
+      BACKUP_ALERT_WEBHOOK_URL: ${BACKUP_ALERT_WEBHOOK_URL:-}
       # rclone remote "src" = local MinIO, for mirroring file buckets offsite.
       # Reuses the app's scoped MinIO creds (they can list+read the buckets).
       RCLONE_CONFIG_SRC_TYPE: s3

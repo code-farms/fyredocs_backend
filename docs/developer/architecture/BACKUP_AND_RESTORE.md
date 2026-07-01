@@ -12,7 +12,7 @@ The **`db-backup`** sidecar (`deployment/backup/`) runs a loop that, every
 1. `pg_dump` the local Postgres → gzip → `/tmp/db-<UTC-timestamp>.sql.gz`
 2. uploads it to an **external** S3-compatible bucket via **rclone**
    (remote `dest`, prefix `BACKUP_PREFIX`, default `postgres/`)
-3. prunes so only the newest `BACKUP_RETAIN` dumps remain (default **48**)
+3. prunes so only the newest `BACKUP_RETAIN` dumps remain (default **10**)
 
 Backup failures are logged and retried next cycle (the loop never exits). The
 container's `HEALTHCHECK` goes **unhealthy** if no backup has succeeded within
@@ -23,7 +23,7 @@ container's `HEALTHCHECK` goes **unhealthy** if no backup has succeeded within
 > every run, so each file is a complete standalone copy — the 2:00 dump contains
 > *all* data as of 2:00, not just 1:00–2:00's changes. To recover you restore
 > **one** file and have the whole database; there is no hourly stitching. Keeping
-> the newest `BACKUP_RETAIN` (48) is therefore a ~2-day rollback history of full
+> the newest `BACKUP_RETAIN` (10) is therefore a ~10-hour rollback history of full
 > copies, not accumulating deltas — total storage is bounded (see "Cost" below),
 > it does not grow forever. This section covers the `fyredocs` **database**;
 > MinIO file bytes are mirrored separately — see "MinIO file backup" below.
@@ -42,7 +42,10 @@ container's `HEALTHCHECK` goes **unhealthy** if no backup has succeeded within
 | `BACKUP_S3_REGION` | region (`auto` for R2) |
 | `BACKUP_PREFIX` | key prefix (default `postgres/`) |
 | `BACKUP_INTERVAL` | seconds between backups (default `3600`) |
-| `BACKUP_RETAIN` | how many recent dumps to keep (default `48`) |
+| `BACKUP_RETAIN` | how many recent DB dumps to keep (default `10`) |
+| `BACKUP_MIN_USERS` | skip the DB backup if `users` rows < this (default `1`; `0` disables) — empty-source protection |
+| `BACKUP_MAX_DELETE` | optional: abort a file sync that would delete more than N objects |
+| `BACKUP_ALERT_WEBHOOK_URL` | optional: POST an alert here (Slack/Discord/healthchecks) when a guard trips |
 
 **The target MUST be external.** The on-server MinIO is *not* valid disaster
 recovery — it dies with the server. Recommended free target: **Cloudflare R2**
@@ -123,6 +126,35 @@ docker exec fyredocs-db-backup-1 \
   rclone copy dest:$BACKUP_S3_BUCKET/minio/fyredocs-outputs/ src:fyredocs-outputs/
 ```
 
+## Empty-source protection
+
+If the server dies and comes back with a **wiped/empty** DB or MinIO (lost
+volume, fresh schema), a naive backup would destroy the good offsite copy — an
+`rclone sync` mirrors the emptiness (wiping the file backup), and an empty
+`pg_dump` would enter retention and eventually prune the good dumps. Guards
+prevent this:
+
+- **DB**: each cycle the sidecar checks `SELECT count(*) FROM users`. If it's
+  below `BACKUP_MIN_USERS` (default 1) — or the query fails — it **skips the DB
+  backup entirely** (no dump, no upload, no prune) and alerts. So an empty DB
+  never creates a snapshot or prunes a good one; the newest retained snapshot is
+  always real data. (`users` is the signal — a fresh DB re-seeds
+  `subscription_plans` but never `users`.)
+- **Files**: before each `rclone sync`, if the source bucket is **empty but the
+  backup still holds objects**, it **skips the sync** (the mirror is preserved)
+  and alerts. Optional `BACKUP_MAX_DELETE` additionally aborts a sync that would
+  delete more than N objects.
+- **Auto-resume**: skipped cycles keep retrying; normal backups resume
+  automatically once real data returns. No manual restart needed.
+- **Alerting**: each trip logs an `ALERT:` line and, if `BACKUP_ALERT_WEBHOOK_URL`
+  is set, POSTs a message (Slack/Discord/healthchecks-style). The container also
+  goes **unhealthy** after it stops succeeding (slower backstop).
+
+> **On a real disaster, RESTORE — don't wait.** The guards protect the backup
+> from being clobbered, buying you time. Recover the DB/files from the newest
+> good snapshot (see Restore above) rather than letting the app keep running on
+> empty data.
+
 ## Cost & the R2 free tier
 
 Cloudflare R2's "10 GB / month free" is **10 GB-month** — a *standing capacity*
@@ -136,7 +168,7 @@ bounds total storage**:
 
 ```
 total stored ≈ BACKUP_RETAIN × (one full compressed dump)
-             ≈ 48 × ~47 KB ≈ ~2.3 MB today   (≈0.02% of the free 10 GB)
+             ≈ 10 × ~47 KB ≈ ~0.5 MB today   (≈0.005% of the free 10 GB)
 ```
 
 Operations are tiny too — a few writes/lists per hour ≈ ~2,200 Class A ops/month

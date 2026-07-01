@@ -20,8 +20,26 @@ BACKUP_FILES_PREFIX="${BACKUP_FILES_PREFIX:-minio/}"
 # When true, only registered (signed-in) users' outputs are backed up; guest
 # jobs' objects (jobs/<id>/**, where processing_jobs.user_id IS NULL) are excluded.
 BACKUP_FILES_REGISTERED_ONLY="${BACKUP_FILES_REGISTERED_ONLY:-false}"
+# Empty-source protection: never overwrite/prune a good backup with empty data.
+# Skip the DB backup if the users table has fewer than BACKUP_MIN_USERS rows
+# (server came back with a wiped/fresh DB). Optional BACKUP_MAX_DELETE bounds how
+# many objects a single file sync may delete. BACKUP_ALERT_WEBHOOK_URL (if set)
+# receives a POST when a guard trips.
+BACKUP_MIN_USERS="${BACKUP_MIN_USERS:-1}"
+BACKUP_MAX_DELETE="${BACKUP_MAX_DELETE:-}"
+BACKUP_ALERT_WEBHOOK_URL="${BACKUP_ALERT_WEBHOOK_URL:-}"
 
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [db-backup] $*"; }
+
+# alert logs an ALERT line and, when a webhook is configured, POSTs a small JSON
+# message (Slack/Discord/Mattermost/healthchecks-style). Never fails the cycle.
+alert() {
+	log "ALERT: $1"
+	[ -n "$BACKUP_ALERT_WEBHOOK_URL" ] || return 0
+	body="{\"text\":\"[fyredocs db-backup] $1\"}"
+	curl -m 10 -sS -X POST -H 'Content-Type: application/json' -d "$body" \
+		"$BACKUP_ALERT_WEBHOOK_URL" >/dev/null 2>&1 || log "webhook POST failed"
+}
 
 log "started: bucket=$BACKUP_S3_BUCKET prefix=$BACKUP_PREFIX interval=${BACKUP_INTERVAL}s retain=$BACKUP_RETAIN files=[${BACKUP_FILES_BUCKETS}]"
 
@@ -30,7 +48,17 @@ while true; do
 	FILE="db-${TS}.sql.gz"
 	TMP="/tmp/${FILE}"
 
-	if pg_dump "$DATABASE_URL" --no-owner --no-privileges | gzip >"$TMP"; then
+	# Empty-source guard: only back up the DB when it actually has data. A wiped/
+	# fresh DB (e.g. server came back with an empty volume) must NOT overwrite or
+	# prune the good snapshots — skip + alert instead, and auto-resume when data
+	# returns. `users` is the signal (AutoMigrate/seedPlans re-create the schema
+	# and subscription_plans on a fresh DB, but never users).
+	USERS="$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM users" 2>/dev/null | tr -dc 0-9)"
+	if [ -z "$USERS" ]; then
+		alert "DB row-count check failed (DB unreachable/not ready?) — skipping DB backup"
+	elif [ "$USERS" -lt "$BACKUP_MIN_USERS" ]; then
+		alert "DB looks EMPTY (users=$USERS < $BACKUP_MIN_USERS) — skipping DB backup; existing snapshots kept"
+	elif pg_dump "$DATABASE_URL" --no-owner --no-privileges | gzip >"$TMP"; then
 		if rclone copyto "$TMP" "dest:${BACKUP_S3_BUCKET}/${BACKUP_PREFIX}${FILE}"; then
 			SIZE="$(wc -c <"$TMP" 2>/dev/null || echo '?')"
 			log "backup ok: ${FILE} (${SIZE} bytes)"
@@ -82,10 +110,24 @@ while true; do
 
 	for b in $BACKUP_FILES_BUCKETS; do
 		[ -n "$b" ] || continue
-		if rclone sync "src:${b}" "dest:${BACKUP_S3_BUCKET}/${BACKUP_FILES_PREFIX}${b}/" $EXCLUDE_ARGS; then
+
+		# Empty-source guard: if the source bucket is empty but the backup still
+		# holds objects, an rclone sync would MIRROR the emptiness and wipe the
+		# backup. Skip + alert instead (auto-resumes when the source repopulates).
+		SRC="$(rclone lsf -R "src:${b}" 2>/dev/null | grep -c .)"
+		DST="$(rclone lsf -R "dest:${BACKUP_S3_BUCKET}/${BACKUP_FILES_PREFIX}${b}/" 2>/dev/null | grep -c .)"
+		if [ "$SRC" -eq 0 ] && [ "$DST" -gt 0 ]; then
+			alert "source bucket '${b}' is EMPTY but backup has ${DST} object(s) — skipping sync to protect the backup"
+			continue
+		fi
+
+		# Optional --max-delete bounds a drastic partial shrink (off by default to
+		# avoid false trips on normal bulk-expiry).
+		if rclone sync "src:${b}" "dest:${BACKUP_S3_BUCKET}/${BACKUP_FILES_PREFIX}${b}/" \
+			${BACKUP_MAX_DELETE:+--max-delete "$BACKUP_MAX_DELETE"} $EXCLUDE_ARGS; then
 			log "files synced: ${b}"
 		else
-			log "FILE SYNC FAILED: ${b}"
+			log "FILE SYNC FAILED: ${b} (rclone error; possibly --max-delete=${BACKUP_MAX_DELETE} exceeded)"
 		fi
 	done
 

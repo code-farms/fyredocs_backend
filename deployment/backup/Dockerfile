@@ -3,7 +3,7 @@
 # No AWS account or aws-cli involved — rclone speaks the S3 API to any endpoint.
 FROM postgres:18-alpine
 
-RUN apk add --no-cache rclone
+RUN apk add --no-cache rclone curl
 
 COPY deployment/backup/backup.sh /usr/local/bin/backup.sh
 RUN chmod +x /usr/local/bin/backup.sh
