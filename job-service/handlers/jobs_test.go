@@ -195,11 +195,11 @@ func TestValidateFileType(t *testing.T) {
 
 func TestOutputFileName(t *testing.T) {
 	tests := []struct {
-		toolType    string
-		inputName   string
-		metadata    datatypes.JSON
-		wantName    string
-		wantType    string
+		toolType  string
+		inputName string
+		metadata  datatypes.JSON
+		wantName  string
+		wantType  string
 	}{
 		{"pdf-to-word", "report.pdf", nil, "report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
 		{"pdf-to-excel", "data.pdf", nil, "data.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
@@ -391,21 +391,25 @@ func TestJobExpiry(t *testing.T) {
 		}
 	})
 
-	t.Run("pro plan returns nil (never expires)", func(t *testing.T) {
+	t.Run("pro plan gets PRO_JOB_TTL expiry", func(t *testing.T) {
+		t.Setenv("PRO_JOB_TTL", "720h")
 		uid := uuid.New()
 		got := jobExpiry(&uid, "pro")
-		if got != nil {
-			t.Errorf("expected nil expiry for pro user, got %v", got)
+		if got == nil {
+			t.Fatal("expected non-nil expiry for pro user")
+		}
+		if time.Until(*got) < 719*time.Hour || time.Until(*got) > 721*time.Hour {
+			t.Errorf("expected expiry ~720h from now, got %v", *got)
 		}
 	})
 }
 
 func TestFreeJobTTL(t *testing.T) {
-	t.Run("default 24h", func(t *testing.T) {
+	t.Run("default 7d", func(t *testing.T) {
 		t.Setenv("FREE_JOB_TTL", "")
 		got := freeJobTTL()
-		if got != 24*time.Hour {
-			t.Errorf("expected 24h, got %v", got)
+		if got != 7*24*time.Hour {
+			t.Errorf("expected 168h (7d), got %v", got)
 		}
 	})
 
@@ -420,8 +424,34 @@ func TestFreeJobTTL(t *testing.T) {
 	t.Run("invalid uses default", func(t *testing.T) {
 		t.Setenv("FREE_JOB_TTL", "invalid")
 		got := freeJobTTL()
-		if got != 24*time.Hour {
-			t.Errorf("expected 24h, got %v", got)
+		if got != 7*24*time.Hour {
+			t.Errorf("expected 168h (7d), got %v", got)
+		}
+	})
+}
+
+func TestProJobTTL(t *testing.T) {
+	t.Run("default 30d", func(t *testing.T) {
+		t.Setenv("PRO_JOB_TTL", "")
+		got := proJobTTL()
+		if got != 30*24*time.Hour {
+			t.Errorf("expected 720h (30d), got %v", got)
+		}
+	})
+
+	t.Run("custom", func(t *testing.T) {
+		t.Setenv("PRO_JOB_TTL", "48h")
+		got := proJobTTL()
+		if got != 48*time.Hour {
+			t.Errorf("expected 48h, got %v", got)
+		}
+	})
+
+	t.Run("invalid uses default", func(t *testing.T) {
+		t.Setenv("PRO_JOB_TTL", "nonsense")
+		got := proJobTTL()
+		if got != 30*24*time.Hour {
+			t.Errorf("expected 720h (30d), got %v", got)
 		}
 	})
 }

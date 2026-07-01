@@ -1050,16 +1050,21 @@ func clampInt(value int, min int, max int) int {
 	return value
 }
 
+// jobExpiry returns when a job (and its input+output files) should be deleted.
+// Retention is per-plan and env-driven (GUEST_JOB_TTL / FREE_JOB_TTL /
+// PRO_JOB_TTL — the source of truth; the *JobTTL helpers hold only fallbacks).
+// Every job gets a finite expiry — including pro — so the cleanup-worker fully
+// governs deletion and no job is left to linger forever.
 func jobExpiry(userID *uuid.UUID, planName string) *time.Time {
-	if userID == nil {
-		ttl := guestJobTTL()
-		expires := time.Now().UTC().Add(ttl)
-		return &expires
+	var ttl time.Duration
+	switch {
+	case userID == nil:
+		ttl = guestJobTTL()
+	case planName == "pro":
+		ttl = proJobTTL()
+	default:
+		ttl = freeJobTTL()
 	}
-	if planName == "pro" {
-		return nil
-	}
-	ttl := freeJobTTL()
 	expires := time.Now().UTC().Add(ttl)
 	return &expires
 }
@@ -1077,13 +1082,27 @@ func guestJobTTL() time.Duration {
 }
 
 func freeJobTTL() time.Duration {
+	const fallback = 7 * 24 * time.Hour // 7 days
 	value := os.Getenv("FREE_JOB_TTL")
 	if value == "" {
-		return 24 * time.Hour
+		return fallback
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
-		return 24 * time.Hour
+		return fallback
+	}
+	return parsed
+}
+
+func proJobTTL() time.Duration {
+	const fallback = 30 * 24 * time.Hour // 30 days
+	value := os.Getenv("PRO_JOB_TTL")
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fallback
 	}
 	return parsed
 }

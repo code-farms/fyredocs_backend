@@ -12,7 +12,7 @@ The Cleanup Worker is a background service that maintains system hygiene by clea
 
 1. **Expired Job Cleanup** - Delete jobs past their expiration time and remove their input/output objects from MinIO
 2. **Expired Upload Session Cleanup** - Delete stale `upload:*` Redis state, abort the associated S3 multipart upload, and remove never-consumed upload objects
-3. **Stale Multipart Abort** - Abort incomplete multipart uploads older than 24h (belt-and-braces ahead of the bucket lifecycle rule)
+3. **Stale Multipart Abort** - Abort incomplete multipart uploads older than `MULTIPART_ABORT_TTL` (default 24h). This is the sole mechanism — there is no bucket lifecycle rule.
 4. **Expiry Backfill** - Backfill `expires_at` on legacy authenticated jobs
 
 The worker no longer touches any filesystem — there is no shared volume. All file bytes live in MinIO (see [Object Storage](../architecture/object-storage.md)).
@@ -47,11 +47,13 @@ When scaled to multiple replicas, the Redis SETNX lock ensures only one instance
 
 ### 1. Expired Job Cleanup
 
-**Criteria**: Jobs where `expires_at IS NOT NULL` and `expires_at <= NOW()` — applies to any user type. The `expires_at` value is set at job-creation time by `job-service` based on the user's plan:
+**Criteria**: Jobs where `expires_at IS NOT NULL` and `expires_at <= NOW()` — applies to any user type. Deleting a job removes **both its input and output** objects. `expires_at` is always finite (set at job-creation time by `job-service`) and governs the retention of **both input and output files**. The retention windows are env-driven (the source of truth; `job-service` reads them, code holds fallbacks):
 
-- **Guest Jobs** (no user): TTL set by `job-service` (`GUEST_JOB_TTL`, configured there — not in cleanup-worker)
-- **Free Plan Users**: TTL set by `job-service` from plan info, also enforced by Phase 4 backfill below for legacy rows (`FREE_JOB_TTL`, default `24h`)
-- **Pro Plan Users**: Never expire (`expires_at = NULL`)
+- **Guest Jobs** (no user): `GUEST_JOB_TTL` — default **30 min**
+- **Free Plan Users**: `FREE_JOB_TTL` — default **7 days (168h)**
+- **Pro Plan Users**: `PRO_JOB_TTL` — default **30 days (720h)** (finite, no longer NULL)
+
+> The plan's `RetentionDays` field is descriptive only; these `*_JOB_TTL` env vars are authoritative. There is **no lifecycle rule at all** on the buckets — input/output retention is fully DB-driven here, and incomplete multipart uploads are aborted by Phase 3 (`MULTIPART_ABORT_TTL`).
 
 **Process**:
 1. Query jobs table for expired jobs
@@ -94,10 +96,10 @@ When scaled to multiple replicas, the Redis SETNX lock ensures only one instance
 **Criteria**: Incomplete multipart uploads in the uploads bucket initiated more than **24 hours** ago
 
 **Process**:
-1. `ListIncompleteUploads(fyredocs-uploads, 24h)`
+1. `ListIncompleteUploads(fyredocs-uploads, MULTIPART_ABORT_TTL)` (default 24h)
 2. `AbortMultipart` each result
 
-**When this triggers**: Catches multipart uploads whose Redis session vanished without an abort (crash, manual Redis flush). The bucket lifecycle rule (`AbortIncompleteMultipartUpload` after 1 day) is the final backstop; this phase reclaims space sooner and emits logs/metrics.
+**When this triggers**: Catches multipart uploads whose Redis session vanished without an abort (crash, manual Redis flush). Since there is no bucket lifecycle rule, this phase is the sole mechanism that reclaims their space; the age threshold is `MULTIPART_ABORT_TTL` (default 24h).
 
 ---
 
@@ -107,10 +109,10 @@ When scaled to multiple replicas, the Redis SETNX lock ensures only one instance
 
 **Process**:
 1. Query for authenticated-user jobs missing `expires_at`
-2. Set `expires_at = created_at + FREE_JOB_TTL` (default 24h)
+2. Set `expires_at = created_at + FREE_JOB_TTL` (default 7d)
 3. These jobs will then be cleaned up by the normal expired job cleanup in the next cycle
 
-**When this triggers**: One-time for any legacy jobs. Once all old jobs have been backfilled, this is a no-op.
+**When this triggers**: One-time for any legacy jobs. Since new jobs (including pro) now always get a finite `expires_at`, a `NULL` only ever means a legacy row — so this no longer risks clobbering pro's expiry. Once old jobs are backfilled, it's a no-op.
 
 ---
 
@@ -139,7 +141,8 @@ The cleanup worker exposes a lightweight HTTP server for health checks, readines
 | `S3_BUCKET_UPLOADS` | `fyredocs-uploads` | Bucket holding raw uploads |
 | `S3_BUCKET_OUTPUTS` | `fyredocs-outputs` | Bucket holding processed outputs |
 | `UPLOAD_TTL` | `2h` | How long an upload session in Redis (`upload:<id>`) can live before Phase 2 reaps it (state + multipart + object) |
-| `FREE_JOB_TTL` | `24h` | TTL applied by Phase 4 backfill to legacy authenticated jobs that were created before plan-based expiration was wired up |
+| `MULTIPART_ABORT_TTL` | `24h` | How old an **incomplete** multipart upload must be before Phase 3 aborts it and frees its parts (Go duration) |
+| `FREE_JOB_TTL` | `168h` (7d) | TTL applied by Phase 4 backfill to legacy authenticated jobs that were created before plan-based expiration was wired up |
 | `CLEANUP_INTERVAL` | `15m` | How often the ticker fires |
 
 ### Redis Keys
@@ -174,17 +177,17 @@ environment:
 
 ## Storage Management
 
-The worker is one of three layers that keep object storage bounded:
+The worker is the **single** mechanism that keeps object storage bounded — there
+are no MinIO bucket lifecycle rules. All deletion is DB/Redis-driven here:
+job input+output objects at job expiry (Phase 1), orphaned/expired upload
+sessions (Phase 2), and incomplete multipart uploads (Phase 3,
+`MULTIPART_ABORT_TTL`).
 
-1. **Cleanup worker** (this service) — DB/Redis-driven deletion, the primary mechanism
-2. **Bucket lifecycle rules** (applied by `minio-init`, uploads bucket only) — expire objects after 2 days, abort incomplete multipart uploads after 1 day
-3. **No lifecycle on the outputs bucket** — pro-plan outputs never expire; output deletion is exclusively DB-driven by Phase 1
-
-**File Retention** (TTLs are set at job creation time by `job-service`, except where noted):
-- Active uploads: until consumed by a job, until `UPLOAD_TTL` expires the Redis session, or at most 2 days (bucket lifecycle)
-- Completed jobs (pro user): no expiration (`expires_at = NULL`)
-- Completed jobs (free user): TTL set from plan info; legacy rows backfilled to `FREE_JOB_TTL` (default `24h`) by Phase 4
-- Completed jobs (guest): TTL set by job-service (guest TTL is not configured in cleanup-worker)
+**File Retention** — the same TTL governs a job's **input and output** files (set at job creation by `job-service`; env vars are the source of truth):
+- Active uploads (not yet a job): until consumed, or until `UPLOAD_TTL` expires the Redis session and Phase 2 reaps the object (no bucket object-expiry lifecycle anymore)
+- Completed jobs (guest): `GUEST_JOB_TTL` (default **30m**)
+- Completed jobs (free user): `FREE_JOB_TTL` (default **7d**); legacy `NULL` rows backfilled by Phase 4
+- Completed jobs (pro user): `PRO_JOB_TTL` (default **30d**) — finite, no longer `NULL`
 - Failed jobs: same TTL as completed (still rows in `processing_jobs`)
 
 ## Deployment

@@ -320,15 +320,26 @@ func cleanupUploadState(ctx context.Context, store objectStore) {
 }
 
 // staleMultipartAge is how old an incomplete multipart upload must be before
-// the worker aborts it. The bucket lifecycle rule (1 day) is the backstop;
-// this catches uploads whose Redis session vanished without an abort.
-const staleMultipartAge = 24 * time.Hour
+// the worker aborts it (env MULTIPART_ABORT_TTL, default 24h). There is no
+// bucket lifecycle rule anymore, so this fully owns aborting incomplete
+// multipart uploads whose Redis session vanished without an abort.
+func staleMultipartAge() time.Duration {
+	value := os.Getenv("MULTIPART_ABORT_TTL")
+	if value == "" {
+		return 24 * time.Hour
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 24 * time.Hour
+	}
+	return parsed
+}
 
 // abortStaleMultipartUploads aborts multipart uploads in the uploads bucket
-// that were initiated more than staleMultipartAge ago and never completed.
+// that were initiated more than staleMultipartAge() ago and never completed.
 func abortStaleMultipartUploads(ctx context.Context, store objectStore) {
 	uploads := store.BucketUploads()
-	stale, err := store.ListIncompleteUploads(ctx, uploads, staleMultipartAge)
+	stale, err := store.ListIncompleteUploads(ctx, uploads, staleMultipartAge())
 	if err != nil {
 		slog.Error("failed to list incomplete multipart uploads", "bucket", uploads, "error", err)
 		return

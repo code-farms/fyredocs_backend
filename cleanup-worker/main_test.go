@@ -171,8 +171,8 @@ func TestAbortStaleMultipartUploads(t *testing.T) {
 		if store.listedCalls != 1 {
 			t.Fatalf("ListIncompleteUploads called %d times, want 1", store.listedCalls)
 		}
-		if store.listedAge != staleMultipartAge {
-			t.Errorf("listed olderThan = %v, want %v", store.listedAge, staleMultipartAge)
+		if store.listedAge != staleMultipartAge() {
+			t.Errorf("listed olderThan = %v, want %v", store.listedAge, staleMultipartAge())
 		}
 		want := []string{
 			"fyredocs-uploads/uploads/a/file1.pdf/id-1",
@@ -245,6 +245,32 @@ func TestUploadTTL(t *testing.T) {
 		got := uploadTTL()
 		if got != 2*time.Hour {
 			t.Errorf("expected 2h, got %v", got)
+		}
+	})
+}
+
+func TestStaleMultipartAge(t *testing.T) {
+	t.Run("default 24h", func(t *testing.T) {
+		t.Setenv("MULTIPART_ABORT_TTL", "")
+		got := staleMultipartAge()
+		if got != 24*time.Hour {
+			t.Errorf("expected 24h, got %v", got)
+		}
+	})
+
+	t.Run("custom 1m", func(t *testing.T) {
+		t.Setenv("MULTIPART_ABORT_TTL", "1m")
+		got := staleMultipartAge()
+		if got != time.Minute {
+			t.Errorf("expected 1m, got %v", got)
+		}
+	})
+
+	t.Run("invalid uses default", func(t *testing.T) {
+		t.Setenv("MULTIPART_ABORT_TTL", "notaduration")
+		got := staleMultipartAge()
+		if got != 24*time.Hour {
+			t.Errorf("expected 24h, got %v", got)
 		}
 	})
 }

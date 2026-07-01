@@ -157,17 +157,14 @@ services:
   # service that touches object storage starts (depends_on:
   # service_completed_successfully). Idempotent — safe on every `up`.
   #
-  # Lifecycle rules (uploads bucket only):
-  #   - expire objects after 2 days (raw uploads are consumed into jobs
-  #     quickly; anything older is abandoned)
-  #   - abort incomplete multipart uploads after 1 day
-  #   `mc ilm rule add` has no flag for AbortIncompleteMultipartUpload, so the
-  #   full lifecycle document is applied via `mc ilm import`. The expiry-only
-  #   equivalent would be: mc ilm rule add --expire-days 2 local/fyredocs-uploads
+  # NO lifecycle rules on either bucket. Any pre-existing uploads rule is
+  # cleared. Incomplete multipart uploads are aborted by the cleanup-worker.
   #
-  # NO lifecycle on the outputs bucket: pro-plan job outputs never expire —
-  # output deletion is DB-driven (cleanup-worker removes objects when the
-  # owning processing_jobs row expires).
+  # NO object-expiration lifecycle on either bucket: input AND output retention
+  # is DB-driven per plan (GUEST_JOB_TTL / FREE_JOB_TTL / PRO_JOB_TTL). The
+  # cleanup-worker removes a job's input+output objects when its processing_jobs
+  # row expires, reaps orphaned uploads on the upload-session TTL, and aborts
+  # stale multipart uploads. A bucket expiry rule would wipe free/pro inputs early.
   minio-init:
     image: ${MINIO_MC_IMAGE:-minio/mc:RELEASE.2025-04-16T18-13-26Z}
     restart: "no"
@@ -183,11 +180,12 @@ services:
         mc mb -p "local/$$S3_BUCKET_UPLOADS"
         mc mb -p "local/$$S3_BUCKET_OUTPUTS"
 
-        # Lifecycle on the uploads bucket: expire after EXPIRE_DAYS, abort
-        # incomplete multipart uploads after ABORT_DAYS (see header for why
-        # ilm import rather than `mc ilm rule add`).
-        echo '{"Rules":[{"ID":"expire-stale-uploads","Status":"Enabled","Filter":{"Prefix":""},"Expiration":{"Days":'"$$UPLOAD_EXPIRE_DAYS"'},"AbortIncompleteMultipartUpload":{"DaysAfterInitiation":'"$$UPLOAD_ABORT_INCOMPLETE_DAYS"'}}]}' \
-          | mc ilm import "local/$$S3_BUCKET_UPLOADS"
+        # NO object-expiry lifecycle on uploads — input/output retention is
+        # DB-driven per plan (cleanup-worker). Clear any pre-existing rule
+        # (e.g. an older 2-day expiry) so it can't wipe inputs early. Incomplete
+        # multipart uploads are aborted by the cleanup-worker
+        # (abortStaleMultipartUploads, 24h), so no bucket rule is needed.
+        mc ilm rule remove --all --force "local/$$S3_BUCKET_UPLOADS" 2>/dev/null || true
 
         # Scoped application credentials: services never use the root key.
         # RW on the two fyredocs buckets only.
@@ -220,8 +218,6 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
-      UPLOAD_EXPIRE_DAYS: ${UPLOAD_EXPIRE_DAYS:-2}
-      UPLOAD_ABORT_INCOMPLETE_DAYS: ${UPLOAD_ABORT_INCOMPLETE_DAYS:-1}
     logging:
       driver: "json-file"
       options:
@@ -448,8 +444,9 @@ services:
       UPLOAD_PART_SIZE_MB: "${UPLOAD_PART_SIZE_MB:-8}"
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
-      GUEST_JOB_TTL: 30m
-      FREE_JOB_TTL: 24h
+      GUEST_JOB_TTL: ${GUEST_JOB_TTL:-30m}
+      FREE_JOB_TTL: ${FREE_JOB_TTL:-168h}
+      PRO_JOB_TTL: ${PRO_JOB_TTL:-720h}
       UPLOAD_TTL: 30m
 
       # Observability
@@ -931,8 +928,10 @@ services:
 
       UPLOAD_TTL: 30m
       CLEANUP_INTERVAL: 5m
-      GUEST_JOB_TTL: 30m
-      FREE_JOB_TTL: 24h
+      MULTIPART_ABORT_TTL: ${MULTIPART_ABORT_TTL:-24h}
+      GUEST_JOB_TTL: ${GUEST_JOB_TTL:-30m}
+      FREE_JOB_TTL: ${FREE_JOB_TTL:-168h}
+      PRO_JOB_TTL: ${PRO_JOB_TTL:-720h}
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
@@ -985,6 +984,20 @@ services:
       BACKUP_PREFIX: ${BACKUP_PREFIX:-postgres/}
       BACKUP_INTERVAL: ${BACKUP_INTERVAL:-3600}
       BACKUP_RETAIN: ${BACKUP_RETAIN:-48}
+      # true = back up only registered users' outputs (exclude guest jobs)
+      BACKUP_FILES_REGISTERED_ONLY: ${BACKUP_FILES_REGISTERED_ONLY:-false}
+      # rclone remote "src" = local MinIO, for mirroring file buckets offsite.
+      # Reuses the app's scoped MinIO creds (they can list+read the buckets).
+      RCLONE_CONFIG_SRC_TYPE: s3
+      RCLONE_CONFIG_SRC_PROVIDER: Minio
+      RCLONE_CONFIG_SRC_ENDPOINT: http://minio:9000
+      RCLONE_CONFIG_SRC_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      RCLONE_CONFIG_SRC_REGION: ${S3_REGION:-us-east-1}
+      # Which MinIO buckets to mirror (space-separated; empty = DB-only backup).
+      # Outputs only by default — uploads are ephemeral (2-day expiry).
+      BACKUP_FILES_BUCKETS: ${BACKUP_FILES_BUCKETS:-fyredocs-outputs}
+      BACKUP_FILES_PREFIX: ${BACKUP_FILES_PREFIX:-minio/}
     deploy:
       resources:
         limits:
@@ -999,6 +1012,8 @@ services:
         max-file: "3"
     depends_on:
       db:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     networks:
       - fyredocs_net

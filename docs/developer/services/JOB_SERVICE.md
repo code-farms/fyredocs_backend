@@ -231,7 +231,7 @@ CREATE TABLE processing_jobs (
     created_at    TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
     completed_at  TIMESTAMP     NULL,
-    expires_at    TIMESTAMP     NULL        -- guest: GUEST_JOB_TTL, free: FREE_JOB_TTL (24h), pro: NULL (never)
+    expires_at    TIMESTAMP     NULL        -- always finite: guest GUEST_JOB_TTL (30m), free FREE_JOB_TTL (7d), pro PRO_JOB_TTL (30d)
 );
 
 -- Indexes
