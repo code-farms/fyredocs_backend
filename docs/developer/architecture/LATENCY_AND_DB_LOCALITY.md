@@ -166,4 +166,6 @@ the round-trip itself is now sub-millisecond, so absolute latency is tiny.
   for rollback.
 
 **Remaining self-managed responsibilities:** single VPS = SPOF (no managed
-HA/PITR); add a daily `pg_dump` with an off-host copy; monitor disk/RAM.
+HA/PITR); monitor disk/RAM. Offsite backups are handled by the `db-backup`
+sidecar (hourly `pg_dump` → external S3 bucket via rclone) — see
+[BACKUP_AND_RESTORE.md](./BACKUP_AND_RESTORE.md).

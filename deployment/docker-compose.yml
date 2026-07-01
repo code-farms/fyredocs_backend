@@ -963,6 +963,46 @@ services:
     networks:
       - fyredocs_net
 
+  # ==================== DB BACKUP (offsite) ====================
+  # Hourly pg_dump of the co-located Postgres, gzipped and pushed to an EXTERNAL
+  # S3-compatible bucket via rclone (Cloudflare R2 recommended). This is the
+  # disaster-recovery copy — the on-server volume/MinIO die with the server.
+  db-backup:
+    build:
+      context: ..
+      dockerfile: deployment/backup/Dockerfile
+    restart: always
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
+      # rclone remote "dest" — configured entirely via env (no rclone.conf).
+      RCLONE_CONFIG_DEST_TYPE: s3
+      RCLONE_CONFIG_DEST_PROVIDER: ${BACKUP_S3_PROVIDER:-Cloudflare}
+      RCLONE_CONFIG_DEST_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY}
+      RCLONE_CONFIG_DEST_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_KEY}
+      RCLONE_CONFIG_DEST_ENDPOINT: ${BACKUP_S3_ENDPOINT}
+      RCLONE_CONFIG_DEST_REGION: ${BACKUP_S3_REGION:-auto}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET}
+      BACKUP_PREFIX: ${BACKUP_PREFIX:-postgres/}
+      BACKUP_INTERVAL: ${BACKUP_INTERVAL:-3600}
+      BACKUP_RETAIN: ${BACKUP_RETAIN:-48}
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.5"
+        reservations:
+          memory: 32M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - fyredocs_net
+
 networks:
   fyredocs_net:
     name: fyredocs_net
