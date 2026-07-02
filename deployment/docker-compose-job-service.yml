@@ -1,63 +1,23 @@
+# Standalone run for job-service. The service definition is extended from
+# the canonical docker-compose.yml — do not duplicate config here; edit the
+# main file and every per-service file picks it up.
+#
+# Shared infra (fyredocs_net network + db/redis/nats/minio) must already be
+# running — start it via docker-compose.yml or docker-compose.essentials.yml.
+#
+# From the repo root:
+#   docker compose -f deployment/docker-compose-job-service.yml --env-file .env up -d --build
 name: fyredocs
 
 services:
   job-service:
-    build:
-      context: ..
-      dockerfile: job-service/Dockerfile
-    restart: always
-    ports:
-      - "8081:8081"
-    environment:
-      PORT: "8081"
-      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
-      REDIS_ADDR: redis:6379
-      REDIS_PASSWORD: ""
-      REDIS_DB: "0"
-      NATS_URL: nats://nats:4222
-
-      # JWT Configuration
-      JWT_HS256_SECRET: ${JWT_HS256_SECRET}
-      JWT_ALLOWED_ALGS: "HS256"
-      JWT_ISSUER: "fyredocs"
-      JWT_AUDIENCE: "fyredocs-api"
-      JWT_CLOCK_SKEW: "60s"
-
-      # Auth settings
-      AUTH_GUEST_PREFIX: "guest"
-      AUTH_GUEST_SUFFIX: "jobs"
-      AUTH_DENYLIST_ENABLED: "true"
-      AUTH_DENYLIST_PREFIX: "denylist:jwt"
-      AUTH_TRUST_GATEWAY_HEADERS: "false"
-
-      # File Handling
-      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
-      GUEST_JOB_TTL: 2h
-      UPLOAD_TTL: 2h
-
-      # Object storage (presigned uploads/downloads; no shared volume)
-      S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_USE_SSL: "${S3_USE_SSL:-false}"
-      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
-      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
-      S3_PUBLIC_ENDPOINT: ${PUBLIC_ORIGIN:-http://localhost:8080}
-      UPLOAD_PART_SIZE_MB: "${UPLOAD_PART_SIZE_MB:-8}"
-
-      # Observability
-      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/healthz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    env_file:
-      - ../.env
-    networks:
-      - fyredocs_net
+    extends:
+      file: docker-compose.yml
+      service: job-service
+    # Deps (db/redis/...) run from the main/essentials compose file — drop
+    # the inherited depends_on so this file stands alone.
+    depends_on: !reset []
 
 networks:
   fyredocs_net:
     external: true
-

@@ -9,6 +9,11 @@ cd /d "%ROOT_DIR%"
 REM Set compose file path
 set "COMPOSE_FILE=%SCRIPT_DIR%docker-compose.yml"
 
+REM Pass the root .env to compose explicitly — compose does not auto-load it
+REM from the repo root when the compose file lives in deployment\
+set "ENVFLAG="
+if exist "%ROOT_DIR%\.env" set ENVFLAG=--env-file "%ROOT_DIR%\.env"
+
 REM Colors for Windows (using ANSI escape codes)
 set "RED=[91m"
 set "GREEN=[92m"
@@ -71,11 +76,41 @@ if %SECRET_LEN% LSS 32 (
 
 echo %GREEN%JWT secret validated (%SECRET_LEN% characters)%NC%
 
+REM Single-service mode: deploy.bat <service> rebuilds + redeploys only that
+REM service via deployment\docker-compose-<service>.yml (extends-based; see
+REM docs\developer\architecture\COMPOSE_FILES.md). Infra must already run.
+if "%~1"=="" goto full_deploy
+
+set "SVC=%~1"
+if not exist "%SCRIPT_DIR%docker-compose-%SVC%.yml" (
+    echo %RED%Unknown service '%SVC%' - no deployment\docker-compose-%SVC%.yml%NC%
+    echo Available services:
+    for %%f in ("%SCRIPT_DIR%docker-compose-*.yml") do (
+        set "N=%%~nf"
+        echo   !N:docker-compose-=!
+    )
+    exit /b 1
+)
+
+echo.
+echo %BLUE%==============================================================
+echo ============== Deploying single service: %SVC%
+echo ==============================================================%NC%
+docker compose -f "%SCRIPT_DIR%docker-compose-%SVC%.yml" %ENVFLAG% up -d --build %SVC%
+if !ERRORLEVEL! NEQ 0 (
+    echo %RED%Deploy failed for %SVC%%NC%
+    exit /b 1
+)
+docker compose -f "%SCRIPT_DIR%docker-compose-%SVC%.yml" %ENVFLAG% ps %SVC%
+echo %GREEN%%SVC% deployed successfully%NC%
+exit /b 0
+
+:full_deploy
 echo.
 echo %BLUE%==============================================================
 echo ============== Stopping existing containers...
 echo ==============================================================%NC%
-docker compose down --remove-orphans 2>nul
+docker compose %ENVFLAG% down --remove-orphans 2>nul
 echo %GREEN%Stopped existing containers%NC%
 
 echo.
@@ -91,7 +126,7 @@ set "SERVICES=api-gateway analytics-service auth-service job-service convert-fro
 
 for %%s in (%SERVICES%) do (
     echo %YELLOW%Building %%s...%NC%
-    docker compose build %%s
+    docker compose %ENVFLAG% build %%s
     if !ERRORLEVEL! NEQ 0 (
         echo %RED%Error building %%s. Build aborted.%NC%
         exit /b 1
@@ -103,7 +138,7 @@ echo.
 echo %BLUE%==============================================================
 echo ============== Starting all services...
 echo ==============================================================%NC%
-docker compose up -d
+docker compose %ENVFLAG% up -d
 
 echo.
 echo %BLUE%==============================================================
@@ -117,7 +152,7 @@ echo.
 echo %BLUE%==============================================================
 echo ============== Service Status
 echo ==============================================================%NC%
-docker compose ps
+docker compose %ENVFLAG% ps
 
 echo.
 echo %GREEN%All services started successfully!%NC%
@@ -135,5 +170,7 @@ echo   Notification Service: internal only (notification-service:8091)
 echo   Cleanup Worker:       internal only (cleanup-worker:8088, background)
 echo   MinIO (S3):           internal (minio:9000); console http://127.0.0.1:9001
 echo   NATS / Redis:         internal only (nats:4222 / redis:6379)
+echo.
+echo Deploy a single service: deploy.bat ^<service^>  (e.g. deploy.bat auth-service)
 
 pause

@@ -1,5 +1,16 @@
 name: fyredocs
 
+# Infra-only stack for the "services run on the host via `go run`" dev
+# workflow, and the dependency provider for the per-service
+# docker-compose-<service>.yml files. Creates the fyredocs_net network.
+#
+# db/redis are defined here directly (dev defaults, host-published ports);
+# nats/minio/minio-init are extended from the canonical docker-compose.yml so
+# their config can't drift — only the host port publishing is added here.
+#
+# From the repo root:
+#   docker compose -f deployment/docker-compose.essentials.yml --env-file .env up -d
+
 services:
   # Local Postgres for the "infra only" dev workflow (services run via `go run`
   # on the host). The port is published so host processes reach it at
@@ -35,6 +46,30 @@ services:
     networks:
       - fyredocs_net
 
+  # JetStream event bus — host-run services reach it at nats://localhost:4222.
+  nats:
+    extends:
+      file: docker-compose.yml
+      service: nats
+    ports:
+      - "127.0.0.1:4222:4222"
+
+  # Object storage — host-run services use S3_ENDPOINT=localhost:9000; the
+  # admin console stays at http://127.0.0.1:9001 (published by the base def).
+  minio:
+    extends:
+      file: docker-compose.yml
+      service: minio
+    ports:
+      - "127.0.0.1:9000:9000"
+
+  # One-shot bucket/policy/app-credential bootstrap (idempotent). Its
+  # depends_on: minio is inherited and valid here — minio is in this file.
+  minio-init:
+    extends:
+      file: docker-compose.yml
+      service: minio-init
+
 networks:
   fyredocs_net:
     name: fyredocs_net
@@ -42,3 +77,5 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  nats_data:
+  minio_data:

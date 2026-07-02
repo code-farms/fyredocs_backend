@@ -1,35 +1,22 @@
+# Standalone run for convert-to-pdf. The service definition is extended from
+# the canonical docker-compose.yml — do not duplicate config here; edit the
+# main file and every per-service file picks it up.
+#
+# Shared infra (fyredocs_net network + db/redis/nats/minio) must already be
+# running — start it via docker-compose.yml or docker-compose.essentials.yml.
+#
+# From the repo root:
+#   docker compose -f deployment/docker-compose-convert-to-pdf.yml --env-file .env up -d --build
 name: fyredocs
 
 services:
   convert-to-pdf:
-    build:
-      context: ../convert-to-pdf
-      dockerfile: Dockerfile
-    restart: always
-    ports:
-      - "8083:8083"
-    environment:
-      PORT: "8083"
-      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
-      REDIS_ADDR: redis:6379
-      TRUSTED_PROXIES: 172.18.0.0/16,127.0.0.1,::1
-      QUEUE_PREFIX: queue
-      MAX_RETRIES: "3"
-      PROCESSING_TIMEOUT: 30m
-
-      # Object storage (files live in MinIO/S3, not on a shared volume)
-      S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_USE_SSL: "${S3_USE_SSL:-false}"
-      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
-      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
-    env_file:
-      - ../.env
-    tmpfs:
-      - /tmp:size=1g
-    networks:
-      - fyredocs_net
+    extends:
+      file: docker-compose.yml
+      service: convert-to-pdf
+    # Deps (db/redis/...) run from the main/essentials compose file — drop
+    # the inherited depends_on so this file stands alone.
+    depends_on: !reset []
 
 networks:
   fyredocs_net:

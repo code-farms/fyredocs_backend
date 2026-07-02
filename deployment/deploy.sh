@@ -8,15 +8,6 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 cd "$ROOT_DIR"
 
-# --print-budget / --dry-run: compute and show the resource budget for this
-# host (RESOURCE_BUDGET_PCT%, default 70), then exit without building anything.
-DRY_RUN=0
-for arg in "$@"; do
-    case "$arg" in
-        --dry-run|--print-budget) DRY_RUN=1 ;;
-    esac
-done
-
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -43,6 +34,37 @@ print_warning() {
 print_error() {
     echo -e "${RED}✗ $1${NC}"
 }
+
+usage() {
+    cat <<'USAGE'
+Usage: deployment/deploy.sh [options] [service ...]
+
+  (no args)              Full deploy: stop stack, build all services
+                         sequentially, start everything, wait for the edge.
+  <service> [more...]    Rebuild + redeploy only the named service(s) via
+                         deployment/docker-compose-<service>.yml. The rest of
+                         the running stack is untouched.
+  --dry-run, --print-budget
+                         Show the resource budget for this host and exit.
+  -h, --help             Show this help.
+
+See docs/developer/architecture/COMPOSE_FILES.md for the compose files layout.
+USAGE
+}
+
+# --print-budget / --dry-run: compute and show the resource budget for this
+# host (RESOURCE_BUDGET_PCT%, default 70), then exit without building anything.
+# Bare arguments are service names for a single-service deploy.
+DRY_RUN=0
+SERVICES_TO_DEPLOY=()
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run|--print-budget) DRY_RUN=1 ;;
+        -h|--help) usage; exit 0 ;;
+        -*) print_error "Unknown option: $arg"; usage; exit 1 ;;
+        *) SERVICES_TO_DEPLOY+=("$arg") ;;
+    esac
+done
 
 # ---------------------------------------------------------------------------
 # compute_resource_budget
@@ -261,6 +283,70 @@ else
     print_success "Generated new JWT secret"
 fi
 
+# ---------------------------------------------------------------------------
+# Single-service mode: rebuild + redeploy only the named service(s) through
+# their per-service compose files (extends-based, see
+# docs/developer/architecture/COMPOSE_FILES.md). Runs AFTER .env sourcing,
+# compute_resource_budget and the JWT secret so the recreated container gets
+# the exact same env/limits as a full deploy. The rest of the stack is
+# untouched — infra (db/redis/nats/minio) must already be running.
+# ---------------------------------------------------------------------------
+if [ ${#SERVICES_TO_DEPLOY[@]} -gt 0 ]; then
+    export DOCKER_BUILDKIT=1
+    export COMPOSE_ENV_FILES="$ROOT_DIR/.env"
+    # The per-service file's project sees only one service; the rest of the
+    # running stack would be reported as "orphans" — that's expected here.
+    export COMPOSE_IGNORE_ORPHANS=1
+
+    for SVC in "${SERVICES_TO_DEPLOY[@]}"; do
+        if [ ! -f "$SCRIPT_DIR/docker-compose-$SVC.yml" ]; then
+            print_error "Unknown service '$SVC' (no deployment/docker-compose-$SVC.yml)"
+            echo "Available services:"
+            for f in "$SCRIPT_DIR"/docker-compose-*.yml; do
+                b=$(basename "$f" .yml)
+                echo "  ${b#docker-compose-}"
+            done
+            exit 1
+        fi
+    done
+
+    for SVC in "${SERVICES_TO_DEPLOY[@]}"; do
+        SVC_FILE="$SCRIPT_DIR/docker-compose-$SVC.yml"
+        print_step "Deploying single service: $SVC"
+        STEP_START=$SECONDS
+        docker compose -f "$SVC_FILE" up -d --build "$SVC"
+        print_success "$SVC built + started (took $(( SECONDS - STEP_START ))s)"
+
+        CID=$(docker compose -f "$SVC_FILE" ps -q "$SVC")
+        HAS_HC=$(docker inspect --format '{{if .State.Health}}yes{{end}}' "$CID" 2>/dev/null || true)
+        if [ "$HAS_HC" != "yes" ]; then
+            print_warning "$SVC has no healthcheck — skipping health wait"
+            continue
+        fi
+        echo -n "Waiting for $SVC to become healthy... "
+        for i in {1..60}; do
+            STATUS=$(docker inspect --format '{{.State.Health.Status}}' "$CID" 2>/dev/null || echo unknown)
+            if [ "$STATUS" = "healthy" ]; then
+                print_success "$SVC healthy!"
+                break
+            fi
+            if [ $i -eq 60 ]; then
+                print_error "$SVC not healthy within 60s (status: $STATUS)"
+                docker compose -f "$SVC_FILE" logs "$SVC" | tail -30
+                exit 1
+            fi
+            echo -n "."
+            sleep 1
+        done
+    done
+
+    echo ""
+    docker compose -f "$SCRIPT_DIR/docker-compose.yml" ps "${SERVICES_TO_DEPLOY[@]}"
+    echo ""
+    print_success "Single-service deploy complete: ${SERVICES_TO_DEPLOY[*]}"
+    exit 0
+fi
+
 # Configuration Notice
 print_step "PDF Processing Configuration"
 print_success "Using free open-source tools (pdfcpu, LibreOffice, Poppler)"
@@ -430,6 +516,8 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🔧 Useful Commands:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Deploy one service:    ./deployment/deploy.sh <service>   (e.g. auth-service)"
+echo "  Compose files layout:  docs/developer/architecture/COMPOSE_FILES.md"
 echo "  View logs:             docker compose -f deployment/docker-compose.yml --env-file .env logs -f"
 echo "  View specific service: docker compose -f deployment/docker-compose.yml --env-file .env logs -f api-gateway"
 echo "  Restart services:      docker compose -f deployment/docker-compose.yml --env-file .env restart"

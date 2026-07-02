@@ -41,6 +41,7 @@ Fyredocs uses a true microservices architecture. Each service is independently d
 | OpenAPI spec | [swagger/openapi.yaml](swagger/openapi.yaml) |
 | Redis data structures | [architecture/REDIS_ARCHITECTURE.md](architecture/REDIS_ARCHITECTURE.md) |
 | Docker base image setup | [architecture/BASE_IMAGE_SETUP.md](architecture/BASE_IMAGE_SETUP.md) |
+| Compose files layout (common / essentials / per-service) | [architecture/COMPOSE_FILES.md](architecture/COMPOSE_FILES.md) |
 | Database patterns | [DB_BEST_PRACTICES.md](DB_BEST_PRACTICES.md) |
 | Security hardening | [backend-hardening.md](backend-hardening.md) |
 | Deployment checklist | [deployment-review.md](deployment-review.md) |
@@ -66,14 +67,17 @@ git clone <repo-url> && cd fyredocs/fyredocs_backend
 # 2. Copy environment config
 cp .env.example .env  # Edit with your local settings
 
-# 3. Start infrastructure (DB, Redis, NATS)
-docker compose -f deployment/docker-compose.essentials.yml up -d
+# 3. Start infrastructure (DB, Redis, NATS, MinIO)
+docker compose -f deployment/docker-compose.essentials.yml --env-file .env up -d
 
-# 4. Run a specific service
+# 4. Run a specific service on the host...
 cd api-gateway && go run main.go
 
+# ...or (re)deploy a single service as a container
+docker compose -f deployment/docker-compose-api-gateway.yml --env-file .env up -d --build
+
 # 5. Or start everything
-./deploy.sh
+./deployment/deploy.sh
 ```
 
 ### Running Tests
