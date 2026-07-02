@@ -89,12 +89,37 @@ All detailed documentation lives under [`docs/`](docs/):
 
 ## Development
 
-```bash
-# Start infrastructure only (Postgres, Redis, NATS)
-docker compose -f deployment/docker-compose.essentials.yml up -d
+Environment lives in a **single** root `.env` (gitignored; `deploy.sh` loads it —
+there is no per-service `.env`). Copy `.env.example` → `.env` and fill it in.
 
-# Run a service locally
-cd job-service && go run main.go
+### Run a single service (Docker)
+Compose reads that one root `.env`; starting a service also starts its
+dependencies. Use the Makefile helpers (no long command to type):
+
+```bash
+make up   SVC=auth-service        # start a service + its deps, env from root .env
+make down SVC=auth-service        # stop just that service
+make logs SVC=auth-service        # follow its logs
+make ps                           # whole-stack status
+make up                           # start the whole stack
+```
+
+Equivalent raw command: `docker compose -f deployment/docker-compose.yml --env-file .env up -d auth-service`.
+
+### Run a service locally with `go run`
+```bash
+# Start infrastructure only (Postgres, Redis, NATS) — publishes localhost ports
+docker compose -f deployment/docker-compose.essentials.yml up -d
+```
+`go run` doesn't read the root `.env` (its docker hostnames like `db:5432` don't
+resolve from the host). Provide **localhost** values via inline env or a
+service-local `.env` (godotenv loads a `.env` from the working directory), e.g.:
+
+```bash
+cd auth-service
+DATABASE_URL='postgresql://fyredocs:fyredocs@localhost:5432/fyredocs?sslmode=disable' \
+REDIS_ADDR=localhost:6379 NATS_URL=nats://localhost:4222 \
+JWT_HS256_SECRET=change-me PORT=8086 go run main.go
 ```
 
 See individual service docs in [`docs/developer/services/`](docs/developer/services/) for environment variables and configuration details.

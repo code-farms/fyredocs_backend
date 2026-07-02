@@ -162,8 +162,8 @@ the round-trip itself is now sub-millisecond, so absolute latency is tiny.
   keepalive params (`keepalives*`). The pgx driver forwards them to the server,
   and a standard Postgres rejects them (`FATAL: unrecognized configuration
   parameter "keepalives_idle"`); Neon's pooler had silently ignored them.
-- The previous Neon `DATABASE_URL` is retained (commented) in `deployment/.env`
-  for rollback.
+- The previous Neon `DATABASE_URL` is retained (commented) in the root `.env`
+  (the single env file `deploy.sh` loads) for rollback.
 
 **Remaining self-managed responsibilities:** single VPS = SPOF (no managed
 HA/PITR); monitor disk/RAM. Offsite backups are handled by the `db-backup`

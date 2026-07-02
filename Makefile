@@ -2,7 +2,33 @@ SERVICES = shared api-gateway auth-service job-service \
            convert-to-pdf convert-from-pdf organize-pdf optimize-pdf \
            cleanup-worker
 
-.PHONY: test test-v $(addprefix test-,$(SERVICES)) $(addprefix test-v-,$(SERVICES))
+# Compose always uses the deployment compose file + the single root .env (same
+# env file deploy.sh loads). Run one (or more) services without a long command:
+#   make up SVC=auth-service                # start a service + its deps
+#   make up SVC="auth-service job-service"  # multiple
+#   make down SVC=auth-service              # stop just that service
+#   make logs SVC=auth-service              # follow its logs
+#   make ps                                 # whole-stack status
+# Omit SVC to act on the whole stack.
+COMPOSE = docker compose -f deployment/docker-compose.yml --env-file .env
+
+.PHONY: up down logs ps test test-v $(addprefix test-,$(SERVICES)) $(addprefix test-v-,$(SERVICES))
+
+## Start service(s) (SVC=…) or the whole stack; env comes from the root .env
+up:
+	$(COMPOSE) up -d $(SVC)
+
+## Stop service(s) (SVC=…) or the whole stack (containers only; volumes kept)
+down:
+	@if [ -n "$(SVC)" ]; then $(COMPOSE) stop $(SVC); else $(COMPOSE) down --remove-orphans; fi
+
+## Follow logs for service(s) (SVC=…) or the whole stack
+logs:
+	$(COMPOSE) logs -f $(SVC)
+
+## Show container status
+ps:
+	$(COMPOSE) ps
 
 ## Run all tests across every service
 test:

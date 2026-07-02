@@ -31,7 +31,7 @@ container's `HEALTHCHECK` goes **unhealthy** if no backup has succeeded within
 > **rclone, not aws-cli.** rclone is a provider-neutral S3 client. There is no
 > AWS account involved — it speaks the S3 API to whatever endpoint is configured.
 
-## Configuration (`deployment/.env`)
+## Configuration (root `.env`)
 
 | Var | Meaning |
 |-----|---------|

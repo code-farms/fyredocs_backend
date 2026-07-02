@@ -166,7 +166,7 @@ Compose/`minio-init`-only (not read by services): `MINIO_IMAGE`,
 `MINIO_MC_IMAGE` (pinned image tags), `UPLOAD_EXPIRE_DAYS` (default `2`) and
 `UPLOAD_ABORT_INCOMPLETE_DAYS` (default `1`) for the uploads-bucket lifecycle.
 Every value above has a compose default — nothing is hardcoded; all are
-overridable from `deployment/.env`.
+overridable from the root `.env` (the single env file `deploy.sh` loads).
 
 ## Related documentation
 
