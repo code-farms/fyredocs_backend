@@ -298,8 +298,8 @@ S3_ENDPOINT="minio:9000"               # required
 S3_ACCESS_KEY="minioadmin"             # required
 S3_SECRET_KEY="minioadmin"             # required
 S3_USE_SSL="false"
-S3_BUCKET_UPLOADS="fyredocs-uploads"   # job inputs (object keys in payload.inputPaths)
-S3_BUCKET_OUTPUTS="fyredocs-outputs"   # job outputs, stored as jobs/{jobID}/...
+S3_BUCKET_UPLOADS="uploads"   # job inputs (object keys in payload.inputPaths)
+S3_BUCKET_OUTPUTS="outputs"   # job outputs, stored as jobs/{jobID}/...
 S3_REGION="us-east-1"
 ```
 
@@ -421,8 +421,8 @@ organize-pdf:
     S3_ENDPOINT: "minio:9000"
     S3_ACCESS_KEY: "minioadmin"
     S3_SECRET_KEY: "minioadmin"
-    S3_BUCKET_UPLOADS: "fyredocs-uploads"
-    S3_BUCKET_OUTPUTS: "fyredocs-outputs"
+    S3_BUCKET_UPLOADS: "uploads"
+    S3_BUCKET_OUTPUTS: "outputs"
 ```
 
 ## Development

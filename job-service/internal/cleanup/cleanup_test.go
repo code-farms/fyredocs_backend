@@ -25,8 +25,8 @@ type fakeStore struct {
 	listedCalls int
 }
 
-func (f *fakeStore) BucketUploads() string { return "fyredocs-uploads" }
-func (f *fakeStore) BucketOutputs() string { return "fyredocs-outputs" }
+func (f *fakeStore) BucketUploads() string { return "uploads" }
+func (f *fakeStore) BucketOutputs() string { return "outputs" }
 
 func (f *fakeStore) RemoveObject(_ context.Context, bucket, key string) error {
 	f.removed = append(f.removed, bucket+"/"+key)
@@ -46,11 +46,11 @@ func (f *fakeStore) ListIncompleteUploads(_ context.Context, _ string, olderThan
 
 func TestBucketFor(t *testing.T) {
 	store := &fakeStore{}
-	if got := bucketFor(store, "input"); got != "fyredocs-uploads" {
-		t.Errorf("bucketFor(input) = %q, want fyredocs-uploads", got)
+	if got := bucketFor(store, "input"); got != "uploads" {
+		t.Errorf("bucketFor(input) = %q, want uploads", got)
 	}
-	if got := bucketFor(store, "output"); got != "fyredocs-outputs" {
-		t.Errorf("bucketFor(output) = %q, want fyredocs-outputs", got)
+	if got := bucketFor(store, "output"); got != "outputs" {
+		t.Errorf("bucketFor(output) = %q, want outputs", got)
 	}
 }
 
@@ -66,8 +66,8 @@ func TestRemoveJobObjects(t *testing.T) {
 		removeJobObjects(context.Background(), store, files)
 
 		want := []string{
-			"fyredocs-uploads/uploads/" + jobID.String() + "/doc.pdf",
-			"fyredocs-outputs/jobs/" + jobID.String() + "/converted.docx",
+			"uploads/uploads/" + jobID.String() + "/doc.pdf",
+			"outputs/jobs/" + jobID.String() + "/converted.docx",
 		}
 		if len(store.removed) != len(want) {
 			t.Fatalf("removed %d objects, want %d: %v", len(store.removed), len(want), store.removed)
@@ -91,7 +91,7 @@ func TestRemoveJobObjects(t *testing.T) {
 		if len(store.removed) != 1 {
 			t.Fatalf("removed %d objects, want 1 (legacy paths skipped): %v", len(store.removed), store.removed)
 		}
-		if store.removed[0] != "fyredocs-outputs/jobs/"+jobID.String()+"/kept.docx" {
+		if store.removed[0] != "outputs/jobs/"+jobID.String()+"/kept.docx" {
 			t.Errorf("removed wrong object: %q", store.removed[0])
 		}
 	})
@@ -113,10 +113,10 @@ func TestReapExpiredUploadObjects(t *testing.T) {
 		store := &fakeStore{}
 		reapExpiredUploadObjects(context.Background(), store, "uploads/u1/file.pdf", "s3-upload-1", notConsumed)
 
-		if len(store.aborted) != 1 || store.aborted[0] != "fyredocs-uploads/uploads/u1/file.pdf/s3-upload-1" {
+		if len(store.aborted) != 1 || store.aborted[0] != "uploads/uploads/u1/file.pdf/s3-upload-1" {
 			t.Errorf("aborted = %v, want one abort for s3-upload-1", store.aborted)
 		}
-		if len(store.removed) != 1 || store.removed[0] != "fyredocs-uploads/uploads/u1/file.pdf" {
+		if len(store.removed) != 1 || store.removed[0] != "uploads/uploads/u1/file.pdf" {
 			t.Errorf("removed = %v, want the upload object removed", store.removed)
 		}
 	})
@@ -172,8 +172,8 @@ func TestAbortStaleMultipartUploads(t *testing.T) {
 			t.Errorf("listed olderThan = %v, want %v", store.listedAge, config.StaleMultipartAge())
 		}
 		want := []string{
-			"fyredocs-uploads/uploads/a/file1.pdf/id-1",
-			"fyredocs-uploads/uploads/b/file2.pdf/id-2",
+			"uploads/uploads/a/file1.pdf/id-1",
+			"uploads/uploads/b/file2.pdf/id-2",
 		}
 		if len(store.aborted) != len(want) {
 			t.Fatalf("aborted %d uploads, want %d: %v", len(store.aborted), len(want), store.aborted)

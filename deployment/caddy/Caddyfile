@@ -22,7 +22,7 @@
 	# forwarded verbatim for the same reason (SigV4 covers the canonical
 	# path). The presigned signature itself is the credential on these
 	# routes — no auth middleware applies.
-	@objects path /{$S3_BUCKET_UPLOADS:fyredocs-uploads}/* /{$S3_BUCKET_OUTPUTS:fyredocs-outputs}/*
+	@objects path /{$S3_BUCKET_UPLOADS:uploads}/* /{$S3_BUCKET_OUTPUTS:outputs}/*
 	handle @objects {
 		reverse_proxy minio:9000 {
 			header_up Host {host}

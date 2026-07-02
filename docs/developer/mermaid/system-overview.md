@@ -49,7 +49,7 @@ graph TB
         PG[(PostgreSQL)]
         RD[(Redis)]
         NATS["NATS JetStream<br/>JOBS_DISPATCH · JOBS_EVENTS · JOBS_DLQ · ANALYTICS<br/>(payloads = object keys; MaxMsgSize/MaxBytes capped)"]
-        S3[("MinIO :9000 (internal)<br/>fyredocs-uploads · fyredocs-outputs<br/>bootstrap: minio-init (buckets · lifecycle · app user)")]
+        S3[("MinIO :9000 (internal)<br/>uploads · outputs<br/>bootstrap: minio-init (buckets · lifecycle · app user)")]
     end
 
     WebApp -->|HTTPS| CADDY
@@ -57,7 +57,7 @@ graph TB
     WebApp -.->|SPA assets| CADDY
 
     CADDY -->|"/api/* · /auth/* · /admin/* · /healthz"| GW
-    CADDY -->|"/fyredocs-uploads/* · /fyredocs-outputs/*<br/>presigned, direct (Host preserved)"| S3
+    CADDY -->|"/uploads/* · /outputs/*<br/>presigned, direct (Host preserved)"| S3
 
     GW -->|/auth/*| AUTH
     GW -->|/api/upload/*| JOB
@@ -124,8 +124,8 @@ flowchart LR
     subgraph Upload["Upload (presigned, same-origin via the Caddy edge)"]
         A[Client] -->|1. Init upload JSON| B[job-service]
         B -->|Store state incl. key + s3UploadId| Redis[(Redis: upload:*)]
-        B -->|presign part URLs for edge origin| S3[("MinIO<br/>fyredocs-uploads")]
-        A -->|"2. PUT parts via Caddy<br/>/fyredocs-uploads/*?X-Amz-..."| S3
+        B -->|presign part URLs for edge origin| S3[("MinIO<br/>uploads")]
+        A -->|"2. PUT parts via Caddy<br/>/uploads/*?X-Amz-..."| S3
         A -->|3. Complete upload JSON + ETags| B
         B -->|CompleteMultipart| S3
     end
@@ -136,7 +136,7 @@ flowchart LR
         B -->|6. Publish JobMessage with object key| NATS["NATS JetStream<br/>JOBS_DISPATCH"]
         NATS -->|7. Pull-consumer| W["Worker Service"]
         W -->|8. download input to tmpfs scratch| S3
-        W -->|9. upload output jobs/<jobId>/...| S3O[("MinIO<br/>fyredocs-outputs")]
+        W -->|9. upload output jobs/<jobId>/...| S3O[("MinIO<br/>outputs")]
         W -->|10. Update status, output key| PG
         W -->|11. Publish progress / completed / failed| EV["jobs.events.<jobId>.*"]
         W -->|on max-retry exhaustion| DLQ["jobs.dlq.<service>"]
@@ -147,7 +147,7 @@ flowchart LR
         EV --> B
         B -->|stream events| A
         A -->|13. GET download → presigned URL| B
-        A -->|"14. GET via Caddy<br/>/fyredocs-outputs/*?X-Amz-..."| S3O
+        A -->|"14. GET via Caddy<br/>/outputs/*?X-Amz-..."| S3O
     end
 ```
 

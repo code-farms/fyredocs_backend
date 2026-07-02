@@ -32,7 +32,7 @@ func TestLimitForPlan(t *testing.T) {
 
 func TestShouldLimit(t *testing.T) {
 	limited := []string{"/api/jobs", "/api/upload/init", "/api"}
-	notLimited := []string{"/auth/login", "/metrics", "/healthz", "/", "/assets/app.js", "/fyredocs-uploads/x"}
+	notLimited := []string{"/auth/login", "/metrics", "/healthz", "/", "/assets/app.js", "/uploads/x"}
 	for _, p := range limited {
 		if !shouldLimit(p) {
 			t.Errorf("shouldLimit(%q) = false, want true", p)

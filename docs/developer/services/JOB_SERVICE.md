@@ -547,8 +547,8 @@ The service fails fast at boot if object storage is misconfigured or the buckets
 |----------|---------|-------------|
 | `PORT` | `8081` | HTTP server port |
 | `S3_PUBLIC_ENDPOINT` | `S3_ENDPOINT` | Browser-reachable origin presigned URLs are signed against (e.g. the Caddy edge, `PUBLIC_ORIGIN`) |
-| `S3_BUCKET_UPLOADS` | `fyredocs-uploads` | Bucket for input objects |
-| `S3_BUCKET_OUTPUTS` | `fyredocs-outputs` | Bucket for worker output objects |
+| `S3_BUCKET_UPLOADS` | `uploads` | Bucket for input objects |
+| `S3_BUCKET_OUTPUTS` | `outputs` | Bucket for worker output objects |
 | `S3_REGION` | `us-east-1` | Signing region |
 | `S3_USE_SSL` | `false` | TLS to the internal endpoint |
 | `UPLOAD_PART_SIZE_MB` | `8` | Multipart part size in MiB (clamped to the S3 5 MiB minimum) |

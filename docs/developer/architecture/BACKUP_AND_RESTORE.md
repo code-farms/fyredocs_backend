@@ -92,9 +92,9 @@ The DB dump covers all database records; the file **bytes** live in MinIO. The
 same `db-backup` sidecar also mirrors MinIO buckets offsite each cycle, driven by
 `BACKUP_FILES_BUCKETS` (space-separated; empty = DB-only):
 
-- **`fyredocs-outputs` only** by default — the converted results, which is also
+- **`outputs` only** by default — the converted results, which is also
   what `documents` reference (document-service sets `StoragePath = OutputPath`).
-- **`fyredocs-uploads` is deliberately excluded** — raw inputs that auto-expire
+- **`uploads` is deliberately excluded** — raw inputs that auto-expire
   in 2 days (bucket lifecycle rule); backing them up is wasted space.
 
 It uses `rclone sync src:<bucket> dest:<bucket>/<BACKUP_FILES_PREFIX><bucket>/`
@@ -123,7 +123,7 @@ choice.
 
 ```sh
 docker exec fyredocs-db-backup-1 \
-  rclone copy dest:$BACKUP_S3_BUCKET/minio/fyredocs-outputs/ src:fyredocs-outputs/
+  rclone copy dest:$BACKUP_S3_BUCKET/minio/outputs/ src:outputs/
 ```
 
 ## Empty-source protection

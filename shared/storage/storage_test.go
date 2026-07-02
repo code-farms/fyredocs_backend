@@ -37,7 +37,7 @@ func TestConfigFromEnv(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if cfg.BucketUploads != "fyredocs-uploads" {
+		if cfg.BucketUploads != "uploads" {
 			t.Errorf("expected default uploads bucket, got %q", cfg.BucketUploads)
 		}
 		if cfg.BucketOutputs != "custom-outputs" {
@@ -79,19 +79,19 @@ func TestNewBuildsPresignClients(t *testing.T) {
 		PublicEndpoint: "http://localhost:8080",
 		AccessKey:      "ak",
 		SecretKey:      "sk",
-		BucketUploads:  "fyredocs-uploads",
-		BucketOutputs:  "fyredocs-outputs",
+		BucketUploads:  "uploads",
+		BucketOutputs:  "outputs",
 	}
 	c, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if c.BucketUploads() != "fyredocs-uploads" || c.BucketOutputs() != "fyredocs-outputs" {
+	if c.BucketUploads() != "uploads" || c.BucketOutputs() != "outputs" {
 		t.Error("bucket accessors mismatch")
 	}
 
 	// Presigned URLs must be signed against the PUBLIC endpoint host.
-	u, err := c.PresignUploadPart(context.Background(), "fyredocs-uploads", "uploads/u1/file.pdf", "s3id", 1, time.Minute)
+	u, err := c.PresignUploadPart(context.Background(), "uploads", "uploads/u1/file.pdf", "s3id", 1, time.Minute)
 	if err != nil {
 		t.Fatalf("PresignUploadPart: %v", err)
 	}

@@ -45,8 +45,8 @@ func ConfigFromEnv() (Config, error) {
 		AccessKey:      os.Getenv("S3_ACCESS_KEY"),
 		SecretKey:      os.Getenv("S3_SECRET_KEY"),
 		UseSSL:         strings.EqualFold(os.Getenv("S3_USE_SSL"), "true"),
-		BucketUploads:  envOr("S3_BUCKET_UPLOADS", "fyredocs-uploads"),
-		BucketOutputs:  envOr("S3_BUCKET_OUTPUTS", "fyredocs-outputs"),
+		BucketUploads:  envOr("S3_BUCKET_UPLOADS", "uploads"),
+		BucketOutputs:  envOr("S3_BUCKET_OUTPUTS", "outputs"),
 		Region:         envOr("S3_REGION", "us-east-1"),
 	}
 	if cfg.Endpoint == "" {

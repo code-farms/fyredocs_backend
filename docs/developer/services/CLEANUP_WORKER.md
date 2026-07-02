@@ -70,16 +70,16 @@ When scaled to multiple replicas, the Redis SETNX lock ensures only one instance
    ```
 2. Batch-fetch all `file_metadata` rows for the batch (single query)
 3. For each row, delete the object: `RemoveObject(bucketFor(kind), path)`
-   - `kind = "input"` → uploads bucket (`fyredocs-uploads`)
-   - `kind = "output"` → outputs bucket (`fyredocs-outputs`)
+   - `kind = "input"` → uploads bucket (`uploads`)
+   - `kind = "output"` → outputs bucket (`outputs`)
    - Rows whose `path` starts with `/` are **legacy filesystem paths** from before the migration — they are skipped (logged once per batch) and handled by the one-off [`scripts/migrate-files-to-minio.sh`](../../../scripts/migrate-files-to-minio.sh)
    - A missing object is treated as success (idempotent across retries)
 4. Batch-delete `file_metadata` records from database
 5. Batch-delete `processing_jobs` records from database
 
 **Objects Cleaned**:
-- Input objects: `fyredocs-uploads/uploads/{uploadId}/{fileName}`
-- Output objects: `fyredocs-outputs/jobs/{jobId}/{outputName}`
+- Input objects: `uploads/uploads/{uploadId}/{fileName}`
+- Output objects: `outputs/jobs/{jobId}/{outputName}`
 
 ---
 
@@ -102,7 +102,7 @@ When scaled to multiple replicas, the Redis SETNX lock ensures only one instance
 **Criteria**: Incomplete multipart uploads in the uploads bucket initiated more than **24 hours** ago
 
 **Process**:
-1. `ListIncompleteUploads(fyredocs-uploads, MULTIPART_ABORT_TTL)` (default 24h)
+1. `ListIncompleteUploads(uploads, MULTIPART_ABORT_TTL)` (default 24h)
 2. `AbortMultipart` each result
 
 **When this triggers**: Catches multipart uploads whose Redis session vanished without an abort (crash, manual Redis flush). Since there is no bucket lifecycle rule, this phase is the sole mechanism that reclaims their space; the age threshold is `MULTIPART_ABORT_TTL` (default 24h).
@@ -144,8 +144,8 @@ The cleanup worker exposes a lightweight HTTP server for health checks, readines
 | `S3_ENDPOINT` | **Required** | MinIO/S3 endpoint, e.g. `minio:9000` |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | **Required** | Scoped app credentials (created by `minio-init`) |
 | `S3_USE_SSL` | `false` | TLS to the S3 endpoint |
-| `S3_BUCKET_UPLOADS` | `fyredocs-uploads` | Bucket holding raw uploads |
-| `S3_BUCKET_OUTPUTS` | `fyredocs-outputs` | Bucket holding processed outputs |
+| `S3_BUCKET_UPLOADS` | `uploads` | Bucket holding raw uploads |
+| `S3_BUCKET_OUTPUTS` | `outputs` | Bucket holding processed outputs |
 | `UPLOAD_TTL` | `30m` | Upload-session lifetime (same variable job-service uses); Phase 2 reaps `upload:<id>` state at **2 × `UPLOAD_TTL`** (state + multipart + object) |
 | `MULTIPART_ABORT_TTL` | `24h` | How old an **incomplete** multipart upload must be before Phase 3 aborts it and frees its parts (Go duration) |
 | `FREE_JOB_TTL` | `168h` (7d) | TTL applied by Phase 4 backfill to legacy authenticated jobs that were created before plan-based expiration was wired up |
@@ -216,8 +216,8 @@ cleanup-worker:
     S3_ACCESS_KEY: ${S3_ACCESS_KEY}
     S3_SECRET_KEY: ${S3_SECRET_KEY}
     S3_USE_SSL: "false"
-    S3_BUCKET_UPLOADS: fyredocs-uploads
-    S3_BUCKET_OUTPUTS: fyredocs-outputs
+    S3_BUCKET_UPLOADS: uploads
+    S3_BUCKET_OUTPUTS: outputs
     UPLOAD_TTL: 30m
     CLEANUP_INTERVAL: 5m
     FREE_JOB_TTL: 168h
@@ -316,11 +316,11 @@ docker compose logs cleanup-worker | grep ERROR
 docker compose ps cleanup-worker
 
 # Bucket usage (mc alias configured against the MinIO console/API)
-mc du fyredocs/fyredocs-uploads
-mc du fyredocs/fyredocs-outputs
+mc du fyredocs/uploads
+mc du fyredocs/outputs
 
 # Incomplete multipart uploads
-mc ls --incomplete fyredocs/fyredocs-uploads
+mc ls --incomplete fyredocs/uploads
 
 # Check database for expired records
 psql "$DATABASE_URL" -c \
@@ -524,5 +524,21 @@ The cleanup worker is designed for resilience:
 
 For issues:
 - Check logs: `docker compose logs -f cleanup-worker`
-- Inspect buckets: `mc du fyredocs/fyredocs-uploads`, `mc ls --incomplete fyredocs/fyredocs-uploads`
+- Inspect buckets: `mc du fyredocs/uploads`, `mc ls --incomplete fyredocs/uploads`
 - Inspect database: Query `processing_jobs` and `file_metadata` tables
+
+## Bucket rename migration (2026-07)
+
+The buckets were renamed `fyredocs-uploads` → `uploads` and `fyredocs-outputs`
+→ `outputs` (the bucket name is the public URL path segment, so this is what
+made browser URLs `/uploads/...`). `minio-init` creates the new buckets
+automatically on the next `deploy.sh` run; objects in the old buckets are NOT
+migrated — files of jobs created before the rename 404 until reprocessed.
+
+To keep old outputs, mirror before removing; otherwise just delete:
+
+```sh
+docker compose exec -it minio sh -c 'mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" \
+  && mc mirror local/fyredocs-outputs local/outputs \
+  && mc rb --force local/fyredocs-uploads local/fyredocs-outputs'
+```

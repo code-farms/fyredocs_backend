@@ -97,8 +97,8 @@ S3_ENDPOINT="minio:9000"               # required
 S3_ACCESS_KEY="minioadmin"             # required
 S3_SECRET_KEY="minioadmin"             # required
 S3_USE_SSL="false"
-S3_BUCKET_UPLOADS="fyredocs-uploads"
-S3_BUCKET_OUTPUTS="fyredocs-outputs"
+S3_BUCKET_UPLOADS="uploads"
+S3_BUCKET_OUTPUTS="outputs"
 S3_REGION="us-east-1"
 
 # JWT

@@ -66,9 +66,9 @@ sequenceDiagram
             alt path starts with "/" (legacy filesystem path)
                 CW->>CW: skip — log once,<br/>migrate via scripts/migrate-files-to-minio.sh
             else kind == "input"
-                CW->>S3: RemoveObject(fyredocs-uploads, path)
+                CW->>S3: RemoveObject(uploads, path)
             else kind == "output"
-                CW->>S3: RemoveObject(fyredocs-outputs, path)
+                CW->>S3: RemoveObject(outputs, path)
             end
             Note over S3: missing object == success (idempotent)
         end
@@ -98,11 +98,11 @@ sequenceDiagram
         alt Yes — stale
             CW->>R: DEL upload:&lt;id&gt; upload:&lt;id&gt;:chunks
             opt hash has s3UploadId
-                CW->>S3: AbortMultipart(fyredocs-uploads, key, s3UploadId)
+                CW->>S3: AbortMultipart(uploads, key, s3UploadId)
             end
             CW->>PG: SELECT count(*) FROM file_metadata WHERE path = &lt;key&gt;
             alt count == 0 (never consumed by a job)
-                CW->>S3: RemoveObject(fyredocs-uploads, key)
+                CW->>S3: RemoveObject(uploads, key)
             else consumed — referenced by a job
                 CW->>CW: keep object (Phase 1 cleans it with the job)
             end
@@ -119,11 +119,11 @@ sequenceDiagram
     participant CW as cleanup-worker
     participant S3 as MinIO
 
-    CW->>S3: ListIncompleteUploads(fyredocs-uploads, olderThan=24h)
+    CW->>S3: ListIncompleteUploads(uploads, olderThan=24h)
     S3-->>CW: [{key, uploadId, initiated}, ...]
 
     loop For each stale incomplete upload
-        CW->>S3: AbortMultipart(fyredocs-uploads, key, uploadId)
+        CW->>S3: AbortMultipart(uploads, key, uploadId)
         Note over S3: unknown upload == success (idempotent)
         CW->>CW: log("aborted stale multipart upload")
     end

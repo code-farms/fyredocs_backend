@@ -11,8 +11,8 @@
 #   On the host those map to ../files/uploads and ../files/outputs.
 #
 #   After the migration, file_metadata.path holds OBJECT KEYS:
-#       uploads/...   keys live in the fyredocs-uploads bucket
-#       jobs/<jobId>/<baseName> keys live in the fyredocs-outputs bucket
+#       uploads/...   keys live in the uploads bucket
+#       jobs/<jobId>/<baseName> keys live in the outputs bucket
 #   The cleanup-worker skips rows whose path still starts with "/" (legacy)
 #   and logs a pointer to this script.
 #
@@ -21,8 +21,8 @@
 #        /app/uploads/X  -> $FILES_ROOT/uploads/X
 #        /app/outputs/X  -> $FILES_ROOT/outputs/X
 #   2. Derives the target bucket + object key
-#        /app/uploads/<jobId>/<file> -> fyredocs-uploads : uploads/<jobId>/<file>
-#        /app/outputs/<base>         -> fyredocs-outputs : jobs/<jobId>/<base>
+#        /app/uploads/<jobId>/<file> -> uploads : uploads/<jobId>/<file>
+#        /app/outputs/<base>         -> outputs : jobs/<jobId>/<base>
 #      (<jobId> is the job_id column of the row — outputs are re-keyed under
 #       jobs/<jobId>/ to match the new layout)
 #   3. Copies the file into MinIO with `mc cp`
@@ -56,8 +56,8 @@ set -euo pipefail
 DATABASE_URL="${DATABASE_URL:?DATABASE_URL is required (postgres connection string)}"
 MC_ALIAS="${MC_ALIAS:-fyredocs}"                 # mc alias pointing at MinIO
 FILES_ROOT="${FILES_ROOT:-../files}"             # host dir that was bind-mounted
-BUCKET_UPLOADS="${S3_BUCKET_UPLOADS:-fyredocs-uploads}"
-BUCKET_OUTPUTS="${S3_BUCKET_OUTPUTS:-fyredocs-outputs}"
+BUCKET_UPLOADS="${S3_BUCKET_UPLOADS:-uploads}"
+BUCKET_OUTPUTS="${S3_BUCKET_OUTPUTS:-outputs}"
 
 DRY_RUN=1
 if [[ "${1:-}" == "--execute" ]]; then

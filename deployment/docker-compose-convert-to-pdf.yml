@@ -22,8 +22,8 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_USE_SSL: "${S3_USE_SSL:-false}"
-      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
-      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
     env_file:
       - ../.env
     tmpfs:

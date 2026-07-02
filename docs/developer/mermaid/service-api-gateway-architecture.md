@@ -2,7 +2,7 @@
 
 Internal structure and component diagram of the `api-gateway` service (port 8080, internal-only).
 
-The public edge is **Caddy** (`deployment/caddy/Caddyfile`, :80/:443): it terminates TLS, serves the SPA, routes presigned object paths (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`) directly to MinIO, and proxies `/api/*`, `/auth/*`, `/admin/*`, `/healthz` to this gateway. The gateway no longer serves the SPA or relays MinIO bytes.
+The public edge is **Caddy** (`deployment/caddy/Caddyfile`, :80/:443): it terminates TLS, serves the SPA, routes presigned object paths (`/uploads/*`, `/outputs/*`) directly to MinIO, and proxies `/api/*`, `/auth/*`, `/admin/*`, `/healthz` to this gateway. The gateway no longer serves the SPA or relays MinIO bytes.
 
 ## Component Diagram
 
@@ -66,7 +66,7 @@ graph TB
 
     Client[Browser/CLI/SPA] --> CADDY
     CADDY -->|"/api/* · /auth/* · /admin/* · /healthz"| TRACE --> METRICS --> REQID --> SEC --> ROOT
-    CADDY -->|"/fyredocs-uploads/* · /fyredocs-outputs/*<br/>presigned, Host preserved (SigV4)"| Minio[("MinIO :9000<br/>fyredocs-uploads · fyredocs-outputs")]
+    CADDY -->|"/uploads/* · /outputs/*<br/>presigned, Host preserved (SigV4)"| Minio[("MinIO :9000<br/>uploads · outputs")]
 
     ROOT --> CORS --> AUTHMW --> RATELIMIT --> BODYLIMIT --> MUX
 
@@ -111,7 +111,7 @@ flowchart LR
     J --> K[Backend Service]
 ```
 
-Presigned object traffic (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`) is routed by Caddy directly to MinIO and never enters this chain.
+Presigned object traffic (`/uploads/*`, `/outputs/*`) is routed by Caddy directly to MinIO and never enters this chain.
 
 ## Plan Header Injection
 

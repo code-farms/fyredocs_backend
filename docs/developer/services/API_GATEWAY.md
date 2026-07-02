@@ -10,7 +10,7 @@ The API Gateway is the entry point for all API requests to the Fyredocs backend.
 
 ### Edge Topology
 
-Caddy ([deployment/caddy/Caddyfile](../../../deployment/caddy/Caddyfile)) is the public edge in front of the gateway. It terminates TLS (automatic HTTPS when `PUBLIC_DOMAIN` is set; plain HTTP on :80 otherwise), serves the SPA bundle from the frontend dist volume, routes presigned object-storage paths (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`) **directly** to MinIO with the original `Host` preserved (SigV4 invariant), and proxies `/api/*`, `/auth/*`, `/admin/*`, and `/healthz` to the gateway. `/metrics` is intentionally not publicly routed. The gateway itself is internal-only (compose `expose: 8080`, no published port) and no longer serves the SPA or relays object bytes.
+Caddy ([deployment/caddy/Caddyfile](../../../deployment/caddy/Caddyfile)) is the public edge in front of the gateway. It terminates TLS (automatic HTTPS when `PUBLIC_DOMAIN` is set; plain HTTP on :80 otherwise), serves the SPA bundle from the frontend dist volume, routes presigned object-storage paths (`/uploads/*`, `/outputs/*`) **directly** to MinIO with the original `Host` preserved (SigV4 invariant), and proxies `/api/*`, `/auth/*`, `/admin/*`, and `/healthz` to the gateway. `/metrics` is intentionally not publicly routed. The gateway itself is internal-only (compose `expose: 8080`, no published port) and no longer serves the SPA or relays object bytes.
 
 ## Architecture
 
@@ -29,7 +29,7 @@ The API Gateway acts as a reverse proxy that:
 ```
 Client Request
     ↓
-[Caddy edge :80/:443]  — TLS, SPA static files, /fyredocs-uploads/* + /fyredocs-outputs/* → MinIO
+[Caddy edge :80/:443]  — TLS, SPA static files, /uploads/* + /outputs/* → MinIO
     ↓  /api/* · /auth/* · /admin/* · /healthz
 [API Gateway :8080 (internal)]
     ↓
@@ -79,7 +79,7 @@ All `/api/*` traffic is proxied to **job-service**. Workers are not exposed publ
 | `/healthz` | api-gateway (local) | Liveness — pings Redis |
 | `/metrics` | api-gateway (local) | Prometheus metrics (internal network only — Caddy does not route it publicly) |
 
-Presigned object-storage traffic (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`) and the SPA are handled at the Caddy edge and never reach the gateway (see [Object Storage](../architecture/object-storage.md)).
+Presigned object-storage traffic (`/uploads/*`, `/outputs/*`) and the SPA are handled at the Caddy edge and never reach the gateway (see [Object Storage](../architecture/object-storage.md)).
 
 **Job dispatch is NATS, not Redis.** The gateway is HTTP-only — it never touches the JOBS_DISPATCH stream directly. `job-service` is the only publisher.
 
@@ -98,7 +98,7 @@ The reverse proxy uses a custom `http.Transport` tuned for long-running conversi
 
 ### Presigned Object-Storage Traffic
 
-`/fyredocs-uploads/*` and `/fyredocs-outputs/*` are routed by **Caddy** directly to MinIO — they never pass through the gateway. Caddy forwards the path verbatim and preserves the original `Host` header (presigned URLs are signed by job-service against `S3_PUBLIC_ENDPOINT`, the public edge origin, and SigV4 includes `Host` in the signed canonical request). The presigned signature is the credential on these routes; no auth middleware applies.
+`/uploads/*` and `/outputs/*` are routed by **Caddy** directly to MinIO — they never pass through the gateway. Caddy forwards the path verbatim and preserves the original `Host` header (presigned URLs are signed by job-service against `S3_PUBLIC_ENDPOINT`, the public edge origin, and SigV4 includes `Host` in the signed canonical request). The presigned signature is the credential on these routes; no auth middleware applies.
 
 See [Object Storage](../architecture/object-storage.md) for the full presigned flow.
 
@@ -554,10 +554,10 @@ sequenceDiagram
     CY->>GW: proxy /api/*
     GW->>JS: proxy (auth + plan headers)
     JS->>M: CreateMultipart / presign part URLs (signed for the edge origin)
-    JS-->>B: {uploadId, presigned part URLs https://<origin>/fyredocs-uploads/...}
+    JS-->>B: {uploadId, presigned part URLs https://<origin>/uploads/...}
 
     par parts in parallel
-        B->>CY: PUT /fyredocs-uploads/uploads/<id>/<file>?partNumber=N&X-Amz-...
+        B->>CY: PUT /uploads/uploads/<id>/<file>?partNumber=N&X-Amz-...
         Note over CY: object route — no auth, path verbatim,<br/>Host preserved (SigV4)
         CY->>M: relay bytes (flush_interval -1)
         M-->>B: 200 + ETag
@@ -569,7 +569,7 @@ sequenceDiagram
     JS->>M: CompleteMultipart
 
     Note over B,M: download is the same shape:
-    B->>CY: GET /fyredocs-outputs/jobs/<jobId>/<file>?X-Amz-...
+    B->>CY: GET /outputs/jobs/<jobId>/<file>?X-Amz-...
     CY->>M: relay
     M-->>B: object bytes (streamed)
 ```

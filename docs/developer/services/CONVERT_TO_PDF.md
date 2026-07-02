@@ -121,8 +121,8 @@ This worker writes to `processing_jobs` and `file_metadata` (the same tables own
 | `S3_ACCESS_KEY` | **Required** | S3 access key |
 | `S3_SECRET_KEY` | **Required** | S3 secret key |
 | `S3_USE_SSL` | `false` | Use TLS to reach the S3 endpoint |
-| `S3_BUCKET_UPLOADS` | `fyredocs-uploads` | Bucket holding job input objects |
-| `S3_BUCKET_OUTPUTS` | `fyredocs-outputs` | Bucket receiving job outputs (`jobs/{jobID}/...`) |
+| `S3_BUCKET_UPLOADS` | `uploads` | Bucket holding job input objects |
+| `S3_BUCKET_OUTPUTS` | `outputs` | Bucket receiving job outputs (`jobs/{jobID}/...`) |
 | `S3_REGION` | `us-east-1` | Signing region (MinIO ignores it; AWS must match) |
 | `WORKER_CONCURRENCY` | `2` | Max concurrent jobs processed in parallel |
 | `UNOSERVER_HOST` | `127.0.0.1` | unoserver daemon host |
@@ -294,8 +294,8 @@ convert-to-pdf:
     S3_ENDPOINT: minio:9000
     S3_ACCESS_KEY: minioadmin
     S3_SECRET_KEY: minioadmin
-    S3_BUCKET_UPLOADS: fyredocs-uploads
-    S3_BUCKET_OUTPUTS: fyredocs-outputs
+    S3_BUCKET_UPLOADS: uploads
+    S3_BUCKET_OUTPUTS: outputs
     WORKER_CONCURRENCY: "2"
   depends_on:
     - db

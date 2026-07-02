@@ -68,7 +68,7 @@ graph TB
     P1A & P1B & P1D & P2D & P4A --> PG[(PostgreSQL)]
     P2A & P2B --> RD[(Redis)]
     P1C & P2D & P3A & P3B --> ST
-    ST --> S3[(MinIO<br/>fyredocs-uploads · fyredocs-outputs)]
+    ST --> S3[(MinIO<br/>uploads · outputs)]
 ```
 
 ## Cleanup Targets
@@ -100,7 +100,7 @@ graph TD
         B["UPLOAD_TTL<br/>Default: 30m (config.UploadTTL)<br/>Phase 2 reaps at 2 × UPLOAD_TTL"]
         C["FREE_JOB_TTL<br/>Default: 7d/168h (config.FreeJobTTL)<br/>(used by Phase 4 backfill only —<br/>old 24h-vs-7d drift bug fixed)"]
         D["S3_ENDPOINT · S3_ACCESS_KEY · S3_SECRET_KEY<br/>Required (fail-fast)"]
-        E["S3_BUCKET_UPLOADS / S3_BUCKET_OUTPUTS<br/>Default: fyredocs-uploads / fyredocs-outputs"]
+        E["S3_BUCKET_UPLOADS / S3_BUCKET_OUTPUTS<br/>Default: uploads / outputs"]
         F["PORT<br/>Default: 8088"]
     end
 

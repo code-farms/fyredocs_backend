@@ -418,8 +418,8 @@ curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-odp \
 | `S3_ACCESS_KEY` | **Required** | S3 access key |
 | `S3_SECRET_KEY` | **Required** | S3 secret key |
 | `S3_USE_SSL` | `false` | Use TLS to reach the S3 endpoint |
-| `S3_BUCKET_UPLOADS` | `fyredocs-uploads` | Bucket holding job input objects |
-| `S3_BUCKET_OUTPUTS` | `fyredocs-outputs` | Bucket receiving job outputs (`jobs/{jobID}/...`) |
+| `S3_BUCKET_UPLOADS` | `uploads` | Bucket holding job input objects |
+| `S3_BUCKET_OUTPUTS` | `outputs` | Bucket receiving job outputs (`jobs/{jobID}/...`) |
 | `S3_REGION` | `us-east-1` | Signing region (MinIO ignores it; AWS must match) |
 | `QUEUE_PREFIX` | `queue` | Redis queue key prefix |
 | `MAX_RETRIES` | `3` | Max retry attempts for failed jobs |
@@ -493,8 +493,8 @@ convert-from-pdf:
     S3_ENDPOINT: minio:9000
     S3_ACCESS_KEY: minioadmin
     S3_SECRET_KEY: minioadmin
-    S3_BUCKET_UPLOADS: fyredocs-uploads
-    S3_BUCKET_OUTPUTS: fyredocs-outputs
+    S3_BUCKET_UPLOADS: uploads
+    S3_BUCKET_OUTPUTS: outputs
     MAX_RETRIES: "3"
     PROCESSING_TIMEOUT: 30m
   depends_on:

@@ -10,7 +10,7 @@ worker replicas and multi-host deployment possible.
 
 ```mermaid
 graph LR
-    Browser -->|"presigned PUT/GET<br/>/fyredocs-uploads/* · /fyredocs-outputs/*"| GW["api-gateway :8080"]
+    Browser -->|"presigned PUT/GET<br/>/uploads/* · /outputs/*"| GW["api-gateway :8080"]
     GW -->|"verbatim path,<br/>original Host preserved"| MINIO["MinIO :9000<br/>(internal only)"]
 
     JOB["job-service"] -->|presign, stat, multipart| MINIO
@@ -36,8 +36,8 @@ graph LR
 
 | Bucket | Keys | Written by | Deleted by |
 |--------|------|------------|------------|
-| `fyredocs-uploads` | `uploads/<uploadId>/<fileName>` | browser (presigned PUT / multipart parts) | lifecycle (2 d) + cleanup-worker |
-| `fyredocs-outputs` | `jobs/<jobId>/<outputName>` | worker services | cleanup-worker (DB-driven only) |
+| `uploads` | `uploads/<uploadId>/<fileName>` | browser (presigned PUT / multipart parts) | lifecycle (2 d) + cleanup-worker |
+| `outputs` | `jobs/<jobId>/<outputName>` | worker services | cleanup-worker (DB-driven only) |
 
 `file_metadata.path` stores the **object key** (no leading `/`). The `kind`
 column selects the bucket: `input` → uploads, `output` → outputs. Rows whose
@@ -54,8 +54,8 @@ Browsers never talk to MinIO directly. `job-service` presigns URLs against
 the two bucket path prefixes straight to MinIO:
 
 ```
-PUT  https://<origin>/fyredocs-uploads/uploads/<id>/<file>?uploadId=…&partNumber=…&X-Amz-…
-GET  https://<origin>/fyredocs-outputs/jobs/<jobId>/<file>?X-Amz-…
+PUT  https://<origin>/uploads/uploads/<id>/<file>?uploadId=…&partNumber=…&X-Amz-…
+GET  https://<origin>/outputs/jobs/<jobId>/<file>?X-Amz-…
 ```
 
 Two properties of the proxy are **load-bearing for SigV4**:
@@ -94,12 +94,12 @@ imported):
 }]}
 ```
 
-- `fyredocs-uploads`: objects expire after `UPLOAD_EXPIRE_DAYS` (**default 2**);
+- `uploads`: objects expire after `UPLOAD_EXPIRE_DAYS` (**default 2**);
   incomplete multipart uploads are aborted after `UPLOAD_ABORT_INCOMPLETE_DAYS`
   (**default 1**). Uploads are consumed into jobs within minutes, so anything
   older is abandoned. Both are set on `minio-init` and overridable via the
   deployment `.env`.
-- `fyredocs-outputs`: **no lifecycle rule.** Pro-plan outputs never expire;
+- `outputs`: **no lifecycle rule.** Pro-plan outputs never expire;
   deletion is exclusively DB-driven (cleanup-worker removes the object when
   the owning `processing_jobs` row passes `expires_at`).
 
@@ -154,8 +154,8 @@ Swapping MinIO for AWS S3/R2 is an env-var change (`S3_ENDPOINT`,
 | `S3_PUBLIC_ENDPOINT` | falls back to `S3_ENDPOINT` | Origin presigned URLs are signed for (the gateway / public origin) |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | — (required) | Scoped app credentials created by `minio-init` |
 | `S3_USE_SSL` | `false` | TLS to the internal endpoint |
-| `S3_BUCKET_UPLOADS` | `fyredocs-uploads` | Raw upload bucket |
-| `S3_BUCKET_OUTPUTS` | `fyredocs-outputs` | Processed output bucket |
+| `S3_BUCKET_UPLOADS` | `uploads` | Raw upload bucket |
+| `S3_BUCKET_OUTPUTS` | `outputs` | Processed output bucket |
 | `S3_REGION` | `us-east-1` | Pins SigV4 signing region (MinIO ignores it) |
 
 Gateway-only: `MINIO_URL` (default `http://minio:9000`) — upstream for the

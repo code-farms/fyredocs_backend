@@ -734,7 +734,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"message\": \"Upload started successfully\",\n  \"data\": {\n    \"uploadId\": \"3f6f2c9a-1d2e-4b5f-8a9c-0d1e2f3a4b5c\",\n    \"key\": \"uploads/3f6f2c9a-1d2e-4b5f-8a9c-0d1e2f3a4b5c/document.pdf\",\n    \"partSize\": 8388608,\n    \"totalParts\": 1,\n    \"urlExpiresAt\": \"2026-01-15T11:00:00Z\",\n    \"parts\": [\n      {\n        \"partNumber\": 1,\n        \"url\": \"{{base_url}}/fyredocs-uploads/uploads/3f6f2c9a-.../document.pdf?uploadId=...&partNumber=1&X-Amz-Signature=...\"\n      }\n    ]\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"message\": \"Upload started successfully\",\n  \"data\": {\n    \"uploadId\": \"3f6f2c9a-1d2e-4b5f-8a9c-0d1e2f3a4b5c\",\n    \"key\": \"uploads/3f6f2c9a-1d2e-4b5f-8a9c-0d1e2f3a4b5c/document.pdf\",\n    \"partSize\": 8388608,\n    \"totalParts\": 1,\n    \"urlExpiresAt\": \"2026-01-15T11:00:00Z\",\n    \"parts\": [\n      {\n        \"partNumber\": 1,\n        \"url\": \"{{base_url}}/uploads/uploads/3f6f2c9a-.../document.pdf?uploadId=...&partNumber=1&X-Amz-Signature=...\"\n      }\n    ]\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
             }
           ]
         },
@@ -818,7 +818,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"message\": \"Upload URLs refreshed\",\n  \"data\": {\n    \"uploadId\": \"3f6f2c9a-1d2e-4b5f-8a9c-0d1e2f3a4b5c\",\n    \"partSize\": 8388608,\n    \"urlExpiresAt\": \"2026-01-15T11:30:00Z\",\n    \"parts\": [\n      {\n        \"partNumber\": 1,\n        \"url\": \"{{base_url}}/fyredocs-uploads/uploads/3f6f2c9a-.../document.pdf?uploadId=...&partNumber=1&X-Amz-Signature=...\"\n      }\n    ]\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"message\": \"Upload URLs refreshed\",\n  \"data\": {\n    \"uploadId\": \"3f6f2c9a-1d2e-4b5f-8a9c-0d1e2f3a4b5c\",\n    \"partSize\": 8388608,\n    \"urlExpiresAt\": \"2026-01-15T11:30:00Z\",\n    \"parts\": [\n      {\n        \"partNumber\": 1,\n        \"url\": \"{{base_url}}/uploads/uploads/3f6f2c9a-.../document.pdf?uploadId=...&partNumber=1&X-Amz-Signature=...\"\n      }\n    ]\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
             }
           ]
         },
@@ -1592,7 +1592,7 @@
               "header": [
                 {
                   "key": "Location",
-                  "value": "{{base_url}}/fyredocs-outputs/outputs/{{job_id}}/document.pdf?response-content-disposition=attachment%3B%20filename%3Ddocument.pdf&response-content-type=application%2Fpdf&X-Amz-Signature=..."
+                  "value": "{{base_url}}/outputs/outputs/{{job_id}}/document.pdf?response-content-disposition=attachment%3B%20filename%3Ddocument.pdf&response-content-type=application%2Fpdf&X-Amz-Signature=..."
                 }
               ],
               "body": ""
@@ -2413,7 +2413,7 @@
               "header": [
                 {
                   "key": "Location",
-                  "value": "{{base_url}}/fyredocs-outputs/outputs/{{job_id}}/document.docx?response-content-disposition=attachment%3B%20filename%3Ddocument.docx&response-content-type=application%2Fvnd.openxmlformats-officedocument.wordprocessingml.document&X-Amz-Signature=..."
+                  "value": "{{base_url}}/outputs/outputs/{{job_id}}/document.docx?response-content-disposition=attachment%3B%20filename%3Ddocument.docx&response-content-type=application%2Fvnd.openxmlformats-officedocument.wordprocessingml.document&X-Amz-Signature=..."
                 }
               ],
               "body": ""
@@ -3224,7 +3224,7 @@
               "header": [
                 {
                   "key": "Location",
-                  "value": "{{base_url}}/fyredocs-outputs/outputs/{{job_id}}/merged.pdf?response-content-disposition=attachment%3B%20filename%3Dmerged.pdf&response-content-type=application%2Fpdf&X-Amz-Signature=..."
+                  "value": "{{base_url}}/outputs/outputs/{{job_id}}/merged.pdf?response-content-disposition=attachment%3B%20filename%3Dmerged.pdf&response-content-type=application%2Fpdf&X-Amz-Signature=..."
                 }
               ],
               "body": ""
@@ -3725,7 +3725,7 @@
               "header": [
                 {
                   "key": "Location",
-                  "value": "{{base_url}}/fyredocs-outputs/outputs/{{job_id}}/compressed.pdf?response-content-disposition=attachment%3B%20filename%3Dcompressed.pdf&response-content-type=application%2Fpdf&X-Amz-Signature=..."
+                  "value": "{{base_url}}/outputs/outputs/{{job_id}}/compressed.pdf?response-content-disposition=attachment%3B%20filename%3Dcompressed.pdf&response-content-type=application%2Fpdf&X-Amz-Signature=..."
                 }
               ],
               "body": ""

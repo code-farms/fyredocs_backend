@@ -19,7 +19,7 @@ The script generates a JWT secret, starts all services with Docker Compose, and 
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **Caddy (edge)** | 80/443 | Public edge: TLS termination (automatic HTTPS when `PUBLIC_DOMAIN` is set), SPA static hosting, presigned object-byte routing to MinIO (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`), proxies `/api/*`, `/auth/*`, `/admin/*`, `/healthz` to the API Gateway |
+| **Caddy (edge)** | 80/443 | Public edge: TLS termination (automatic HTTPS when `PUBLIC_DOMAIN` is set), SPA static hosting, presigned object-byte routing to MinIO (`/uploads/*`, `/outputs/*`), proxies `/api/*`, `/auth/*`, `/admin/*`, `/healthz` to the API Gateway |
 | **API Gateway** | 8080 (internal) | Reverse proxy behind the Caddy edge (not published), CORS, JWT/guest verification, plan resolution |
 | **Auth Service** | 8086 | Signup, login, refresh-token rotation with DB-backed sessions, plan management |
 | **Job Service** | 8081 | Presigned (multipart) uploads to MinIO, job creation, NATS publish, SSE streaming, history |
@@ -32,15 +32,15 @@ The script generates a JWT secret, starts all services with Docker Compose, and 
 | **Document Service** | 8089 | Persistent document library — documents, folders, tags, exports; finalizes completed jobs into documents (NATS subscriber) |
 | **User Service** | 8090 | Organizations, memberships, and the RBAC role model |
 | **Notification Service** | 8091 | In-app notification feed; consumes job events, pushes a live SSE bell |
-| **MinIO** | — (internal) | Object storage for all file bytes (`fyredocs-uploads`, `fyredocs-outputs`); bootstrapped by the one-shot `minio-init` container (buckets, lifecycle rules, scoped app user) |
+| **MinIO** | — (internal) | Object storage for all file bytes (`uploads`, `outputs`); bootstrapped by the one-shot `minio-init` container (buckets, lifecycle rules, scoped app user) |
 
 ## Request Flow
 
 ```
 Client → Caddy edge (:80/:443 — TLS, gzip)
             │
-            ├─ /fyredocs-uploads/*   → MinIO (presigned PUT/multipart parts — no auth, Host preserved for SigV4)
-            ├─ /fyredocs-outputs/*   → MinIO (presigned GET downloads)
+            ├─ /uploads/*   → MinIO (presigned PUT/multipart parts — no auth, Host preserved for SigV4)
+            ├─ /outputs/*   → MinIO (presigned GET downloads)
             ├─ /  (everything else)  → SPA static files (frontend dist volume)
             │
             └─ /api/* · /auth/* · /admin/* · /healthz
@@ -83,7 +83,7 @@ Client → Caddy edge (:80/:443 — TLS, gzip)
 - **Web Framework**: Gin (services) + net/http (api-gateway)
 - **Database**: PostgreSQL 18 (per-service schema, UUIDv7 IDs, pooled DSN)
 - **Cache / Sessions**: Redis 7 (token denylist, upload state, rate limiting, plan cache, cleanup lock)
-- **Object Storage**: MinIO (S3-compatible) — buckets `fyredocs-uploads` / `fyredocs-outputs`, presigned URLs routed same-origin through the Caddy edge
+- **Object Storage**: MinIO (S3-compatible) — buckets `uploads` / `outputs`, presigned URLs routed same-origin through the Caddy edge
 - **Edge**: Caddy — TLS termination (automatic HTTPS via `PUBLIC_DOMAIN`), SPA static hosting, object-byte routing, API proxy
 - **Message Bus**: NATS JetStream — streams: `JOBS_DISPATCH`, `JOBS_EVENTS`, `JOBS_DLQ`, `ANALYTICS`
 - **Document Processing**: LibreOffice + unoserver, pdf2docx, pdfcpu, Poppler, Ghostscript, Tesseract OCR

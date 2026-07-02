@@ -116,9 +116,9 @@ services:
 
   # ==================== OBJECT STORAGE (MinIO) ====================
   # All file bytes live here. Services talk to minio:9000 over the internal
-  # network; browsers reach objects through the api-gateway's presigned-URL
-  # proxy (/fyredocs-uploads/*, /fyredocs-outputs/*) — port 9000 is NOT
-  # published. The console is bound to localhost only for operators.
+  # network; browsers reach objects through presigned URLs routed at the
+  # Caddy edge (/uploads/*, /outputs/*) — port 9000 is NOT published.
+  # The console is bound to localhost only for operators.
   minio:
     image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-04-22T22-12-26Z}
     restart: always
@@ -216,8 +216,8 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
-      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
     logging:
       driver: "json-file"
       options:
@@ -243,8 +243,8 @@ services:
       # Set to your public domain to enable automatic HTTPS; leave unset
       # for plain HTTP on :80 (local/dev).
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
-      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
-      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ../../fyredocs_frontend/dist:/srv/spa:ro
@@ -474,8 +474,8 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_USE_SSL: "${S3_USE_SSL:-false}"
-      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
-      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
       # Presigned URLs are signed for the origin browsers actually use (the
       # gateway). Multi-host: point this at the public origin instead.
       S3_PUBLIC_ENDPOINT: ${PUBLIC_ORIGIN:-http://localhost}
@@ -538,8 +538,8 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_USE_SSL: "${S3_USE_SSL:-false}"
-      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
-      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
@@ -600,8 +600,8 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_USE_SSL: "${S3_USE_SSL:-false}"
-      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
-      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
       # Overridable per host: on a VS-32-class box (16 cores) try 3-4.
@@ -670,8 +670,8 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_USE_SSL: "${S3_USE_SSL:-false}"
-      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
-      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
       # pdfcpu ops are pure-Go and cheap, so concurrency can run higher.
@@ -729,8 +729,8 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_USE_SSL: "${S3_USE_SSL:-false}"
-      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
-      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
@@ -963,8 +963,8 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_USE_SSL: "${S3_USE_SSL:-false}"
-      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
-      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
 
       UPLOAD_TTL: 30m
       CLEANUP_INTERVAL: 5m
@@ -1041,7 +1041,7 @@ services:
       RCLONE_CONFIG_SRC_REGION: ${S3_REGION:-us-east-1}
       # Which MinIO buckets to mirror (space-separated; empty = DB-only backup).
       # Outputs only by default — uploads are ephemeral (2-day expiry).
-      BACKUP_FILES_BUCKETS: ${BACKUP_FILES_BUCKETS:-fyredocs-outputs}
+      BACKUP_FILES_BUCKETS: ${BACKUP_FILES_BUCKETS:-outputs}
       BACKUP_FILES_PREFIX: ${BACKUP_FILES_PREFIX:-minio/}
     deploy:
       resources:

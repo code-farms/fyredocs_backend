@@ -69,7 +69,7 @@ sequenceDiagram
 
     Note over Browser: presigned URL from job-service,<br/>signed for the EDGE origin (S3_PUBLIC_ENDPOINT)
 
-    Browser->>CY: PUT /fyredocs-uploads/uploads/&lt;id&gt;/&lt;file&gt;?partNumber=N&X-Amz-Signature=...
+    Browser->>CY: PUT /uploads/uploads/&lt;id&gt;/&lt;file&gt;?partNumber=N&X-Amz-Signature=...
     Note over CY: @objects matcher routes bucket prefixes to MinIO —<br/>signature is the credential, no auth middleware
     Note over CY: path verbatim (no strip),<br/>Host header preserved (SigV4 signs it)
     CY->>M: relay bytes (flush_interval -1)
@@ -77,7 +77,7 @@ sequenceDiagram
     M-->>CY: 200 + ETag
     CY-->>Browser: 200 + ETag
 
-    Browser->>CY: GET /fyredocs-outputs/jobs/&lt;jobId&gt;/&lt;file&gt;?X-Amz-Signature=...
+    Browser->>CY: GET /outputs/jobs/&lt;jobId&gt;/&lt;file&gt;?X-Amz-Signature=...
     CY->>M: relay
     M-->>Browser: object bytes (streamed, no buffering)
 ```
