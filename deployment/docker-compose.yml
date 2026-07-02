@@ -799,6 +799,9 @@ services:
       PORT: "8087"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       NATS_URL: nats://nats:4222
+      # NATS HTTP monitoring endpoint (`-m 8222`), internal-only. Scraped by the
+      # admin NATS dashboard tab (/admin/metrics/nats).
+      NATS_MONITOR_URL: http://nats:8222
       # Redis backs the short-TTL /api/dashboard response cache.
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}

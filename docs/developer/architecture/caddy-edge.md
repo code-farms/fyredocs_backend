@@ -41,6 +41,12 @@ graph TB
 `/metrics` is **intentionally not routed** — Prometheus scrapes services on the
 internal network, so metrics are not internet-reachable.
 
+Likewise the **NATS monitoring endpoint** (`nats:8222`, enabled via `-m 8222`)
+is not exposed at the edge. The admin NATS dashboard tab (`/admin/metrics/nats`)
+does not reach NATS directly — it goes through Caddy → api-gateway →
+analytics-service, which scrapes `http://nats:8222` from inside `fyredocs_net`
+and shapes the JSON. NATS itself stays internal-only.
+
 ## Request routing (sequence)
 
 ```mermaid

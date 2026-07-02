@@ -2133,6 +2133,29 @@ paths:
               schema:
                 $ref: "#/components/schemas/APIResponse"
 
+  /admin/metrics/nats:
+    get:
+      tags: [Admin Analytics]
+      summary: NATS/JetStream health (streams, consumers, server info)
+      description: |
+        Scrapes the NATS HTTP monitoring endpoint (NATS_MONITOR_URL, default
+        http://nats:8222, internal-only): /varz for server info and
+        /jsz?streams=true&consumers=true for stream and consumer detail.
+        Returns `server` (status, connections, memoryMB, uptime, slowConsumers),
+        `streams[]` (name, messages, bytes, firstSeq, lastSeq, consumerCount),
+        `consumers[]` (stream, name, numPending, numAckPending, numRedelivered,
+        numWaiting), and `summary` (totalStreams, totalConsumers, totalMessages,
+        dlqDepth). When NATS monitoring is unreachable the response is still
+        HTTP 200 with status "unreachable".
+      operationId: adminNATSStats
+      responses:
+        "200":
+          description: NATS/JetStream metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+
   /admin/metrics/server-performance:
     get:
       tags: [Admin Analytics]

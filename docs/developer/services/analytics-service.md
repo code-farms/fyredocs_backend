@@ -69,6 +69,7 @@ Behaviour by caller:
 | GET | `/admin/metrics/engagement?days=30` | Engagement metrics (tool trends, jobs/user, file sizes, guest vs registered, power users) |
 | GET | `/admin/metrics/reliability?days=30` | Reliability metrics (success/failure rates, processing time p50/p95, tool errors, plan limit hits). Also returns `processingTimeTrend` (daily p50/p95/p99 latency, seconds) and `failureCategories` (daily failure counts bucketed into timeout/validation/processing/infrastructure/other from the `[ERROR_CODE]` prefix in `metadata.failureReason`). |
 | GET | `/admin/metrics/system` | System health (ingestion rate, active users, processing lag, event breakdown) |
+| GET | `/admin/metrics/nats` | NATS/JetStream health. Scrapes the NATS HTTP monitoring endpoint (`NATS_MONITOR_URL`, default `http://nats:8222`, internal-only): `/varz` for server info and `/jsz?streams=true&consumers=true` for stream/consumer detail. Returns `server` (status, connections, memoryMB, uptime, slowConsumers), `streams[]` (name, messages, bytes, firstSeq, lastSeq, consumerCount), `consumers[]` (stream, name, numPending, numAckPending, numRedelivered, numWaiting), and `summary` (totalStreams, totalConsumers, totalMessages, dlqDepth). Degrades gracefully to `status: "unreachable"` (still HTTP 200) when NATS monitoring is down. |
 | GET | `/admin/metrics/server-performance` | Server performance (CPU, memory, storage, uptime, service availability, Go runtime per service). Also returns `servicesList`: a name-sorted, table-friendly array of per-service rows (name, status, uptime, goroutines, heapAllocMB, heapInuseMB, sysMB, goVersion, error?). |
 | GET | `/admin/metrics/executive?days=30` | Executive overview: 8 KPIs (totalUsers, activeUsers, revenue, jobsCreated, successRate, apiRequests, apiErrorRate, activeServers) each with `current`, `previous`, and a daily `sparkline`. `revenue` is ESTIMATED (see `/revenue`); `apiRequests`/`apiErrorRate` are null until the metrics sampler is deployed. |
 | GET | `/admin/metrics/revenue?days=30` | **Estimated** revenue from the active plan distribution × the configured `PLAN_PRICES` map (no billing integration). Returns `mrr`, `arr`, `previousMrr`, `byPlan`, a daily `trend`, `planChanges` (upgrades/downgrades ranked by price), `prices`, `currency`, and `estimated: true`. |
@@ -122,6 +123,7 @@ Behaviour by caller:
 | PORT | 8087 | Service port |
 | DATABASE_URL | — | PostgreSQL connection string |
 | NATS_URL | nats://nats:4222 | NATS server URL |
+| NATS_MONITOR_URL | http://nats:8222 | NATS HTTP monitoring endpoint (`-m 8222`), internal-only. Scraped by `/admin/metrics/nats`. |
 | TRUSTED_PROXIES | 127.0.0.1,::1 | Trusted proxy addresses |
 | SERVICE_URLS | api-gateway=http://api-gateway:8080,auth-service=http://auth-service:8086,job-service=http://job-service:8081,convert-from-pdf=http://convert-from-pdf:8082,convert-to-pdf=http://convert-to-pdf:8083,organize-pdf=http://organize-pdf:8084,optimize-pdf=http://optimize-pdf:8085 | Service name=URL pairs for performance scraping |
 | API_GATEWAY_METRICS_URL | http://api-gateway:8080/metrics | API gateway Prometheus metrics URL |
