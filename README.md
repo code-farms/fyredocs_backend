@@ -13,7 +13,8 @@ The script generates a JWT secret, starts all services with Docker Compose, and 
 | Service | URL |
 |---------|-----|
 | Caddy edge (SPA + API) | http://localhost |
-| Job Service | http://localhost:8081 |
+
+All other services are internal-only (reachable on the `fyredocs_net` Docker network, not published to the host); the Caddy edge is the sole host-exposed entrypoint.
 
 ## Services
 
@@ -31,7 +32,7 @@ The script generates a JWT secret, starts all services with Docker Compose, and 
 | **Document Service** | 8089 | Persistent document library — documents, folders, tags, exports; finalizes completed jobs into documents (NATS subscriber) |
 | **User Service** | 8090 | Organizations, memberships, and the RBAC role model |
 | **Notification Service** | 8091 | In-app notification feed; consumes job events, pushes a live SSE bell |
-| **MinIO** | — (internal) | Object storage for all file bytes (`uploads`, `outputs`); bootstrapped by the one-shot `minio-init` container (buckets, lifecycle rules, scoped app user) |
+| **MinIO** | — (internal) | Object storage for all file bytes (`uploads`, `outputs`); bootstrapped by the one-shot `minio-init` container (creates buckets + scoped app user, clears any bucket lifecycle rule — retention is DB-driven via job-service's cleanup loop) |
 
 ## Request Flow
 

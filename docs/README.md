@@ -26,8 +26,8 @@ Includes:
 - [API Reference](developer/api/) — Endpoint specifications for all services
 - [Service Architecture](developer/services/) — Internal design docs for each microservice
 - [Architecture Diagrams](developer/mermaid/) — Mermaid diagrams (system overview, per-service architecture & sequence)
-- [Infrastructure](developer/architecture/) — Base image setup, Redis architecture
+- [Infrastructure](developer/architecture/) — Caddy edge, object storage, Redis, base image, compose layout
 - [OpenAPI/Swagger](developer/swagger/openapi.yaml) — Machine-readable API specification
-- [Database Best Practices](developer/DB_BEST_PRACTICES.md)
-- [Backend Hardening](developer/backend-hardening.md)
-- [Deployment Review](developer/deployment-review.md)
+- [Database (performance, optimization & locality)](developer/architecture/database.md)
+- [Backend Hardening](developer/architecture/backend-hardening.md)
+- [Production Readiness](developer/architecture/production-readiness.md)

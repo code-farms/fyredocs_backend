@@ -373,3 +373,48 @@ What stands between this system and that target is not code but **operations**: 
 
 ---
 *Audit artifacts: findings verified against source at commit-time snapshot of 2026-07-02. Line references are to files as read during this audit.*
+
+---
+
+## Appendix — Deployment Strategy Review (2026-03-19)
+
+An earlier, infrastructure-focused review of `docker-compose.yml`, `deploy.sh`, and the Dockerfiles. Where it overlaps the audit above, **the audit (2026-07-02) is authoritative** — several of the original Critical/Medium items have since been resolved and are folded into the audit's findings and roadmap. Retained here for the deployment-specific positives, the resource-budget design, and a status log of the original 13 findings.
+
+### What the deployment does well
+
+- **Multi-stage Docker builds** with `scratch` base images — minimal attack surface, small images
+- **Non-root containers** (`appuser` UID 10001) across all services
+- **Health checks on all services** with dependency ordering via `depends_on` + `condition`
+- **BuildKit caching** for Go module and build cache — faster rebuilds
+- **Sequential builds** in `deploy.sh` to avoid CPU/memory exhaustion on constrained hosts
+- **Shared base image** (`fyredocs-base`) for PDF tooling — avoids redundant layers across workers
+- **Go workspace** (`go.work`) for unified dependency management
+
+### Resource limits — auto-budgeted (resolved)
+
+Every service carries `deploy.resources.limits` (memory + cpus), and `deploy.sh` auto-computes them so the **whole stack stays under a configurable percentage of the host's total RAM/CPU** (`RESOURCE_BUDGET_PCT`, default 70, clamped 50–90), on any machine, with no specs hardcoded:
+
+- "Total available" is read from `docker info` (`.MemTotal` / `.NCPU`) — the full host on a Linux VPS, the Docker Desktop VM's allocation on macOS.
+- `MEM_BUDGET = PCT% × MemTotal`, `CPU_BUDGET = PCT% × NCPU`, distributed across containers by **responsibility-based weights** (LibreOffice/OCR workers + MinIO get the bulk; the api-gateway gets a real CPU share as it sits on every request's hot path; near-idle services get a sliver), so **Σ(limits) ≤ budget** even with everything maxed at once.
+- Each limit is exposed as `${<SERVICE>_MEM_LIMIT:-<default>}` / `${<SERVICE>_CPU_LIMIT:-<default>}`; deploy.sh exports the computed values (exported env wins over `.env` defaults). A plain `docker compose up` falls back to the built-in defaults.
+- Worker pools (`*_CONCURRENCY`, `OCR_MAX_WORKERS`, `UNOSERVER_INSTANCES`) are derived from each worker's *scaled* memory cap, so no pool can be sized past the RAM its container is allowed.
+
+Preview for any host: `./deployment/deploy.sh --dry-run` (override with `MEM_TOTAL_MB=… NCPU=…` to model a different box).
+
+### Status of the original 13 findings
+
+| # | Issue | Severity | Current status |
+|---|-------|----------|----------------|
+| 1 | Hardcoded DB credentials | Critical | ✅ Resolved — moved to gitignored root `.env` with variable interpolation (secrets hygiene still tracked as audit S4) |
+| 2 | No reverse proxy / TLS | Critical | ✅ Resolved — Caddy edge terminates TLS (automatic HTTPS via `PUBLIC_DOMAIN`), serves the SPA, routes object bytes; gateway is now internal-only (audit S5) |
+| 3 | No CI/CD pipeline | Critical | ❌ Open — see audit §8.1 and roadmap Phase 1 |
+| 4 | No rollback strategy | Critical | ❌ Open — images not tagged/pushed to a registry (audit §5.15) |
+| 5 | `chmod 777` on volumes | Medium | ✅ Obsolete — no shared filesystem volume; all bytes live in MinIO |
+| 6 | Infra ports exposed to host | Medium | ✅ Resolved — db/redis/nats internal-only; only the edge (80/443) and MinIO console (loopback) are published |
+| 7 | No resource limits | Medium | ✅ Resolved — see "Resource limits" above |
+| 8 | No log retention | Medium | ✅ Resolved — `json-file` with `max-size: 10m` / `max-file: 3` on all services |
+| 9 | OTel collector not deployed | Low | ❌ Open — services export to `otel-collector:4318` but no collector runs (audit §5.11) |
+| 10 | No DB backups | Medium | ⚠️ Partial — `db-backup` sidecar does hourly `pg_dump` → external S3 via rclone (opt-in on `BACKUP_S3_*`); restore drill still undocumented (audit §5.15). See [backup-and-restore.md](./backup-and-restore.md) |
+| 11 | `deploy.sh` health-check gaps | Medium | ⚠️ Partial — edge/DB waits exist; per-service health waits added for single-service deploys |
+| 12 | No frontend deployment | Medium | ✅ Resolved — SPA is built and served by the Caddy edge from `fyredocs_frontend/dist` |
+| 13 | Redis no authentication | Medium | ✅ Resolved — `--requirepass ${REDIS_PASSWORD}`, required by `deploy.sh` |

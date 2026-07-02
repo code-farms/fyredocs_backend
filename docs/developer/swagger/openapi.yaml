@@ -52,7 +52,7 @@ info:
 
 servers:
   - url: http://localhost
-    description: Fyredocs API Gateway (local development)
+    description: Fyredocs Caddy edge (local development)
 
 tags:
   - name: Health

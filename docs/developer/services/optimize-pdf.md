@@ -26,7 +26,7 @@ Reduces PDF file size using Ghostscript optimization.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8080/api/optimize-pdf/compress-pdf \
+curl -X POST http://localhost/api/optimize-pdf/compress-pdf \
   -F "files=@large-document.pdf" \
   -F 'options={"quality":"ebook"}'
 ```
@@ -36,7 +36,7 @@ Fixes corrupted or damaged PDFs using Ghostscript to rebuild the PDF structure.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8080/api/optimize-pdf/repair-pdf \
+curl -X POST http://localhost/api/optimize-pdf/repair-pdf \
   -F "files=@corrupted-document.pdf"
 ```
 
@@ -49,7 +49,7 @@ Adds a searchable text layer to scanned PDFs using Tesseract OCR.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8080/api/optimize-pdf/ocr-pdf \
+curl -X POST http://localhost/api/optimize-pdf/ocr-pdf \
   -F "files=@scanned-document.pdf" \
   -F 'options={"language":"eng","dpi":"300"}'
 ```

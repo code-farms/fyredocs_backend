@@ -253,7 +253,7 @@ environment:
 
 ### Docker Compose
 
-The API Gateway is configured in [docker-compose.yml](../docker-compose.yml):
+The API Gateway is configured in [docker-compose.yml](../../../deployment/docker-compose.yml):
 
 ```yaml
 api-gateway:
@@ -623,8 +623,8 @@ When a backend service is unreachable:
 
 ## Related Documentation
 
-- [Auth Service](./AUTH_SERVICE.md) - Detailed authentication documentation
-- [Job Service](./JOB_SERVICE.md) - Backend service documentation
+- [Auth Service](./auth-service.md) - Detailed authentication documentation
+- [Job Service](./job-service.md) - Backend service documentation
 - [Object Storage](../architecture/object-storage.md) - MinIO topology and presigned flow
 - [Main README](../README.md) - Overall architecture and deployment
 

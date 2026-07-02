@@ -186,7 +186,7 @@ output.png
 
 **Example**:
 ```bash
-curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-image \
+curl -X POST http://localhost/api/convert-from-pdf/pdf-to-image \
   -F "file=@document.pdf"
 ```
 
@@ -211,7 +211,7 @@ The integration boundary in code is a single Go function, [`pdfToDocxNative`](..
 
 **Example**:
 ```bash
-curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-word \
+curl -X POST http://localhost/api/convert-from-pdf/pdf-to-word \
   -F "file=@document.pdf"
 ```
 
@@ -233,7 +233,7 @@ Converts PDF to Microsoft Excel (.xlsx).
 
 **Example**:
 ```bash
-curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-excel \
+curl -X POST http://localhost/api/convert-from-pdf/pdf-to-excel \
   -F "file=@document.pdf"
 ```
 
@@ -254,7 +254,7 @@ Converts PDF to Microsoft PowerPoint (.pptx).
 
 **Example**:
 ```bash
-curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-ppt \
+curl -X POST http://localhost/api/convert-from-pdf/pdf-to-ppt \
   -F "file=@document.pdf"
 ```
 
@@ -284,7 +284,7 @@ output.zip
 
 **Example**:
 ```bash
-curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-html \
+curl -X POST http://localhost/api/convert-from-pdf/pdf-to-html \
   -F "file=@document.pdf"
 ```
 
@@ -309,7 +309,7 @@ Extracts plain text from PDF.
 
 **Example**:
 ```bash
-curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-text \
+curl -X POST http://localhost/api/convert-from-pdf/pdf-to-text \
   -F "file=@document.pdf"
 ```
 
@@ -338,7 +338,7 @@ PDF/A is an ISO-standardized version of PDF designed for long-term archival:
 
 **Example**:
 ```bash
-curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-pdfa \
+curl -X POST http://localhost/api/convert-from-pdf/pdf-to-pdfa \
   -F "file=@document.pdf"
 ```
 
@@ -363,7 +363,7 @@ Converts PDF to LibreOffice Writer (.odt) format.
 
 **Example**:
 ```bash
-curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-odt \
+curl -X POST http://localhost/api/convert-from-pdf/pdf-to-odt \
   -F "file=@document.pdf"
 ```
 
@@ -381,7 +381,7 @@ Converts PDF to LibreOffice Calc (.ods) format.
 
 **Example**:
 ```bash
-curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-ods \
+curl -X POST http://localhost/api/convert-from-pdf/pdf-to-ods \
   -F "file=@document.pdf"
 ```
 
@@ -399,7 +399,7 @@ Converts PDF to LibreOffice Impress (.odp) format.
 
 **Example**:
 ```bash
-curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-odp \
+curl -X POST http://localhost/api/convert-from-pdf/pdf-to-odp \
   -F "file=@document.pdf"
 ```
 
@@ -741,12 +741,12 @@ When retries are exhausted (MaxDeliver reached), the failed job payload is publi
 
 ## Related Documentation
 
-- [Convert To PDF](./CONVERT_TO_PDF.md) - Convert files TO PDF
-- [Organize PDF](./ORGANIZE_PDF.md) - PDF manipulation (merge, split, etc.)
-- [Optimize PDF](./OPTIMIZE_PDF.md) - PDF compression, repair, OCR
-- [Job Service](./JOB_SERVICE.md) - Job creation and management
-- [Auth Service](./AUTH_SERVICE.md) - Authentication and user management
-- [API Gateway](./API_GATEWAY.md) - Request routing
+- [Convert To PDF](./convert-to-pdf.md) - Convert files TO PDF
+- [Organize PDF](./organize-pdf.md) - PDF manipulation (merge, split, etc.)
+- [Optimize PDF](./optimize-pdf.md) - PDF compression, repair, OCR
+- [Job Service](./job-service.md) - Job creation and management
+- [Auth Service](./auth-service.md) - Authentication and user management
+- [API Gateway](./api-gateway.md) - Request routing
 
 ## Progress DB-write throttle
 

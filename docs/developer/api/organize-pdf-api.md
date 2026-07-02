@@ -1,6 +1,6 @@
 # Organize PDF API
 
-Base URL: `http://localhost:8080`
+Base URL: `http://localhost` (the Caddy edge; the api-gateway is internal-only)
 
 Manipulate and organize PDF files - merge, split, reorder pages, and more.
 

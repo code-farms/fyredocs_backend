@@ -1,6 +1,6 @@
 # Analytics & Dashboard API (analytics-service)
 
-Base URL (via gateway): `http://localhost:8080`
+Base URL: `http://localhost` (the Caddy edge; the api-gateway is internal-only)
 
 The gateway forwards `/api/dashboard` and `/admin/*` to `analytics-service:8087`. All responses use the standard envelope `{success, message, data, error, meta}`. The service computes everything from its own event store (`analytics_events`, `daily_metrics`) populated by the NATS subscribers — there is no separate ingestion endpoint.
 

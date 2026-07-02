@@ -662,8 +662,8 @@ The same goroutine also runs `models.DeleteExpiredResetTokens` each tick so the 
 auth-service:
   build:
     context: ./auth-service
-  ports:
-    - "8086:8086"
+  expose:
+    - "8086"          # internal-only; reached via the Caddy edge → api-gateway
   environment:
     PORT: "8086"
     DATABASE_URL: postgresql://user:password@db:5432/fyredocs
@@ -842,7 +842,7 @@ Revokes a single session by its UUID (= `jti`).
 
 ## Error Logging
 
-All 5xx response sites in `Signup`, `Login`, `Refresh`, `respondWithTokens`, `ChangePlan`, `RevokeUserSessions`, `RevokeSession`, and `GetAllPlans` use `response.InternalErrorf` to log the underlying err with `op` and identifiers before returning the standard envelope. Authentication paths (`Login`, `Refresh`, `loadUserFromAuth`) emit `slog.Warn` lines via `logger.LogWarn` for observability without altering the user-visible response. See [Error Logging](../architecture/ERROR_LOGGING.md) for the convention.
+All 5xx response sites in `Signup`, `Login`, `Refresh`, `respondWithTokens`, `ChangePlan`, `RevokeUserSessions`, `RevokeSession`, and `GetAllPlans` use `response.InternalErrorf` to log the underlying err with `op` and identifiers before returning the standard envelope. Authentication paths (`Login`, `Refresh`, `loadUserFromAuth`) emit `slog.Warn` lines via `logger.LogWarn` for observability without altering the user-visible response. See [Error Logging](../architecture/error-logging.md) for the convention.
 
 To debug a failed signup/login, take `meta.requestId` from the response and grep auth-service stdout — the matching log line names the failing `op` (e.g. `db.users.create`, `bcrypt.generate_password_hash`, `issue_access_token.login`).
 
@@ -866,7 +866,7 @@ To debug a failed signup/login, take `meta.requestId` from the response and grep
 
 ## Related Documentation
 
-- [API Gateway](./API_GATEWAY.md) — Request routing, JWT verification, plan resolution
-- [Job Service](./JOB_SERVICE.md) — Job orchestration and file management
+- [API Gateway](./api-gateway.md) — Request routing, JWT verification, plan resolution
+- [Job Service](./job-service.md) — Job orchestration and file management
 - [Main README](../../../README.md) — Overall architecture
-- [Error Logging](../architecture/ERROR_LOGGING.md) — Backend-wide error logging convention
+- [Error Logging](../architecture/error-logging.md) — Backend-wide error logging convention

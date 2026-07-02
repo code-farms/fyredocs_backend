@@ -10,8 +10,8 @@ worker replicas and multi-host deployment possible.
 
 ```mermaid
 graph LR
-    Browser -->|"presigned PUT/GET<br/>/uploads/* · /outputs/*"| GW["api-gateway :8080"]
-    GW -->|"verbatim path,<br/>original Host preserved"| MINIO["MinIO :9000<br/>(internal only)"]
+    Browser -->|"presigned PUT/GET<br/>/uploads/* · /outputs/*"| CADDY["Caddy edge :80/:443"]
+    CADDY -->|"verbatim path,<br/>original Host preserved"| MINIO["MinIO :9000<br/>(internal only)"]
 
     JOB["job-service"] -->|presign, stat, multipart| MINIO
     W["worker services ×N"] -->|"download input,<br/>upload output"| MINIO
@@ -20,12 +20,15 @@ graph LR
     OP["Operator"] -->|127.0.0.1:9001 console| MINIO
 ```
 
+The api-gateway is **not** in the object-byte path — it is internal-only and API-routing only. Object bytes flow browser → Caddy edge → MinIO.
+
 - **`minio`** (pinned image, `minio/minio:RELEASE.2025-04-22T22-12-26Z`) runs
   with a named volume `minio_data`. Port `9000` (S3 API) is **not published**;
   only the admin console is exposed on `127.0.0.1:9001`.
 - **`minio-init`** (`minio/mc`) is a one-shot bootstrap container: it creates
-  the buckets, applies lifecycle rules, and provisions the scoped application
-  user. Every service that touches objects has
+  the buckets, **clears any pre-existing bucket lifecycle rule** (retention is
+  DB-driven, see below), and provisions the scoped application user. Every
+  service that touches objects has
   `depends_on: minio-init: condition: service_completed_successfully`.
 - Services authenticate with the **scoped app credentials**
   (`S3_ACCESS_KEY`/`S3_SECRET_KEY`), never the MinIO root user. The attached
@@ -46,64 +49,56 @@ migration — the cleanup loop skips them and they are moved by the one-off
 script [`scripts/migrate-files-to-minio.sh`](../../../scripts/migrate-files-to-minio.sh)
 (dry-run by default, `--execute` to apply).
 
-## Presigned flow through the gateway (same-origin)
+## Presigned flow through the Caddy edge (same-origin)
 
 Browsers never talk to MinIO directly. `job-service` presigns URLs against
-`S3_PUBLIC_ENDPOINT` — the **public origin browsers actually use** (default
-`http://localhost:8080`, i.e. the api-gateway). The gateway reverse-proxies
-the two bucket path prefixes straight to MinIO:
+`S3_PUBLIC_ENDPOINT` — the **public origin browsers actually use**
+(`${PUBLIC_ORIGIN:-http://localhost}`, i.e. the **Caddy edge**). The edge
+reverse-proxies the two bucket path prefixes straight to MinIO (see the
+`@objects` route in `deployment/caddy/Caddyfile`):
 
 ```
 PUT  https://<origin>/uploads/uploads/<id>/<file>?uploadId=…&partNumber=…&X-Amz-…
 GET  https://<origin>/outputs/jobs/<jobId>/<file>?X-Amz-…
 ```
 
-Two properties of the proxy are **load-bearing for SigV4**:
+Two properties of the edge route are **load-bearing for SigV4**:
 
 1. **Path forwarded verbatim** — no prefix stripping; the signature covers
    the canonical path `/{bucket}/{key}`.
 2. **Host header preserved** — SigV4 includes `Host` in the signed canonical
-   request. The URL was signed for the gateway origin, so the gateway forwards
-   the *original* `Host` header instead of rewriting it to `minio:9000` (which
-   the gateway's service routes do). MinIO recomputes the signature against
-   the received Host; a rewritten Host would invalidate every presigned URL.
+   request. The URL was signed for the edge origin, so Caddy forwards the
+   *original* `Host` header (`header_up Host {host}`) instead of rewriting it
+   to `minio:9000`. MinIO recomputes the signature against the received Host;
+   a rewritten Host would invalidate every presigned URL.
 
-The bucket routes additionally bypass auth middleware (the signature is the
-credential), have **no body-size limit** (file bytes flow here), strip
-client-supplied identity headers, stream with `FlushInterval=-1`, and use a
-transport with `MaxIdleConnsPerHost=50` because multipart parts arrive in
-parallel. With the presigned flow in place, `/api/upload/*` is JSON-only
-(init/complete) and now gets the standard 1 MiB body limit.
+The bucket route needs no auth middleware (the signature is the credential),
+has no application body-size limit (file bytes flow here), and streams with
+`flush_interval -1` so large multipart parts pass through without buffering.
+The api-gateway is not involved — it is internal-only and never sees object
+bytes. `/api/upload/*` on the gateway is JSON-only (init/complete/parts) under
+the standard 1 MiB body limit.
 
-Benefits of same-origin proxying: no CORS configuration on MinIO, HttpOnly
-cookies keep working, one TLS certificate, no extra public port.
+Benefits of same-origin routing at the edge: no CORS configuration on MinIO,
+HttpOnly cookies keep working, one TLS certificate, no extra public port.
 
-## Lifecycle rules
+## Retention — DB-driven, no bucket lifecycle rules
 
-Applied by `minio-init` via `mc ilm import` (the `mc ilm rule add` CLI has no
-flag for aborting incomplete multipart uploads, so the full document is
-imported):
+There are **no MinIO bucket expiry lifecycle rules** on either bucket.
+`minio-init` explicitly clears any pre-existing rule (`mc ilm rule remove
+--all`) so a stale bucket-side expiry can't wipe inputs early. Retention is
+**entirely DB-driven** by job-service's in-process cleanup loop, keyed off each
+job's `expires_at` (per-plan TTLs), so free/pro inputs and outputs live exactly
+as long as their job — a fixed bucket-age rule could not express that.
 
-```json
-{"Rules":[{
-  "ID": "expire-stale-uploads",
-  "Status": "Enabled",
-  "Filter": {"Prefix": ""},
-  "Expiration": {"Days": 2},
-  "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}
-}]}
-```
+- `uploads`: no bucket rule. A never-consumed upload is reaped by the cleanup
+  loop once its Redis session passes 2× `UPLOAD_TTL`; incomplete multipart
+  uploads older than 24h are aborted by the loop's `abortStaleMultipartUploads`
+  phase (not a bucket `AbortIncompleteMultipartUpload` rule).
+- `outputs`: no bucket rule. Deletion is DB-driven — the cleanup loop removes
+  the object when the owning `processing_jobs` row passes `expires_at`.
 
-- `uploads`: objects expire after `UPLOAD_EXPIRE_DAYS` (**default 2**);
-  incomplete multipart uploads are aborted after `UPLOAD_ABORT_INCOMPLETE_DAYS`
-  (**default 1**). Uploads are consumed into jobs within minutes, so anything
-  older is abandoned. Both are set on `minio-init` and overridable via the
-  deployment `.env`.
-- `outputs`: **no lifecycle rule.** Pro-plan outputs never expire;
-  deletion is exclusively DB-driven (the cleanup loop removes the object when
-  the owning `processing_jobs` row passes `expires_at`).
-
-job-service's cleanup loop provides defense in depth:
+The cleanup loop is the single mechanism keeping storage bounded:
 
 - expired job → `RemoveObject` per `file_metadata` row (input + output);
 - expired Redis upload session → `AbortMultipart` (when the session has an
@@ -114,15 +109,15 @@ job-service's cleanup loop provides defense in depth:
 
 ## Multi-host deployment
 
-The single-host default keeps MinIO entirely private behind the gateway. To
+The single-host default keeps MinIO entirely private behind the Caddy edge. To
 split hosts (or move to AWS S3/R2):
 
 1. **Publish the S3 endpoint** (or use the provider's endpoint): expose port
    `9000` behind TLS, e.g. `https://s3.example.com`.
 2. **Flip `S3_PUBLIC_ENDPOINT`** on job-service to that public origin.
    Presigned URLs are then signed for — and fetched directly from — the
-   storage host; the gateway bucket proxy becomes unused (it can stay, it is
-   inert without traffic).
+   storage host; the edge's `/uploads /outputs` route becomes unused (it can
+   stay, it is inert without traffic).
 3. Configure CORS on the bucket for the app origin (only needed once browsers
    talk to storage cross-origin).
 4. Workers/cleanup keep using the internal `S3_ENDPOINT`; nothing else
@@ -151,25 +146,27 @@ Swapping MinIO for AWS S3/R2 is an env-var change (`S3_ENDPOINT`,
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `S3_ENDPOINT` | — (required) | Internal data-plane endpoint, e.g. `minio:9000` |
-| `S3_PUBLIC_ENDPOINT` | falls back to `S3_ENDPOINT` | Origin presigned URLs are signed for (the gateway / public origin) |
+| `S3_PUBLIC_ENDPOINT` | falls back to `S3_ENDPOINT` | Origin presigned URLs are signed for (the Caddy edge / public origin) |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | — (required) | Scoped app credentials created by `minio-init` |
 | `S3_USE_SSL` | `false` | TLS to the internal endpoint |
 | `S3_BUCKET_UPLOADS` | `uploads` | Raw upload bucket |
 | `S3_BUCKET_OUTPUTS` | `outputs` | Processed output bucket |
 | `S3_REGION` | `us-east-1` | Pins SigV4 signing region (MinIO ignores it) |
 
-Gateway-only: `MINIO_URL` (default `http://minio:9000`) — upstream for the
-bucket proxy routes. Job-service-only: `UPLOAD_PART_SIZE_MB` (default `8`) —
-presigned multipart part size.
+Edge-only: the object-byte upstream (`minio:9000`) is set in
+`deployment/caddy/Caddyfile`, not via an env var — the api-gateway has no
+`MINIO_URL`. Job-service-only: `UPLOAD_PART_SIZE_MB` (default `8`) — presigned
+multipart part size.
 
 Compose/`minio-init`-only (not read by services): `MINIO_IMAGE`,
-`MINIO_MC_IMAGE` (pinned image tags), `UPLOAD_EXPIRE_DAYS` (default `2`) and
-`UPLOAD_ABORT_INCOMPLETE_DAYS` (default `1`) for the uploads-bucket lifecycle.
-Every value above has a compose default — nothing is hardcoded; all are
-overridable from the root `.env` (the single env file `deploy.sh` loads).
+`MINIO_MC_IMAGE` (pinned image tags). There are no uploads-bucket lifecycle env
+vars — retention is DB-driven (see above). Every value above has a compose
+default — nothing is hardcoded; all are overridable from the root `.env` (the
+single env file `deploy.sh` loads).
 
 ## Related documentation
 
-- [API Gateway](../services/API_GATEWAY.md) — bucket proxy routes
-- [Cleanup Worker](../services/CLEANUP_WORKER.md) — object deletion phases
+- [Caddy edge](../../../deployment/caddy/Caddyfile) — the `/uploads /outputs` object-byte routes
+- [API Gateway](../services/api-gateway.md) — internal API routing (no object bytes)
+- [Job Service](../services/job-service.md#background-cleanup-loop) — in-process cleanup: object deletion phases
 - [System overview diagram](../mermaid/system-overview.md)

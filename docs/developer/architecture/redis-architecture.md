@@ -167,11 +167,11 @@ DEL upload:550e8400
 ```
 
 #### Lifecycle
-1. Client calls `/api/upload/init` → Session created in Redis
-2. Client uploads chunks → `receivedChunks` incremented
-3. Client calls `/api/upload/complete` → Chunks assembled, session marked complete
+1. Client calls `/api/upload/init` → presigned multipart session created in Redis
+2. Client PUTs each part directly to MinIO (presigned) → no per-part Redis write
+3. Client calls `/api/upload/complete` → S3 multipart finalized, session marked complete
 4. Job created → Upload session deleted or marked consumed
-5. TTL: 2 hours (configurable via `UPLOAD_TTL`)
+5. TTL: 30 minutes (configurable via `UPLOAD_TTL`); the cleanup loop reaps stale sessions at 2× that age
 
 ---
 
@@ -239,7 +239,7 @@ cleanup-worker:lock
 
 | Key Pattern | Type | TTL | Purpose |
 |---|---|---|---|
-| `cleanup-worker:lock` | String (SETNX) | 10 minutes | Distributed lock ensuring only one cleanup worker runs per cycle |
+| `cleanup-worker:lock` | String (SETNX) | 10 minutes | Distributed lock ensuring only one job-service replica runs the cleanup sweep per cycle |
 
 ---
 
@@ -262,13 +262,14 @@ cleanup-worker:lock
 **Current Configuration** (Single Redis Instance):
 - **Throughput**: 100,000+ ops/sec (single-threaded)
 - **Latency**: < 1ms for most operations
-- **Memory**: 256 MB allocated (Docker default)
-- **Connections**: Unlimited (connection pooling in services)
+- **Memory**: `--maxmemory 400mb` (`REDIS_MAXMEMORY`, overridable) under a 512M container cap, `volatile-lru` eviction
+- **Persistence**: AOF enabled (`--appendonly yes`)
+- **Connections**: connection pooling in services
 
 **Production Recommendations**:
-- **Memory**: 1-2 GB for high traffic
+- **Memory**: raise `REDIS_MAXMEMORY` / the container limit to 1-2 GB for high traffic
 - **Max Connections**: Configure per service (default: 10 per pool)
-- **Persistence**: Enable AOF for job queue durability
+- **HA**: Redis Sentinel or a managed Redis for failover (single instance today)
 
 ---
 
@@ -494,48 +495,42 @@ it was never created, the TTL elapsed, or Redis was flushed/restarted.
 
 ### Current Configuration
 
+The canonical stack (`deployment/docker-compose.yml`) runs Redis with a
+required password, AOF persistence, and a memory cap — **no host port is
+published** (internal-only on `fyredocs_net`):
+
 ```yaml
 redis:
   image: redis:7-alpine
-  ports:
-    - "6379:6379"  # ⚠️ Exposed to localhost
+  command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory ${REDIS_MAXMEMORY:-400mb} --maxmemory-policy volatile-lru
   networks:
-    - fyredocs_net  # Internal Docker network
+    - fyredocs_net   # internal only; no `ports:` mapping
 ```
 
-### Security Recommendations
+> The dev-only `docker-compose.essentials.yml` (host `go run` workflow) *does*
+> publish `6379` with no password, for local convenience — never use that
+> profile in production.
 
-#### Development
-✅ **Current setup is fine:**
-- Redis exposed only on localhost
-- Internal Docker network
-- No password required
+### Security posture (already implemented)
 
-#### Production
-⚠️ **Apply these security measures:**
+✅ **Authentication** — `--requirepass ${REDIS_PASSWORD}`; `deploy.sh` requires
+`REDIS_PASSWORD` to be set (aborts otherwise). Every service passes
+`REDIS_PASSWORD`.
+✅ **Not host-exposed** — the canonical compose publishes no Redis port; only
+services on `fyredocs_net` can reach it.
+✅ **Persistence** — `--appendonly yes` (AOF).
+✅ **Bounded memory** — `--maxmemory 400mb --maxmemory-policy volatile-lru`
+(every key carries a TTL, so nothing TTL-less is evicted).
 
-1. **Enable Authentication**:
-   ```yaml
-   redis:
-     command: redis-server --requirepass your-secure-password
-     environment:
-       REDIS_PASSWORD: ${REDIS_PASSWORD}
-   ```
+### Further hardening (optional, for a remote/managed Redis)
 
-2. **Do NOT Expose Port Publicly**:
-   ```yaml
-   # Remove port mapping in production
-   # ports:
-   #   - "6379:6379"  # Only if needed for external access
-   ```
-
-3. **Use Redis ACLs (Access Control Lists)**:
+1. **Use Redis ACLs (Access Control Lists)**:
    ```bash
    # Create user with limited permissions
    redis-cli ACL SETUSER worker on >password ~queue:* +lpush +brpop
    ```
 
-4. **Enable TLS/SSL** (for Redis 6+):
+2. **Enable TLS/SSL** (for Redis 6+):
    ```bash
    redis-server --tls-port 6379 --port 0 \
      --tls-cert-file /path/to/redis.crt \
@@ -543,7 +538,7 @@ redis:
      --tls-ca-cert-file /path/to/ca.crt
    ```
 
-5. **Network Isolation**:
+3. **Network Isolation**:
    - Keep Redis in internal Docker network
    - No direct internet access
    - Firewall rules to restrict connections
@@ -690,13 +685,13 @@ redis:
 
 ## Related Documentation
 
-- [Job Service](../services/JOB_SERVICE.md) - Job management and upload session management
-- [Auth Service](../services/AUTH_SERVICE.md) - Token denylist usage
-- [Convert From PDF](../services/CONVERT_FROM_PDF.md) - Queue consumer
-- [Convert To PDF](../services/CONVERT_TO_PDF.md) - Queue consumer
-- [Organize PDF](../services/ORGANIZE_PDF.md) - Queue consumer
-- [Optimize PDF](../services/OPTIMIZE_PDF.md) - Queue consumer
-- [Cleanup Worker](../services/CLEANUP_WORKER.md) - Session cleanup
+- [Job Service](../services/job-service.md) - Job management and upload session management
+- [Auth Service](../services/auth-service.md) - Token denylist usage
+- [Convert From PDF](../services/convert-from-pdf.md) - Queue consumer
+- [Convert To PDF](../services/convert-to-pdf.md) - Queue consumer
+- [Organize PDF](../services/organize-pdf.md) - Queue consumer
+- [Optimize PDF](../services/optimize-pdf.md) - Queue consumer
+- [Job Service](../services/job-service.md#background-cleanup-loop) - In-process TTL cleanup sweep
 - [Main README](../README.md) - Overall architecture
 
 ---

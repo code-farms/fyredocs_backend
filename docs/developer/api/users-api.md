@@ -1,6 +1,6 @@
 # Organizations API (user-service)
 
-Base URL (via gateway): `http://localhost:8080`
+Base URL: `http://localhost` (the Caddy edge; the api-gateway is internal-only)
 
 The gateway forwards `/api/orgs/*` to `user-service:8090`. All requests go through the gateway, which verifies the JWT and injects `X-User-ID`. Org-level RBAC is enforced per handler from the caller's membership role. Responses use the standard envelope `{success, message, data, error, meta}`.
 

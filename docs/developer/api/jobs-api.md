@@ -1,6 +1,6 @@
 # Jobs API
 
-Base URL (via gateway): `http://localhost:8080`
+Base URL: `http://localhost` (the Caddy edge; the api-gateway is internal-only)
 
 The job-service exposes job creation, listing, retrieval, deletion, downloads, history, and a Server-Sent Events stream. Jobs are scoped under tool-group prefixes (`/api/<group>/:tool/...`) — there is no generic `/api/jobs/:jobId` resource. The history and SSE endpoints are the only routes under the bare `/api/jobs` namespace.
 
@@ -20,7 +20,7 @@ Tool groups:
 
 Create a job using one of two request shapes:
 
-1. **Chunked-upload pre-completed flow** (`Content-Type: application/json`) — references a previously completed `uploadId`/`uploadIds`. Recommended for large files because the chunked-upload protocol gives you resumability.
+1. **Presigned-upload pre-completed flow** (`Content-Type: application/json`) — references a previously completed `uploadId`/`uploadIds`. Recommended for large files: the presigned multipart protocol PUTs bytes directly to object storage and supports resume (re-presign parts). See [Upload API](./upload-api.md).
 2. **Direct multipart upload** (`Content-Type: multipart/form-data`) — for small files or simple single-shot scripts.
 
 ### Common headers
@@ -80,7 +80,7 @@ options: <stringified JSON>
 | 400 | TOO_MANY_FILES | More files than the user's plan permits |
 | 401 | UNAUTHORIZED | Auth required for non-guest tools |
 | 413 | FILE_TOO_LARGE | File exceeds the plan's max-file-size |
-| 500 | SERVER_ERROR | Disk / DB / NATS publish failure |
+| 500 | SERVER_ERROR | Object storage / DB / NATS publish failure |
 
 ---
 
@@ -130,7 +130,7 @@ Delete the job and all associated files. Auth must match.
 
 ### Response — 200 / 204
 
-Returns 200 with the standard envelope (or 204 No Content depending on response helper). Side effects: removes input + output files from disk and deletes the `processing_jobs` row.
+Returns 200 with the standard envelope (or 204 No Content depending on response helper). Side effects: removes the input + output objects from the `uploads`/`outputs` buckets and deletes the `processing_jobs` row.
 
 ### Errors
 
@@ -142,7 +142,7 @@ Returns 200 with the standard envelope (or 204 No Content depending on response 
 
 ## GET /api/&lt;group&gt;/:tool/:id/download
 
-Stream the output file. The `Content-Disposition` filename is derived from the original input. MIME type is set per the tool (e.g. `application/pdf` for `*-to-pdf`, `application/zip` for split / multi-output jobs).
+Returns a **302 redirect** to a short-lived (5-minute) presigned GET URL; the browser fetches the bytes straight from object storage via the Caddy edge (`/outputs/*`), not through this service. The `Content-Disposition` filename is derived from the original input and the MIME type is set per the tool (e.g. `application/pdf` for `*-to-pdf`, `application/zip` for split / multi-output jobs) via the presigned response headers.
 
 ### Errors
 
@@ -255,7 +255,7 @@ Workers also emit `jobs.events.<jobId>.progress` events while running. These are
 | createdAt | string (RFC3339) | No | Creation timestamp |
 | updatedAt | string (RFC3339) | No | Last update timestamp |
 | completedAt | string (RFC3339) | Yes | Set when `completed` |
-| expiresAt | string (RFC3339) | Yes | TTL set per plan; null for pro users |
+| expiresAt | string (RFC3339) | Yes | TTL set per plan (guest 30m / free 7d / pro 30d) — always finite |
 
 ---
 
@@ -297,6 +297,6 @@ Prefer **SSE** (`/api/jobs/:id/events`) for tracking progress — it is push-bas
 
 ## File Cleanup
 
-- Expired jobs are reaped by job-service's in-process [cleanup loop](../services/JOB_SERVICE.md#background-cleanup-loop) every `CLEANUP_INTERVAL` (default 15m).
-- Pro-user jobs have `expires_at = NULL` and are not auto-deleted.
+- Expired jobs are reaped by job-service's in-process [cleanup loop](../services/job-service.md#background-cleanup-loop) every `CLEANUP_INTERVAL` (compose sets 5m; code fallback 15m).
+- All jobs have a finite `expires_at` (pro = `PRO_JOB_TTL`, default 30d); pro jobs are reaped by the cleanup loop like any other once expired.
 - `DELETE /api/<group>/:tool/:id` immediately removes the job and its files.

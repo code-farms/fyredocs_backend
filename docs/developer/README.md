@@ -10,24 +10,29 @@ Fyredocs uses a true microservices architecture. Each service is independently d
 
 | Service | Port | Description |
 |---------|------|-------------|
-| API Gateway | 8080 | Central entry point — CORS, auth middleware, reverse proxy |
-| Job Service | 8081 | Job orchestration, file uploads, job lifecycle management |
+| Caddy edge | 80 / 443 | Public entrypoint — TLS termination, serves the SPA, routes object bytes (`/uploads /outputs`) to MinIO, proxies API to the gateway. The only host-exposed service. |
+| API Gateway | 8080 (internal) | CORS, auth middleware, plan resolve, reverse proxy to services. Internal-only — not host-exposed; no longer serves the SPA or object bytes. |
+| Job Service | 8081 (internal) | Job orchestration, presigned uploads, job lifecycle + in-process TTL cleanup sweep |
 | Convert From PDF | 8082 | PDF → Word, Excel, PPT, Image, HTML, Text conversions |
 | Convert To PDF | 8083 | Word, Excel, PPT, HTML, Image → PDF conversions |
 | Organize PDF | 8084 | Merge, split, rotate, extract, watermark, sign, edit |
 | Optimize PDF | 8085 | Compress, repair, OCR operations |
 | Auth Service | 8086 | User registration, login, JWT token management |
 | Analytics Service | 8087 | Usage metrics and analytics tracking |
-| Cleanup Worker | 8088 | Background worker for expired file/job cleanup (health/metrics only) |
 | Document Service | 8089 | Persistent document library — documents, folders, tags, exports |
 | User Service | 8090 | Organizations, memberships, and RBAC |
 | Notification Service | 8091 | In-app notification feed + live SSE bell |
+| MinIO | 9000 (internal) | S3-compatible object storage for all file bytes; console on `127.0.0.1:9001` |
+| NATS | 4222 (internal) | JetStream work queues + job events |
+| PostgreSQL / Redis | internal | Co-located Postgres; Redis (auth denylist, upload session state, rate limits, plan cache) |
+
+All service ports except the Caddy edge (80/443) are internal-only — reachable on the `fyredocs_net` Docker network, not published to the host.
 
 ### Communication
-- **Client → Services**: All traffic flows through the API Gateway via REST
+- **Client → stack**: All traffic enters at the **Caddy edge**, which serves the SPA and proxies `/api /auth /admin` to the API Gateway. Object bytes go **browser ↔ MinIO directly** via presigned URLs (routed at the edge), bypassing the gateway.
 - **Service → Service**: NATS JetStream for async job processing
-- **Caching/State**: Redis for upload chunks, rate limiting, guest tokens
-- **Persistence**: PostgreSQL (each service owns its own schema)
+- **Caching/State**: Redis for upload **session state**, rate limiting, guest tokens, plan cache
+- **Persistence**: PostgreSQL (each service owns its own schema); file bytes in MinIO
 
 ---
 
@@ -39,12 +44,17 @@ Fyredocs uses a true microservices architecture. Each service is independently d
 | Service internals & design | [services/](services/) |
 | Architecture diagrams | [mermaid/](mermaid/) |
 | OpenAPI spec | [swagger/openapi.yaml](swagger/openapi.yaml) |
-| Redis data structures | [architecture/REDIS_ARCHITECTURE.md](architecture/REDIS_ARCHITECTURE.md) |
-| Docker base image setup | [architecture/BASE_IMAGE_SETUP.md](architecture/BASE_IMAGE_SETUP.md) |
-| Compose files layout (common / essentials / per-service) | [architecture/COMPOSE_FILES.md](architecture/COMPOSE_FILES.md) |
-| Database patterns | [DB_BEST_PRACTICES.md](DB_BEST_PRACTICES.md) |
-| Security hardening | [backend-hardening.md](backend-hardening.md) |
-| Deployment checklist | [deployment-review.md](deployment-review.md) |
+| Redis data structures | [architecture/redis-architecture.md](architecture/redis-architecture.md) |
+| Docker base image setup | [architecture/base-image-setup.md](architecture/base-image-setup.md) |
+| Caddy edge (TLS, SPA, object-byte + API routing) | [architecture/caddy-edge.md](architecture/caddy-edge.md) |
+| Compose files layout (common / essentials / per-service) | [architecture/compose-files.md](architecture/compose-files.md) |
+| Database (perf, optimization, locality) | [architecture/database.md](architecture/database.md) |
+| Security hardening | [architecture/backend-hardening.md](architecture/backend-hardening.md) |
+| Load testing (k6) | [architecture/load-testing.md](architecture/load-testing.md) |
+| Production readiness (audit + deployment review) | [architecture/production-readiness.md](architecture/production-readiness.md) |
+| Backups & restore | [architecture/backup-and-restore.md](architecture/backup-and-restore.md) |
+| Object storage (MinIO) | [architecture/object-storage.md](architecture/object-storage.md) |
+| Error logging convention | [architecture/error-logging.md](architecture/error-logging.md) |
 | Project rules & conventions | [../../CLAUDE.md](../../CLAUDE.md) |
 
 ---
@@ -96,24 +106,30 @@ done
 ## Request Flow
 
 ```
-Browser → API Gateway (8080)
-           ├─ CORS, security headers
-           ├─ Auth check (JWT / Guest cookie) + plan resolution from Redis
-           ├─ Body size limit (1 MB on non-upload routes)
-           └─ Reverse proxy to target service
-               │
-               ├─ /auth/*                     → Auth Service (8086)
-               ├─ /api/upload/*               → Job Service (8081)  (rewritten to /api/uploads/*)
-               ├─ /api/jobs/history|:id/events → Job Service (8081)
-               ├─ /api/{convert-from-pdf,convert-to-pdf,organize-pdf,optimize-pdf}/:tool → Job Service (8081)
-               ├─ /api/{documents,folders,tags,exports}/* → Document Service (8089)
-               ├─ /api/orgs/*                 → User Service (8090)
-               ├─ /api/notifications/*        → Notification Service (8091)
-               ├─ /admin/* , /api/dashboard   → Analytics Service (8087)
-               └─ /                           → SPA static files (when SPA_DIR is set)
+Browser → Caddy edge (:80/:443)
+           ├─ TLS termination (automatic HTTPS when PUBLIC_DOMAIN is set)
+           ├─ /                           → SPA static files (/srv/spa)
+           ├─ /uploads/* , /outputs/*     → MinIO (:9000) directly (presigned object bytes)
+           └─ /api/* /auth/* /admin/* /healthz → api-gateway (:8080, internal)
+                       │
+                       ├─ CORS, security headers
+                       ├─ Auth check (JWT / Guest cookie) + plan resolution from Redis
+                       ├─ Body size limit (1 MB on non-upload routes)
+                       └─ Reverse proxy to target service
+                           │
+                           ├─ /auth/*                     → Auth Service (8086)
+                           ├─ /api/upload/*               → Job Service (8081)  (rewritten to /api/uploads/*)
+                           ├─ /api/jobs/history|:id/events → Job Service (8081)
+                           ├─ /api/{convert-from-pdf,convert-to-pdf,organize-pdf,optimize-pdf}/:tool → Job Service (8081)
+                           ├─ /api/{documents,folders,tags,exports}/* → Document Service (8089)
+                           ├─ /api/orgs/*                 → User Service (8090)
+                           ├─ /api/notifications/*        → Notification Service (8091)
+                           └─ /admin/* , /api/dashboard   → Analytics Service (8087)
 
 Job Service receives tool requests:
-  1. Client uploads chunks via /api/uploads/* (state in Redis, bytes on disk)
+  1. Client presigns an upload via /api/uploads/* (session state in Redis) and
+     PUTs the file's parts straight to MinIO through the edge — bytes never
+     touch job-service or a shared disk
   2. Client POSTs /api/<group>/:tool with the uploadId(s) — job-service creates a
      ProcessingJob in PostgreSQL (UUIDv7), guarded by idempotency-key + a 10-minute
      uploadId-dedupe window
@@ -132,15 +148,14 @@ Job Service receives tool requests:
 
 Each service has a dedicated architecture document:
 
-- [API Gateway](services/API_GATEWAY.md)
-- [Auth Service](services/AUTH_SERVICE.md)
-- [Job Service](services/JOB_SERVICE.md)
-- [Convert From PDF](services/CONVERT_FROM_PDF.md)
-- [Convert To PDF](services/CONVERT_TO_PDF.md)
-- [Organize PDF](services/ORGANIZE_PDF.md)
-- [Optimize PDF](services/OPTIMIZE_PDF.md)
-- [Cleanup Worker](services/CLEANUP_WORKER.md)
-- [Analytics Service](services/ANALYTICS_SERVICE.md)
-- [Document Service](services/DOCUMENT_SERVICE.md)
-- [User Service](services/USER_SERVICE.md)
-- [Notification Service](services/NOTIFICATION_SERVICE.md)
+- [API Gateway](services/api-gateway.md)
+- [Auth Service](services/auth-service.md)
+- [Job Service](services/job-service.md)
+- [Convert From PDF](services/convert-from-pdf.md)
+- [Convert To PDF](services/convert-to-pdf.md)
+- [Organize PDF](services/organize-pdf.md)
+- [Optimize PDF](services/optimize-pdf.md)
+- [Analytics Service](services/analytics-service.md)
+- [Document Service](services/document-service.md)
+- [User Service](services/user-service.md)
+- [Notification Service](services/notification-service.md)

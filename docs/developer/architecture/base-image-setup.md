@@ -15,7 +15,7 @@ cd fyredocs_backend
 
 # Build the base image
 docker build \
-  -f infra/base-alpine-libreoffice.Dockerfile \
+  -f deployment/base-alpine-libreoffice.Dockerfile \
   -t your-username/alpine-libreoffice:3.19 \
   .
 ```
@@ -97,7 +97,7 @@ Only rebuild when:
 
 ```bash
 # Rebuild with new version
-docker build -f infra/base-alpine-libreoffice.Dockerfile -t your-username/alpine-libreoffice:3.20 .
+docker build -f deployment/base-alpine-libreoffice.Dockerfile -t your-username/alpine-libreoffice:3.20 .
 docker push your-username/alpine-libreoffice:3.20
 
 # Update Dockerfile ARG default
@@ -124,9 +124,9 @@ docker push your-username/alpine-libreoffice:3.20
 Use the provided script:
 
 ```bash
-# Edit infra/build-base-image.sh with your registry details
-nano infra/build-base-image.sh
+# Edit deployment/build-base-image.sh with your registry details
+nano deployment/build-base-image.sh
 
 # Run the script
-./infra/build-base-image.sh
+./deployment/build-base-image.sh
 ```

@@ -22,7 +22,7 @@ Combines multiple PDF files into a single document.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8080/api/organize-pdf/merge-pdf \
+curl -X POST http://localhost/api/organize-pdf/merge-pdf \
   -H "Authorization: Bearer $TOKEN" \
   -F "files=@document1.pdf" \
   -F "files=@document2.pdf" \
@@ -40,7 +40,7 @@ Splits a PDF into individual pages or specified page ranges.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8080/api/organize-pdf/split-pdf \
+curl -X POST http://localhost/api/organize-pdf/split-pdf \
   -H "Authorization: Bearer $TOKEN" \
   -F "files=@document.pdf" \
   -F 'options={"range":"1-5,10"}'
@@ -57,7 +57,7 @@ Removes specified pages from a PDF document.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8080/api/organize-pdf/remove-pages \
+curl -X POST http://localhost/api/organize-pdf/remove-pages \
   -H "Authorization: Bearer $TOKEN" \
   -F "files=@document.pdf" \
   -F 'options={"pages":"2,4,6"}'
@@ -74,7 +74,7 @@ Extracts specified pages into a new PDF document.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8080/api/organize-pdf/extract-pages \
+curl -X POST http://localhost/api/organize-pdf/extract-pages \
   -H "Authorization: Bearer $TOKEN" \
   -F "files=@document.pdf" \
   -F 'options={"pages":"1,3,5-7"}'
@@ -91,7 +91,7 @@ Reorders pages in a PDF according to a specified order.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8080/api/organize-pdf/organize-pdf \
+curl -X POST http://localhost/api/organize-pdf/organize-pdf \
   -H "Authorization: Bearer $TOKEN" \
   -F "files=@document.pdf" \
   -F 'options={"order":"3,1,2,4,5"}'
@@ -110,7 +110,7 @@ Rotates pages in a PDF by a specified angle, with optional page selection.
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8080/api/organize-pdf/rotate-pdf \
+curl -X POST http://localhost/api/organize-pdf/rotate-pdf \
   -H "Authorization: Bearer $TOKEN" \
   -F "files=@document.pdf" \
   -F 'options={"rotation":90,"applyToPages":"all"}'
@@ -127,7 +127,7 @@ Converts images to PDF (similar to scanning documents).
 
 **Example:**
 ```bash
-curl -X POST http://localhost:8080/api/organize-pdf/scan-to-pdf \
+curl -X POST http://localhost/api/organize-pdf/scan-to-pdf \
   -H "Authorization: Bearer $TOKEN" \
   -F "files=@scan1.jpg" \
   -F "files=@scan2.jpg" \
@@ -412,8 +412,8 @@ docker run -d \
 ```yaml
 organize-pdf:
   build: ./organize-pdf
-  ports:
-    - "8084:8084"
+  expose:
+    - "8084"          # internal-only worker; not host-exposed
   environment:
     PORT: "8084"
     DATABASE_URL: "postgresql://..."
@@ -461,7 +461,7 @@ curl http://localhost:8084/healthz
 ### Create Test Job
 ```bash
 # Merge PDFs
-curl -X POST http://localhost:8080/api/organize-pdf/merge-pdf \
+curl -X POST http://localhost/api/organize-pdf/merge-pdf \
   -H "Authorization: Bearer $TOKEN" \
   -F "files=@test1.pdf" \
   -F "files=@test2.pdf"
@@ -469,13 +469,13 @@ curl -X POST http://localhost:8080/api/organize-pdf/merge-pdf \
 
 ### Check Job Status
 ```bash
-curl http://localhost:8080/api/organize-pdf/merge-pdf/$JOB_ID \
+curl http://localhost/api/organize-pdf/merge-pdf/$JOB_ID \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 ### Download Result
 ```bash
-curl -O http://localhost:8080/api/organize-pdf/merge-pdf/$JOB_ID/download \
+curl -O http://localhost/api/organize-pdf/merge-pdf/$JOB_ID/download \
   -H "Authorization: Bearer $TOKEN"
 ```
 

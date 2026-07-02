@@ -1,6 +1,6 @@
 # Optimize PDF API
 
-Base URL: `http://localhost:8080`
+Base URL: `http://localhost` (the Caddy edge; the api-gateway is internal-only)
 
 Optimize PDF files - compress, repair, and add OCR text layers.
 

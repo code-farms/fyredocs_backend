@@ -197,7 +197,7 @@ The Fyredocs backend is a well-architected microservices system. Clean service b
 
 ---
 
-### 3.12 Cleanup Worker Distributed Lock `Medium`
+### 3.12 Cleanup Sweep Distributed Lock (job-service, in-process) `Medium`
 
 **Finding:** Multiple cleanup sweepers (now job-service's in-process loop) would compete to delete the same expired jobs, causing unnecessary DB load and race conditions.
 

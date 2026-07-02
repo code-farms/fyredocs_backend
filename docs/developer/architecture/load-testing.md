@@ -1,11 +1,11 @@
 # Load testing
 
-A k6 load-test suite lives at [`scripts/k6/`](../../scripts/k6/) and covers
+A k6 load-test suite lives at [`scripts/k6/`](../../../scripts/k6/) and covers
 **every tool and endpoint** with realistic, scenario-based traffic (auth →
 upload → create job → poll → download), to measure real capacity on the
-Contabo VPS-40 (12 vCPU / 48 GB) @ 80% cap.
+Contabo VPS-40 (12 vCPU / 48 GB) @ the auto resource-budget (RESOURCE_BUDGET_PCT, default 70%).
 
-Quick start (full docs in [`scripts/k6/README.md`](../../scripts/k6/README.md)):
+Quick start (full docs in [`scripts/k6/README.md`](../../../scripts/k6/README.md)):
 
 ```bash
 # 1. (test box only) raise rate limits so you measure the backend, not the limiter
@@ -24,5 +24,5 @@ Scenarios: `smoke`, `mixed-realistic`, per-group (`convert-to-pdf`,
 `convert-from-pdf`, `organize-pdf`, `optimize-pdf`), `browse`, `auth-churn`,
 `upload-heavy`, `spike`, `soak`. Key metrics: `job_e2e`, `queue_wait`,
 `job_success`, `http_req_duration{kind:api|storage}`. Watch `docker stats`
-(stays within the 80% cap) and `convert-to-pdf` logs for unoserver "fallback"
+(stays within the RESOURCE_BUDGET_PCT cap, default 70%) and `convert-to-pdf` logs for unoserver "fallback"
 warnings during a run.

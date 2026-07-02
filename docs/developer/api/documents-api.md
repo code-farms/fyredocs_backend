@@ -1,6 +1,6 @@
 # Documents API
 
-Base URL (via gateway): `http://localhost:8080`
+Base URL: `http://localhost` (the Caddy edge; the api-gateway is internal-only)
 
 The gateway forwards `/api/documents/*`, `/api/folders/*`, `/api/tags/*`, and `/api/exports/*` to `document-service:8089`. All requests must go through the gateway, which verifies the JWT and injects `X-User-ID`; every resource is scoped to that user. All responses use the standard envelope `{success, message, data, error, meta}`.
 

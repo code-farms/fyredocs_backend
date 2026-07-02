@@ -64,7 +64,7 @@ The worker's `AllowedTools` whitelist (in `main.go`) is the authoritative source
 | `html-to-pdf` | — | `.html`, `.htm` | `.pdf` | LibreOffice Writer |
 | `image-to-pdf` | `img-to-pdf` | `.jpg`, `.png`, `.gif`, `.webp`, `.bmp` | `.pdf` | pdfcpu (one image per page) |
 
-> **Heads-up:** the worker's `AllowedTools` map is the definitive list. PDF-manipulation tools (compress / merge / split / watermark / sign / etc.) live in **organize-pdf** and **optimize-pdf**, not here. The job-service [routing](./JOB_SERVICE.md#toolservicemap-routinggo) table is what the gateway and clients see — keep both in sync if you add a new tool.
+> **Heads-up:** the worker's `AllowedTools` map is the definitive list. PDF-manipulation tools (compress / merge / split / watermark / sign / etc.) live in **organize-pdf** and **optimize-pdf**, not here. The job-service [routing](./job-service.md#toolservicemap-routinggo) table is what the gateway and clients see — keep both in sync if you add a new tool.
 
 ## API Endpoints (via job-service through API gateway)
 
@@ -78,7 +78,7 @@ GET  /api/convert-to-pdf/{tool}/{jobId}/download  # stream output
 DELETE /api/convert-to-pdf/{tool}/{jobId}         # delete job + files
 ```
 
-See [JOBS_API.md](../api/JOBS_API.md) for full request/response shapes.
+See [jobs-api.md](../api/jobs-api.md) for full request/response shapes.
 
 ## Concurrency
 
@@ -322,12 +322,12 @@ go run main.go
 
 ## Related Documentation
 
-- [Convert From PDF](./CONVERT_FROM_PDF.md) — PDF → DOCX/PPTX/JPG/PNG/TXT
-- [Organize PDF](./ORGANIZE_PDF.md) — pdfcpu-based merge/split/rotate/extract/watermark/etc.
-- [Optimize PDF](./OPTIMIZE_PDF.md) — compress/repair/OCR
-- [Job Service](./JOB_SERVICE.md) — Job creation and dispatch
-- [API Gateway](./API_GATEWAY.md) — Request routing
-- [Error Logging](../architecture/ERROR_LOGGING.md) — Backend-wide error logging convention
+- [Convert From PDF](./convert-from-pdf.md) — PDF → DOCX/PPTX/JPG/PNG/TXT
+- [Organize PDF](./organize-pdf.md) — pdfcpu-based merge/split/rotate/extract/watermark/etc.
+- [Optimize PDF](./optimize-pdf.md) — compress/repair/OCR
+- [Job Service](./job-service.md) — Job creation and dispatch
+- [API Gateway](./api-gateway.md) — Request routing
+- [Error Logging](../architecture/error-logging.md) — Backend-wide error logging convention
 
 ## unoserver daemon pool
 

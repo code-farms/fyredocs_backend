@@ -1,6 +1,6 @@
 # Authentication API
 
-Base URL (via gateway): `http://localhost:8080`
+Base URL: `http://localhost` (the Caddy edge; the api-gateway is internal-only)
 
 The gateway forwards `/auth/*` to `auth-service:8086`. Client requests should always go to the gateway, not directly to auth-service.
 

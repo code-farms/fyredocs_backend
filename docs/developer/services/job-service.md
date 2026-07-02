@@ -599,8 +599,8 @@ The service fails fast at boot if object storage is misconfigured or the buckets
 job-service:
   build:
     context: ./job-service
-  ports:
-    - "8081:8081"
+  expose:
+    - "8081"          # internal-only; reached via the Caddy edge → api-gateway
   environment:
     PORT: "8081"
     DATABASE_URL: postgresql://user:password@db:5432/fyredocs
@@ -644,16 +644,16 @@ job-service:
 
 ## Error Logging
 
-All 5xx response sites in handlers (`CreateJobFromTool`, `InitUpload`, `GetUploadParts`, `CompleteUpload`, `AbortUpload`, list/delete/download/history endpoints) emit a structured `slog.Error` via `response.InternalErrorf` before returning. Internal helpers (`consumeUpload`, etc.) call `logger.LogErr` / `logger.LogWarn` at the point of failure detection. Each line carries `op`, `requestId`, and the local IDs (`jobId`, `uploadId`, `tool`) needed to reproduce the failure. See [Error Logging](../architecture/ERROR_LOGGING.md) for the convention.
+All 5xx response sites in handlers (`CreateJobFromTool`, `InitUpload`, `GetUploadParts`, `CompleteUpload`, `AbortUpload`, list/delete/download/history endpoints) emit a structured `slog.Error` via `response.InternalErrorf` before returning. Internal helpers (`consumeUpload`, etc.) call `logger.LogErr` / `logger.LogWarn` at the point of failure detection. Each line carries `op`, `requestId`, and the local IDs (`jobId`, `uploadId`, `tool`) needed to reproduce the failure. See [Error Logging](../architecture/error-logging.md) for the convention.
 
 To debug a user-visible failure, take `meta.requestId` from the API response and grep job-service stdout for that value — the matching `slog.Error` line names the failing `op` (e.g. `db.processing_jobs.transaction`, `s3.create_multipart`, `s3.presign_get`).
 
 ## Related Documentation
 
-- [API Gateway](./API_GATEWAY.md) -- Request routing and CORS
-- [Auth Service](./AUTH_SERVICE.md) -- Authentication and user management
-- [Convert From PDF](./CONVERT_FROM_PDF.md) -- PDF-to-other-format worker
-- [Convert To PDF](./CONVERT_TO_PDF.md) -- Other-format-to-PDF worker
-- [Organize PDF](./ORGANIZE_PDF.md) -- PDF organization worker
-- [Optimize PDF](./OPTIMIZE_PDF.md) -- PDF optimization worker
-- [Error Logging](../architecture/ERROR_LOGGING.md) -- Backend-wide error logging convention
+- [API Gateway](./api-gateway.md) -- Request routing and CORS
+- [Auth Service](./auth-service.md) -- Authentication and user management
+- [Convert From PDF](./convert-from-pdf.md) -- PDF-to-other-format worker
+- [Convert To PDF](./convert-to-pdf.md) -- Other-format-to-PDF worker
+- [Organize PDF](./organize-pdf.md) -- PDF organization worker
+- [Optimize PDF](./optimize-pdf.md) -- PDF optimization worker
+- [Error Logging](../architecture/error-logging.md) -- Backend-wide error logging convention

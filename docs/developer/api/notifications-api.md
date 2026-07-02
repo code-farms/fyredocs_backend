@@ -1,6 +1,6 @@
 # Notifications API (notification-service)
 
-Base URL (via gateway): `http://localhost:8080`
+Base URL: `http://localhost` (the Caddy edge; the api-gateway is internal-only)
 
 The gateway forwards `/api/notifications/*` to `notification-service:8091`, verifying the JWT and injecting `X-User-ID`. Notifications are per-user. The `/internal/notifications` endpoint is **mesh-only** — reachable service-to-service, never through the gateway. Responses use the standard envelope `{success, message, data, error, meta}`.
 

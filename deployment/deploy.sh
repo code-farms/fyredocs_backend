@@ -48,7 +48,7 @@ Usage: deployment/deploy.sh [options] [service ...]
                          Show the resource budget for this host and exit.
   -h, --help             Show this help.
 
-See docs/developer/architecture/COMPOSE_FILES.md for the compose files layout.
+See docs/developer/architecture/compose-files.md for the compose files layout.
 USAGE
 }
 
@@ -288,7 +288,7 @@ fi
 # ---------------------------------------------------------------------------
 # Single-service mode: rebuild + redeploy only the named service(s) through
 # their per-service compose files (extends-based, see
-# docs/developer/architecture/COMPOSE_FILES.md). Runs AFTER .env sourcing,
+# docs/developer/architecture/compose-files.md). Runs AFTER .env sourcing,
 # compute_resource_budget and the JWT secret so the recreated container gets
 # the exact same env/limits as a full deploy. The rest of the stack is
 # untouched — infra (db/redis/nats/minio) must already be running.
@@ -517,7 +517,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "🔧 Useful Commands:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Deploy one service:    ./deployment/deploy.sh <service>   (e.g. auth-service)"
-echo "  Compose files layout:  docs/developer/architecture/COMPOSE_FILES.md"
+echo "  Compose files layout:  docs/developer/architecture/compose-files.md"
 echo "  View logs:             docker compose -f deployment/docker-compose.yml --env-file .env logs -f"
 echo "  View specific service: docker compose -f deployment/docker-compose.yml --env-file .env logs -f api-gateway"
 echo "  Restart services:      docker compose -f deployment/docker-compose.yml --env-file .env restart"
