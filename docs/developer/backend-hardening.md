@@ -199,7 +199,7 @@ The Fyredocs backend is a well-architected microservices system. Clean service b
 
 ### 3.12 Cleanup Worker Distributed Lock `Medium`
 
-**Finding:** Multiple cleanup-worker replicas would compete to delete the same expired jobs, causing unnecessary DB load and race conditions.
+**Finding:** Multiple cleanup sweepers (now job-service's in-process loop) would compete to delete the same expired jobs, causing unnecessary DB load and race conditions.
 
 **Why:** A distributed lock ensures only one replica runs cleanup at a time, while still allowing multiple replicas for high availability.
 
@@ -209,7 +209,7 @@ The Fyredocs backend is a well-architected microservices system. Clean service b
 - If lock is held, the instance skips the cycle (debug log)
 - Lock released via `defer Del` after cleanup; auto-expires if worker crashes
 
-**Files:** `cleanup-worker/main.go`
+**Files:** `job-service/internal/cleanup/cleanup.go`
 
 ---
 

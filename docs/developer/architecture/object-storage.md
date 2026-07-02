@@ -15,7 +15,7 @@ graph LR
 
     JOB["job-service"] -->|presign, stat, multipart| MINIO
     W["worker services ×N"] -->|"download input,<br/>upload output"| MINIO
-    CW["cleanup-worker"] -->|"RemoveObject,<br/>AbortMultipart"| MINIO
+    JSCL["job-service<br/>(in-process cleanup loop)"] -->|"RemoveObject,<br/>AbortMultipart"| MINIO
 
     OP["Operator"] -->|127.0.0.1:9001 console| MINIO
 ```
@@ -36,13 +36,13 @@ graph LR
 
 | Bucket | Keys | Written by | Deleted by |
 |--------|------|------------|------------|
-| `uploads` | `uploads/<uploadId>/<fileName>` | browser (presigned PUT / multipart parts) | lifecycle (2 d) + cleanup-worker |
-| `outputs` | `jobs/<jobId>/<outputName>` | worker services | cleanup-worker (DB-driven only) |
+| `uploads` | `uploads/<uploadId>/<fileName>` | browser (presigned PUT / multipart parts) | job-service cleanup loop |
+| `outputs` | `jobs/<jobId>/<outputName>` | worker services | job-service cleanup loop (DB-driven only) |
 
 `file_metadata.path` stores the **object key** (no leading `/`). The `kind`
 column selects the bucket: `input` → uploads, `output` → outputs. Rows whose
 path still begins with `/` are legacy filesystem paths from before the
-migration — the cleanup-worker skips them and they are moved by the one-off
+migration — the cleanup loop skips them and they are moved by the one-off
 script [`scripts/migrate-files-to-minio.sh`](../../../scripts/migrate-files-to-minio.sh)
 (dry-run by default, `--execute` to apply).
 
@@ -100,10 +100,10 @@ imported):
   older is abandoned. Both are set on `minio-init` and overridable via the
   deployment `.env`.
 - `outputs`: **no lifecycle rule.** Pro-plan outputs never expire;
-  deletion is exclusively DB-driven (cleanup-worker removes the object when
+  deletion is exclusively DB-driven (the cleanup loop removes the object when
   the owning `processing_jobs` row passes `expires_at`).
 
-The cleanup-worker provides defense in depth ahead of the lifecycle backstop:
+job-service's cleanup loop provides defense in depth:
 
 - expired job → `RemoveObject` per `file_metadata` row (input + output);
 - expired Redis upload session → `AbortMultipart` (when the session has an

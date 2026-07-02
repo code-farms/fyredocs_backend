@@ -93,16 +93,18 @@ compute_resource_budget() {
     # associative arrays). Order: name, mem weight (MB), cpu weight (tenths).
     local NAMES=(redis nats minio api-gateway auth-service job-service \
         convert-from-pdf convert-to-pdf organize-pdf optimize-pdf \
-        analytics-service document-service user-service notification-service cleanup-worker)
+        analytics-service document-service user-service notification-service)
     # Weights reflect each service's real responsibilities (not the old 8 GB-box
     # limits). Memory: LibreOffice/OCR workers + MinIO get the bulk; redis and
     # the light Go CRUD services stay lean. CPU: the heavy workers AND the
     # api-gateway — which sits on every request's hot path and proxies object
     # bytes to/from MinIO — get real shares; near-idle services get a sliver.
     # Sums are computed below so the arrays can be retuned in isolation.
-    #              redis nats minio  gw auth  job   cF  cT org opt  an doc usr ntf cln
-    local MEMW=(     8   12   34   14    7   18   48  48  24  46    6   6   6   6   6)
-    local CPUW=(     2    2    7   10    2    5   18  18  12  18    1   1   1   1   1)
+    # job-service's weights include its in-process cleanup sweep (formerly
+    # the separate cleanup-worker container).
+    #              redis nats minio  gw auth  job   cF  cT org opt  an doc usr ntf
+    local MEMW=(     8   12   34   14    7   24   48  48  24  46    6   6   6   6)
+    local CPUW=(     2    2    7   10    2    6   18  18  12  18    1   1   1   1)
     local MEMW_SUM=0 CPUW_SUM=0 wi
     for wi in "${!MEMW[@]}"; do
         MEMW_SUM=$(( MEMW_SUM + MEMW[wi] )); CPUW_SUM=$(( CPUW_SUM + CPUW[wi] ))
@@ -372,7 +374,6 @@ GO_SERVICES=(
   "document-service"
   "user-service"
   "notification-service"
-  "cleanup-worker"
 )
 
 export DOCKER_BUILDKIT=1
@@ -498,7 +499,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "  🌐 App (Caddy edge):      $EDGE_URL  (SPA + APIs under /api, /auth, /admin)"
 echo "  🌐 API Gateway:           internal only (caddy → api-gateway:8080)"
 echo "  🔑 Auth Service:          internal only (auth-service:8086)"
-echo "  📤 Job Service:           internal only (job-service:8081)"
+echo "  📤 Job Service:           internal only (job-service:8081, + in-process cleanup sweeps)"
 echo "  📄 Convert-From-PDF:      internal only (convert-from-pdf:8082)"
 echo "  📑 Convert-To-PDF:        internal only (convert-to-pdf:8083)"
 echo "  📋 Organize-PDF:          internal only (organize-pdf:8084)"
@@ -507,7 +508,6 @@ echo "  📊 Analytics:             internal only (analytics-service:8087)"
 echo "  🗂️  Document Service:      internal only (document-service:8089)"
 echo "  👤 User Service:          internal only (user-service:8090)"
 echo "  🔔 Notification Service:  internal only (notification-service:8091)"
-echo "  🧹 Cleanup Worker:        internal only (cleanup-worker:8088, background)"
 echo "  📦 MinIO (S3):            internal (minio:9000) — console http://127.0.0.1:9001, objects via edge /uploads /outputs"
 echo "  📨 NATS:                  internal only (nats:4222)"
 echo "  🔴 Redis:                 internal only (redis:6379)"

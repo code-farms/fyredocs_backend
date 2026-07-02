@@ -28,7 +28,6 @@ The script generates a JWT secret, starts all services with Docker Compose, and 
 | **Organize PDF** | 8084 | Merge, split, rotate, extract, remove, watermark, protect, unlock, sign, edit, page numbers (pdfcpu) |
 | **Optimize PDF** | 8085 | Compress, repair, OCR (Ghostscript / Tesseract) |
 | **Analytics Service** | 8087 | Business / engagement / reliability metrics, NATS subscriber |
-| **Cleanup Worker** | 8088 | Background TTL cleanup of jobs, upload sessions, and their MinIO objects; aborts stale multipart uploads (health/metrics endpoints only). Owned by job-service (`job-service/cmd/cleanup`), deployed as its own container |
 | **Document Service** | 8089 | Persistent document library — documents, folders, tags, exports; finalizes completed jobs into documents (NATS subscriber) |
 | **User Service** | 8090 | Organizations, memberships, and the RBAC role model |
 | **Notification Service** | 8091 | In-app notification feed; consumes job events, pushes a live SSE bell |
@@ -158,7 +157,7 @@ test.bat
 test.bat -v api-gateway
 ```
 
-Available services: `shared`, `api-gateway`, `auth-service`, `job-service`, `convert-to-pdf`, `convert-from-pdf`, `organize-pdf`, `optimize-pdf`, `analytics-service`, `document-service`, `user-service`, `notification-service` (the cleanup binary is tested as part of `job-service`)
+Available services: `shared`, `api-gateway`, `auth-service`, `job-service`, `convert-to-pdf`, `convert-from-pdf`, `organize-pdf`, `optimize-pdf`, `analytics-service`, `document-service`, `user-service`, `notification-service` (the cleanup sweep is part of `job-service`)
 
 ## License
 

@@ -297,6 +297,6 @@ Prefer **SSE** (`/api/jobs/:id/events`) for tracking progress — it is push-bas
 
 ## File Cleanup
 
-- Expired jobs are reaped by the [cleanup-worker](../services/CLEANUP_WORKER.md) every `CLEANUP_INTERVAL` (default 15m).
+- Expired jobs are reaped by job-service's in-process [cleanup loop](../services/JOB_SERVICE.md#background-cleanup-loop) every `CLEANUP_INTERVAL` (default 15m).
 - Pro-user jobs have `expires_at = NULL` and are not auto-deleted.
 - `DELETE /api/<group>/:tool/:id` immediately removes the job and its files.

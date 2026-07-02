@@ -64,7 +64,7 @@ This document covers database best practices for the Fyredocs backend, organized
 
 **Impact**: Reduced from O(N) queries per batch to O(1) — typically 100x fewer database round-trips per cleanup cycle.
 
-**File**: `cleanup-worker/main.go`
+**File**: `job-service/internal/cleanup/cleanup.go`
 
 ---
 

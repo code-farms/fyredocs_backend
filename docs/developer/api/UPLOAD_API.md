@@ -215,7 +215,7 @@ POST /api/upload/{uploadId}/complete
 
 - Assembles chunks `000000.part`, `000001.part`, ... into one file under `uploads/<uploadId>/<fileName>`.
 - Cleans up the temporary chunk directory `uploads/tmp/<uploadId>/`.
-- The Redis upload session (`upload:<uploadId>`) is **kept** so that the next `POST /api/<group>/:tool` call can reference this `uploadId`. The session is only released after the job is committed and queued (or expired by the cleanup-worker after `UPLOAD_TTL`).
+- The Redis upload session (`upload:<uploadId>`) is **kept** so that the next `POST /api/<group>/:tool` call can reference this `uploadId`. The session is only released after the job is committed and queued (or expired by job-service's cleanup loop after `UPLOAD_TTL`).
 - Files larger than `MAX_UPLOAD_MB` are rejected after assembly (the partial file is removed).
 
 ### Errors

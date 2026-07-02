@@ -235,3 +235,32 @@ graph LR
     Queue --> |PublishJobEvent · SubjectForDispatch| NATS
     AuthVerify --> |golang-jwt/jwt/v5| JWT
 ```
+
+## Background Cleanup Loop
+
+The TTL sweep runs in-process inside the API binary (goroutine started from `main.go`, gated by `CLEANUP_ENABLED`, default true; sweep logic in `internal/cleanup`). Formerly the separate `cleanup-worker` container — folded in for a strict 1 service = 1 container mapping.
+
+```mermaid
+graph TB
+    subgraph loop[" in-process cleanup loop (main.go goroutine · internal/cleanup) "]
+        direction TB
+
+        TICKER["time.Ticker<br/>CLEANUP_INTERVAL (compose 5m · fallback 15m)"]
+        LOOP["RunSweep(ctx, store) each tick"]
+
+        subgraph Sweep["RunSweep() — under SETNX lock cleanup-worker:lock (10m TTL)"]
+            P1["Phase 1: cleanupExpiredJobs()<br/>batch=100 · RemoveObject per file_metadata row<br/>legacy '/...' paths skipped (log once)"]
+            P2["Phase 2: cleanupUploadState()<br/>SCAN upload:* · age > 2 × UPLOAD_TTL<br/>DEL + AbortMultipart + RemoveObject (if unconsumed)"]
+            P3["Phase 3: abortStaleMultipartUploads()<br/>ListIncompleteUploads > MULTIPART_ABORT_TTL (24h)"]
+            P4["Phase 4: backfillExpiry()<br/>legacy jobs: expires_at = created_at + FREE_JOB_TTL"]
+        end
+    end
+
+    TICKER --> LOOP --> P1 --> P2 --> P3 --> P4
+
+    P1 & P4 --> PG[(PostgreSQL)]
+    P2 --> RD[(Redis)]
+    P1 & P2 & P3 --> S3[(MinIO<br/>uploads · outputs)]
+```
+
+Out of scope for the sweep: NATS redelivery (JetStream AckWait), refresh-token sessions (auth-service hourly purge), legacy filesystem paths (one-off `scripts/migrate-files-to-minio.sh`). There are no MinIO bucket lifecycle rules — this loop is the sole storage-reclaim mechanism.

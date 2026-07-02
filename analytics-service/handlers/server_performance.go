@@ -265,7 +265,6 @@ func parseServiceURLs() map[string]string {
 			"convert-to-pdf":   "http://convert-to-pdf:8083",
 			"organize-pdf":     "http://organize-pdf:8084",
 			"optimize-pdf":     "http://optimize-pdf:8085",
-			"cleanup-worker":   "http://cleanup-worker:8088",
 		}
 	}
 

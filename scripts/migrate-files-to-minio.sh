@@ -13,7 +13,7 @@
 #   After the migration, file_metadata.path holds OBJECT KEYS:
 #       uploads/...   keys live in the uploads bucket
 #       jobs/<jobId>/<baseName> keys live in the outputs bucket
-#   The cleanup-worker skips rows whose path still starts with "/" (legacy)
+#   job-service's cleanup loop skips rows whose path still starts with "/" (legacy)
 #   and logs a pointer to this script.
 #
 # WHAT THIS SCRIPT DOES (per legacy row, i.e. path LIKE '/%'):

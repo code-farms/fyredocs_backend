@@ -21,6 +21,7 @@ import (
 
 	"fyredocs/shared/authverify"
 	"job-service/handlers"
+	"job-service/internal/cleanup"
 	"job-service/internal/models"
 	"job-service/routes"
 )
@@ -73,6 +74,19 @@ func main() {
 	}
 	storageCancel()
 	handlers.SetObjectStore(objStore)
+
+	// Background TTL sweeps (expired jobs, upload sessions, stale multipart
+	// uploads) run in-process — job-service owns all the data they touch, so
+	// the sweep ships in the same container as the API. CLEANUP_ENABLED=false
+	// opts a replica out, keeping exactly one sweeper if the API ever scales
+	// beyond a single replica.
+	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
+	defer cleanupCancel()
+	if config.GetEnvBool("CLEANUP_ENABLED", true) {
+		go runCleanupLoop(cleanupCtx, objStore)
+	} else {
+		slog.Warn("cleanup loop disabled (CLEANUP_ENABLED=false)")
+	}
 
 	// Initialize denylist for JWT verification
 	var denylist authverify.TokenDenylist
@@ -128,6 +142,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	slog.Info("shutting down server...")
+	cleanupCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -136,6 +151,26 @@ func main() {
 	}
 	redisstore.Close()
 	slog.Info("server exited")
+}
+
+// runCleanupLoop executes cleanup.RunSweep immediately and then on every
+// CLEANUP_INTERVAL tick until ctx is cancelled. This was the standalone
+// cleanup-worker binary (cmd/cleanup) before being folded in so the service
+// ships as a single container.
+func runCleanupLoop(ctx context.Context, store cleanup.ObjectStore) {
+	interval := config.CleanupInterval()
+	slog.Info("cleanup loop started", "interval", interval)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		cleanup.RunSweep(ctx, store)
+		select {
+		case <-ctx.Done():
+			slog.Info("cleanup loop stopped")
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func buildAuthMiddleware(denylist authverify.TokenDenylist) gin.HandlerFunc {

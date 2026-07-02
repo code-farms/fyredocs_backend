@@ -628,7 +628,7 @@ func consumeUpload(ctx context.Context, toolType string, uploadID string) (consu
 
 // releaseUpload clears the Redis session state for a successfully consumed
 // upload. The object itself is NOT removed — workers read it from its
-// uploads/{uploadId}/... key; the cleanup-worker reaps it later. Failures are
+// uploads/{uploadId}/... key; the in-process cleanup loop reaps it later. Failures are
 // logged but never returned — the job has already been queued and a stuck
 // upload record will be cleaned up by the Redis TTL.
 func releaseUpload(ctx context.Context, uploadID string) {

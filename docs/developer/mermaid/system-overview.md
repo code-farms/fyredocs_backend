@@ -21,7 +21,7 @@ graph TB
 
     subgraph Core["Core Services"]
         AUTH["auth-service :8086<br/>Gin · DB-backed sessions"]
-        JOB["job-service :8081<br/>Gin · uploads, jobs, SSE"]
+        JOB["job-service :8081<br/>Gin · uploads, jobs, SSE<br/>+ in-process cleanup loop<br/>(jobs · upload sessions · stale multiparts · backfill)"]
     end
 
     subgraph Workers["Worker Services (NATS consumers)"]
@@ -33,10 +33,6 @@ graph TB
 
     subgraph Analytics["Analytics"]
         AN["analytics-service :8087<br/>Gin + NATS subscriber"]
-    end
-
-    subgraph Background
-        CW["cleanup-worker :8088<br/>job-service's cleanup binary (cmd/cleanup)<br/>Ticker · 4-phase cleanup<br/>(jobs · upload sessions · stale multiparts · backfill)"]
     end
 
     subgraph Platform["Platform Services"]
@@ -103,9 +99,7 @@ graph TB
     CTP -->|input download · output upload| S3
     ORG -->|input download · output upload| S3
     OPT -->|input download · output upload| S3
-    CW --> PG
-    CW --> RD
-    CW -->|RemoveObject · AbortMultipart| S3
+    JOB -->|cleanup: RemoveObject · AbortMultipart| S3
     GW --> RD
 
     DOC --> PG

@@ -80,22 +80,32 @@ Job Service :8081  (control plane only — no file bytes)
 | `handlers/storage.go` | `ObjectStore` interface (narrow slice of `shared/storage.Client`) + boot-time injection |
 | `handlers/auth.go` | Extract authenticated user ID from auth context |
 | `internal/routing/routing.go` | `ToolServiceMap` -- single source of truth for tool-to-service mapping |
-| `internal/models/` | GORM models for `ProcessingJob` and `FileMetadata` (shared with the cleanup binary) |
-| `internal/cleanup/` | Sweep logic for the cleanup binary (expired jobs, upload state, stale multiparts, backfill) |
-| `cmd/cleanup/` | Entrypoint for the cleanup binary (deployed as the `cleanup-worker` container) |
+| `internal/models/` | GORM models for `ProcessingJob` and `FileMetadata` |
+| `internal/cleanup/` | Sweep logic for the in-process cleanup loop (expired jobs, upload state, stale multiparts, backfill) |
 | `routes/upload_routes.go` | Gin route registration with rate limiting |
 | `middleware/` | Rate limiting middleware |
 
 JWT verification middleware is imported from the shared `fyredocs/shared/authverify` package (replacing the old `internal/authverify` local copy).
 
-### Two Binaries
+### Background Cleanup Loop
 
-The job-service module ships two binaries:
+The TTL sweep runs **in-process** inside the API binary (started from `main.go` as a background goroutine, sweep logic in `internal/cleanup/`). It was previously a second binary shipped as the separate `cleanup-worker` container; it was folded in to keep a strict 1 service = 1 container mapping — job-service owns all the data the sweep touches, so no service boundary is crossed either way.
 
-1. **API server** (`main.go` at the module root) — the REST orchestrator documented in this file, port 8081.
-2. **Cleanup binary** (`cmd/cleanup/main.go`, sweep logic in `internal/cleanup/`) — the background TTL sweeper, deployed as the `cleanup-worker` container (built from `job-service/Dockerfile.cleanup`, port 8088). It reuses this service's `internal/models` directly, so there is no cross-service data access. See [Cleanup Worker](./CLEANUP_WORKER.md).
+Every `CLEANUP_INTERVAL` (compose sets 5m; code fallback 15m), under a Redis `SETNX` lock (`cleanup-worker:lock`, 10-min TTL, so at most one sweeper runs per tick even with multiple replicas):
 
-Retention TTL fallbacks (`GUEST_JOB_TTL` 30m, `FREE_JOB_TTL` 7d, `PRO_JOB_TTL` 30d, `UPLOAD_TTL` 30m, `CLEANUP_INTERVAL` 15m, `MULTIPART_ABORT_TTL` 24h, `MAX_UPLOAD_MB` 50) live once in `shared/config/defaults.go`; both binaries read the same helpers, so the fallbacks cannot drift.
+1. **Expired job cleanup** — delete `processing_jobs` rows past `expires_at` (batch 100) and `RemoveObject` their input/output objects; TTLs per plan: `GUEST_JOB_TTL` 30m / `FREE_JOB_TTL` 7d / `PRO_JOB_TTL` 30d.
+2. **Expired upload-session reap** — Redis `upload:*` state older than 2 × `UPLOAD_TTL`: `DEL` state, `AbortMultipart`, `RemoveObject` if the object was never consumed by a job.
+3. **Stale multipart abort** — incomplete multipart uploads older than `MULTIPART_ABORT_TTL` (24h). This is the sole reclaim mechanism; there are **no bucket lifecycle rules**.
+4. **Expiry backfill** — set `expires_at = created_at + FREE_JOB_TTL` on legacy authenticated jobs where it is `NULL`.
+
+Operational notes:
+- `CLEANUP_ENABLED=false` opts a replica out of sweeping entirely (the Redis lock already dedupes; the flag is the explicit off-switch for extra replicas or local runs).
+- Idempotent by design: a missing object or unknown multipart upload counts as success; anything missed in one cycle is retried on the next.
+- Fail-safe delete rule: an upload object is only removed if provably unreferenced by `file_metadata`; on a DB error it is kept.
+- `file_metadata.path` values starting with `/` are pre-object-storage legacy filesystem paths — skipped and logged; migrate with `scripts/migrate-files-to-minio.sh`.
+- Logs/metrics ship with the job-service container (`docker compose logs -f job-service`, grep `cleanup`); sweep activity appears in job-service's `/metrics`.
+
+Retention TTL fallbacks (`GUEST_JOB_TTL` 30m, `FREE_JOB_TTL` 7d, `PRO_JOB_TTL` 30d, `UPLOAD_TTL` 30m, `CLEANUP_INTERVAL` 15m, `MULTIPART_ABORT_TTL` 24h, `MAX_UPLOAD_MB` 50) live once in `shared/config/defaults.go`, read by both the handlers and the sweep, so the values cannot drift.
 
 ### ToolServiceMap (routing.go)
 
@@ -524,7 +534,7 @@ All errors follow the standard response format:
 When job creation fails partway through:
 - `consumeUpload` is **read-only**: it never moves or deletes the uploaded object, so any downstream failure (DB transaction, NATS publish) leaves the object at `uploads/<uploadId>/...` and the Redis session intact. The frontend's retry button can resubmit the same `uploadId` without forcing the user to re-upload.
 - The Redis session (`upload:<uploadId>`) is released **only after** the DB transaction commits **and** the `JobCreated` event is published.
-- Abandoned uploads (object + incomplete multipart uploads) are reaped by the cleanup-worker; the Redis session expires via `UPLOAD_TTL`.
+- Abandoned uploads (object + incomplete multipart uploads) are reaped by the in-process cleanup loop; the Redis session expires via `UPLOAD_TTL`.
 
 ## Environment Variables
 
@@ -646,5 +656,4 @@ To debug a user-visible failure, take `meta.requestId` from the API response and
 - [Convert To PDF](./CONVERT_TO_PDF.md) -- Other-format-to-PDF worker
 - [Organize PDF](./ORGANIZE_PDF.md) -- PDF organization worker
 - [Optimize PDF](./OPTIMIZE_PDF.md) -- PDF optimization worker
-- [Cleanup Worker](./CLEANUP_WORKER.md) -- Expired job/upload cleanup
 - [Error Logging](../architecture/ERROR_LOGGING.md) -- Backend-wide error logging convention

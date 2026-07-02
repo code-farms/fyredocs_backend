@@ -86,7 +86,7 @@ docker compose -f deployment/docker-compose-api-gateway.yml --env-file .env up -
 cd job-service && go test ./...
 
 # Run all tests
-for svc in api-gateway auth-service job-service convert-from-pdf convert-to-pdf organize-pdf optimize-pdf cleanup-worker analytics-service document-service user-service notification-service; do
+for svc in api-gateway auth-service job-service convert-from-pdf convert-to-pdf organize-pdf optimize-pdf analytics-service document-service user-service notification-service; do
   echo "Testing $svc..." && cd $svc && go test ./... && cd ..
 done
 ```

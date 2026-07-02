@@ -32,7 +32,7 @@ for %%a in (%*) do (
 )
 
 if "!HAS_TARGETS!"=="0" (
-    set "TARGETS=shared api-gateway auth-service job-service convert-to-pdf convert-from-pdf organize-pdf optimize-pdf cleanup-worker"
+    set "TARGETS=shared api-gateway auth-service job-service convert-to-pdf convert-from-pdf organize-pdf optimize-pdf analytics-service document-service user-service notification-service"
 )
 
 for %%s in (!TARGETS!) do (
@@ -54,7 +54,7 @@ echo Usage: %~nx0 [-v^|--verbose] [service ...]
 echo.
 echo Services: shared api-gateway auth-service job-service
 echo           convert-to-pdf convert-from-pdf organize-pdf optimize-pdf
-echo           cleanup-worker
+echo           analytics-service document-service user-service notification-service
 echo.
 echo Examples:
 echo   %~nx0                     test everything

@@ -6,11 +6,11 @@ All compose files live in `deployment/` and share the same project name (`fyredo
 
 | File | Role | When to use |
 |------|------|-------------|
-| `docker-compose.yml` | **Canonical stack** — all 12 services + infra (db, redis, nats, minio, caddy) + backups. The single source of truth for every service's config. | Full deploys (`deployment/deploy.sh` uses it). |
+| `docker-compose.yml` | **Canonical stack** — all 11 services + infra (db, redis, nats, minio, caddy) + backups. The single source of truth for every service's config. | Full deploys (`deployment/deploy.sh` uses it). |
 | `docker-compose.essentials.yml` | **Infra only** — db (5432), redis (6379), nats (4222), minio (9000, console 9001), minio-init. Ports published to the host. Creates `fyredocs_net`. | Local dev where services run on the host via `go run`, or as the dependency provider for per-service files. |
-| `docker-compose-<service>.yml` × 12 | **One service each** — extends the service's definition from `docker-compose.yml`. | Build/redeploy a single service against already-running infra. |
+| `docker-compose-<service>.yml` × 11 | **One service each** — extends the service's definition from `docker-compose.yml`. | Build/redeploy a single service against already-running infra. |
 
-Per-service files exist for: `api-gateway`, `auth-service`, `job-service`, `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`, `analytics-service`, `document-service`, `user-service`, `notification-service`, `cleanup-worker`.
+Per-service files exist for: `api-gateway`, `auth-service`, `job-service`, `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`, `analytics-service`, `document-service`, `user-service`, `notification-service`.
 
 ## How per-service files stay in sync
 

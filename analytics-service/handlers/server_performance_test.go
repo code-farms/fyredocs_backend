@@ -48,7 +48,6 @@ func TestParseServiceURLs_Default(t *testing.T) {
 	expected := []string{
 		"api-gateway", "auth-service", "job-service",
 		"convert-from-pdf", "convert-to-pdf", "organize-pdf", "optimize-pdf",
-		"cleanup-worker",
 	}
 	if len(urls) != len(expected) {
 		t.Errorf("expected %d default URLs, got %d", len(expected), len(urls))

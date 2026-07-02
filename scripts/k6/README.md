@@ -102,7 +102,7 @@ arrival rate exceeds processing capacity (expected past the ceiling; jobs queue)
 
 ## 6. Cleanup
 
-Jobs and uploads expire via the normal TTLs (`cleanup-worker`, guest 30m / free 24h)
+Jobs and uploads expire via the normal TTLs (job-service's cleanup loop, guest 30m / free 24h)
 and the uploads-bucket lifecycle. Provisioned test users (`*@loadtest.fyredocs.local`)
 remain in the Neon DB — delete them with a one-off SQL `DELETE FROM users WHERE email
 LIKE '%@loadtest.fyredocs.local'` (and cascade) if you want a clean slate.

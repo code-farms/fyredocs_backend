@@ -87,7 +87,7 @@ caddy:
     - fyredocs_net
 ```
 
-Then remove `ports:` from `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`, `cleanup-worker`, and infrastructure services.
+Then remove `ports:` from `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`, and infrastructure services.
 
 ---
 
@@ -133,7 +133,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          for svc in api-gateway auth-service job-service convert-from-pdf convert-to-pdf organize-pdf optimize-pdf cleanup-worker; do
+          for svc in api-gateway auth-service job-service convert-from-pdf convert-to-pdf organize-pdf optimize-pdf; do
             docker build -t fyredocs-$svc:${{ github.sha }} -f $svc/Dockerfile .
           done
         working-directory: fyredocs_backend

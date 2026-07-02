@@ -122,7 +122,7 @@ REM Set BuildKit for Windows
 set DOCKER_BUILDKIT=1
 
 REM List of services to build sequentially
-set "SERVICES=api-gateway analytics-service auth-service job-service convert-from-pdf convert-to-pdf organize-pdf optimize-pdf document-service user-service notification-service cleanup-worker"
+set "SERVICES=api-gateway analytics-service auth-service job-service convert-from-pdf convert-to-pdf organize-pdf optimize-pdf document-service user-service notification-service"
 
 for %%s in (%SERVICES%) do (
     echo %YELLOW%Building %%s...%NC%
@@ -161,13 +161,12 @@ echo Service Endpoints:
 echo   App (Caddy edge):     http://localhost  (SPA + APIs under /api, /auth, /admin)
 echo   API Gateway:          internal only (caddy -^> api-gateway:8080)
 echo   Auth Service:         internal only (auth-service:8086)
-echo   Job Service:          internal only (job-service:8081)
+echo   Job Service:          internal only (job-service:8081, + in-process cleanup sweeps)
 echo   PDF Workers:          internal only (convert-from-pdf:8082, convert-to-pdf:8083, organize-pdf:8084, optimize-pdf:8085)
 echo   Analytics:            internal only (analytics-service:8087)
 echo   Document Service:     internal only (document-service:8089)
 echo   User Service:         internal only (user-service:8090)
 echo   Notification Service: internal only (notification-service:8091)
-echo   Cleanup Worker:       internal only (cleanup-worker:8088, background)
 echo   MinIO (S3):           internal (minio:9000); console http://127.0.0.1:9001
 echo   NATS / Redis:         internal only (nats:4222 / redis:6379)
 echo.

@@ -100,7 +100,7 @@ same `db-backup` sidecar also mirrors MinIO buckets offsite each cycle, driven b
 It uses `rclone sync src:<bucket> dest:<bucket>/<BACKUP_FILES_PREFIX><bucket>/`
 (default prefix `minio/`), where `src` is the local MinIO (app S3 creds). **Sync
 mirrors**: new/changed objects are copied and objects removed from MinIO (expired
-/ cleaned by the cleanup-worker) are removed from the backup too — so the backup
+/ cleaned by job-service's cleanup loop) are removed from the backup too — so the backup
 tracks the live bucket and storage stays ≈ current bucket size. A file-sync
 failure is logged but does not flip the DB-backup healthcheck.
 
