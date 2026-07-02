@@ -283,6 +283,9 @@ GO_SERVICES=(
   "convert-to-pdf"
   "organize-pdf"
   "optimize-pdf"
+  "document-service"
+  "user-service"
+  "notification-service"
   "cleanup-worker"
 )
 
@@ -383,19 +386,46 @@ docker compose ps
 echo ""
 print_success "Deployment successful! (Total Time: ${MINUTES}m ${SECONDS_REM}s)"
 echo ""
+# Edge URL: PUBLIC_DOMAIN set → Caddy terminates TLS on that domain;
+# unset (or a bare :port from the compose default) → plain HTTP locally.
+case "${PUBLIC_DOMAIN:-}" in
+    ""|:*) EDGE_URL="http://localhost" ;;
+    *)     EDGE_URL="https://$PUBLIC_DOMAIN" ;;
+esac
+
+# DB label from DATABASE_URL: services talk to whatever it points at
+# (in-compose db, Neon, RDS, ...) — don't hardcode a provider here.
+if [ -n "${DATABASE_URL:-}" ]; then
+    DB_HOST=$(echo "$DATABASE_URL" | sed -E 's|.*@([^/:?]+).*|\1|')
+    if [ "$DB_HOST" = "db" ]; then
+        DB_LABEL="in-compose Postgres (db:5432)"
+    else
+        DB_LABEL="external ($DB_HOST)"
+    fi
+else
+    DB_LABEL="not configured (DATABASE_URL unset)"
+fi
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "📋 Service Endpoints:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  🌐 App (Caddy edge):   http://localhost  (APIs under /api, /auth)"
-echo "  🌐 API Gateway:        internal only (caddy → api-gateway:8080)"
-echo "  📤 Upload Service:     internal only (job-service:8081)"
-echo "  📄 Convert-From-PDF:   internal only (:8082)"
-echo "  📑 Convert-To-PDF:     internal only (:8083)"
-echo "  📋 Organize-PDF:       internal only (:8084)"
-echo "  🔧 Optimize-PDF:       internal only (:8085)"
-echo "  📊 Analytics:          internal only (:8087)"
-echo "  🗄️  PostgreSQL:         Neon (cloud)"
-echo "  🔴 Redis:              localhost:6379"
+echo "  🌐 App (Caddy edge):      $EDGE_URL  (SPA + APIs under /api, /auth, /admin)"
+echo "  🌐 API Gateway:           internal only (caddy → api-gateway:8080)"
+echo "  🔑 Auth Service:          internal only (auth-service:8086)"
+echo "  📤 Job Service:           internal only (job-service:8081)"
+echo "  📄 Convert-From-PDF:      internal only (convert-from-pdf:8082)"
+echo "  📑 Convert-To-PDF:        internal only (convert-to-pdf:8083)"
+echo "  📋 Organize-PDF:          internal only (organize-pdf:8084)"
+echo "  🔧 Optimize-PDF:          internal only (optimize-pdf:8085)"
+echo "  📊 Analytics:             internal only (analytics-service:8087)"
+echo "  🗂️  Document Service:      internal only (document-service:8089)"
+echo "  👤 User Service:          internal only (user-service:8090)"
+echo "  🔔 Notification Service:  internal only (notification-service:8091)"
+echo "  🧹 Cleanup Worker:        internal only (cleanup-worker:8088, background)"
+echo "  📦 MinIO (S3):            internal (minio:9000) — console http://127.0.0.1:9001, objects via edge /uploads /outputs"
+echo "  📨 NATS:                  internal only (nats:4222)"
+echo "  🔴 Redis:                 internal only (redis:6379)"
+echo "  🗄️  PostgreSQL:            $DB_LABEL"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🔧 Useful Commands:"

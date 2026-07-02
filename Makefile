@@ -1,5 +1,6 @@
 SERVICES = shared api-gateway auth-service job-service \
-           convert-to-pdf convert-from-pdf organize-pdf optimize-pdf
+           convert-to-pdf convert-from-pdf organize-pdf optimize-pdf \
+           analytics-service document-service user-service notification-service
 
 # Compose always uses the deployment compose file + the single root .env (same
 # env file deploy.sh loads). Run one (or more) services without a long command:

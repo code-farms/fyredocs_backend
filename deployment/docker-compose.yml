@@ -241,8 +241,10 @@ services:
       - "443:443"
     environment:
       # Set to your public domain to enable automatic HTTPS; leave unset
-      # for plain HTTP on :80 (local/dev).
-      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
+      # for plain HTTP on :80 (local/dev). The :80 default must be applied
+      # HERE: compose always defines the variable in the container, and
+      # Caddy's {$VAR:default} fallback ignores defined-but-empty values.
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-:80}
       S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
     volumes:
