@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"api-gateway/internal/authverify"
 	"api-gateway/internal/plancache"
 	"api-gateway/internal/ratelimit"
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/config"
 	"fyredocs/shared/logger"
 	"fyredocs/shared/metrics"
@@ -166,18 +166,6 @@ func main() {
 
 	mux.Handle("/metrics", metrics.HTTPMetricsHandler())
 
-	// SPA static file serving — serves the built frontend from the same origin
-	// so that httpOnly cookies (guest_token, auth) work without cross-origin hacks.
-	spaDir := config.GetEnv("SPA_DIR", "")
-	if spaDir != "" {
-		if info, err := os.Stat(spaDir); err == nil && info.IsDir() {
-			mux.Handle("/", spaFileServer(spaDir))
-			slog.Info("SPA static files enabled", "dir", spaDir)
-		} else {
-			slog.Warn("SPA_DIR configured but not found, skipping static file serving", "dir", spaDir)
-		}
-	}
-
 	// Fix #28: Deep health check - ping Redis
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -226,25 +214,15 @@ func main() {
 		ProLimit:  config.GetEnvInt("RATE_LIMIT_API_PRO", 600),
 	})
 
-	// Object-storage proxy: browsers upload/download file bytes via presigned
-	// URLs that resolve to this gateway origin (same-origin, no CORS). The
-	// presigned SigV4 signature itself is the credential, so these routes
-	// bypass auth middleware, body-size limits, and cookie handling — the
-	// gateway only relays bytes to MinIO.
-	minioURL := config.GetEnv("MINIO_URL", "http://minio:9000")
-	bucketUploads := config.GetEnv("S3_BUCKET_UPLOADS", "fyredocs-uploads")
-	bucketOutputs := config.GetEnv("S3_BUCKET_OUTPUTS", "fyredocs-outputs")
-	minioProxy := newMinioProxy(minioURL)
-
-	root := http.NewServeMux()
-	root.Handle("/"+bucketUploads+"/", minioProxy)
-	root.Handle("/"+bucketOutputs+"/", minioProxy)
-	root.Handle("/", withCORS(authMiddleware(rateLimit(mux)), corsConfig{
+	// SPA static files and presigned MinIO byte traffic are handled by the
+	// Caddy edge (deployment/caddy/Caddyfile), not this gateway — file
+	// bandwidth must never compete with API routing for gateway CPU.
+	root := withCORS(authMiddleware(rateLimit(mux)), corsConfig{
 		allowedOrigins:   corsOrigins,
 		allowedMethods:   corsMethods,
 		allowedHeaders:   corsHeaders,
 		allowCredentials: credentialsEnabled,
-	}))
+	})
 
 	handler := telemetry.HTTPTraceMiddleware("api-gateway")(
 		metrics.HTTPMetricsMiddleware(
@@ -292,62 +270,17 @@ var proxyTransport = &http.Transport{
 	MaxIdleConns:          100,
 }
 
-// minioTransport extends proxyTransport for the MinIO upstream: multipart
-// parts arrive from the browser in parallel, so allow a much larger idle
-// connection pool to that single host.
-var minioTransport = &http.Transport{
-	ResponseHeaderTimeout: 5 * time.Minute,
-	IdleConnTimeout:       90 * time.Second,
-	MaxIdleConnsPerHost:   50,
-	MaxIdleConns:          100,
-}
-
 // registerServiceRoutes mounts each backend route with the standard 1 MiB
-// JSON body limit. File bytes no longer pass through these routes — uploads
-// and downloads go directly to MinIO via the presigned bucket proxies — so
-// /api/upload is JSON-only (init/complete) and gets the same limit.
+// JSON body limit. File bytes never pass through this gateway — uploads and
+// downloads go directly from the browser to MinIO via presigned URLs routed
+// at the Caddy edge — so /api/upload is JSON-only (init/complete) and gets
+// the same limit.
 func registerServiceRoutes(mux *http.ServeMux, routes []routeConfig) {
 	for _, cfg := range routes {
 		handler := withMaxBodySize(newProxy(cfg), 1<<20) // 1 MiB
 		mux.Handle(cfg.prefix, handler)
 		mux.Handle(cfg.prefix+"/", handler)
 	}
-}
-
-// newMinioProxy proxies presigned object-storage requests to MinIO.
-//
-// The path is forwarded verbatim (/{bucket}/{key}?X-Amz-...) — no prefix
-// stripping — because the SigV4 signature covers the canonical path.
-//
-// Host preservation is load-bearing: presigned URLs are signed against the
-// public origin the browser uses (S3_PUBLIC_ENDPOINT, i.e. this gateway), and
-// SigV4 includes the Host header in the signed canonical request. MinIO
-// recomputes the signature against the Host it receives, so the gateway must
-// forward the ORIGINAL Host header rather than rewriting it to the upstream
-// host (which newProxy does for service routes).
-func newMinioProxy(targetURL string) http.Handler {
-	target, err := url.Parse(targetURL)
-	if err != nil {
-		slog.Error("invalid MINIO_URL", "url", targetURL, "error", err)
-		os.Exit(1)
-	}
-
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.Transport = minioTransport
-	proxy.FlushInterval = -1 // stream bytes immediately (large downloads/uploads)
-	proxy.Director = func(req *http.Request) {
-		originalHost := req.Host
-		req.URL.Scheme = target.Scheme
-		req.URL.Host = target.Host
-		// req.URL.Path is left untouched (verbatim) and req.Host stays the
-		// origin the URL was presigned for. Set explicitly for clarity.
-		req.Host = originalHost
-		// Strip any client-supplied identity headers; the presigned
-		// signature is the only credential on these routes.
-		authverify.ClearUserHeaders(req.Header)
-	}
-
-	return proxy
 }
 
 func newProxy(cfg routeConfig) http.Handler {
@@ -469,34 +402,5 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		next.ServeHTTP(w, r)
-	})
-}
-
-// spaFileServer serves static files from dir and falls back to index.html
-// for any path that doesn't match a real file (SPA client-side routing).
-func spaFileServer(dir string) http.Handler {
-	fs := http.Dir(dir)
-	fileServer := http.FileServer(fs)
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		if path == "/" {
-			path = "/index.html"
-		}
-		f, err := fs.Open(path)
-		if err != nil {
-			// File not found — serve index.html for SPA client-side routing
-			r.URL.Path = "/"
-			fileServer.ServeHTTP(w, r)
-			return
-		}
-		f.Close()
-
-		// Cache static assets (hashed filenames) aggressively
-		if strings.HasPrefix(path, "/assets/") {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		}
-
-		fileServer.ServeHTTP(w, r)
 	})
 }

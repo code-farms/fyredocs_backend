@@ -14,7 +14,6 @@ COPY go.work go.work.sum* ./
 COPY shared/go.mod shared/go.sum* ./shared/
 COPY api-gateway/go.mod* ./api-gateway/
 COPY auth-service/go.mod* ./auth-service/
-COPY cleanup-worker/go.mod* ./cleanup-worker/
 COPY convert-from-pdf/go.mod* ./convert-from-pdf/
 COPY convert-to-pdf/go.mod* ./convert-to-pdf/
 COPY optimize-pdf/go.mod* ./optimize-pdf/

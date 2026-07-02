@@ -19,8 +19,8 @@ import (
 	"fyredocs/shared/storage"
 	"fyredocs/shared/telemetry"
 
+	"fyredocs/shared/authverify"
 	"job-service/handlers"
-	"job-service/internal/authverify"
 	"job-service/internal/models"
 	"job-service/routes"
 )

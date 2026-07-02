@@ -2,24 +2,26 @@
 
 ## Overview
 
-The API Gateway is the central entry point for all client requests to the Fyredocs backend. It handles request routing, CORS, rate limiting, and authentication middleware before forwarding requests to the appropriate backend services.
+The API Gateway is the entry point for all API requests to the Fyredocs backend. It handles request routing, CORS, rate limiting, and authentication middleware before forwarding requests to the appropriate backend services.
 
-**Port**: 8080
+**Port**: 8080 (internal-only — reached via the Caddy edge, not published)
 **Type**: HTTP Reverse Proxy
 **Framework**: Go net/http
+
+### Edge Topology
+
+Caddy ([deployment/caddy/Caddyfile](../../../deployment/caddy/Caddyfile)) is the public edge in front of the gateway. It terminates TLS (automatic HTTPS when `PUBLIC_DOMAIN` is set; plain HTTP on :80 otherwise), serves the SPA bundle from the frontend dist volume, routes presigned object-storage paths (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`) **directly** to MinIO with the original `Host` preserved (SigV4 invariant), and proxies `/api/*`, `/auth/*`, `/admin/*`, and `/healthz` to the gateway. `/metrics` is intentionally not publicly routed. The gateway itself is internal-only (compose `expose: 8080`, no published port) and no longer serves the SPA or relays object bytes.
 
 ## Architecture
 
 The API Gateway acts as a reverse proxy that:
 - Routes incoming HTTP requests to backend services
 - Enforces CORS policies for browser clients
-- Validates JWT tokens from cookies or Authorization headers
+- Validates JWT tokens from cookies or Authorization headers (via `fyredocs/shared/authverify`)
 - Issues + validates guest cookies for unauthenticated users
 - Resolves plan info from Redis on every request and forwards it as headers
 - Adds security response headers (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy) via `withSecurityHeaders()` middleware
-- Enforces request body size limit (1 MiB on **all** service routes — `/api/upload/*` is JSON-only now that file bytes flow through the presigned MinIO proxy) via `withMaxBodySize()` middleware
-- Relays presigned object-storage traffic (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`) verbatim to MinIO — no auth, no body limit, original `Host` preserved for SigV4
-- Optionally serves the SPA bundle from `SPA_DIR` so the frontend ships with first-party cookies (no cross-origin)
+- Enforces request body size limit (1 MiB on **all** service routes — `/api/upload/*` is JSON-only; file bytes flow browser → Caddy → MinIO via presigned URLs and never touch the gateway) via `withMaxBodySize()` middleware
 - Performs graceful shutdown with 30-second drain on SIGTERM/SIGINT
 
 ### Request Flow
@@ -27,14 +29,13 @@ The API Gateway acts as a reverse proxy that:
 ```
 Client Request
     ↓
-[API Gateway :8080]
+[Caddy edge :80/:443]  — TLS, SPA static files, /fyredocs-uploads/* + /fyredocs-outputs/* → MinIO
+    ↓  /api/* · /auth/* · /admin/* · /healthz
+[API Gateway :8080 (internal)]
     ↓
 Telemetry → Metrics → Request-ID → SecurityHeaders
     ↓
-    ├─ /fyredocs-uploads/*   ─┐  Presigned MinIO proxy (MINIO_URL)
-    ├─ /fyredocs-outputs/*   ─┘  no auth · no body limit · path verbatim · Host preserved (SigV4)
-    │
-    └─ everything else → CORS → Auth middleware
+    CORS → Auth middleware
             ├─ Auth: Bearer header > access_token cookie > guest_token cookie (issues new if absent)
             └─ ResolvePlan: read user:plan:<userId> from Redis (defaults to free)
             ↓
@@ -49,8 +50,7 @@ Telemetry → Metrics → Request-ID → SecurityHeaders
             ├─ /api/orgs/*                                  → USER_SERVICE_URL
             ├─ /api/notifications/*                         → NOTIFICATION_SERVICE_URL
             ├─ /admin/*                                     → ANALYTICS_SERVICE_URL
-            ├─ /api/dashboard                               → ANALYTICS_SERVICE_URL  (role-aware, any authenticated user)
-            └─ /                                            → SPA_DIR static files (when set)
+            └─ /api/dashboard                               → ANALYTICS_SERVICE_URL  (role-aware, any authenticated user)
 ```
 
 ## Routing Configuration
@@ -62,9 +62,7 @@ All `/api/*` traffic is proxied to **job-service**. Workers are not exposed publ
 | Path Prefix | Target Service (env override) | Purpose |
 |-------------|------------------------------|---------|
 | `/auth/*` | `AUTH_SERVICE_URL` (default = `JOB_SERVICE_URL` fallback for backward compat) | Auth, plan management, sessions |
-| `/fyredocs-uploads/*` | `MINIO_URL` (path verbatim, Host preserved, no auth/body limit) | Presigned upload PUTs / multipart parts |
-| `/fyredocs-outputs/*` | `MINIO_URL` (path verbatim, Host preserved, no auth/body limit) | Presigned output downloads |
-| `/api/upload/*` | `JOB_SERVICE_URL` (rewritten to `/api/uploads/*`) | Upload orchestration (JSON init/complete — file bytes go via the MinIO proxy) |
+| `/api/upload/*` | `JOB_SERVICE_URL` (rewritten to `/api/uploads/*`) | Upload orchestration (JSON init/complete — file bytes go browser → Caddy → MinIO via presigned URLs) |
 | `/api/jobs/*` | `JOB_SERVICE_URL` | History + SSE event stream |
 | `/api/convert-from-pdf/*` | `JOB_SERVICE_URL` | PDF → Word/Excel/PPTX/Image/HTML/Text/ODF |
 | `/api/convert-to-pdf/*` | `JOB_SERVICE_URL` | Office/Image → PDF |
@@ -79,8 +77,9 @@ All `/api/*` traffic is proxied to **job-service**. Workers are not exposed publ
 | `/admin/*` | `ANALYTICS_SERVICE_URL` | Admin / analytics dashboards (super-admin only, enforced by the service) |
 | `/api/dashboard` | `ANALYTICS_SERVICE_URL` | Unified role-aware dashboard summary; the service filters by `X-User-Role` (admin/super-admin → system KPIs, user → personal KPIs, guest → 403) |
 | `/healthz` | api-gateway (local) | Liveness — pings Redis |
-| `/metrics` | api-gateway (local) | Prometheus metrics |
-| `/` (catch-all) | static SPA from `SPA_DIR` (when set) | Frontend bundle, with `/index.html` fallback for client-side routing |
+| `/metrics` | api-gateway (local) | Prometheus metrics (internal network only — Caddy does not route it publicly) |
+
+Presigned object-storage traffic (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`) and the SPA are handled at the Caddy edge and never reach the gateway (see [Object Storage](../architecture/object-storage.md)).
 
 **Job dispatch is NATS, not Redis.** The gateway is HTTP-only — it never touches the JOBS_DISPATCH stream directly. `job-service` is the only publisher.
 
@@ -97,19 +96,11 @@ The reverse proxy uses a custom `http.Transport` tuned for long-running conversi
 | `MaxIdleConnsPerHost` | 20 | Connection pool per backend service |
 | `MaxIdleConns` | 100 | Global idle connection pool limit |
 
-The MinIO bucket proxy uses its own `minioTransport` with `MaxIdleConnsPerHost: 50` because browsers send multipart upload parts in parallel to a single upstream host.
+### Presigned Object-Storage Traffic
 
-### Presigned Object-Storage Proxy
+`/fyredocs-uploads/*` and `/fyredocs-outputs/*` are routed by **Caddy** directly to MinIO — they never pass through the gateway. Caddy forwards the path verbatim and preserves the original `Host` header (presigned URLs are signed by job-service against `S3_PUBLIC_ENDPOINT`, the public edge origin, and SigV4 includes `Host` in the signed canonical request). The presigned signature is the credential on these routes; no auth middleware applies.
 
-`/fyredocs-uploads/*` and `/fyredocs-outputs/*` (prefixes configurable via `S3_BUCKET_UPLOADS`/`S3_BUCKET_OUTPUTS`) are relayed to `MINIO_URL` with semantics that differ from the service routes:
-
-- **Path forwarded verbatim** — no prefix stripping; the SigV4 signature covers the canonical `/{bucket}/{key}` path.
-- **Original `Host` header preserved** — presigned URLs are signed by job-service against `S3_PUBLIC_ENDPOINT` (this gateway's public origin), and SigV4 includes `Host` in the signed canonical request. Service routes rewrite `req.Host` to the upstream; the MinIO proxy must NOT, or MinIO's signature check fails.
-- **No auth middleware** — the presigned signature (with its expiry) is the credential. Client-supplied identity headers (`X-User-ID` etc.) are stripped before forwarding.
-- **No body-size limit** — file bytes flow through these routes.
-- **`FlushInterval = -1`** — streams immediately in both directions.
-
-See [Object Storage](../architecture/object-storage.md) for the full presigned flow and the multi-host variant (publishing port 9000 and flipping `S3_PUBLIC_ENDPOINT`).
+See [Object Storage](../architecture/object-storage.md) for the full presigned flow.
 
 ### Response Streaming
 
@@ -131,13 +122,6 @@ The reverse proxy sets `FlushInterval = -1` to stream responses immediately to t
 | `NOTIFICATION_SERVICE_URL` | Notification-service base URL (notifications, SSE bell) | `http://notification-service:8091` |
 | `REDIS_ADDR` | Redis server address (used for denylist, guest cookie store, plan cache) | `redis:6379` |
 
-#### Object Storage Proxy
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `MINIO_URL` | Upstream for the presigned bucket proxy routes | `http://minio:9000` |
-| `S3_BUCKET_UPLOADS` | Uploads bucket name (= proxied path prefix) | `fyredocs-uploads` |
-| `S3_BUCKET_OUTPUTS` | Outputs bucket name (= proxied path prefix) | `fyredocs-outputs` |
-
 ### Optional (with defaults)
 
 #### JWT Configuration
@@ -155,7 +139,6 @@ The reverse proxy sets `FlushInterval = -1` to stream responses immediately to t
 | `AUTH_GUEST_SUFFIX` | Guest token Redis key suffix | `jobs` |
 | `AUTH_DENYLIST_ENABLED` | Enable token denylist (logout) | `true` |
 | `AUTH_DENYLIST_PREFIX` | Denylist Redis key prefix | `denylist:jwt` |
-| `SPA_DIR` | If set, serve static files from this directory at `/` (with index.html fallback). Disabled by default. | `""` |
 
 #### Redis
 | Variable | Description | Default |
@@ -173,7 +156,7 @@ The reverse proxy sets `FlushInterval = -1` to stream responses immediately to t
 
 ## Authentication Middleware
 
-The API Gateway validates authentication for all proxied requests using middleware that checks tokens in this priority order:
+The auth verification code is imported from the shared `fyredocs/shared/authverify` package (the same package the backend services use, replacing the old per-service `internal/authverify` copies). The API Gateway validates authentication for all proxied requests using middleware that checks tokens in this priority order:
 
 ### 1. Authorization Header (Highest Priority)
 ```http
@@ -191,7 +174,7 @@ Primary method for browser clients. Automatically sent by browsers.
 ```http
 Cookie: guest_token=<uuid>
 ```
-For unauthenticated users accessing guest features. The gateway issues this cookie automatically on first contact when no auth header/cookie is present and validates it against `guest:<token>:jobs` in Redis (the suffix is configurable via `AUTH_GUEST_SUFFIX`). Same-origin SPA hosting (via `SPA_DIR`) keeps this cookie HttpOnly + Secure.
+For unauthenticated users accessing guest features. The gateway issues this cookie automatically on first contact when no auth header/cookie is present and validates it against `guest:<token>:jobs` in Redis (the suffix is configurable via `AUTH_GUEST_SUFFIX`). Same-origin SPA hosting — Caddy serves the SPA and the API from the same public origin — keeps this cookie HttpOnly + Secure.
 
 ### Token Validation
 
@@ -227,7 +210,7 @@ These headers are cleared from incoming client requests before proxying (`ClearU
 
 ### Bypass Paths
 
-The following paths skip authentication (`PublicPaths` in [main.go:179](../../../api-gateway/main.go#L179)):
+The following paths skip authentication (`PublicPaths` in [shared/authverify](../../../shared/authverify/)):
 - `/healthz` - Health check endpoint
 - `/auth/login` - User login
 - `/auth/signup` - User registration
@@ -277,15 +260,14 @@ api-gateway:
   build:
     context: ./api-gateway
     dockerfile: Dockerfile
-  ports:
-    - "8080:8080"
+  expose:
+    - "8080"   # internal-only — public traffic enters via the caddy service (:80/:443)
   environment:
     PORT: "8080"
     JOB_SERVICE_URL: http://job-service:8081
     AUTH_SERVICE_URL: http://auth-service:8086
     ANALYTICS_SERVICE_URL: http://analytics-service:8087
     JWT_HS256_SECRET: ${JWT_HS256_SECRET}
-    # SPA_DIR: /app/spa  # uncomment to serve the frontend bundle
     # ... other env vars
   depends_on:
     - redis
@@ -321,7 +303,7 @@ api-gateway:
 
 - [ ] Generate a strong JWT secret (`openssl rand -hex 32`)
 - [ ] Set specific CORS origins (no wildcards)
-- [ ] Use HTTPS in production
+- [ ] Use HTTPS in production (set `PUBLIC_DOMAIN` so the Caddy edge enables automatic HTTPS)
 - [ ] Update `AUTH_COOKIE_SECURE=true` (enforced by job-service)
 - [ ] Configure proper DNS/load balancer
 - [ ] Enable request logging and monitoring
@@ -409,7 +391,7 @@ docker compose up -d api-gateway
 
 **Frontend fix**:
 ```javascript
-fetch('http://localhost:8080/api/jobs', {
+fetch('http://localhost/api/jobs', {   // via the Caddy edge
   credentials: 'include'  // Required!
 });
 ```
@@ -558,32 +540,37 @@ sequenceDiagram
 
 ### Presigned Object Upload/Download Flow
 
+Object bytes never touch the gateway — Caddy routes the presigned bucket paths directly to MinIO:
+
 ```mermaid
 sequenceDiagram
     participant B as Browser
-    participant GW as API Gateway :8080
+    participant CY as Caddy edge :80/:443
+    participant GW as API Gateway :8080 (internal)
     participant JS as Job Service :8081
     participant M as MinIO :9000 (internal)
 
-    B->>GW: POST /api/upload/init (JSON, 1 MiB limit)
+    B->>CY: POST /api/upload/init (JSON, 1 MiB limit)
+    CY->>GW: proxy /api/*
     GW->>JS: proxy (auth + plan headers)
-    JS->>M: CreateMultipart / presign part URLs (signed for gateway origin)
+    JS->>M: CreateMultipart / presign part URLs (signed for the edge origin)
     JS-->>B: {uploadId, presigned part URLs https://<origin>/fyredocs-uploads/...}
 
     par parts in parallel
-        B->>GW: PUT /fyredocs-uploads/uploads/<id>/<file>?partNumber=N&X-Amz-...
-        Note over GW: bucket proxy — no auth, no body limit,<br/>path verbatim, Host preserved (SigV4)
-        GW->>M: relay bytes (FlushInterval=-1)
+        B->>CY: PUT /fyredocs-uploads/uploads/<id>/<file>?partNumber=N&X-Amz-...
+        Note over CY: object route — no auth, path verbatim,<br/>Host preserved (SigV4)
+        CY->>M: relay bytes (flush_interval -1)
         M-->>B: 200 + ETag
     end
 
-    B->>GW: POST /api/upload/complete (JSON: part ETags)
+    B->>CY: POST /api/upload/complete (JSON: part ETags)
+    CY->>GW: proxy /api/*
     GW->>JS: proxy
     JS->>M: CompleteMultipart
 
     Note over B,M: download is the same shape:
-    B->>GW: GET /fyredocs-outputs/jobs/<jobId>/<file>?X-Amz-...
-    GW->>M: relay
+    B->>CY: GET /fyredocs-outputs/jobs/<jobId>/<file>?X-Amz-...
+    CY->>M: relay
     M-->>B: object bytes (streamed)
 ```
 
@@ -652,8 +639,9 @@ plan and identity:
   from `X-Forwarded-For`, else `RemoteAddr`).
 - **Ceilings per window** (`RATE_LIMIT_API_WINDOW`, default `1m`):
   `RATE_LIMIT_API_ANON` (30), `RATE_LIMIT_API_FREE` (120), `RATE_LIMIT_API_PRO` (600).
-- **Excluded**: `/auth/*` (limited by auth-service), `/metrics`, `/healthz`, the
-  SPA, and the presigned MinIO bucket proxies.
+- **Excluded**: `/auth/*` (limited by auth-service), `/metrics`, and `/healthz`.
+  The SPA and the presigned object routes are served at the Caddy edge and never
+  reach the limiter.
 - **On limit**: `429` with the standard envelope (`RATE_LIMIT_EXCEEDED`),
   `X-RateLimit-Limit/Remaining/Reset` and `Retry-After` headers.
 - **Fail-open**: a Redis error or nil client allows the request (logged).

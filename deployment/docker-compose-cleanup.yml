@@ -3,15 +3,13 @@ name: fyredocs
 services:
   cleanup-worker:
     build:
-      context: ../cleanup-worker
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: job-service/Dockerfile.cleanup
     restart: always
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: redis:6379
-      QUEUE_PREFIX: queue
-      UPLOAD_TTL: 2h
-      MAX_RETRIES: "3"
+      UPLOAD_TTL: 30m
       CLEANUP_INTERVAL: 15m
 
       # Object storage (cleanup deletes objects by key; no shared volume)

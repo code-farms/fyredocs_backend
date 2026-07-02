@@ -8,7 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"auth-service/internal/authverify"
+	"fyredocs/shared/authverify"
 )
 
 // newProxyLoginRouter builds a gin engine with the ProxyLogin route, optionally

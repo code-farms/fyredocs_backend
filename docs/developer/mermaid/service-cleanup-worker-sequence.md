@@ -1,12 +1,12 @@
 # Cleanup Worker -- Sequence Diagrams
 
-Execution flows for the `cleanup-worker` background service.
+Execution flows for the `cleanup-worker` container — job-service's cleanup binary (`job-service/cmd/cleanup`, logic in `job-service/internal/cleanup`, models from `job-service/internal/models`, TTL fallbacks from `shared/config/defaults.go`).
 
 ## Startup and Main Loop
 
 ```mermaid
 sequenceDiagram
-    participant Main as main()
+    participant Main as main() (job-service/cmd/cleanup)
     participant Cfg as shared/config
     participant DB as PostgreSQL
     participant R as Redis
@@ -93,7 +93,7 @@ sequenceDiagram
     loop For each key (skip :chunks)
         CW->>R: HGETALL upload:&lt;id&gt;
         R-->>CW: {createdAt, key, s3UploadId, ...}
-        CW->>CW: time.Since(createdAt) > UPLOAD_TTL?
+        CW->>CW: time.Since(createdAt) > 2 × UPLOAD_TTL?<br/>(config.UploadTTL, default 30m → 60m)
 
         alt Yes — stale
             CW->>R: DEL upload:&lt;id&gt; upload:&lt;id&gt;:chunks

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
+	"fyredocs/shared/config"
 	"fyredocs/shared/redisstore"
 	"fyredocs/shared/response"
 	"fyredocs/shared/storage"
@@ -452,13 +453,5 @@ func uploadPartSize() int64 {
 }
 
 func uploadTTL() time.Duration {
-	ttl := os.Getenv("UPLOAD_TTL")
-	if ttl == "" {
-		return 30 * time.Minute
-	}
-	parsed, err := time.ParseDuration(ttl)
-	if err != nil {
-		return 30 * time.Minute
-	}
-	return parsed
+	return config.UploadTTL()
 }

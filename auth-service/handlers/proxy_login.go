@@ -13,8 +13,8 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"auth-service/internal/authverify"
 	"auth-service/internal/models"
+	"fyredocs/shared/authverify"
 
 	"fyredocs/shared/config"
 	"fyredocs/shared/logger"

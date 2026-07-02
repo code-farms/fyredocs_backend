@@ -102,34 +102,6 @@ func guestContextFromRequest(r *http.Request, store GuestStore, headerName strin
 	}, nil
 }
 
-func authContextFromGatewayHeaders(header http.Header) (AuthContext, bool) {
-	if header == nil {
-		return AuthContext{}, false
-	}
-	userID := strings.TrimSpace(header.Get("X-User-ID"))
-	if userID == "" {
-		return AuthContext{}, false
-	}
-	role := strings.TrimSpace(header.Get("X-User-Role"))
-	scope := splitScope(header.Get("X-User-Scope"))
-	return AuthContext{
-		UserID: userID,
-		Role:   role,
-		Scope:  scope,
-	}, true
-}
-
-func extractBearerToken(header string) (string, bool) {
-	parts := strings.Fields(header)
-	if len(parts) != 2 {
-		return "", false
-	}
-	if !strings.EqualFold(parts[0], "Bearer") {
-		return "", false
-	}
-	token := strings.TrimSpace(parts[1])
-	if token == "" {
-		return "", false
-	}
-	return token, true
-}
+// authContextFromGatewayHeaders and extractBearerToken are shared with the
+// HTTP middleware (middleware_http.go). The gateway-header parser also fills
+// plan fields; services that don't read them are unaffected.

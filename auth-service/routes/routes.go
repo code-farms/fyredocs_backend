@@ -9,11 +9,11 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"auth-service/handlers"
-	"auth-service/internal/authverify"
 	"auth-service/internal/email"
 	"auth-service/internal/models"
 	"auth-service/internal/token"
 	"auth-service/middleware"
+	"fyredocs/shared/authverify"
 
 	"fyredocs/shared/config"
 )
@@ -133,4 +133,3 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 		c.JSON(http.StatusOK, gin.H{"status": "ready", "checks": checks})
 	})
 }
-

@@ -17,10 +17,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
-	"auth-service/internal/authverify"
 	"auth-service/internal/email"
 	"auth-service/internal/models"
 	"auth-service/internal/token"
+	"fyredocs/shared/authverify"
 
 	"fyredocs/shared/config"
 	"fyredocs/shared/logger"

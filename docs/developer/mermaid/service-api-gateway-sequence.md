@@ -1,6 +1,8 @@
 # API Gateway -- Sequence Diagrams
 
-Request flows through the `api-gateway` service (port 8080).
+Request flows through the `api-gateway` service (port 8080, internal-only).
+
+All public traffic enters through the **Caddy edge** (:80/:443 — TLS, SPA static files), which proxies `/api/*`, `/auth/*`, `/admin/*`, and `/healthz` to the gateway and routes presigned object paths directly to MinIO. The Caddy hop is omitted from most diagrams below for brevity.
 
 ## Authenticated Request — proxied to job-service
 
@@ -57,28 +59,30 @@ sequenceDiagram
     GW-->>Client: 201 {uploadId, presigned URLs} + Set-Cookie guest_token (when newly issued)
 ```
 
-## Presigned Object Traffic — MinIO bucket proxy
+## Presigned Object Traffic — routed at the Caddy edge (bypasses the gateway)
 
 ```mermaid
 sequenceDiagram
     participant Browser
-    participant GW as api-gateway :8080
+    participant CY as Caddy edge :80/:443
     participant M as MinIO :9000 (internal only)
 
-    Note over Browser: presigned URL from job-service,<br/>signed for the GATEWAY origin (S3_PUBLIC_ENDPOINT)
+    Note over Browser: presigned URL from job-service,<br/>signed for the EDGE origin (S3_PUBLIC_ENDPOINT)
 
-    Browser->>GW: PUT /fyredocs-uploads/uploads/&lt;id&gt;/&lt;file&gt;?partNumber=N&X-Amz-Signature=...
-    Note over GW: root mux matches bucket prefix BEFORE CORS/auth —<br/>signature is the credential
-    Note over GW: Director: path verbatim (no strip),<br/>req.Host = original Host (SigV4 signs it),<br/>identity headers stripped
-    GW->>M: relay bytes (minioTransport, MaxIdleConnsPerHost=50, FlushInterval=-1)
+    Browser->>CY: PUT /fyredocs-uploads/uploads/&lt;id&gt;/&lt;file&gt;?partNumber=N&X-Amz-Signature=...
+    Note over CY: @objects matcher routes bucket prefixes to MinIO —<br/>signature is the credential, no auth middleware
+    Note over CY: path verbatim (no strip),<br/>Host header preserved (SigV4 signs it)
+    CY->>M: relay bytes (flush_interval -1)
     M->>M: recompute SigV4 against received Host + path
-    M-->>GW: 200 + ETag
-    GW-->>Browser: 200 + ETag
+    M-->>CY: 200 + ETag
+    CY-->>Browser: 200 + ETag
 
-    Browser->>GW: GET /fyredocs-outputs/jobs/&lt;jobId&gt;/&lt;file&gt;?X-Amz-Signature=...
-    GW->>M: relay
+    Browser->>CY: GET /fyredocs-outputs/jobs/&lt;jobId&gt;/&lt;file&gt;?X-Amz-Signature=...
+    CY->>M: relay
     M-->>Browser: object bytes (streamed, no buffering)
 ```
+
+The api-gateway is not involved: object bytes flow Browser ↔ Caddy ↔ MinIO.
 
 ## Refresh Token Rotation — passes through to auth-service
 
@@ -130,24 +134,24 @@ sequenceDiagram
     end
 ```
 
-## SPA Static Hosting
+## SPA Static Hosting — served at the Caddy edge (not by the gateway)
 
 ```mermaid
 sequenceDiagram
     participant Browser
-    participant GW as api-gateway :8080
-    participant FS as SPA_DIR
+    participant CY as Caddy edge :80/:443
+    participant FS as /srv/spa (frontend dist volume)
 
-    Browser->>GW: GET /pdf-to-word (no /api/* prefix)
-    Note over GW: ServeMux falls through to spaFileServer when SPA_DIR is set
-    GW->>FS: Open /pdf-to-word
+    Browser->>CY: GET /pdf-to-word (no /api/* prefix)
+    Note over CY: default handle — try_files {path} /index.html
+    CY->>FS: Open /pdf-to-word
     alt file exists
-        FS-->>GW: bytes (with Cache-Control for /assets/*)
-        GW-->>Browser: 200
+        FS-->>CY: bytes (immutable Cache-Control for /assets/*)
+        CY-->>Browser: 200
     else missing (SPA route)
-        GW->>FS: Serve /index.html
-        FS-->>GW: index.html
-        GW-->>Browser: 200 (client-side routing takes over)
+        CY->>FS: Serve /index.html
+        FS-->>CY: index.html
+        CY-->>Browser: 200 (client-side routing takes over)
     end
 ```
 

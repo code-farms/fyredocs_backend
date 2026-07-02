@@ -352,15 +352,15 @@ else
     print_warning "Could not verify database connectivity — continuing anyway (services run their own readiness checks)"
 fi
 
-echo -n "Waiting for API Gateway... "
+echo -n "Waiting for edge (Caddy → API Gateway)... "
 for i in {1..30}; do
-    if curl -s http://localhost:8080/healthz &> /dev/null; then
-        print_success "API Gateway ready!"
+    if curl -s http://localhost/healthz &> /dev/null; then
+        print_success "Edge + API Gateway ready!"
         break
     fi
     if [ $i -eq 30 ]; then
-        print_error "API Gateway failed to start within 30s!"
-        docker compose logs api-gateway | tail -20
+        print_error "Edge failed to start within 30s!"
+        docker compose logs caddy api-gateway | tail -30
         exit 1
     fi
     echo -n "."
@@ -386,13 +386,14 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "📋 Service Endpoints:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  🌐 API Gateway:        http://localhost:8080"
-echo "  📤 Upload Service:     http://localhost:8081"
-echo "  📄 Convert-From-PDF:   http://localhost:8082"
-echo "  📑 Convert-To-PDF:     http://localhost:8083"
-echo "  📋 Organize-PDF:       http://localhost:8084"
-echo "  🔧 Optimize-PDF:       http://localhost:8085"
-echo "  📊 Analytics:          http://localhost:8087"
+echo "  🌐 App (Caddy edge):   http://localhost  (APIs under /api, /auth)"
+echo "  🌐 API Gateway:        internal only (caddy → api-gateway:8080)"
+echo "  📤 Upload Service:     internal only (job-service:8081)"
+echo "  📄 Convert-From-PDF:   internal only (:8082)"
+echo "  📑 Convert-To-PDF:     internal only (:8083)"
+echo "  📋 Organize-PDF:       internal only (:8084)"
+echo "  🔧 Optimize-PDF:       internal only (:8085)"
+echo "  📊 Analytics:          internal only (:8087)"
 echo "  🗄️  PostgreSQL:         Neon (cloud)"
 echo "  🔴 Redis:              localhost:6379"
 echo ""

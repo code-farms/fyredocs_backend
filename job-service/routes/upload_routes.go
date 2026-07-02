@@ -11,8 +11,8 @@ import (
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/redisstore"
 
+	"fyredocs/shared/authverify"
 	"job-service/handlers"
-	"job-service/internal/authverify"
 	"job-service/internal/models"
 	"job-service/middleware"
 )
@@ -127,4 +127,3 @@ func SetupRouter(r *gin.Engine) {
 		c.JSON(http.StatusOK, gin.H{"status": "ready", "checks": checks})
 	})
 }
-

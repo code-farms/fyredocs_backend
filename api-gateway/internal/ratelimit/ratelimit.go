@@ -20,7 +20,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"api-gateway/internal/authverify"
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/response"
 )
 

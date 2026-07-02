@@ -20,7 +20,6 @@ ALL_SERVICES=(
   convert-from-pdf
   organize-pdf
   optimize-pdf
-  cleanup-worker
   analytics-service
   document-service
   user-service

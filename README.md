@@ -12,14 +12,15 @@ The script generates a JWT secret, starts all services with Docker Compose, and 
 
 | Service | URL |
 |---------|-----|
-| API Gateway | http://localhost:8080 |
+| Caddy edge (SPA + API) | http://localhost |
 | Job Service | http://localhost:8081 |
 
 ## Services
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **API Gateway** | 8080 | Reverse proxy, CORS, JWT/guest verification, plan resolution, SPA hosting, presigned MinIO proxy (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`) |
+| **Caddy (edge)** | 80/443 | Public edge: TLS termination (automatic HTTPS when `PUBLIC_DOMAIN` is set), SPA static hosting, presigned object-byte routing to MinIO (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`), proxies `/api/*`, `/auth/*`, `/admin/*`, `/healthz` to the API Gateway |
+| **API Gateway** | 8080 (internal) | Reverse proxy behind the Caddy edge (not published), CORS, JWT/guest verification, plan resolution |
 | **Auth Service** | 8086 | Signup, login, refresh-token rotation with DB-backed sessions, plan management |
 | **Job Service** | 8081 | Presigned (multipart) uploads to MinIO, job creation, NATS publish, SSE streaming, history |
 | **Convert From PDF** | 8082 | PDF → DOCX (pdf2docx + LibreOffice fallback) / XLSX / PPTX (image-based) / Image / HTML / Text / ODF |
@@ -27,7 +28,7 @@ The script generates a JWT secret, starts all services with Docker Compose, and 
 | **Organize PDF** | 8084 | Merge, split, rotate, extract, remove, watermark, protect, unlock, sign, edit, page numbers (pdfcpu) |
 | **Optimize PDF** | 8085 | Compress, repair, OCR (Ghostscript / Tesseract) |
 | **Analytics Service** | 8087 | Business / engagement / reliability metrics, NATS subscriber |
-| **Cleanup Worker** | 8088 | Background TTL cleanup of jobs, upload sessions, and their MinIO objects; aborts stale multipart uploads (health/metrics endpoints only) |
+| **Cleanup Worker** | 8088 | Background TTL cleanup of jobs, upload sessions, and their MinIO objects; aborts stale multipart uploads (health/metrics endpoints only). Owned by job-service (`job-service/cmd/cleanup`), deployed as its own container |
 | **Document Service** | 8089 | Persistent document library — documents, folders, tags, exports; finalizes completed jobs into documents (NATS subscriber) |
 | **User Service** | 8090 | Organizations, memberships, and the RBAC role model |
 | **Notification Service** | 8091 | In-app notification feed; consumes job events, pushes a live SSE bell |
@@ -36,13 +37,19 @@ The script generates a JWT secret, starts all services with Docker Compose, and 
 ## Request Flow
 
 ```
-Client → API Gateway (:8080)
+Client → Caddy edge (:80/:443 — TLS, gzip)
+            │
+            ├─ /fyredocs-uploads/*   → MinIO (presigned PUT/multipart parts — no auth, Host preserved for SigV4)
+            ├─ /fyredocs-outputs/*   → MinIO (presigned GET downloads)
+            ├─ /  (everything else)  → SPA static files (frontend dist volume)
+            │
+            └─ /api/* · /auth/* · /admin/* · /healthz
+                        ↓
+         API Gateway (:8080, internal-only — not published)
             │  • CORS, security headers, body-size limit (1MB on all service routes)
             │  • JWT/guest token verification
             │  • Plan info resolution from Redis cache
             │
-            ├─ /fyredocs-uploads/*   → MinIO (presigned PUT/multipart parts — no auth, Host preserved for SigV4)
-            ├─ /fyredocs-outputs/*   → MinIO (presigned GET downloads)
             ├─ /auth/*               → Auth Service (:8086)
             ├─ /api/upload/*         → Job Service (:8081, rewritten to /api/uploads/*; JSON init/complete only)
             ├─ /api/jobs/*           → Job Service (:8081)
@@ -50,8 +57,7 @@ Client → API Gateway (:8080)
             ├─ /api/{documents,folders,tags,exports}/* → Document Service (:8089)
             ├─ /api/orgs/*           → User Service (:8090)
             ├─ /api/notifications/*  → Notification Service (:8091)
-            ├─ /admin/* , /api/dashboard → Analytics Service (:8087)
-            └─ /                     → SPA static files (when SPA_DIR is set)
+            └─ /admin/* , /api/dashboard → Analytics Service (:8087)
                           │
                           ▼
                     NATS JetStream  (jobs.dispatch.<service-name> — payloads carry object keys, not bytes)
@@ -68,7 +74,7 @@ Client → API Gateway (:8080)
                                                                        │
                                                                        ▼
                                                               SSE stream → client
-                                                              (download via presigned URL through the gateway)
+                                                              (download via presigned URL through the Caddy edge)
 ```
 
 ## Technology Stack
@@ -77,7 +83,8 @@ Client → API Gateway (:8080)
 - **Web Framework**: Gin (services) + net/http (api-gateway)
 - **Database**: PostgreSQL 18 (per-service schema, UUIDv7 IDs, pooled DSN)
 - **Cache / Sessions**: Redis 7 (token denylist, upload state, rate limiting, plan cache, cleanup lock)
-- **Object Storage**: MinIO (S3-compatible) — buckets `fyredocs-uploads` / `fyredocs-outputs`, presigned URLs proxied same-origin through the gateway
+- **Object Storage**: MinIO (S3-compatible) — buckets `fyredocs-uploads` / `fyredocs-outputs`, presigned URLs routed same-origin through the Caddy edge
+- **Edge**: Caddy — TLS termination (automatic HTTPS via `PUBLIC_DOMAIN`), SPA static hosting, object-byte routing, API proxy
 - **Message Bus**: NATS JetStream — streams: `JOBS_DISPATCH`, `JOBS_EVENTS`, `JOBS_DLQ`, `ANALYTICS`
 - **Document Processing**: LibreOffice + unoserver, pdf2docx, pdfcpu, Poppler, Ghostscript, Tesseract OCR
 - **Auth**: JWT (HS256) with HTTP-only cookies, refresh-token rotation, DB-backed sessions
@@ -151,7 +158,7 @@ test.bat
 test.bat -v api-gateway
 ```
 
-Available services: `shared`, `api-gateway`, `auth-service`, `job-service`, `convert-to-pdf`, `convert-from-pdf`, `organize-pdf`, `optimize-pdf`, `cleanup-worker`, `analytics-service`, `document-service`, `user-service`, `notification-service`
+Available services: `shared`, `api-gateway`, `auth-service`, `job-service`, `convert-to-pdf`, `convert-from-pdf`, `organize-pdf`, `optimize-pdf`, `analytics-service`, `document-service`, `user-service`, `notification-service` (the cleanup binary is tested as part of `job-service`)
 
 ## License
 

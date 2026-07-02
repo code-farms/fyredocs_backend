@@ -229,14 +229,63 @@ services:
     networks:
       - fyredocs_net
 
+  # ==================== EDGE (Caddy) ====================
+  # Public entrypoint: TLS termination, SPA static files, direct
+  # browser<->MinIO byte routing (presigned URLs), and API proxying to the
+  # api-gateway. See deployment/caddy/Caddyfile.
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Set to your public domain to enable automatic HTTPS; leave unset
+      # for plain HTTP on :80 (local/dev).
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
+      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
+      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../../fyredocs_frontend/dist:/srv/spa:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${CADDY_MEM_LIMIT:-256M}
+          cpus: "${CADDY_CPU_LIMIT:-1.0}"
+        reservations:
+          memory: ${CADDY_MEM_RESERVATION:-64M}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      api-gateway:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    networks:
+      - fyredocs_net
+
   # ==================== API GATEWAY ====================
+  # Internal-only: Caddy is the public edge. The gateway no longer serves
+  # the SPA or relays MinIO bytes — it only verifies auth, rate-limits, and
+  # routes API traffic to services.
   api-gateway:
     build:
       context: ..
       dockerfile: api-gateway/Dockerfile
     restart: always
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     environment:
       PORT: "8080"
       JOB_SERVICE_URL: http://job-service:8081
@@ -248,12 +297,6 @@ services:
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
-
-      # Object-storage proxy: presigned URLs resolve to this gateway origin
-      # and are relayed verbatim (path + Host preserved) to MinIO.
-      MINIO_URL: ${MINIO_URL:-http://minio:9000}
-      S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-fyredocs-uploads}
-      S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
 
       # JWT Configuration
       JWT_HS256_SECRET: ${JWT_HS256_SECRET}
@@ -268,9 +311,6 @@ services:
       AUTH_DENYLIST_ENABLED: "true"
       AUTH_DENYLIST_PREFIX: "denylist:jwt"
 
-      # SPA static file serving (frontend served from same origin)
-      SPA_DIR: /app/frontend
-
       # CORS Configuration (kept for local dev when frontend runs separately)
       CORS_ALLOW_ORIGINS: "http://localhost:5173,http://localhost:3000"
       CORS_ALLOW_METHODS: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
@@ -279,8 +319,6 @@ services:
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
-    volumes:
-      - ../../fyredocs_frontend/dist:/app/frontend:ro
     healthcheck:
       test: ["CMD", "./healthcheck", "http://localhost:8080/healthz"]
       interval: 10s
@@ -440,7 +478,7 @@ services:
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-fyredocs-outputs}
       # Presigned URLs are signed for the origin browsers actually use (the
       # gateway). Multi-host: point this at the public origin instead.
-      S3_PUBLIC_ENDPOINT: ${PUBLIC_ORIGIN:-http://localhost:8080}
+      S3_PUBLIC_ENDPOINT: ${PUBLIC_ORIGIN:-http://localhost}
       UPLOAD_PART_SIZE_MB: "${UPLOAD_PART_SIZE_MB:-8}"
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
@@ -905,10 +943,12 @@ services:
       - fyredocs_net
 
   # ==================== CLEANUP WORKER ====================
+  # job-service's TTL sweep binary (job-service/cmd/cleanup) — separate
+  # container so sweeps never compete with the API binary for CPU.
   cleanup-worker:
     build:
       context: ..
-      dockerfile: cleanup-worker/Dockerfile
+      dockerfile: job-service/Dockerfile.cleanup
     restart: always
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
@@ -1033,3 +1073,5 @@ volumes:
   redis_data:
   nats_data:
   minio_data:
+  caddy_data:
+  caddy_config:

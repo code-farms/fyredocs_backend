@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"job-service/internal/authverify"
+	"fyredocs/shared/authverify"
 )
 
 // Fix #3: Removed X-User-ID header fallback - only trust auth context from JWT

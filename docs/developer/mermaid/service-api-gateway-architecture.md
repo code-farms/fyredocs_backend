@@ -1,12 +1,16 @@
 # API Gateway -- Architecture
 
-Internal structure and component diagram of the `api-gateway` service (port 8080).
+Internal structure and component diagram of the `api-gateway` service (port 8080, internal-only).
+
+The public edge is **Caddy** (`deployment/caddy/Caddyfile`, :80/:443): it terminates TLS, serves the SPA, routes presigned object paths (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`) directly to MinIO, and proxies `/api/*`, `/auth/*`, `/admin/*`, `/healthz` to this gateway. The gateway no longer serves the SPA or relays MinIO bytes.
 
 ## Component Diagram
 
 ```mermaid
 graph TB
-    subgraph api-gateway[" api-gateway :8080 "]
+    CADDY["Caddy edge :80/:443<br/>TLS · SPA · object bytes → MinIO"]
+
+    subgraph api-gateway[" api-gateway :8080 (internal) "]
         direction TB
 
         subgraph Middleware["Outer Middleware (all routes)"]
@@ -17,12 +21,6 @@ graph TB
         end
 
         ROOT["root http.ServeMux"]
-
-        subgraph MinioProxy["Presigned object-storage proxy (no CORS/auth/body limit)"]
-            PROXY_UP["/fyredocs-uploads/* → MINIO_URL"]
-            PROXY_OUT["/fyredocs-outputs/* → MINIO_URL"]
-            MPROPS["path verbatim · original Host preserved (SigV4)<br/>identity headers stripped · FlushInterval=-1"]
-        end
 
         subgraph InnerChain["Service-route chain"]
             CORS["withCORS<br/>(allowed origins · credentials · preflight)"]
@@ -52,7 +50,6 @@ graph TB
             PROXY_NOTIF["/api/notifications/* → NOTIFICATION_SERVICE_URL"]
             PROXY_ADMIN["/admin/* → ANALYTICS_SERVICE_URL"]
             PROXY_DASH["/api/dashboard → ANALYTICS_SERVICE_URL<br/>(role-aware)"]
-            SPA["/ catch-all → SPA static (when SPA_DIR set)<br/>index.html fallback for client-side routes"]
         end
 
         subgraph ProxyTransport["http.Transport (service routes)"]
@@ -63,18 +60,15 @@ graph TB
             FI["FlushInterval=-1<br/>(stream downloads immediately)"]
         end
 
-        subgraph MinioTransport["minioTransport (bucket proxy)"]
-            M1["MaxIdleConnsPerHost=50<br/>(multipart parts arrive in parallel)"]
-        end
-
         HEALTH["/healthz (Redis ping)"]
-        METRICEP["/metrics (Prometheus)"]
+        METRICEP["/metrics (Prometheus — internal network only, not routed by Caddy)"]
     end
 
-    Client[Browser/CLI/SPA] --> TRACE --> METRICS --> REQID --> SEC --> ROOT
+    Client[Browser/CLI/SPA] --> CADDY
+    CADDY -->|"/api/* · /auth/* · /admin/* · /healthz"| TRACE --> METRICS --> REQID --> SEC --> ROOT
+    CADDY -->|"/fyredocs-uploads/* · /fyredocs-outputs/*<br/>presigned, Host preserved (SigV4)"| Minio[("MinIO :9000<br/>fyredocs-uploads · fyredocs-outputs")]
 
-    ROOT -->|/fyredocs-uploads/* · /fyredocs-outputs/*| PROXY_UP & PROXY_OUT
-    ROOT -->|everything else| CORS --> AUTHMW --> RATELIMIT --> BODYLIMIT --> MUX
+    ROOT --> CORS --> AUTHMW --> RATELIMIT --> BODYLIMIT --> MUX
 
     AUTHMW --> VERIFIER
     AUTHMW --> DENYLIST
@@ -82,12 +76,10 @@ graph TB
     AUTHMW --> PLANCACHE
 
     MUX --> PROXY_AUTH & PROXY_UPLOAD & PROXY_CFP & PROXY_CTP & PROXY_ORG & PROXY_OPT & PROXY_JOBS & PROXY_DOCS & PROXY_USER & PROXY_NOTIF & PROXY_ADMIN & PROXY_DASH
-    MUX --> SPA
     MUX --> HEALTH
     MUX --> METRICEP
 
     PROXY_AUTH & PROXY_UPLOAD & PROXY_CFP & PROXY_CTP & PROXY_ORG & PROXY_OPT & PROXY_JOBS & PROXY_DOCS & PROXY_USER & PROXY_NOTIF & PROXY_ADMIN & PROXY_DASH --> ProxyTransport
-    PROXY_UP & PROXY_OUT --> MinioTransport
 
     DENYLIST --> Redis[(Redis)]
     GUESTSTORE --> Redis
@@ -100,21 +92,17 @@ graph TB
     PROXY_USER --> UserSvc["user-service :8090"]
     PROXY_NOTIF --> NotifSvc["notification-service :8091"]
     PROXY_ADMIN & PROXY_DASH --> AnSvc["analytics-service :8087"]
-    PROXY_UP & PROXY_OUT --> Minio[("MinIO :9000<br/>fyredocs-uploads · fyredocs-outputs")]
 ```
 
 ## Middleware Execution Order
 
 ```mermaid
 flowchart LR
-    A[Incoming<br/>Request] --> B[telemetry.<br/>HTTPTraceMiddleware]
+    A[Incoming Request<br/>via Caddy edge] --> B[telemetry.<br/>HTTPTraceMiddleware]
     B --> C[metrics.<br/>HTTPMetricsMiddleware]
     C --> D[logger.<br/>HTTPRequestID]
     D --> E[withSecurityHeaders]
-    E --> R{root mux}
-    R -->|"/fyredocs-uploads/*<br/>/fyredocs-outputs/*"| M[MinIO bucket proxy<br/>no CORS · no auth · no body limit<br/>Host preserved · FlushInterval=-1]
-    M --> S3[MinIO]
-    R -->|other| F[withCORS<br/>preflight short-circuit]
+    E --> F[withCORS<br/>preflight short-circuit]
     F --> G[authverify.<br/>HTTPAuthMiddleware<br/>+ ResolvePlan]
     G --> RL[ratelimit.Middleware<br/>per-plan /api/* · 429]
     RL --> H[withMaxBodySize 1 MiB<br/>all service routes]
@@ -122,6 +110,8 @@ flowchart LR
     I --> J[httputil.<br/>ReverseProxy<br/>FlushInterval=-1]
     J --> K[Backend Service]
 ```
+
+Presigned object traffic (`/fyredocs-uploads/*`, `/fyredocs-outputs/*`) is routed by Caddy directly to MinIO and never enters this chain.
 
 ## Plan Header Injection
 
@@ -144,7 +134,7 @@ graph LR
     GW --> |shared/logger| Logger
     GW --> |shared/metrics| Metrics
     GW --> |shared/telemetry| Telemetry
-    GW --> |internal/authverify| AuthVerify
+    GW --> |shared/authverify| AuthVerify
     GW --> |internal/plancache| PlanCache
 
     AuthVerify --> |go-redis/v9| Redis[(Redis)]
@@ -152,6 +142,4 @@ graph LR
     PlanCache --> |go-redis/v9| Redis
 
     GW --> |net/http/httputil| ReverseProxy
-    GW --> |net/http (FileServer)| StaticFS
-    ReverseProxy --> |MINIO_URL| Minio[(MinIO)]
 ```

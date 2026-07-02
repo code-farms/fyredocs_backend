@@ -4,14 +4,13 @@ use (
 	./analytics-service
 	./api-gateway
 	./auth-service
-	./cleanup-worker
 	./convert-from-pdf
 	./convert-to-pdf
+	./document-service
+	./job-service
+	./notification-service
 	./optimize-pdf
 	./organize-pdf
 	./shared
-	./job-service
-	./document-service
 	./user-service
-	./notification-service
 )

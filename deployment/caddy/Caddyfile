@@ -1,0 +1,53 @@
+# Fyredocs edge: TLS termination, SPA static files, direct MinIO byte
+# routing, and API proxying to the api-gateway.
+#
+# PUBLIC_DOMAIN unset (default)     → plain HTTP on :80 (local/dev).
+# PUBLIC_DOMAIN=docs.example.com    → automatic HTTPS via Let's Encrypt.
+#
+# This replaces two responsibilities the gateway used to carry in-process:
+# serving the SPA and relaying object bytes to MinIO. File bandwidth no
+# longer competes with API routing for the gateway's CPU.
+
+{$PUBLIC_DOMAIN::80} {
+	encode gzip zstd
+
+	# ---- Object storage: presigned URLs go straight to MinIO ----------
+	# Host preservation is load-bearing: presigned SigV4 URLs are signed
+	# against the public origin the browser uses (PUBLIC_ORIGIN, i.e. this
+	# edge), and the signature covers the Host header. MinIO recomputes the
+	# signature against the Host it receives, so the ORIGINAL Host must be
+	# forwarded — never rewritten to the upstream host. Caddy's
+	# reverse_proxy preserves the client Host by default; header_up makes
+	# that explicit because correctness depends on it. The path is
+	# forwarded verbatim for the same reason (SigV4 covers the canonical
+	# path). The presigned signature itself is the credential on these
+	# routes — no auth middleware applies.
+	@objects path /{$S3_BUCKET_UPLOADS:fyredocs-uploads}/* /{$S3_BUCKET_OUTPUTS:fyredocs-outputs}/*
+	handle @objects {
+		reverse_proxy minio:9000 {
+			header_up Host {host}
+			# Multipart parts arrive from the browser in parallel; allow
+			# long transfers to stream without buffering.
+			flush_interval -1
+		}
+	}
+
+	# ---- API, auth, and admin routes → api-gateway ---------------------
+	# /metrics is intentionally NOT routed: Prometheus scrapes services on
+	# the internal network; metrics are no longer internet-reachable.
+	@api path /api/* /auth/* /admin/* /healthz
+	handle @api {
+		reverse_proxy api-gateway:8080 {
+			flush_interval -1
+		}
+	}
+
+	# ---- SPA (client-side routed) --------------------------------------
+	handle {
+		root * /srv/spa
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
+}

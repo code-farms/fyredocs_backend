@@ -1,19 +1,16 @@
-package main
+package cleanup
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"fyredocs/shared/config"
 	"fyredocs/shared/storage"
 
-	"cleanup-worker/internal/models"
+	"job-service/internal/models"
 )
 
 // fakeStore records object-storage calls for assertions.
@@ -171,8 +168,8 @@ func TestAbortStaleMultipartUploads(t *testing.T) {
 		if store.listedCalls != 1 {
 			t.Fatalf("ListIncompleteUploads called %d times, want 1", store.listedCalls)
 		}
-		if store.listedAge != staleMultipartAge() {
-			t.Errorf("listed olderThan = %v, want %v", store.listedAge, staleMultipartAge())
+		if store.listedAge != config.StaleMultipartAge() {
+			t.Errorf("listed olderThan = %v, want %v", store.listedAge, config.StaleMultipartAge())
 		}
 		want := []string{
 			"fyredocs-uploads/uploads/a/file1.pdf/id-1",
@@ -197,149 +194,18 @@ func TestAbortStaleMultipartUploads(t *testing.T) {
 	})
 }
 
-func TestCleanupInterval(t *testing.T) {
-	t.Run("default 15m", func(t *testing.T) {
-		t.Setenv("CLEANUP_INTERVAL", "")
-		got := cleanupInterval()
-		if got != 15*time.Minute {
-			t.Errorf("expected 15m, got %v", got)
-		}
-	})
-
-	t.Run("custom 5m", func(t *testing.T) {
-		t.Setenv("CLEANUP_INTERVAL", "5m")
-		got := cleanupInterval()
-		if got != 5*time.Minute {
-			t.Errorf("expected 5m, got %v", got)
-		}
-	})
-
-	t.Run("invalid uses default", func(t *testing.T) {
-		t.Setenv("CLEANUP_INTERVAL", "invalid")
-		got := cleanupInterval()
-		if got != 15*time.Minute {
-			t.Errorf("expected 15m, got %v", got)
-		}
-	})
-}
-
-func TestUploadTTL(t *testing.T) {
-	t.Run("default 2h", func(t *testing.T) {
+func TestUploadReapAge(t *testing.T) {
+	t.Run("is twice the session TTL", func(t *testing.T) {
 		t.Setenv("UPLOAD_TTL", "")
-		got := uploadTTL()
-		if got != 2*time.Hour {
-			t.Errorf("expected 2h, got %v", got)
+		if got := uploadReapAge(); got != 2*30*time.Minute {
+			t.Errorf("uploadReapAge = %v, want 1h (2 × 30m default)", got)
 		}
 	})
 
-	t.Run("custom 30m", func(t *testing.T) {
-		t.Setenv("UPLOAD_TTL", "30m")
-		got := uploadTTL()
-		if got != 30*time.Minute {
-			t.Errorf("expected 30m, got %v", got)
+	t.Run("tracks UPLOAD_TTL overrides", func(t *testing.T) {
+		t.Setenv("UPLOAD_TTL", "45m")
+		if got := uploadReapAge(); got != 90*time.Minute {
+			t.Errorf("uploadReapAge = %v, want 90m", got)
 		}
 	})
-
-	t.Run("invalid uses default", func(t *testing.T) {
-		t.Setenv("UPLOAD_TTL", "notaduration")
-		got := uploadTTL()
-		if got != 2*time.Hour {
-			t.Errorf("expected 2h, got %v", got)
-		}
-	})
-}
-
-func TestStaleMultipartAge(t *testing.T) {
-	t.Run("default 24h", func(t *testing.T) {
-		t.Setenv("MULTIPART_ABORT_TTL", "")
-		got := staleMultipartAge()
-		if got != 24*time.Hour {
-			t.Errorf("expected 24h, got %v", got)
-		}
-	})
-
-	t.Run("custom 1m", func(t *testing.T) {
-		t.Setenv("MULTIPART_ABORT_TTL", "1m")
-		got := staleMultipartAge()
-		if got != time.Minute {
-			t.Errorf("expected 1m, got %v", got)
-		}
-	})
-
-	t.Run("invalid uses default", func(t *testing.T) {
-		t.Setenv("MULTIPART_ABORT_TTL", "notaduration")
-		got := staleMultipartAge()
-		if got != 24*time.Hour {
-			t.Errorf("expected 24h, got %v", got)
-		}
-	})
-}
-
-func TestFreeJobTTL(t *testing.T) {
-	t.Run("default 24h", func(t *testing.T) {
-		t.Setenv("FREE_JOB_TTL", "")
-		got := freeJobTTL()
-		if got != 24*time.Hour {
-			t.Errorf("expected 24h, got %v", got)
-		}
-	})
-
-	t.Run("custom", func(t *testing.T) {
-		t.Setenv("FREE_JOB_TTL", "12h")
-		got := freeJobTTL()
-		if got != 12*time.Hour {
-			t.Errorf("expected 12h, got %v", got)
-		}
-	})
-
-	t.Run("invalid uses default", func(t *testing.T) {
-		t.Setenv("FREE_JOB_TTL", "invalid")
-		got := freeJobTTL()
-		if got != 24*time.Hour {
-			t.Errorf("expected 24h, got %v", got)
-		}
-	})
-}
-
-func TestHealthzRoute(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.GET("/healthz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-}
-
-func TestReadyzRoute(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.GET("/readyz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ready"})
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-}
-
-func TestDefaultPort(t *testing.T) {
-	t.Setenv("PORT", "")
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8088"
-	}
-	if port != "8088" {
-		t.Errorf("expected default port 8088, got %s", port)
-	}
 }

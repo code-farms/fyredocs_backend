@@ -9,7 +9,6 @@ import (
 
 // anonymousPlan holds the limits applied to requests with no valid token.
 // These mirror the "anonymous" row in the subscription_plans table.
-// Override via ANON_MAX_FILE_MB and ANON_MAX_FILES env vars if needed.
 var anonymousPlan = struct {
 	Name           string
 	MaxFileSizeMB  int
@@ -39,10 +38,6 @@ type HTTPMiddlewareOptions struct {
 }
 
 func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.Handler {
-	headerName := options.GuestTokenHeaderName
-	if headerName == "" {
-		headerName = "X-Guest-Token"
-	}
 	guestCookieName := options.GuestCookieName
 	if guestCookieName == "" {
 		guestCookieName = "guest_token"
@@ -86,7 +81,7 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 				}
 			}
 
-			guestCtx, _ := guestContextFromRequest(r, options.GuestStore, headerName, guestCookieName)
+			guestCtx, _ := guestContextFromCookie(r, options.GuestStore, guestCookieName)
 
 			// Try Authorization header first
 			token, hasToken := extractBearerToken(r.Header.Get("Authorization"))
@@ -111,10 +106,10 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 					return
 				}
 				authCtx := claims.ToAuthContext()
-			if options.ResolvePlan != nil {
-				options.ResolvePlan(r, &authCtx)
-			}
-			next.ServeHTTP(w, SetRequestAuth(r, authCtx))
+				if options.ResolvePlan != nil {
+					options.ResolvePlan(r, &authCtx)
+				}
+				next.ServeHTTP(w, SetRequestAuth(r, authCtx))
 				return
 			}
 
@@ -138,7 +133,11 @@ func SplitScopes(header string) []string {
 	return splitScope(strings.TrimSpace(header))
 }
 
-func guestContextFromRequest(r *http.Request, store GuestStore, _ string, cookieName string) (*AuthContext, error) {
+// guestContextFromCookie resolves a guest identity from the guest cookie
+// ONLY. The HTTP (gateway) middleware deliberately ignores the X-Guest-Token
+// header at the edge; the Gin middleware used by internal services accepts
+// header-then-cookie (see guestContextFromRequest in middleware_gin.go).
+func guestContextFromCookie(r *http.Request, store GuestStore, cookieName string) (*AuthContext, error) {
 	if r == nil || store == nil {
 		return nil, nil
 	}

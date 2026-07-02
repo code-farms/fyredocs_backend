@@ -1,12 +1,12 @@
 # Cleanup Worker -- Architecture
 
-Internal structure and component diagram of the `cleanup-worker` service.
+Internal structure and component diagram of the `cleanup-worker` container — **job-service's cleanup binary** (`job-service/cmd/cleanup`, sweep logic in `job-service/internal/cleanup`, built from `job-service/Dockerfile.cleanup`). It uses job-service's own GORM models directly and reads TTL fallbacks from `shared/config/defaults.go`.
 
 ## Component Diagram
 
 ```mermaid
 graph TB
-    subgraph cleanup-worker[" cleanup-worker :8088 "]
+    subgraph cleanup-worker[" cleanup-worker :8088 (job-service/cmd/cleanup) "]
         direction TB
 
         subgraph Bootstrap["Bootstrap (main)"]
@@ -34,7 +34,7 @@ graph TB
         subgraph P2Detail["Phase 2: Upload sessions"]
             P2A["Redis SCAN upload:* (skip :chunks)"]
             P2B["HGETALL upload:&lt;id&gt;<br/>(createdAt · key · s3UploadId)"]
-            P2C["age > UPLOAD_TTL (default 2h) ?"]
+            P2C["age > 2 × UPLOAD_TTL<br/>(config.UploadTTL, default 30m → reap at 60m) ?"]
             P2D["DEL upload:&lt;id&gt; keys<br/>AbortMultipart(uploads, key, s3UploadId)<br/>RemoveObject(uploads, key) if no<br/>file_metadata row references key"]
         end
 
@@ -47,7 +47,7 @@ graph TB
             P4A["UPDATE processing_jobs<br/>SET expires_at = created_at + FREE_JOB_TTL<br/>WHERE user_id IS NOT NULL<br/>AND expires_at IS NULL"]
         end
 
-        subgraph Models["internal/models (GORM)"]
+        subgraph Models["job-service/internal/models (GORM — job-service's own models, no duplicated structs)"]
             JM["ProcessingJob"]
             FM["FileMetadata"]
         end
@@ -95,10 +95,10 @@ graph LR
 
 ```mermaid
 graph TD
-    subgraph EnvVars["Environment Variables (cleanup-worker)"]
-        A["CLEANUP_INTERVAL<br/>Default: 15m"]
-        B["UPLOAD_TTL<br/>Default: 2h"]
-        C["FREE_JOB_TTL<br/>Default: 24h<br/>(used by Phase 4 backfill only)"]
+    subgraph EnvVars["Environment Variables (fallbacks from shared/config/defaults.go — same helpers job-service uses)"]
+        A["CLEANUP_INTERVAL<br/>Default: 15m (config.CleanupInterval)"]
+        B["UPLOAD_TTL<br/>Default: 30m (config.UploadTTL)<br/>Phase 2 reaps at 2 × UPLOAD_TTL"]
+        C["FREE_JOB_TTL<br/>Default: 7d/168h (config.FreeJobTTL)<br/>(used by Phase 4 backfill only —<br/>old 24h-vs-7d drift bug fixed)"]
         D["S3_ENDPOINT · S3_ACCESS_KEY · S3_SECRET_KEY<br/>Required (fail-fast)"]
         E["S3_BUCKET_UPLOADS / S3_BUCKET_OUTPUTS<br/>Default: fyredocs-uploads / fyredocs-outputs"]
         F["PORT<br/>Default: 8088"]

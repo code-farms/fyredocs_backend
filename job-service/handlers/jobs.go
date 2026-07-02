@@ -12,7 +12,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -25,6 +24,7 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
+	"fyredocs/shared/config"
 	"fyredocs/shared/logger"
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/queue"
@@ -858,15 +858,7 @@ func resolveOutputExt(metadata datatypes.JSON, defaultExt string, defaultCT stri
 }
 
 func maxUploadBytes() int64 {
-	value := os.Getenv("MAX_UPLOAD_MB")
-	if value == "" {
-		return 50 * 1024 * 1024
-	}
-	mb, err := strconv.Atoi(value)
-	if err != nil || mb <= 0 {
-		return 50 * 1024 * 1024
-	}
-	return int64(mb) * 1024 * 1024
+	return config.MaxUploadBytes()
 }
 
 // planMaxFileSizeMB reads the per-plan file size limit from X-User-Plan-Max-File-MB.
@@ -1052,59 +1044,22 @@ func clampInt(value int, min int, max int) int {
 
 // jobExpiry returns when a job (and its input+output files) should be deleted.
 // Retention is per-plan and env-driven (GUEST_JOB_TTL / FREE_JOB_TTL /
-// PRO_JOB_TTL — the source of truth; the *JobTTL helpers hold only fallbacks).
-// Every job gets a finite expiry — including pro — so the cleanup-worker fully
-// governs deletion and no job is left to linger forever.
+// PRO_JOB_TTL); the canonical fallbacks live in fyredocs/shared/config so the
+// cleanup binary can never drift from what job-service promises. Every job
+// gets a finite expiry — including pro — so cleanup fully governs deletion and
+// no job is left to linger forever.
 func jobExpiry(userID *uuid.UUID, planName string) *time.Time {
 	var ttl time.Duration
 	switch {
 	case userID == nil:
-		ttl = guestJobTTL()
+		ttl = config.GuestJobTTL()
 	case planName == "pro":
-		ttl = proJobTTL()
+		ttl = config.ProJobTTL()
 	default:
-		ttl = freeJobTTL()
+		ttl = config.FreeJobTTL()
 	}
 	expires := time.Now().UTC().Add(ttl)
 	return &expires
-}
-
-func guestJobTTL() time.Duration {
-	value := os.Getenv("GUEST_JOB_TTL")
-	if value == "" {
-		return 30 * time.Minute
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return 30 * time.Minute
-	}
-	return parsed
-}
-
-func freeJobTTL() time.Duration {
-	const fallback = 7 * 24 * time.Hour // 7 days
-	value := os.Getenv("FREE_JOB_TTL")
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func proJobTTL() time.Duration {
-	const fallback = 30 * 24 * time.Hour // 30 days
-	value := os.Getenv("PRO_JOB_TTL")
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
 }
 
 func assignGuestTokenIfNeeded(c *gin.Context, userID *uuid.UUID, jobID uuid.UUID) string {
@@ -1121,8 +1076,8 @@ func assignGuestTokenIfNeeded(c *gin.Context, userID *uuid.UUID, jobID uuid.UUID
 	ctx := c.Request.Context()
 	key := fmt.Sprintf("guest:%s:jobs", token)
 	redisstore.Client.SAdd(ctx, key, jobID.String())
-	redisstore.Client.Expire(ctx, key, guestJobTTL())
-	c.SetCookie("guest_token", token, int(guestJobTTL().Seconds()), "/", "", false, true)
+	redisstore.Client.Expire(ctx, key, config.GuestJobTTL())
+	c.SetCookie("guest_token", token, int(config.GuestJobTTL().Seconds()), "/", "", false, true)
 	return token
 }
 

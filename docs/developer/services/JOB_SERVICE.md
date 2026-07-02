@@ -26,7 +26,7 @@ The Job Service is the central orchestration service for all file processing ope
 
 ## Presigned Upload Protocol
 
-File bytes never stream through the job-service. The browser talks to object storage directly using presigned URLs signed against `S3_PUBLIC_ENDPOINT` (typically the API gateway / public MinIO origin):
+File bytes never stream through the job-service. The browser talks to object storage directly using presigned URLs signed against `S3_PUBLIC_ENDPOINT` (typically the Caddy edge / public MinIO origin):
 
 1. `POST /api/uploads/init` `{fileName, fileSize, contentType}` — the plan size limit (`X-User-Plan-Max-File-MB`) is enforced on the declared size **before** any URL is issued. The service creates an S3 multipart upload at key `uploads/{uploadId}/{sanitizedFileName}` in the uploads bucket and returns `{uploadId, key, partSize, totalParts, urlExpiresAt, parts:[{partNumber,url}]}`. `partSize` comes from `UPLOAD_PART_SIZE_MB` (default 8 MiB, clamped to the S3 5 MiB minimum); `totalParts = ceil(fileSize/partSize)` and is capped at 1000.
 2. The browser `PUT`s each part directly to the presigned URL and collects the returned `ETag`s.
@@ -80,10 +80,22 @@ Job Service :8081  (control plane only — no file bytes)
 | `handlers/storage.go` | `ObjectStore` interface (narrow slice of `shared/storage.Client`) + boot-time injection |
 | `handlers/auth.go` | Extract authenticated user ID from auth context |
 | `internal/routing/routing.go` | `ToolServiceMap` -- single source of truth for tool-to-service mapping |
-| `internal/models/` | GORM models for `ProcessingJob` and `FileMetadata` |
-| `internal/authverify/` | JWT verification middleware (local copy) |
+| `internal/models/` | GORM models for `ProcessingJob` and `FileMetadata` (shared with the cleanup binary) |
+| `internal/cleanup/` | Sweep logic for the cleanup binary (expired jobs, upload state, stale multiparts, backfill) |
+| `cmd/cleanup/` | Entrypoint for the cleanup binary (deployed as the `cleanup-worker` container) |
 | `routes/upload_routes.go` | Gin route registration with rate limiting |
 | `middleware/` | Rate limiting middleware |
+
+JWT verification middleware is imported from the shared `fyredocs/shared/authverify` package (replacing the old `internal/authverify` local copy).
+
+### Two Binaries
+
+The job-service module ships two binaries:
+
+1. **API server** (`main.go` at the module root) — the REST orchestrator documented in this file, port 8081.
+2. **Cleanup binary** (`cmd/cleanup/main.go`, sweep logic in `internal/cleanup/`) — the background TTL sweeper, deployed as the `cleanup-worker` container (built from `job-service/Dockerfile.cleanup`, port 8088). It reuses this service's `internal/models` directly, so there is no cross-service data access. See [Cleanup Worker](./CLEANUP_WORKER.md).
+
+Retention TTL fallbacks (`GUEST_JOB_TTL` 30m, `FREE_JOB_TTL` 7d, `PRO_JOB_TTL` 30d, `UPLOAD_TTL` 30m, `CLEANUP_INTERVAL` 15m, `MULTIPART_ABORT_TTL` 24h, `MAX_UPLOAD_MB` 50) live once in `shared/config/defaults.go`; both binaries read the same helpers, so the fallbacks cannot drift.
 
 ### ToolServiceMap (routing.go)
 
@@ -304,7 +316,7 @@ sequenceDiagram
     GW-->>C: 201
 
     loop For each part
-        C->>S3: PUT <presigned part URL> [part bytes] (via gateway/public endpoint)
+        C->>S3: PUT <presigned part URL> [part bytes] (via Caddy edge/public endpoint)
         S3-->>C: 200 + ETag header
     end
 
@@ -534,16 +546,17 @@ The service fails fast at boot if object storage is misconfigured or the buckets
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8081` | HTTP server port |
-| `S3_PUBLIC_ENDPOINT` | `S3_ENDPOINT` | Browser-reachable origin presigned URLs are signed against (e.g. the API gateway) |
+| `S3_PUBLIC_ENDPOINT` | `S3_ENDPOINT` | Browser-reachable origin presigned URLs are signed against (e.g. the Caddy edge, `PUBLIC_ORIGIN`) |
 | `S3_BUCKET_UPLOADS` | `fyredocs-uploads` | Bucket for input objects |
 | `S3_BUCKET_OUTPUTS` | `fyredocs-outputs` | Bucket for worker output objects |
 | `S3_REGION` | `us-east-1` | Signing region |
 | `S3_USE_SSL` | `false` | TLS to the internal endpoint |
 | `UPLOAD_PART_SIZE_MB` | `8` | Multipart part size in MiB (clamped to the S3 5 MiB minimum) |
 | `MAX_UPLOAD_MB` | `50` | Server-side hard cap on file size in MB (per-user plan limits are enforced via `X-User-Plan-Max-File-MB` header) |
-| `UPLOAD_TTL` | `30m` | Upload session expiration |
+| `UPLOAD_TTL` | `30m` | Upload session expiration (fallback from `shared/config/defaults.go`) |
 | `GUEST_JOB_TTL` | `30m` | Guest job expiration (no user) |
-| `FREE_JOB_TTL` | `24h` | Free plan user job expiration |
+| `FREE_JOB_TTL` | `168h` (7d) | Free plan user job expiration |
+| `PRO_JOB_TTL` | `720h` (30d) | Pro plan user job expiration |
 | `RATE_LIMIT_UPLOAD` | `30` | Upload-endpoint rate limit per IP per window |
 | `RATE_LIMIT_JOB_CREATE` | `20` | Job-creation rate limit per IP per window |
 | `RATE_LIMIT_WINDOW` | `60s` | Rate limit time window |
@@ -585,12 +598,12 @@ job-service:
     NATS_URL: nats://nats:4222
     JWT_HS256_SECRET: ${JWT_HS256_SECRET}
     S3_ENDPOINT: minio:9000
-    S3_PUBLIC_ENDPOINT: http://localhost:8080
+    S3_PUBLIC_ENDPOINT: http://localhost   # the Caddy edge (PUBLIC_ORIGIN)
     S3_ACCESS_KEY: ${S3_ACCESS_KEY}
     S3_SECRET_KEY: ${S3_SECRET_KEY}
     MAX_UPLOAD_MB: "50"
     GUEST_JOB_TTL: "30m"
-    FREE_JOB_TTL: "24h"
+    FREE_JOB_TTL: "168h"
   depends_on:
     - db
     - redis

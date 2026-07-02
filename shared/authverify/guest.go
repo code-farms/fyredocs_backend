@@ -129,4 +129,3 @@ func NewRedisClientFromEnv() (*redis.Client, error) {
 	slog.Info("Auth redis connection established")
 	return client, nil
 }
-

@@ -332,32 +332,6 @@ func TestMaxUploadBytes(t *testing.T) {
 	})
 }
 
-func TestGuestJobTTL(t *testing.T) {
-	t.Run("default 30m", func(t *testing.T) {
-		t.Setenv("GUEST_JOB_TTL", "")
-		got := guestJobTTL()
-		if got != 30*time.Minute {
-			t.Errorf("expected 30m, got %v", got)
-		}
-	})
-
-	t.Run("custom", func(t *testing.T) {
-		t.Setenv("GUEST_JOB_TTL", "1h")
-		got := guestJobTTL()
-		if got != 1*time.Hour {
-			t.Errorf("expected 1h, got %v", got)
-		}
-	})
-
-	t.Run("invalid uses default", func(t *testing.T) {
-		t.Setenv("GUEST_JOB_TTL", "invalid")
-		got := guestJobTTL()
-		if got != 30*time.Minute {
-			t.Errorf("expected 30m, got %v", got)
-		}
-	})
-}
-
 func TestJobExpiry(t *testing.T) {
 	t.Run("guest user gets GUEST_JOB_TTL expiry", func(t *testing.T) {
 		t.Setenv("GUEST_JOB_TTL", "2h")
@@ -400,58 +374,6 @@ func TestJobExpiry(t *testing.T) {
 		}
 		if time.Until(*got) < 719*time.Hour || time.Until(*got) > 721*time.Hour {
 			t.Errorf("expected expiry ~720h from now, got %v", *got)
-		}
-	})
-}
-
-func TestFreeJobTTL(t *testing.T) {
-	t.Run("default 7d", func(t *testing.T) {
-		t.Setenv("FREE_JOB_TTL", "")
-		got := freeJobTTL()
-		if got != 7*24*time.Hour {
-			t.Errorf("expected 168h (7d), got %v", got)
-		}
-	})
-
-	t.Run("custom", func(t *testing.T) {
-		t.Setenv("FREE_JOB_TTL", "12h")
-		got := freeJobTTL()
-		if got != 12*time.Hour {
-			t.Errorf("expected 12h, got %v", got)
-		}
-	})
-
-	t.Run("invalid uses default", func(t *testing.T) {
-		t.Setenv("FREE_JOB_TTL", "invalid")
-		got := freeJobTTL()
-		if got != 7*24*time.Hour {
-			t.Errorf("expected 168h (7d), got %v", got)
-		}
-	})
-}
-
-func TestProJobTTL(t *testing.T) {
-	t.Run("default 30d", func(t *testing.T) {
-		t.Setenv("PRO_JOB_TTL", "")
-		got := proJobTTL()
-		if got != 30*24*time.Hour {
-			t.Errorf("expected 720h (30d), got %v", got)
-		}
-	})
-
-	t.Run("custom", func(t *testing.T) {
-		t.Setenv("PRO_JOB_TTL", "48h")
-		got := proJobTTL()
-		if got != 48*time.Hour {
-			t.Errorf("expected 48h, got %v", got)
-		}
-	})
-
-	t.Run("invalid uses default", func(t *testing.T) {
-		t.Setenv("PRO_JOB_TTL", "nonsense")
-		got := proJobTTL()
-		if got != 30*24*time.Hour {
-			t.Errorf("expected 720h (30d), got %v", got)
 		}
 	})
 }

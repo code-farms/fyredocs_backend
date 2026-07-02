@@ -225,7 +225,7 @@ graph LR
 
     Storage --> |minio-go/v7| S3[("MinIO / S3")]
 
-    JS --> |internal/authverify| AuthVerify
+    JS --> |shared/authverify| AuthVerify
     JS --> |internal/models| Models
     JS --> |internal/routing| Routing
 

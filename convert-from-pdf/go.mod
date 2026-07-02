@@ -10,7 +10,6 @@ require (
 	github.com/pdfcpu/pdfcpu v0.9.1
 	github.com/redis/go-redis/v9 v9.14.0
 	gorm.io/datatypes v1.2.7
-	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
 )
 
@@ -99,6 +98,7 @@ require (
 	gopkg.in/ini.v1 v1.67.2 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
+	gorm.io/driver/postgres v1.6.0 // indirect
 )
 
 replace fyredocs/shared => ../shared

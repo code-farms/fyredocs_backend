@@ -51,7 +51,7 @@ info:
     name: Fyredocs Team
 
 servers:
-  - url: http://localhost:8080
+  - url: http://localhost
     description: Fyredocs API Gateway (local development)
 
 tags:
@@ -1130,7 +1130,7 @@ paths:
             Location:
               schema:
                 type: string
-                example: "http://localhost:8080/fyredocs-outputs/outputs/<jobId>/document.docx?response-content-disposition=attachment%3B%20filename%3Ddocument.docx&X-Amz-Signature=..."
+                example: "http://localhost/fyredocs-outputs/outputs/<jobId>/document.docx?response-content-disposition=attachment%3B%20filename%3Ddocument.docx&X-Amz-Signature=..."
         "400":
           description: Job not yet completed
           content:
@@ -2816,7 +2816,7 @@ components:
         url:
           type: string
           description: Presigned PUT URL for this part — the browser uploads the part bytes directly to object storage
-          example: "http://localhost:8080/fyredocs-uploads/uploads/<uploadId>/document.pdf?uploadId=...&partNumber=1&X-Amz-Signature=..."
+          example: "http://localhost/fyredocs-uploads/uploads/<uploadId>/document.pdf?uploadId=...&partNumber=1&X-Amz-Signature=..."
 
     UploadInitResponse:
       type: object

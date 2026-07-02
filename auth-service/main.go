@@ -19,11 +19,11 @@ import (
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/telemetry"
 
-	"auth-service/internal/authverify"
 	"auth-service/internal/email"
 	"auth-service/internal/models"
 	"auth-service/internal/token"
 	"auth-service/routes"
+	"fyredocs/shared/authverify"
 )
 
 func main() {

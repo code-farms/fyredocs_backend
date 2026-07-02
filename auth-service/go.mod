@@ -10,7 +10,6 @@ require (
 	github.com/redis/go-redis/v9 v9.14.0
 	github.com/resend/resend-go/v2 v2.28.0
 	golang.org/x/crypto v0.51.0
-	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
 )
 
@@ -78,6 +77,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260209200024-4cfbd4190f57 // indirect
 	google.golang.org/grpc v1.79.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
+	gorm.io/driver/postgres v1.6.0 // indirect
 )
 
 replace fyredocs/shared => ../shared

@@ -2,25 +2,29 @@
 
 ## Overview
 
-The Cleanup Worker is a background service that maintains system hygiene by cleaning up expired jobs, expired upload sessions, and their associated objects in MinIO object storage. It runs on a scheduled interval and ensures that expired data does not accumulate over time.
+The Cleanup Worker is a background process that maintains system hygiene by cleaning up expired jobs, expired upload sessions, and their associated objects in MinIO object storage. It runs on a scheduled interval and ensures that expired data does not accumulate over time.
+
+It is **owned by job-service**: the binary lives at `job-service/cmd/cleanup/main.go` with the sweep logic in `job-service/internal/cleanup/cleanup.go`, and it uses job-service's real GORM models (`job-service/internal/models`) directly — there are no duplicated `ProcessingJob`/`FileMetadata` structs, so job-service can evolve its schema without silently breaking cleanup. It still runs as its own container (service name `cleanup-worker`, built from `job-service/Dockerfile.cleanup`) with the same port and behavior as before.
 
 **Port**: 8088
-**Type**: Background Worker with HTTP health/metrics server
+**Type**: Background Worker with HTTP health/metrics server (second binary of job-service)
 **Framework**: Go (Gin)
 
 ## Responsibilities
 
 1. **Expired Job Cleanup** - Delete jobs past their expiration time and remove their input/output objects from MinIO
-2. **Expired Upload Session Cleanup** - Delete stale `upload:*` Redis state, abort the associated S3 multipart upload, and remove never-consumed upload objects
+2. **Expired Upload Session Cleanup** - Delete stale `upload:*` Redis state (older than **2 × `UPLOAD_TTL`**), abort the associated S3 multipart upload, and remove never-consumed upload objects
 3. **Stale Multipart Abort** - Abort incomplete multipart uploads older than `MULTIPART_ABORT_TTL` (default 24h). This is the sole mechanism — there is no bucket lifecycle rule.
 4. **Expiry Backfill** - Backfill `expires_at` on legacy authenticated jobs
+
+All TTL fallbacks come from the canonical helpers in `shared/config/defaults.go` (see [Environment Variables](#environment-variables)) — the same values job-service uses, so the two can no longer drift.
 
 The worker no longer touches any filesystem — there is no shared volume. All file bytes live in MinIO (see [Object Storage](../architecture/object-storage.md)).
 
 ## Architecture
 
 ```
-Cleanup Worker (Background Loop)
+Cleanup Binary (job-service/cmd/cleanup — background loop)
   ↓
 ┌─────────────────────────────────────┐
 │  Every CLEANUP_INTERVAL (15 min)    │
@@ -47,11 +51,13 @@ When scaled to multiple replicas, the Redis SETNX lock ensures only one instance
 
 ### 1. Expired Job Cleanup
 
-**Criteria**: Jobs where `expires_at IS NOT NULL` and `expires_at <= NOW()` — applies to any user type. Deleting a job removes **both its input and output** objects. `expires_at` is always finite (set at job-creation time by `job-service`) and governs the retention of **both input and output files**. The retention windows are env-driven (the source of truth; `job-service` reads them, code holds fallbacks):
+**Criteria**: Jobs where `expires_at IS NOT NULL` and `expires_at <= NOW()` — applies to any user type. Deleting a job removes **both its input and output** objects. `expires_at` is always finite (set at job-creation time by `job-service`) and governs the retention of **both input and output files**. The retention windows are env-driven, with the canonical fallbacks defined once in `shared/config/defaults.go` and read by both job-service and this binary:
 
-- **Guest Jobs** (no user): `GUEST_JOB_TTL` — default **30 min**
-- **Free Plan Users**: `FREE_JOB_TTL` — default **7 days (168h)**
-- **Pro Plan Users**: `PRO_JOB_TTL` — default **30 days (720h)** (finite, no longer NULL)
+- **Guest Jobs** (no user): `GUEST_JOB_TTL` (`config.GuestJobTTL`) — default **30 min**
+- **Free Plan Users**: `FREE_JOB_TTL` (`config.FreeJobTTL`) — default **7 days (168h)**
+- **Pro Plan Users**: `PRO_JOB_TTL` (`config.ProJobTTL`) — default **30 days (720h)** (finite, no longer NULL)
+
+> **Drift bug fixed**: the old standalone cleanup-worker carried its own `FREE_JOB_TTL` fallback of **24h** while job-service used **7d** — with the variable unset, cleanup would have deleted free users' jobs 6 days early. Both now call the same `shared/config` helper, so this class of divergence is gone.
 
 > The plan's `RetentionDays` field is descriptive only; these `*_JOB_TTL` env vars are authoritative. There is **no lifecycle rule at all** on the buckets — input/output retention is fully DB-driven here, and incomplete multipart uploads are aborted by Phase 3 (`MULTIPART_ABORT_TTL`).
 
@@ -79,12 +85,12 @@ When scaled to multiple replicas, the Redis SETNX lock ensures only one instance
 
 ### 2. Expired Upload Session Cleanup
 
-**Criteria**: Redis `upload:*` hashes older than `UPLOAD_TTL` (default: 2 hours, deployment sets 30m)
+**Criteria**: Redis `upload:*` hashes older than **2 × `UPLOAD_TTL`** (`config.UploadTTL`, default 30m → reap at 60m). The reap age is derived from the same `UPLOAD_TTL` job-service uses for session expiry — twice the session lifetime, replacing the old independent 2h fallback — so an in-flight session is never reaped while its presigned URLs could still be valid.
 
 **Process**:
 1. `SCAN` Redis for `upload:*` keys (skipping `:chunks` suffixes)
 2. `HGETALL` each hash; parse `createdAt`
-3. If older than `UPLOAD_TTL`:
+3. If older than 2 × `UPLOAD_TTL`:
    - `DEL` the Redis state keys
    - If the hash carries an `s3UploadId`: `AbortMultipart(uploads, key, s3UploadId)` — frees orphaned parts immediately
    - If the object key is **not referenced** by any `file_metadata` row (`WHERE path = <key>`), `RemoveObject(uploads, key)`. A consumed upload's key *is* referenced by a job, so consumed objects are left for Phase 1 to clean with the job. On a DB error the object is kept (never delete what cannot be proven unreferenced).
@@ -140,10 +146,12 @@ The cleanup worker exposes a lightweight HTTP server for health checks, readines
 | `S3_USE_SSL` | `false` | TLS to the S3 endpoint |
 | `S3_BUCKET_UPLOADS` | `fyredocs-uploads` | Bucket holding raw uploads |
 | `S3_BUCKET_OUTPUTS` | `fyredocs-outputs` | Bucket holding processed outputs |
-| `UPLOAD_TTL` | `2h` | How long an upload session in Redis (`upload:<id>`) can live before Phase 2 reaps it (state + multipart + object) |
+| `UPLOAD_TTL` | `30m` | Upload-session lifetime (same variable job-service uses); Phase 2 reaps `upload:<id>` state at **2 × `UPLOAD_TTL`** (state + multipart + object) |
 | `MULTIPART_ABORT_TTL` | `24h` | How old an **incomplete** multipart upload must be before Phase 3 aborts it and frees its parts (Go duration) |
 | `FREE_JOB_TTL` | `168h` (7d) | TTL applied by Phase 4 backfill to legacy authenticated jobs that were created before plan-based expiration was wired up |
 | `CLEANUP_INTERVAL` | `15m` | How often the ticker fires |
+
+All duration fallbacks are the canonical helpers in `shared/config/defaults.go`: `GuestJobTTL` (30m), `FreeJobTTL` (7d), `ProJobTTL` (30d), `UploadTTL` (30m), `CleanupInterval` (15m), `StaleMultipartAge` (24h), `MaxUploadBytes` (50MB). job-service reads the same helpers, so the fallbacks cannot diverge again.
 
 ### Redis Keys
 
@@ -158,7 +166,7 @@ The cleanup worker exposes a lightweight HTTP server for health checks, readines
 ```
 Every 15 minutes (under Redis SETNX lock):
   ├─ Phase 1: Delete expired jobs (any user, expires_at <= NOW), RemoveObject per file_metadata row
-  ├─ Phase 2: Reap Redis upload:* sessions older than UPLOAD_TTL (DEL state, AbortMultipart, RemoveObject if unconsumed)
+  ├─ Phase 2: Reap Redis upload:* sessions older than 2 × UPLOAD_TTL (DEL state, AbortMultipart, RemoveObject if unconsumed)
   ├─ Phase 3: Abort incomplete multipart uploads older than 24h
   └─ Phase 4: Backfill expires_at on legacy authenticated-user jobs (user_id IS NOT NULL AND expires_at IS NULL)
 ```
@@ -183,8 +191,8 @@ job input+output objects at job expiry (Phase 1), orphaned/expired upload
 sessions (Phase 2), and incomplete multipart uploads (Phase 3,
 `MULTIPART_ABORT_TTL`).
 
-**File Retention** — the same TTL governs a job's **input and output** files (set at job creation by `job-service`; env vars are the source of truth):
-- Active uploads (not yet a job): until consumed, or until `UPLOAD_TTL` expires the Redis session and Phase 2 reaps the object (no bucket object-expiry lifecycle anymore)
+**File Retention** — the same TTL governs a job's **input and output** files (set at job creation by `job-service`; env vars are the source of truth, fallbacks from `shared/config/defaults.go`):
+- Active uploads (not yet a job): until consumed, or until the Redis session expires (`UPLOAD_TTL`) and Phase 2 reaps the object at 2 × `UPLOAD_TTL` (no bucket object-expiry lifecycle anymore)
 - Completed jobs (guest): `GUEST_JOB_TTL` (default **30m**)
 - Completed jobs (free user): `FREE_JOB_TTL` (default **7d**); legacy `NULL` rows backfilled by Phase 4
 - Completed jobs (pro user): `PRO_JOB_TTL` (default **30d**) — finite, no longer `NULL`
@@ -194,11 +202,13 @@ sessions (Phase 2), and incomplete multipart uploads (Phase 3,
 
 ### Docker Compose
 
+The service name stays `cleanup-worker`; the image is built from job-service's cleanup Dockerfile:
+
 ```yaml
 cleanup-worker:
   build:
     context: ..
-    dockerfile: cleanup-worker/Dockerfile
+    dockerfile: job-service/Dockerfile.cleanup
   environment:
     DATABASE_URL: postgresql://user:password@db:5432/fyredocs
     REDIS_ADDR: redis:6379
@@ -210,7 +220,7 @@ cleanup-worker:
     S3_BUCKET_OUTPUTS: fyredocs-outputs
     UPLOAD_TTL: 30m
     CLEANUP_INTERVAL: 5m
-    FREE_JOB_TTL: 24h
+    FREE_JOB_TTL: 168h
   depends_on:
     redis:
       condition: service_healthy
@@ -227,14 +237,14 @@ No volumes — the worker is stateless.
    docker compose -f deployment/docker-compose.yml up -d redis minio minio-init
    ```
 
-2. Run worker:
+2. Run the cleanup binary (from the job-service module):
    ```bash
-   cd cleanup-worker
+   cd job-service
    export DATABASE_URL="postgresql://user:password@localhost:5432/fyredocs"
    export REDIS_ADDR="localhost:6379"
    export S3_ENDPOINT="localhost:9000"   # publish 9000 locally or port-forward
    export S3_ACCESS_KEY=... S3_SECRET_KEY=...
-   go run main.go
+   go run ./cmd/cleanup
    ```
 
 ### Production Deployment
@@ -427,7 +437,7 @@ sequenceDiagram
     CW->>R: SCAN 0 MATCH upload:* COUNT 100
     loop For each upload key
         CW->>R: HGETALL <key>
-        alt age > UPLOAD_TTL
+        alt age > 2 × UPLOAD_TTL
             CW->>R: DEL <key> <key>:chunks
             opt hash has s3UploadId
                 CW->>S3: AbortMultipart(uploads, key, s3UploadId)

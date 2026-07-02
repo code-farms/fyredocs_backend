@@ -11,9 +11,12 @@ graph TB
         CLI["CLI / API Consumer"]
     end
 
-    subgraph Gateway["API Gateway :8080"]
+    subgraph Edge["Caddy Edge :80/:443"]
+        CADDY["caddy<br/>TLS (auto-HTTPS via PUBLIC_DOMAIN)<br/>SPA static files · object-byte routing"]
+    end
+
+    subgraph Gateway["API Gateway :8080 (internal-only)"]
         GW["api-gateway<br/>net/http reverse proxy<br/>JWT + guest verify, plan resolve"]
-        SPA["Static SPA<br/>(when SPA_DIR set)"]
     end
 
     subgraph Core["Core Services"]
@@ -33,7 +36,7 @@ graph TB
     end
 
     subgraph Background
-        CW["cleanup-worker :8088<br/>Ticker · 4-phase cleanup<br/>(jobs · upload sessions · stale multiparts · backfill)"]
+        CW["cleanup-worker :8088<br/>job-service's cleanup binary (cmd/cleanup)<br/>Ticker · 4-phase cleanup<br/>(jobs · upload sessions · stale multiparts · backfill)"]
     end
 
     subgraph Platform["Platform Services"]
@@ -49,9 +52,12 @@ graph TB
         S3[("MinIO :9000 (internal)<br/>fyredocs-uploads · fyredocs-outputs<br/>bootstrap: minio-init (buckets · lifecycle · app user)")]
     end
 
-    WebApp -->|HTTPS| GW
-    CLI -->|HTTPS| GW
-    WebApp -.->|SPA assets| SPA
+    WebApp -->|HTTPS| CADDY
+    CLI -->|HTTPS| CADDY
+    WebApp -.->|SPA assets| CADDY
+
+    CADDY -->|"/api/* · /auth/* · /admin/* · /healthz"| GW
+    CADDY -->|"/fyredocs-uploads/* · /fyredocs-outputs/*<br/>presigned, direct (Host preserved)"| S3
 
     GW -->|/auth/*| AUTH
     GW -->|/api/upload/*| JOB
@@ -62,7 +68,6 @@ graph TB
     GW -->|/api/notifications/*| NOT
     GW -->|/admin/* · /api/dashboard| AN
     GW -->|plan info| RD
-    GW -->|"/fyredocs-uploads/* · /fyredocs-outputs/*<br/>presigned proxy (Host preserved)"| S3
 
     JOB -->|jobs.dispatch.*| NATS
     NATS -->|jobs.dispatch.convert-from-pdf| CFP
@@ -116,11 +121,11 @@ graph TB
 
 ```mermaid
 flowchart LR
-    subgraph Upload["Upload (presigned, same-origin via gateway)"]
+    subgraph Upload["Upload (presigned, same-origin via the Caddy edge)"]
         A[Client] -->|1. Init upload JSON| B[job-service]
         B -->|Store state incl. key + s3UploadId| Redis[(Redis: upload:*)]
-        B -->|presign part URLs for gateway origin| S3[("MinIO<br/>fyredocs-uploads")]
-        A -->|"2. PUT parts via gateway<br/>/fyredocs-uploads/*?X-Amz-..."| S3
+        B -->|presign part URLs for edge origin| S3[("MinIO<br/>fyredocs-uploads")]
+        A -->|"2. PUT parts via Caddy<br/>/fyredocs-uploads/*?X-Amz-..."| S3
         A -->|3. Complete upload JSON + ETags| B
         B -->|CompleteMultipart| S3
     end
@@ -142,7 +147,7 @@ flowchart LR
         EV --> B
         B -->|stream events| A
         A -->|13. GET download → presigned URL| B
-        A -->|"14. GET via gateway<br/>/fyredocs-outputs/*?X-Amz-..."| S3O
+        A -->|"14. GET via Caddy<br/>/fyredocs-outputs/*?X-Amz-..."| S3O
     end
 ```
 
@@ -214,7 +219,8 @@ graph LR
 
 ```mermaid
 flowchart TD
-    Client -->|Request with auth cookie or Bearer token| GW[api-gateway]
+    Client -->|Request with auth cookie or Bearer token| Caddy[Caddy edge]
+    Caddy -->|/api/* · /auth/* · /admin/*| GW[api-gateway]
     GW -->|Verify JWT via HS256 secret| GW
     GW -->|Check token denylist| Redis[(Redis)]
     GW -->|No token? Issue/load guest_token cookie| Redis

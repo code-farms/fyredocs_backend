@@ -162,7 +162,7 @@ graph LR
     AS --> |shared/response| Response
     AS --> |shared/natsconn + shared/queue| NATSPub
 
-    AS --> |internal/authverify| AuthVerify
+    AS --> |shared/authverify| AuthVerify
     AS --> |internal/models| Models
     AS --> |internal/token| TokenIssuer
 

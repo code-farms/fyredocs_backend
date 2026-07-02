@@ -44,7 +44,6 @@ If a user request violates microservice boundaries, Claude must correct or rejec
 - `convert-to-pdf/`
 - `organize-pdf/`
 - `optimize-pdf/`
-- `cleanup-worker/`
 - `document-service/`
 - `user-service/`
 - `notification-service/`
@@ -60,6 +59,8 @@ If a user request violates microservice boundaries, Claude must correct or rejec
 - metrics exporters
 - config loaders
 - message queue clients
+- auth verification middleware (authverify)
+- database connection pooling (database)
 
 ────────────────────────────────────────
 # 3. DATA OWNERSHIP RULES

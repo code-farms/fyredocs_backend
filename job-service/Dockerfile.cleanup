@@ -1,3 +1,6 @@
+# Builds job-service's cleanup binary (cmd/cleanup) — the TTL sweep that
+# reaps expired jobs, upload sessions, and stale multipart uploads. It ships
+# as its own container so sweeps never compete with the API binary for CPU.
 # ---- Builder Stage ----
 FROM golang:1.25-alpine AS builder
 
@@ -12,7 +15,6 @@ COPY go.work go.work.sum* ./
 COPY shared/go.mod shared/go.sum* ./shared/
 COPY api-gateway/go.mod* ./api-gateway/
 COPY auth-service/go.mod* ./auth-service/
-COPY cleanup-worker/go.mod* ./cleanup-worker/
 COPY convert-from-pdf/go.mod* ./convert-from-pdf/
 COPY convert-to-pdf/go.mod* ./convert-to-pdf/
 COPY optimize-pdf/go.mod* ./optimize-pdf/
@@ -29,13 +31,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # 3. Copy source code
 COPY shared/ ./shared/
-COPY cleanup-worker/ ./cleanup-worker/
+COPY job-service/ ./job-service/
 
 # 4. Build binary with Go build cache
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    cd cleanup-worker && \
-    CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/cleanup-worker .
+    cd job-service && \
+    CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/cleanup-worker ./cmd/cleanup
 
 # ---- Runtime Stage ----
 # We use Alpine instead of Scratch so the worker can manage the filesystem

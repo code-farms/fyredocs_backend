@@ -51,7 +51,7 @@ Auth Service :8086
   │── handlers/admin.go            RevokeUserSessions · RevokeSession
   │── handlers/plans.go            GetAllPlans
   │── internal/token/              JWT issuance (HS256), Claims with jti
-  │── internal/authverify/         JWT verification middleware, Redis token denylist
+  │── shared/authverify            JWT verification middleware, Redis token denylist (shared package)
   │── internal/email/              Mailer interface · ResendMailer · NoopMailer
   │── internal/models/             GORM models: User · SubscriptionPlan · UserSession · PasswordResetToken
   │── middleware/ratelimit         Redis-backed rate limiter (per IP)
@@ -70,7 +70,7 @@ Auth Service :8086
 | `handlers/internal_api.go` | GetUserPlan (internal API) |
 | `handlers/plans.go` | GetAllPlans (public, lists non-anonymous plans) |
 | `internal/token/` | JWT issuance with HS256; AccessToken (8h, includes role) and RefreshToken (7d) |
-| `internal/authverify/` | JWT verification, denylist, gin middleware |
+| `fyredocs/shared/authverify` | JWT verification, denylist, gin middleware (shared package, replaces the old `internal/authverify` copy) |
 | `internal/email/` | `Mailer` interface, `ResendMailer` (HTTPS API), `NoopMailer` (dev/test) |
 | `internal/models/user.go` | `User`, `SubscriptionPlan`, `AuthMetadata` |
 | `internal/models/token.go` | `UserSession` + `HashToken`, `StoreSession`, `FindSessionByRefreshHash`, `RevokeSessionByAccessHash`, `RevokeAllUserSessions`, `DeleteExpiredSessions` |
