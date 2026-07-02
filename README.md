@@ -28,6 +28,9 @@ The script generates a JWT secret, starts all services with Docker Compose, and 
 | **Optimize PDF** | 8085 | Compress, repair, OCR (Ghostscript / Tesseract) |
 | **Analytics Service** | 8087 | Business / engagement / reliability metrics, NATS subscriber |
 | **Cleanup Worker** | 8088 | Background TTL cleanup of jobs, upload sessions, and their MinIO objects; aborts stale multipart uploads (health/metrics endpoints only) |
+| **Document Service** | 8089 | Persistent document library — documents, folders, tags, exports; finalizes completed jobs into documents (NATS subscriber) |
+| **User Service** | 8090 | Organizations, memberships, and the RBAC role model |
+| **Notification Service** | 8091 | In-app notification feed; consumes job events, pushes a live SSE bell |
 | **MinIO** | — (internal) | Object storage for all file bytes (`fyredocs-uploads`, `fyredocs-outputs`); bootstrapped by the one-shot `minio-init` container (buckets, lifecycle rules, scoped app user) |
 
 ## Request Flow
@@ -44,7 +47,10 @@ Client → API Gateway (:8080)
             ├─ /api/upload/*         → Job Service (:8081, rewritten to /api/uploads/*; JSON init/complete only)
             ├─ /api/jobs/*           → Job Service (:8081)
             ├─ /api/{convert-from,convert-to,organize,optimize}-pdf/* → Job Service (:8081)
-            ├─ /admin/*              → Analytics Service (:8087)
+            ├─ /api/{documents,folders,tags,exports}/* → Document Service (:8089)
+            ├─ /api/orgs/*           → User Service (:8090)
+            ├─ /api/notifications/*  → Notification Service (:8091)
+            ├─ /admin/* , /api/dashboard → Analytics Service (:8087)
             └─ /                     → SPA static files (when SPA_DIR is set)
                           │
                           ▼

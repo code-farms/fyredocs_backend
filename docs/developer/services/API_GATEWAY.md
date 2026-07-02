@@ -45,6 +45,9 @@ Telemetry → Metrics → Request-ID → SecurityHeaders
             ├─ /api/upload/*                                → JOB_SERVICE_URL   (rewritten to /api/uploads/*)
             ├─ /api/jobs/*                                  → JOB_SERVICE_URL
             ├─ /api/{convert-from,convert-to,organize,optimize}-pdf/* → JOB_SERVICE_URL
+            ├─ /api/{documents,folders,tags,exports}/*      → DOCUMENT_SERVICE_URL
+            ├─ /api/orgs/*                                  → USER_SERVICE_URL
+            ├─ /api/notifications/*                         → NOTIFICATION_SERVICE_URL
             ├─ /admin/*                                     → ANALYTICS_SERVICE_URL
             ├─ /api/dashboard                               → ANALYTICS_SERVICE_URL  (role-aware, any authenticated user)
             └─ /                                            → SPA_DIR static files (when set)
@@ -67,6 +70,12 @@ All `/api/*` traffic is proxied to **job-service**. Workers are not exposed publ
 | `/api/convert-to-pdf/*` | `JOB_SERVICE_URL` | Office/Image → PDF |
 | `/api/organize-pdf/*` | `JOB_SERVICE_URL` | Merge, split, rotate, watermark, sign, etc. |
 | `/api/optimize-pdf/*` | `JOB_SERVICE_URL` | Compress, repair, OCR |
+| `/api/documents/*` | `DOCUMENT_SERVICE_URL` | Document library CRUD |
+| `/api/folders/*` | `DOCUMENT_SERVICE_URL` | Folder tree |
+| `/api/tags/*` | `DOCUMENT_SERVICE_URL` | Tags |
+| `/api/exports/*` | `DOCUMENT_SERVICE_URL` | Document exports (CSV/JSON) |
+| `/api/orgs/*` | `USER_SERVICE_URL` | Organizations, memberships, RBAC |
+| `/api/notifications/*` | `NOTIFICATION_SERVICE_URL` | In-app notification feed + SSE bell |
 | `/admin/*` | `ANALYTICS_SERVICE_URL` | Admin / analytics dashboards (super-admin only, enforced by the service) |
 | `/api/dashboard` | `ANALYTICS_SERVICE_URL` | Unified role-aware dashboard summary; the service filters by `X-User-Role` (admin/super-admin → system KPIs, user → personal KPIs, guest → 403) |
 | `/healthz` | api-gateway (local) | Liveness — pings Redis |
@@ -117,6 +126,9 @@ The reverse proxy sets `FlushInterval = -1` to stream responses immediately to t
 | `JOB_SERVICE_URL` | Job-service base URL (handles uploads, jobs, tool routes) | `http://job-service:8081` |
 | `AUTH_SERVICE_URL` | Auth-service base URL (defaults to `JOB_SERVICE_URL` for backward compat) | `http://auth-service:8086` |
 | `ANALYTICS_SERVICE_URL` | Analytics-service base URL | `http://analytics-service:8087` |
+| `DOCUMENT_SERVICE_URL` | Document-service base URL (documents, folders, tags, exports) | `http://document-service:8089` |
+| `USER_SERVICE_URL` | User-service base URL (orgs, memberships, RBAC) | `http://user-service:8090` |
+| `NOTIFICATION_SERVICE_URL` | Notification-service base URL (notifications, SSE bell) | `http://notification-service:8091` |
 | `REDIS_ADDR` | Redis server address (used for denylist, guest cookie store, plan cache) | `redis:6379` |
 
 #### Object Storage Proxy

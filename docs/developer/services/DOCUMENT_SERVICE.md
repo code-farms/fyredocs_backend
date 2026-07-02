@@ -13,9 +13,9 @@ The service stores **metadata only**; file bytes live in object storage (referen
 ## Internal Architecture
 - `main.go` — config/logger/telemetry init, DB connect + migrate, gin with metrics/trace/request-id middleware, `/metrics`, graceful shutdown. Port `8089` (env `PORT`).
 - `routes/routes.go` — health + the `/api` group guarded by `RequireUser()`.
-- `handlers/` — `auth.go` (identity + helpers), `documents.go`, `folders.go`, `tags.go`, `health.go`.
-- `internal/models/` — `database.go` (Connect/Migrate), `document.go`, `folder.go`, `tag.go`.
-- No NATS dependency yet (v1 is CRUD only; processing/indexing events are a later increment).
+- `handlers/` — `auth.go` (identity + RBAC helpers), `documents.go`, `folders.go`, `tags.go`, `exports.go`, `hints.go` (workspace hints), `health.go`.
+- `internal/models/` — `database.go` (Connect/Migrate), `document.go`, `folder.go`, `tag.go`, `export.go`, `jobhint.go`.
+- `subscriber/subscriber.go` — **NATS is a hard dependency** (`main.go` fails fast if the connection or subscriber start fails). A durable JetStream consumer `document-job-events` on the `JOBS_EVENTS` stream (filter `jobs.events.>`, `DeliverNew`, explicit ack) finalizes every `JobCompleted` event for an authenticated user into a `documents` row — the server-side counterpart to direct creation, so any completed job becomes a library document regardless of client. Finalize is idempotent via a partial unique index on `(user_id, source_job_id)` (soft-deleted docs are not resurrected), and files the document into an org workspace when a `JobWorkspaceHint` exists.
 
 ## Routes
 Health: `GET /healthz` (liveness), `GET /readyz` (DB ping).
@@ -35,6 +35,7 @@ All `/api/*` routes require auth (`X-User-ID`) and are scoped to that user. Reac
 | DELETE | `/api/documents/:id/permanent` | Permanently delete (hard delete + tag associations). |
 | POST | `/api/documents/:id/tags` | Attach a tag. Body: `tagId`. |
 | DELETE | `/api/documents/:id/tags/:tagId` | Detach a tag. |
+| POST | `/api/documents/workspace-hint` | Record that a job should finalize into an org workspace (editor+ verified via user-service). Body: `jobId`, `organizationId` (empty clears the hint → personal). Consumed and cleared by the finalize subscriber on completion. |
 | GET | `/api/folders` | List folders. Filter: `parentId`. |
 | POST | `/api/folders` | Create folder. Body: `name` (required), `parentId?`. |
 | PATCH | `/api/folders/:id` | Rename/move (`name?`, `parentId?`). |
@@ -50,10 +51,12 @@ All `/api/*` routes require auth (`X-User-ID`) and are scoped to that user. Reac
 **Exports** are generated asynchronously (v1: in-process; an `EXPORTS` NATS work-queue is the scale follow-up). The CSV/JSON artifact bytes are stored on the `exports` row (`exports` table: id, user_id, organization_id?, format, status `queued|processing|ready|failed`, file_name, content, document_count, filters, completed_at). Binary/ZIP exports to object storage are a follow-up.
 
 ## DB Schema (own Postgres)
-- **documents**: id (uuid v7), user_id, organization_id?, folder_id?, name, file_type, mime_type, file_size, storage_path, thumbnail_path, status (`uploaded|processing|ready|failed`), extracted_content, metadata (jsonb), uploaded_at?, processed_at?, created_at, updated_at, deleted_at (soft delete). Plus a generated `search_vector tsvector` over name+extracted_content with a GIN index. Indexes: `(user_id, created_at)`, `(user_id, status, created_at)`, GIN on `search_vector`.
+- **documents**: id (uuid v7), user_id, organization_id?, folder_id?, name, file_type, mime_type, file_size, storage_path, thumbnail_path, status (`uploaded|processing|ready|failed`), source_job_id? (links a doc finalized from a completed job), extracted_content, metadata (jsonb), uploaded_at?, processed_at?, created_at, updated_at, deleted_at (soft delete). Plus a generated `search_vector tsvector` over name+extracted_content with a GIN index. Indexes: `(user_id, created_at)`, `(user_id, status, created_at)`, GIN on `search_vector`, and a **partial unique index on `(user_id, source_job_id)`** that makes finalize idempotent.
 - **folders**: id, user_id, parent_id? (self-ref tree), name, created_at, updated_at, deleted_at.
 - **tags**: id, user_id, name, color, created_at. Unique `(user_id, name)`.
 - **document_tags**: many2many join (document_id, tag_id), managed by GORM.
+- **exports**: id, user_id, organization_id?, format (`csv|json`), status (`queued|processing|ready|failed`), file_name, content, document_count, filters, completed_at.
+- **job_workspace_hints**: job_id (pk), user_id, organization_id, created_at — set at job creation (editor+), consumed by the finalize subscriber to file the resulting document into an org.
 
 Search: `search_vector @@ websearch_to_tsquery('english', q)` (pluggable behind the same API to Meilisearch/OpenSearch later).
 
@@ -79,10 +82,14 @@ Stateless → horizontally scalable behind the gateway. Reads (list/search) are 
 - `deployment/docker-compose.yml` has a `document-service` block; `api-gateway` depends on it and sets `DOCUMENT_SERVICE_URL`.
 - In `go.work` and every service Dockerfile's go.mod copy list (workspace builds).
 
+## NATS
+- **Consumes** `jobs.events.>` (`JOBS_EVENTS` stream, durable consumer `document-job-events`) to finalize completed jobs into documents. See Internal Architecture above.
+- **Publishes** nothing today. Outbound `document.*` events (for indexing/cross-service notifications) are a follow-up.
+
 ## Roadmap (next increments)
-- Presigned-upload finalize that creates a document; jobs reference `document_id`.
+- Presigned-upload finalize that creates a document directly; jobs reference `document_id`.
 - Publish `document.*` events to NATS for indexing/notifications.
-- Shares, exports, activity log; organization scoping via user-service.
+- Shares and activity log; binary/ZIP exports to object storage; an `EXPORTS` NATS work-queue for async export at scale.
 
 ## Performance
 - `GET /api/documents` runs a `COUNT(*)` (total for pagination) and the page

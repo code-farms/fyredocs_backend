@@ -63,4 +63,4 @@ The gateway verifies the JWT and injects `X-User-ID`. `RequireUser()` rejects re
 - Teams (`teams` table) and per-team membership.
 - API keys (`api_keys`) for programmatic access.
 - Ownership transfer; invitations (email) instead of raw `userId`.
-- Org scoping wired into document-service (documents gain `organization_id` enforcement) and the gateway injecting `X-Org-ID`.
+- Gateway injecting `X-Org-ID` (org scoping is already enforced in document-service, which calls `GET /api/orgs/:id` here to resolve the caller's role).

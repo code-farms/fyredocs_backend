@@ -199,6 +199,17 @@ When a job is created, the service publishes a `JobCreated` event to NATS JetStr
 
 The target service name is resolved via `routing.ServiceForTool(toolType)` and the subject is built with `queue.SubjectForDispatch(serviceName)`.
 
+### Analytics Events
+
+Alongside the dispatch event, `job-service` publishes fire-and-forget analytics events to the `ANALYTICS` stream (`analytics.events.<eventType>`, via `queue.PublishAnalyticsEvent`; a NATS outage never blocks the request):
+
+| Event type | When | Payload highlights |
+|------------|------|--------------------|
+| `analytics.events.job.created` | On successful job creation (`publishJobAnalyticsEvent`) | `toolType`, `fileSize`, `isGuest`, `userId?` |
+| `analytics.events.plan.limit_hit` | When a plan limit blocks a job (`publishPlanLimitHit`) | `toolType`, `isGuest`, `metadata.limitType` |
+
+These are consumed by analytics-service (see its subscriber). Job **lifecycle** events (`JobProgress`/`JobCompleted`/`JobFailed`) are published by the **workers** to `jobs.events.<jobId>.*` on the `JOBS_EVENTS` stream — job-service only reads those (for the SSE endpoint), it does not publish them.
+
 ### Dead Letter Queue (DLQ)
 
 The `JOBS_DLQ` stream provides a dead letter queue with 7-day retention for failed jobs.

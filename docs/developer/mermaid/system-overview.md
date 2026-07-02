@@ -36,6 +36,12 @@ graph TB
         CW["cleanup-worker :8088<br/>Ticker · 4-phase cleanup<br/>(jobs · upload sessions · stale multiparts · backfill)"]
     end
 
+    subgraph Platform["Platform Services"]
+        DOC["document-service :8089<br/>Gin · library + NATS finalize subscriber"]
+        USR["user-service :8090<br/>Gin · orgs, memberships, RBAC"]
+        NOT["notification-service :8091<br/>Gin · feed + SSE bell (NATS subscriber)"]
+    end
+
     subgraph Infrastructure
         PG[(PostgreSQL)]
         RD[(Redis)]
@@ -51,7 +57,10 @@ graph TB
     GW -->|/api/upload/*| JOB
     GW -->|/api/jobs/*| JOB
     GW -->|/api/{convert,organize,optimize}-pdf/*| JOB
-    GW -->|/admin/*| AN
+    GW -->|/api/{documents,folders,tags,exports}/*| DOC
+    GW -->|/api/orgs/*| USR
+    GW -->|/api/notifications/*| NOT
+    GW -->|/admin/* · /api/dashboard| AN
     GW -->|plan info| RD
     GW -->|"/fyredocs-uploads/* · /fyredocs-outputs/*<br/>presigned proxy (Host preserved)"| S3
 
@@ -93,6 +102,14 @@ graph TB
     CW --> RD
     CW -->|RemoveObject · AbortMultipart| S3
     GW --> RD
+
+    DOC --> PG
+    USR --> PG
+    NOT --> PG
+    NATS -->|jobs.events.> finalize| DOC
+    NATS -->|jobs.events.> notify| NOT
+    DOC -->|GET /api/orgs/:id RBAC| USR
+    DOC -.->|POST /internal/notifications| NOT
 ```
 
 ## Data Flow Overview
@@ -173,6 +190,9 @@ graph LR
     E1 -->|filter by jobId| JS
     E2 -->|filter by jobId| JS
     E3 -->|filter by jobId| JS
+    E2 -->|finalize completed → document| DOC2[document-service]
+    E2 -->|notify user| NOT2[notification-service]
+    E3 -->|notify user| NOT2
 
     CFP -.->|on max-retry| Q1
     CTP -.->|on max-retry| Q1

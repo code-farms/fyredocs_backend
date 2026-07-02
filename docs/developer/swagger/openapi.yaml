@@ -73,6 +73,12 @@ tags:
     description: Cross-tool job history and real-time status updates for authenticated users
   - name: Admin Analytics
     description: Admin dashboard metrics (requires super-admin role via JWT authentication)
+  - name: Documents
+    description: Persistent document library — documents, folders, tags, and exports (document-service)
+  - name: Organizations
+    description: Organizations, memberships, and RBAC (user-service)
+  - name: Notifications
+    description: Per-user in-app notification feed and live SSE bell (notification-service)
 
 # ---------------------------------------------------------------------------
 # Reusable path parameter and query parameter components
@@ -2187,6 +2193,384 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/APIResponse"
+
+  # ==========================================================================
+  # Documents (document-service :8089)
+  # Auth via gateway (X-User-ID). Optional orgId query scopes to an org (RBAC).
+  # ==========================================================================
+  /api/documents:
+    get:
+      tags: [Documents]
+      summary: List documents
+      operationId: listDocuments
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [uploaded, processing, ready, failed] } }
+        - { name: folderId, in: query, schema: { type: string, format: uuid } }
+        - { name: tagId, in: query, schema: { type: string, format: uuid } }
+        - { name: q, in: query, description: Full-text search (name + extracted content), schema: { type: string } }
+        - { name: trashed, in: query, description: "true returns the Trash view", schema: { type: boolean } }
+        - { name: orgId, in: query, description: Org-scope the listing (viewer+), schema: { type: string, format: uuid } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+      responses:
+        "200":
+          description: Paginated documents (data[] + meta{page,limit,total})
+          content: { application/json: { schema: { $ref: "#/components/schemas/APIResponse" } } }
+    post:
+      tags: [Documents]
+      summary: Create a document (metadata only)
+      operationId: createDocument
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                folderId: { type: string, format: uuid }
+                organizationId: { type: string, format: uuid, description: "Org-scope (editor+)" }
+                fileType: { type: string }
+                mimeType: { type: string }
+                fileSize: { type: integer, format: int64 }
+                storagePath: { type: string }
+                status: { type: string }
+                metadata: { type: object }
+      responses:
+        "201": { description: Document created, content: { application/json: { schema: { $ref: "#/components/schemas/APIResponse" } } } }
+        "400": { description: Validation error }
+  /api/documents/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Documents]
+      summary: Get one document (with tags)
+      operationId: getDocument
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses:
+        "200": { description: Document, content: { application/json: { schema: { $ref: "#/components/schemas/APIResponse" } } } }
+        "404": { description: Not found }
+    patch:
+      tags: [Documents]
+      summary: Update a document (name/folderId/status/metadata)
+      operationId: updateDocument
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                folderId: { type: string, description: "empty string moves to root" }
+                status: { type: string }
+                metadata: { type: object }
+      responses:
+        "200": { description: Updated }
+        "400": { description: No changes / validation error }
+        "404": { description: Not found }
+    delete:
+      tags: [Documents]
+      summary: Soft-delete (move to Trash)
+      operationId: deleteDocument
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses:
+        "200": { description: Deleted }
+        "404": { description: Not found }
+  /api/documents/{id}/restore:
+    post:
+      tags: [Documents]
+      summary: Restore a soft-deleted document
+      operationId: restoreDocument
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Restored }
+        "404": { description: Not found in Trash }
+  /api/documents/{id}/permanent:
+    delete:
+      tags: [Documents]
+      summary: Permanently delete a document
+      operationId: purgeDocument
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Permanently deleted }
+        "404": { description: Not found }
+  /api/documents/{id}/tags:
+    post:
+      tags: [Documents]
+      summary: Attach a tag to a document
+      operationId: attachTag
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [tagId], properties: { tagId: { type: string, format: uuid } } } } }
+      responses:
+        "200": { description: Tag attached }
+        "404": { description: Document or tag not found }
+  /api/documents/{id}/tags/{tagId}:
+    delete:
+      tags: [Documents]
+      summary: Detach a tag from a document
+      operationId: detachTag
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tagId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Tag detached }
+  /api/documents/workspace-hint:
+    post:
+      tags: [Documents]
+      summary: File a future job's output into an org workspace
+      description: Records that a job should finalize into an org (editor+ verified). Empty organizationId clears the hint. Consumed by the finalize subscriber on completion.
+      operationId: setWorkspaceHint
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jobId]
+              properties:
+                jobId: { type: string, format: uuid }
+                organizationId: { type: string, format: uuid, description: "empty clears the hint (personal)" }
+      responses:
+        "200": { description: Hint set or cleared }
+        "400": { description: Invalid jobId }
+  /api/folders:
+    get:
+      tags: [Documents]
+      summary: List folders
+      operationId: listFolders
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters: [{ name: parentId, in: query, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: Folders } }
+    post:
+      tags: [Documents]
+      summary: Create a folder
+      operationId: createFolder
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string }, parentId: { type: string, format: uuid } } } } }
+      responses: { "201": { description: Folder created } }
+  /api/folders/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    patch:
+      tags: [Documents]
+      summary: Rename or move a folder
+      operationId: updateFolder
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { name: { type: string }, parentId: { type: string, format: uuid } } } } }
+      responses: { "200": { description: Updated } }
+    delete:
+      tags: [Documents]
+      summary: Soft-delete a folder (documents move to root)
+      operationId: deleteFolder
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses: { "200": { description: Deleted } }
+  /api/tags:
+    get:
+      tags: [Documents]
+      summary: List tags
+      operationId: listTags
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses: { "200": { description: Tags } }
+    post:
+      tags: [Documents]
+      summary: Create a tag (idempotent on user+name)
+      operationId: createTag
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string }, color: { type: string } } } } }
+      responses: { "201": { description: Tag created } }
+  /api/tags/{id}:
+    delete:
+      tags: [Documents]
+      summary: Delete a tag and its associations
+      operationId: deleteTag
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: Deleted } }
+  /api/exports:
+    get:
+      tags: [Documents]
+      summary: List exports
+      operationId: listExports
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses: { "200": { description: Exports (status/metadata) } }
+    post:
+      tags: [Documents]
+      summary: Queue an async export of documents in scope
+      operationId: createExport
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [format]
+              properties:
+                format: { type: string, enum: [csv, json] }
+                organizationId: { type: string, format: uuid }
+                status: { type: string }
+                folderId: { type: string, format: uuid }
+                tagId: { type: string, format: uuid }
+      responses: { "201": { description: Export queued } }
+  /api/exports/{id}:
+    get:
+      tags: [Documents]
+      summary: Get export status/metadata
+      operationId: getExport
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: "Export (status queued|processing|ready|failed)" } }
+  /api/exports/{id}/download:
+    get:
+      tags: [Documents]
+      summary: Download a ready export artifact
+      operationId: downloadExport
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Export artifact bytes, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+
+  # ==========================================================================
+  # Organizations (user-service :8090)
+  # ==========================================================================
+  /api/orgs:
+    get:
+      tags: [Organizations]
+      summary: List organizations the caller belongs to
+      operationId: listOrganizations
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses: { "200": { description: "Orgs, each with the caller's role" } }
+    post:
+      tags: [Organizations]
+      summary: Create an organization (caller becomes owner)
+      operationId: createOrganization
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } }
+      responses:
+        "201": { description: Organization created }
+        "400": { description: Invalid name }
+  /api/orgs/{id}:
+    get:
+      tags: [Organizations]
+      summary: Get an org the caller belongs to (with role)
+      description: Also used service-to-service by document-service to resolve membership/role for org-scoped requests.
+      operationId: getOrganization
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Organization + caller role }
+        "404": { description: "Not found (also returned to non-members)" }
+  /api/orgs/{id}/members:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Organizations]
+      summary: List members
+      operationId: listMembers
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses: { "200": { description: Members } }
+    post:
+      tags: [Organizations]
+      summary: Add or update a member (admin+)
+      operationId: addMember
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [userId, role], properties: { userId: { type: string, format: uuid }, role: { type: string, enum: [admin, editor, viewer] } } } } }
+      responses:
+        "201": { description: Member added }
+        "200": { description: Member updated (already a member) }
+        "403": { description: "Caller not admin+, or targeting the owner" }
+  /api/orgs/{id}/members/{userId}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Organizations]
+      summary: Change a member's role (admin+, not the owner)
+      operationId: updateMemberRole
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [role], properties: { role: { type: string, enum: [admin, editor, viewer] } } } } }
+      responses:
+        "200": { description: Role updated }
+        "403": { description: "Caller not admin+, or targeting the owner" }
+        "404": { description: Member not found }
+    delete:
+      tags: [Organizations]
+      summary: Remove a member (admin+, never the owner)
+      operationId: removeMember
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses:
+        "200": { description: Member removed }
+        "403": { description: "Caller not admin+, or the owner" }
+        "404": { description: Member not found }
+
+  # ==========================================================================
+  # Notifications (notification-service :8091)
+  # ==========================================================================
+  /api/notifications:
+    get:
+      tags: [Notifications]
+      summary: Recent notifications + unread count
+      operationId: listNotifications
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses:
+        "200": { description: "{notifications:[max 50], unreadCount}", content: { application/json: { schema: { $ref: "#/components/schemas/APIResponse" } } } }
+  /api/notifications/stream:
+    get:
+      tags: [Notifications]
+      summary: SSE stream of new notifications (live bell)
+      description: Subscribes to core-NATS subject notify.<userId> and forwards each new notification.
+      operationId: streamNotifications
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: |
+                event: connected
+                data: {}
+
+                event: notification
+                data: {"id":"018f...","type":"job.completed","title":"Processing complete"}
+        "500": { description: NATS_UNAVAILABLE or STREAM_UNSUPPORTED }
+  /api/notifications/read-all:
+    post:
+      tags: [Notifications]
+      summary: Mark all notifications read
+      operationId: markAllRead
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses: { "200": { description: All marked read } }
+  /api/notifications/{id}/read:
+    post:
+      tags: [Notifications]
+      summary: Mark one notification read
+      operationId: markRead
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Marked read }
+        "400": { description: Invalid id }
 
 # =============================================================================
 # Components

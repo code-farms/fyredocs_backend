@@ -426,6 +426,8 @@ curl -X POST http://localhost:8080/api/convert-from-pdf/pdf-to-odp \
 | `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing (currently honoured via NATS `AckWait` rather than a context deadline in code) |
 | `WORKER_CONCURRENCY` | `2` | Max concurrent jobs processed in parallel (semaphore-bounded goroutines; one slow conversion no longer blocks the rest) |
 | `RESULT_CACHE_TTL_SECONDS` | `3600` | Lifetime of result-cache entries. Keep ≤ outputs bucket TTL. `0` disables caching. |
+| `PROGRESS_DB_MIN_DELTA` | `10` | Min percent jump before a progress update is persisted to the DB (throttles writes; `internal/worker/progress.go`) |
+| `PROGRESS_DB_MIN_INTERVAL` | `10s` | Min time between persisted progress updates, regardless of delta |
 | `NATS_URL` | **Required** | NATS server URL |
 
 ## Result Caching

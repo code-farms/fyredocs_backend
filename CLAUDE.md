@@ -45,6 +45,9 @@ If a user request violates microservice boundaries, Claude must correct or rejec
 - `organize-pdf/`
 - `optimize-pdf/`
 - `cleanup-worker/`
+- `document-service/`
+- `user-service/`
+- `notification-service/`
 
 ## Forbidden:
 - Shared `/models`, `/handlers`, `/domain`, `/business` folders

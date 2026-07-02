@@ -57,7 +57,7 @@ Auth Service :8086
   │── middleware/ratelimit         Redis-backed rate limiter (per IP)
   │── PostgreSQL                   users · auth_metadata · subscription_plans · user_sessions · password_reset_tokens
   │── Redis                        denylist:jwt:* · ratelimit:* · user:plan:*
-  └── NATS                         analytics.events.user.signup / user.login / plan.changed / user.password_reset_completed
+  └── NATS                         analytics.events.user.signup / user.login / plan.changed / user.password_reset_completed / user.proxy_login
 ```
 
 ### Key Internal Packages

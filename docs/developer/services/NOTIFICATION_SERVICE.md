@@ -10,7 +10,8 @@ Owns the user **in-app notification feed**. It consumes job-completion events fr
 
 ## Internal Architecture
 - `main.go` — config/logger/telemetry, DB connect+migrate, NATS connect + `EnsureStreams`, the finalize **subscriber**, gin + metrics, graceful shutdown. Port `8091`.
-- `subscriber/` — durable consumer `notification-job-events` on `JOBS_EVENTS`; `JobCompleted` → "Processing complete", `JobFailed` → "Processing failed" (authenticated users only; guests skipped). Idempotent on `(user_id, source_job_id)`.
+- `subscriber/` — durable consumer `notification-job-events` on `JOBS_EVENTS` (filter `jobs.events.>`); `JobCompleted` → "Processing complete", `JobFailed` → "Processing failed" (authenticated users only; guests skipped). Idempotent on `(user_id, source_job_id)`. After persisting, it publishes the notification to **core NATS subject `notify.<userId>`** so any open SSE stream for that user pushes it live.
+- Live bell: `GET /api/notifications/stream` opens an SSE connection that subscribes to `notify.<userId>` (ephemeral core-NATS subscription) and forwards each notification to the browser.
 - `handlers/` — `notifications.go` (list + unread count, mark-read, mark-all-read), `health.go`.
 - `internal/models/` — `database.go`, `notification.go`.
 

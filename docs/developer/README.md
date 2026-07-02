@@ -18,7 +18,10 @@ Fyredocs uses a true microservices architecture. Each service is independently d
 | Optimize PDF | 8085 | Compress, repair, OCR operations |
 | Auth Service | 8086 | User registration, login, JWT token management |
 | Analytics Service | 8087 | Usage metrics and analytics tracking |
-| Cleanup Worker | — | Background worker for expired file/job cleanup |
+| Cleanup Worker | 8088 | Background worker for expired file/job cleanup (health/metrics only) |
+| Document Service | 8089 | Persistent document library — documents, folders, tags, exports |
+| User Service | 8090 | Organizations, memberships, and RBAC |
+| Notification Service | 8091 | In-app notification feed + live SSE bell |
 
 ### Communication
 - **Client → Services**: All traffic flows through the API Gateway via REST
@@ -79,7 +82,7 @@ cd api-gateway && go run main.go
 cd job-service && go test ./...
 
 # Run all tests
-for svc in api-gateway auth-service job-service convert-from-pdf convert-to-pdf organize-pdf optimize-pdf cleanup-worker analytics-service; do
+for svc in api-gateway auth-service job-service convert-from-pdf convert-to-pdf organize-pdf optimize-pdf cleanup-worker analytics-service document-service user-service notification-service; do
   echo "Testing $svc..." && cd $svc && go test ./... && cd ..
 done
 ```
@@ -99,7 +102,10 @@ Browser → API Gateway (8080)
                ├─ /api/upload/*               → Job Service (8081)  (rewritten to /api/uploads/*)
                ├─ /api/jobs/history|:id/events → Job Service (8081)
                ├─ /api/{convert-from-pdf,convert-to-pdf,organize-pdf,optimize-pdf}/:tool → Job Service (8081)
-               ├─ /admin/*                    → Analytics Service (8087)
+               ├─ /api/{documents,folders,tags,exports}/* → Document Service (8089)
+               ├─ /api/orgs/*                 → User Service (8090)
+               ├─ /api/notifications/*        → Notification Service (8091)
+               ├─ /admin/* , /api/dashboard   → Analytics Service (8087)
                └─ /                           → SPA static files (when SPA_DIR is set)
 
 Job Service receives tool requests:
@@ -131,3 +137,6 @@ Each service has a dedicated architecture document:
 - [Optimize PDF](services/OPTIMIZE_PDF.md)
 - [Cleanup Worker](services/CLEANUP_WORKER.md)
 - [Analytics Service](services/ANALYTICS_SERVICE.md)
+- [Document Service](services/DOCUMENT_SERVICE.md)
+- [User Service](services/USER_SERVICE.md)
+- [Notification Service](services/NOTIFICATION_SERVICE.md)

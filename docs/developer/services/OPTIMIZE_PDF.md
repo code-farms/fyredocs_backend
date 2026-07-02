@@ -113,8 +113,8 @@ AUTH_GUEST_SUFFIX="jobs"
 AUTH_DENYLIST_ENABLED="true"
 
 # OCR
-OCR_DEFAULT_LANGUAGE="eng"
-OCR_DEFAULT_DPI="300"
+OCR_DEFAULT_LANGUAGE="eng"  # tesseract language code (639-2/T). Per-job options.language accepts ISO 639-1 (e.g. "en","de") — mapped to tesseract codes; unmapped values pass through, falling back to "eng"
+OCR_DEFAULT_DPI="300"       # rasterization DPI for OCR; overridable per-job via options.dpi
 OCR_MAX_WORKERS=""         # OCR page-pool cap; unset = min(NumCPU,4). Auto-sized by deploy.sh's 70% budget (see below); pin only to override
 ```
 

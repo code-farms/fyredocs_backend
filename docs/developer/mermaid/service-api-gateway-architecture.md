@@ -47,7 +47,11 @@ graph TB
             PROXY_ORG["/api/organize-pdf/* → JOB_SERVICE_URL"]
             PROXY_OPT["/api/optimize-pdf/* → JOB_SERVICE_URL"]
             PROXY_JOBS["/api/jobs/* → JOB_SERVICE_URL"]
+            PROXY_DOCS["/api/documents|folders|tags|exports/* → DOCUMENT_SERVICE_URL"]
+            PROXY_USER["/api/orgs/* → USER_SERVICE_URL"]
+            PROXY_NOTIF["/api/notifications/* → NOTIFICATION_SERVICE_URL"]
             PROXY_ADMIN["/admin/* → ANALYTICS_SERVICE_URL"]
+            PROXY_DASH["/api/dashboard → ANALYTICS_SERVICE_URL<br/>(role-aware)"]
             SPA["/ catch-all → SPA static (when SPA_DIR set)<br/>index.html fallback for client-side routes"]
         end
 
@@ -77,12 +81,12 @@ graph TB
     AUTHMW --> GUESTSTORE
     AUTHMW --> PLANCACHE
 
-    MUX --> PROXY_AUTH & PROXY_UPLOAD & PROXY_CFP & PROXY_CTP & PROXY_ORG & PROXY_OPT & PROXY_JOBS & PROXY_ADMIN
+    MUX --> PROXY_AUTH & PROXY_UPLOAD & PROXY_CFP & PROXY_CTP & PROXY_ORG & PROXY_OPT & PROXY_JOBS & PROXY_DOCS & PROXY_USER & PROXY_NOTIF & PROXY_ADMIN & PROXY_DASH
     MUX --> SPA
     MUX --> HEALTH
     MUX --> METRICEP
 
-    PROXY_AUTH & PROXY_UPLOAD & PROXY_CFP & PROXY_CTP & PROXY_ORG & PROXY_OPT & PROXY_JOBS & PROXY_ADMIN --> ProxyTransport
+    PROXY_AUTH & PROXY_UPLOAD & PROXY_CFP & PROXY_CTP & PROXY_ORG & PROXY_OPT & PROXY_JOBS & PROXY_DOCS & PROXY_USER & PROXY_NOTIF & PROXY_ADMIN & PROXY_DASH --> ProxyTransport
     PROXY_UP & PROXY_OUT --> MinioTransport
 
     DENYLIST --> Redis[(Redis)]
@@ -92,7 +96,10 @@ graph TB
 
     PROXY_AUTH --> AuthSvc["auth-service :8086"]
     PROXY_UPLOAD & PROXY_CFP & PROXY_CTP & PROXY_ORG & PROXY_OPT & PROXY_JOBS --> JobSvc["job-service :8081"]
-    PROXY_ADMIN --> AnSvc["analytics-service :8087"]
+    PROXY_DOCS --> DocSvc["document-service :8089"]
+    PROXY_USER --> UserSvc["user-service :8090"]
+    PROXY_NOTIF --> NotifSvc["notification-service :8091"]
+    PROXY_ADMIN & PROXY_DASH --> AnSvc["analytics-service :8087"]
     PROXY_UP & PROXY_OUT --> Minio[("MinIO :9000<br/>fyredocs-uploads · fyredocs-outputs")]
 ```
 
