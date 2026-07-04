@@ -79,6 +79,7 @@ sequenceDiagram
 
     GW->>JS: POST /api/&lt;group&gt;/:tool {uploadIds, options} · Idempotency-Key?
     JS->>JS: GinAuth · normalize tool · routing.ServiceForTool · per-IP RATE_LIMIT_JOB_CREATE
+    JS->>JS: validateToolOptions(tool, options) — 400 INVALID_OPTIONS (scan-to-pdf schema)
 
     alt Idempotency-Key cache hit
         JS->>Redis: GET idempotency:&lt;key&gt;
@@ -134,6 +135,48 @@ sequenceDiagram
     JS->>PG: INSERT processing_jobs + file_metadata (path=&lt;object key&gt;) in TX
     JS->>NATS: Publish jobs.dispatch.&lt;serviceName&gt;
     JS-->>GW: 201 {job}
+```
+
+## Detect Edges (scanner assist — synchronous relay)
+
+`POST /api/organize-pdf/detect-edges` peeks at a completed image upload
+**without consuming it** (the same `uploadId` feeds scan-to-pdf job creation
+next) and relays detection to organize-pdf's internal endpoint. Per-IP
+`RATE_LIMIT_DETECT` limiter (default 60/window).
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant GW as api-gateway
+    participant JS as job-service
+    participant Redis
+    participant S3 as MinIO/S3
+    participant OP as organize-pdf<br/>(/internal/v1/detect-edges)
+
+    Client->>GW: POST /api/organize-pdf/detect-edges {uploadId}
+    GW->>JS: Proxy
+    JS->>JS: GinAuth · per-IP RATE_LIMIT_DETECT (ratelimit:detect)
+    JS->>Redis: HGETALL upload:&lt;uploadId&gt; (peek — no releaseUpload)
+    JS->>S3: StatObject(uploads, key) — existence + size
+    JS->>S3: GetObjectRange(key, 0, 512) → image MIME sniff
+    alt missing/unknown uploadId or PDF upload
+        JS-->>Client: 400 INVALID_INPUT
+    else image upload
+        JS->>OP: POST {key} · X-Internal-Token (if INTERNAL_API_TOKEN set) · 15s timeout
+        OP->>S3: StatObject (413 IMAGE_TOO_LARGE if &gt;30MiB)
+        OP->>S3: GetObject → decode (422 UNDECODABLE_IMAGE if not an image / &gt;50MP)
+        OP->>OP: DetectDocumentQuad (downscale→500px · blur · Sobel · Hough · quad)
+        Note over OP: never fails hard — full-image quad, confidence 0 when no document found
+        OP-->>JS: 200 {corners (normalized 0..1), confidence, width, height}
+        alt upstream 4xx
+            JS-->>Client: 422 relayed code (e.g. UNDECODABLE_IMAGE, IMAGE_TOO_LARGE)
+        else upstream down / 5xx / timeout
+            JS-->>Client: 502 DETECTION_UNAVAILABLE
+        else success
+            JS-->>Client: 200 {corners, confidence, width, height}
+        end
+    end
+    Note over Client,JS: uploadId stays valid — Redis session and object untouched.<br/>Client passes corners into scan-to-pdf options.pages[i].corners.
 ```
 
 ## List Jobs by Tool (paginated)

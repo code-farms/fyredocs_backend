@@ -1336,6 +1336,98 @@ paths:
   # ==========================================================================
   # Organize PDF
   # ==========================================================================
+  /api/organize-pdf/detect-edges:
+    post:
+      tags: [Organize PDF]
+      summary: Detect document edges in an uploaded photo
+      description: |
+        Detects the document quad in a completed image upload for the mobile
+        scanner UI. The upload is **peeked at, not consumed** — the same
+        `uploadId` remains valid for a subsequent scan-to-pdf job. job-service
+        synchronously relays the request to the organize-pdf service's internal
+        detection endpoint (pure-Go pipeline; 15 second timeout).
+
+        Corners are normalized `0..1` against the **decoded pixel grid** (EXIF
+        orientation is ignored server-side). When no document is found the
+        response still succeeds with full-image corners and `confidence: 0`.
+        The returned `corners` object can be passed directly into the
+        scan-to-pdf `options.pages[i].corners` field (see `ScanToPdfOptions`).
+
+        Rate-limited per IP at `RATE_LIMIT_DETECT` (default 60 per window).
+      operationId: detectEdges
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+        - GuestToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uploadId]
+              properties:
+                uploadId:
+                  type: string
+                  format: uuid
+                  description: ID of a completed presigned upload (image only — PDF uploads are rejected)
+      responses:
+        "200":
+          description: Edges detected (full-image corners with confidence 0 when no document is found)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/DetectEdgesResult"
+        "400":
+          description: Missing/unknown uploadId, or the upload is a PDF
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      error:
+                        $ref: "#/components/schemas/APIError"
+                        example:
+                          code: INVALID_INPUT
+                          details: Edge detection requires an image upload, not a PDF.
+        "422":
+          description: The image could not be analyzed (upstream error code relayed, e.g. UNDECODABLE_IMAGE, IMAGE_TOO_LARGE)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      error:
+                        $ref: "#/components/schemas/APIError"
+                        example:
+                          code: UNDECODABLE_IMAGE
+                          details: The upload is not a decodable image.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "502":
+          description: Edge detection temporarily unavailable (organize-pdf down, 5xx, or timeout)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      error:
+                        $ref: "#/components/schemas/APIError"
+                        example:
+                          code: DETECTION_UNAVAILABLE
+                          details: Edge detection is temporarily unavailable.
+
   /api/organize-pdf/{tool}:
     post:
       tags: [Organize PDF]
@@ -1344,6 +1436,11 @@ paths:
         Creates a new job to organize a PDF (merge, split, remove pages, etc.).
         The organize-pdf service accepts multipart file uploads or JSON with
         an `uploadId` from a completed presigned multipart upload.
+
+        For `scan-to-pdf`, `options` follows the `ScanToPdfOptions` schema
+        (perspective-warp corners, rotation, enhancement, page size, OCR
+        language). The schema is validated at job creation — violations return
+        400 with error code `INVALID_OPTIONS`.
       operationId: createOrganizePdfJob
       security:
         - BearerAuth: []
@@ -2906,6 +3003,119 @@ components:
           type: integer
           description: Expected number of parts
 
+    # -- Scanner Schemas (scan-to-pdf + detect-edges) --
+    NormalizedPoint:
+      type: object
+      required: [x, y]
+      description: A point normalized to [0, 1] against the decoded pixel grid
+      properties:
+        x:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.04
+        y:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.06
+
+    DocumentCorners:
+      type: object
+      required: [tl, tr, br, bl]
+      description: |
+        Normalized document quad. All four corners must be present (or the
+        object omitted entirely). Coordinates are relative to the DECODED
+        pixel grid — EXIF orientation is ignored server-side, so clients must
+        bake orientation into the pixels before upload.
+      properties:
+        tl:
+          $ref: "#/components/schemas/NormalizedPoint"
+        tr:
+          $ref: "#/components/schemas/NormalizedPoint"
+        br:
+          $ref: "#/components/schemas/NormalizedPoint"
+        bl:
+          $ref: "#/components/schemas/NormalizedPoint"
+
+    ScanToPdfOptions:
+      type: object
+      description: |
+        Options for scan-to-pdf jobs (all fields optional, backward
+        compatible). Validated by job-service at job creation — violations
+        return 400 INVALID_OPTIONS. Unknown fields are ignored; string enums
+        are case-insensitive. The worker re-clamps values defensively and
+        never fails a job on a bad enum (it degrades to the default).
+      properties:
+        ocr:
+          type: boolean
+          default: false
+          description: Produce a searchable PDF via Tesseract
+        language:
+          type: string
+          enum: [eng, deu, fra, spa, hin]
+          default: eng
+          description: Tesseract OCR language (whitelist matches the installed language packs)
+        pageSize:
+          type: string
+          enum: ["", auto, a4, letter, id]
+          default: auto
+          description: |
+            PDF page size. "auto" (default) sizes each page to its image;
+            "id" is the ISO ID-1 card format (85.6×54 mm). IGNORED on the OCR
+            path — Tesseract emits image-sized pages.
+        enhance:
+          type: string
+          enum: ["", none, grayscale, bw, color-boost]
+          description: Image enhancement; "bw" applies an adaptive-threshold scan look
+        pages:
+          type: array
+          maxItems: 50
+          description: Per-page directives, index-aligned with uploadIds; each entry optional
+          items:
+            type: object
+            properties:
+              corners:
+                $ref: "#/components/schemas/DocumentCorners"
+              rotation:
+                type: integer
+                enum: [0, 90, 180, 270]
+                default: 0
+                description: Clockwise rotation, applied after the perspective warp
+      example:
+        ocr: true
+        language: eng
+        pageSize: a4
+        enhance: bw
+        pages:
+          - corners:
+              tl: { x: 0.04, y: 0.06 }
+              tr: { x: 0.97, y: 0.05 }
+              br: { x: 0.96, y: 0.95 }
+              bl: { x: 0.05, y: 0.94 }
+            rotation: 90
+
+    DetectEdgesResult:
+      type: object
+      description: Detected document quad for an uploaded photo
+      properties:
+        corners:
+          $ref: "#/components/schemas/DocumentCorners"
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Detection confidence; 0 with full-image corners when no document is found
+          example: 0.83
+        width:
+          type: integer
+          description: Decoded image width in pixels
+          example: 3024
+        height:
+          type: integer
+          description: Decoded image height in pixels
+          example: 4032
+
     # -- Job Schemas --
     CreateJobRequest:
       type: object
@@ -2926,6 +3136,8 @@ components:
           additionalProperties: true
           description: |
             Tool-specific options (varies by tool type).
+            For scan-to-pdf: see the ScanToPdfOptions schema (validated at job
+            creation; violations return 400 INVALID_OPTIONS).
             For watermark-pdf:
               - type: "text" | "image" (default: "text")
               - text: string (watermark text, used when type=text)

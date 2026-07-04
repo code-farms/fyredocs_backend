@@ -36,6 +36,85 @@ func TestOCRMaxWorkers(t *testing.T) {
 	}
 }
 
+func TestComputeSafeDPI(t *testing.T) {
+	tests := []struct {
+		name      string
+		w, h      float64
+		requested int
+		maxDim    int
+		want      int
+	}{
+		// Letter page (612x792 pts) at 300 DPI → 3300px longest, under 10000 cap.
+		{"small page keeps requested", 612, 792, 300, 10000, 300},
+		// Huge banner page: 20000pt longest at 300 DPI → ~83000px, far over cap.
+		// safe = floor(10000*72/20000) = 36.
+		{"huge page capped", 20000, 5000, 300, 10000, 36},
+		// Requested already below the fit DPI → unchanged.
+		{"requested below cap unchanged", 5000, 5000, 72, 10000, 72},
+		// Unknown dimensions → requested unchanged.
+		{"zero dims unchanged", 0, 0, 300, 10000, 300},
+		// Non-positive maxDim → requested unchanged.
+		{"no cap unchanged", 20000, 5000, 300, 0, 300},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := computeSafeDPI(tt.w, tt.h, tt.requested, tt.maxDim); got != tt.want {
+				t.Errorf("computeSafeDPI(%v,%v,%d,%d) = %d, want %d", tt.w, tt.h, tt.requested, tt.maxDim, got, tt.want)
+			}
+		})
+	}
+
+	// A capped result must keep the longest edge within maxDim pixels.
+	t.Run("cap keeps edge within bound", func(t *testing.T) {
+		w, h, requested, maxDim := 20000.0, 5000.0, 300, 10000
+		dpi := computeSafeDPI(w, h, requested, maxDim)
+		longestPx := int(w / 72.0 * float64(dpi))
+		if longestPx > maxDim {
+			t.Errorf("longest edge %dpx exceeds maxDim %d at dpi %d", longestPx, maxDim, dpi)
+		}
+	})
+}
+
+func TestResolveLanguage(t *testing.T) {
+	tests := []struct {
+		name      string
+		requested string
+		available []string
+		want      string
+	}{
+		{"present uses itself", "fra", []string{"eng", "fra", "spa"}, "fra"},
+		{"missing falls back to eng", "fra", []string{"eng", "spa"}, "eng"},
+		{"missing and no eng uses first", "fra", []string{"spa", "deu"}, "spa"},
+		{"empty available keeps requested", "fra", nil, "fra"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveLanguage(tt.requested, tt.available); got != tt.want {
+				t.Errorf("resolveLanguage(%q,%v) = %q, want %q", tt.requested, tt.available, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOCRMaxImageDim(t *testing.T) {
+	t.Setenv("OCR_MAX_IMAGE_DIM", "5000")
+	if got := ocrMaxImageDim(); got != 5000 {
+		t.Errorf("OCR_MAX_IMAGE_DIM=5000 → %d, want 5000", got)
+	}
+	t.Setenv("OCR_MAX_IMAGE_DIM", "0")
+	if got := ocrMaxImageDim(); got != 10000 {
+		t.Errorf("OCR_MAX_IMAGE_DIM=0 → %d, want default 10000", got)
+	}
+	t.Setenv("OCR_MAX_IMAGE_DIM", "notnum")
+	if got := ocrMaxImageDim(); got != 10000 {
+		t.Errorf("invalid OCR_MAX_IMAGE_DIM → %d, want default 10000", got)
+	}
+	t.Setenv("OCR_MAX_IMAGE_DIM", "")
+	if got := ocrMaxImageDim(); got != 10000 {
+		t.Errorf("unset OCR_MAX_IMAGE_DIM → %d, want default 10000", got)
+	}
+}
+
 func TestProcessFileUnsupportedTool(t *testing.T) {
 	_, err := ProcessFile(context.Background(), uuid.New(), "unknown-tool", []string{"/tmp/test.pdf"}, nil, t.TempDir())
 	if err == nil {

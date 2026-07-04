@@ -44,8 +44,8 @@ curl -X POST http://localhost/api/optimize-pdf/repair-pdf \
 Adds a searchable text layer to scanned PDFs using Tesseract OCR.
 
 **Options:**
-- `language`: OCR language code (default: `eng`)
-- `dpi`: Resolution for conversion (default: `300`)
+- `language`: OCR language code (default: `eng`). Requested language is resolved against the languages actually installed (`tesseract --list-langs`); if the pack is missing it falls back to `eng` (then the first available), so a missing language pack never fails the job.
+- `dpi`: Resolution for conversion (default: `300`). The effective DPI is automatically capped so the longest edge of a rendered page stays within `OCR_MAX_IMAGE_DIM` pixels (default `10000`) — this prevents oversized rasters (e.g. large banner PDFs) from making Tesseract/pdfcpu fail. The size bound wins over resolution, so very large pages may render below the requested DPI.
 
 **Example:**
 ```bash
@@ -116,6 +116,7 @@ AUTH_DENYLIST_ENABLED="true"
 OCR_DEFAULT_LANGUAGE="eng"  # tesseract language code (639-2/T). Per-job options.language accepts ISO 639-1 (e.g. "en","de") — mapped to tesseract codes; unmapped values pass through, falling back to "eng"
 OCR_DEFAULT_DPI="300"       # rasterization DPI for OCR; overridable per-job via options.dpi
 OCR_MAX_WORKERS=""         # OCR page-pool cap; unset = min(NumCPU,4). Auto-sized by deploy.sh's 70% budget (see below); pin only to override
+OCR_MAX_IMAGE_DIM="10000"  # max px for the longest edge of a rasterized OCR page; effective DPI is capped to keep images within this bound so oversized pages don't fail tesseract
 ```
 
 ### Scaling / memory bounding
@@ -149,7 +150,7 @@ Caching is **best-effort**: any cache-path error (Redis down, stat/copy failure,
 - `poppler-utils` - PDF to image conversion (pdftoppm)
 - `ghostscript` - PDF repair and rebuild
 - `tesseract-ocr` - OCR engine
-- `tesseract-ocr-data-eng` - English language data
+- `tesseract-ocr-data-eng` - English language data (only English is installed; other requested languages fall back to English via `resolveLanguage`)
 
 ## Architecture
 

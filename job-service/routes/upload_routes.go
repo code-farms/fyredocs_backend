@@ -67,7 +67,17 @@ func SetupRouter(r *gin.Engine) {
 		convertTo.DELETE("/:tool/:id", handlers.DeleteJobByID)
 		convertTo.GET("/:tool/:id/download", handlers.DownloadJobFile)
 
+		// Edge detection for the mobile scanner: synchronous, cheap relay to
+		// organize-pdf — rate-limited separately from job creation.
+		detectLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
+			RedisClient: redisstore.Client,
+			KeyPrefix:   "ratelimit:detect",
+			MaxRequests: config.GetEnvInt("RATE_LIMIT_DETECT", 60),
+			Window:      window,
+		})
+
 		organizePdf := api.Group("/organize-pdf")
+		organizePdf.POST("/detect-edges", detectLimiter.RateLimitByIP(), handlers.DetectEdges)
 		organizePdf.GET("/:tool", handlers.GetJobsByTool)
 		organizePdf.POST("/:tool", jobCreateLimiter.RateLimitByIP(), handlers.CreateJobFromTool)
 		organizePdf.GET("/:tool/:id", handlers.GetJobByID)

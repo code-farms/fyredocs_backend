@@ -107,8 +107,74 @@ Content-Type: application/json
 | Status | Code | Description |
 |--------|------|-------------|
 | 400 | INVALID_INPUT | Invalid tool, options, or file type |
+| 400 | INVALID_OPTIONS | Options payload fails the per-tool schema (scan-to-pdf) |
 | 401 | UNAUTHORIZED | Not authenticated |
 | 404 | NOT_FOUND | Upload not found |
+
+---
+
+## POST /api/organize-pdf/detect-edges
+
+Detect the document quad in an uploaded photo (mobile scanner assist). Peeks at the upload **without consuming it** — the same `uploadId` remains valid for a subsequent scan-to-pdf job. job-service relays the request synchronously to the organize-pdf service's internal detection endpoint.
+
+**Authentication:** Required (same as other tool routes)
+
+**Rate limit:** per-IP, `RATE_LIMIT_DETECT` (default 60 per window)
+
+### Request
+
+```
+POST /api/organize-pdf/detect-edges
+Content-Type: application/json
+```
+
+```json
+{
+  "uploadId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| uploadId | string | Yes | ID of a **completed** presigned upload. Image only (JPEG/PNG/WebP) — PDF uploads are rejected |
+
+### Response
+
+**200 OK**
+```json
+{
+  "success": true,
+  "message": "Edges detected",
+  "data": {
+    "corners": {
+      "tl": {"x": 0.04, "y": 0.06},
+      "tr": {"x": 0.97, "y": 0.05},
+      "br": {"x": 0.96, "y": 0.95},
+      "bl": {"x": 0.05, "y": 0.94}
+    },
+    "confidence": 0.83,
+    "width": 3024,
+    "height": 4032
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| corners | object | Detected document quad — `tl`/`tr`/`br`/`bl`, each `{x, y}` normalized `0..1` against the decoded pixel grid |
+| confidence | number | Detection confidence `0..1`. When no document is found, full-image corners with `confidence: 0` are returned (still 200) |
+| width / height | integer | Decoded image dimensions in pixels |
+
+The `corners` value can be passed straight into the scan-to-pdf `options.pages[i].corners` field.
+
+### Errors
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 400 | INVALID_INPUT | Missing or unknown uploadId, or the upload is a PDF |
+| 422 | UNDECODABLE_IMAGE / IMAGE_TOO_LARGE | Upstream rejection relayed from organize-pdf (not a decodable image / object over 30 MiB or 50 MP) |
+| 429 | RATE_LIMIT_EXCEEDED | Too many detect requests from this IP |
+| 502 | DETECTION_UNAVAILABLE | organize-pdf down, 5xx, or 15s timeout |
 
 ---
 
@@ -452,37 +518,61 @@ This reorders a 5-page PDF so page 3 becomes first, page 1 becomes second, etc.
 
 ### scan-to-pdf
 
-Convert images to a PDF document, with optional OCR.
+Convert images to a PDF document, with optional per-page perspective correction (crop to detected corners), rotation, enhancement, page sizing, and OCR.
 
-**Input:** Multiple image files (use `uploadIds`)
+**Input:** Multiple image files (use `uploadIds`; each ≤ 50 megapixels)
 
 **Output:** Single PDF
 
-**Conversion Engine:** pdfcpu (image import) + Tesseract (when `ocr=true`)
+**Conversion Engine:** pure-Go imaging pipeline (warp/rotate/enhance) + pdfcpu (image import) + Tesseract (when `ocr=true`)
 
 **Supported Image Formats:** `.png`, `.jpg`, `.jpeg`, `.webp`
 
-**Options:**
+**Options** (all optional — `{"ocr":true}` alone remains valid; the schema is validated at job creation and violations return 400 `INVALID_OPTIONS`):
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | ocr | boolean | false | Apply OCR to make text searchable |
+| language | string | `"eng"` | OCR language — one of `eng`, `deu`, `fra`, `spa`, `hin` |
+| pageSize | string | `"auto"` | PDF page size — `""`/`"auto"` (page = image size), `"a4"`, `"letter"`, `"id"` (ISO ID-1 card, 85.6×54 mm). **Ignored when `ocr=true`** (Tesseract emits image-sized pages) |
+| enhance | string | — | `""`/`"none"`, `"grayscale"`, `"bw"` (adaptive-threshold scan look), `"color-boost"` |
+| pages | array | — | Per-page directives, **index-aligned with `uploadIds`** (max 50 entries); each entry optional |
+| pages[i].corners | object | — | Normalized document quad to perspective-warp: `tl`/`tr`/`br`/`bl`, each `{x, y}` in `[0, 1]`. All four corners or omitted. Get suggested corners from `POST /api/organize-pdf/detect-edges` |
+| pages[i].rotation | integer | 0 | Clockwise rotation applied after the warp — `0`, `90`, `180`, or `270` |
 
 **Request Example:**
 ```json
 {
   "uploadIds": [
     "image-upload-1",
-    "image-upload-2",
-    "image-upload-3"
+    "image-upload-2"
   ],
   "options": {
-    "ocr": true
+    "ocr": true,
+    "language": "eng",
+    "pageSize": "a4",
+    "enhance": "bw",
+    "pages": [
+      {
+        "corners": {
+          "tl": {"x": 0.04, "y": 0.06},
+          "tr": {"x": 0.97, "y": 0.05},
+          "br": {"x": 0.96, "y": 0.95},
+          "bl": {"x": 0.05, "y": 0.94}
+        },
+        "rotation": 90
+      },
+      {}
+    ]
   }
 }
 ```
 
-**Note:** Images are added to the PDF in the order provided. Each image becomes one page.
+**Notes:**
+- Images are added to the PDF in the order provided. Each image becomes one page. PDF inputs pass through preprocessing untouched.
+- Per image the worker runs: decode → warp to `corners` (if present) → rotate → enhance → re-encode (PNG for `bw`, JPEG q92 otherwise) → pdfcpu import at the requested page size.
+- **EXIF contract:** the server ignores EXIF orientation — `corners` and `rotation` are relative to the **decoded pixel grid**. Clients must bake EXIF orientation into the pixels before uploading.
+- Unknown option fields are ignored; string enums are case-insensitive. The worker re-clamps values defensively and never fails a job on a bad enum — it degrades to the default.
 
 ---
 

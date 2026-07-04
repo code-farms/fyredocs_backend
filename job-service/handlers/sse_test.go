@@ -8,7 +8,54 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"fyredocs/shared/natsconn"
+	"fyredocs/shared/queue"
 )
+
+func TestBuildSSEPayload(t *testing.T) {
+	t.Run("failed event includes failureReason", func(t *testing.T) {
+		p := buildSSEPayload(queue.JobEvent{
+			JobID:         "job-1",
+			EventType:     "JobFailed",
+			Progress:      0,
+			ToolType:      "ocr-pdf",
+			FailureReason: "[CONVERSION_FAILED] failed to process page 1",
+		})
+		if p["status"] != "JobFailed" {
+			t.Errorf("status = %v, want JobFailed", p["status"])
+		}
+		if p["failureReason"] != "[CONVERSION_FAILED] failed to process page 1" {
+			t.Errorf("failureReason = %v, want the backend reason", p["failureReason"])
+		}
+	})
+
+	t.Run("non-failed event omits failureReason and zero fileSize", func(t *testing.T) {
+		p := buildSSEPayload(queue.JobEvent{
+			JobID:     "job-2",
+			EventType: "JobProgress",
+			Progress:  40,
+			ToolType:  "ocr-pdf",
+		})
+		if _, ok := p["failureReason"]; ok {
+			t.Error("failureReason should be omitted when empty")
+		}
+		if _, ok := p["fileSize"]; ok {
+			t.Error("fileSize should be omitted when zero")
+		}
+	})
+
+	t.Run("completed event includes fileSize when set", func(t *testing.T) {
+		p := buildSSEPayload(queue.JobEvent{
+			JobID:     "job-3",
+			EventType: "JobCompleted",
+			Progress:  100,
+			ToolType:  "ocr-pdf",
+			FileSize:  12345,
+		})
+		if p["fileSize"] != int64(12345) {
+			t.Errorf("fileSize = %v, want 12345", p["fileSize"])
+		}
+	})
+}
 
 func TestSSEJobUpdates_MissingJobID(t *testing.T) {
 	gin.SetMode(gin.TestMode)

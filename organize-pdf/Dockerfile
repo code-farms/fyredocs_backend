@@ -40,10 +40,16 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # This service only uses pdfcpu (Go library) and Tesseract — no LibreOffice needed.
 FROM alpine:3.19
 
+# Tesseract language packs match the scan-to-pdf `language` whitelist
+# (eng/deu/fra/spa/hin) enforced in job-service and processing_scan.go.
 RUN apk add --no-cache \
     ca-certificates \
     tesseract-ocr \
     tesseract-ocr-data-eng \
+    tesseract-ocr-data-deu \
+    tesseract-ocr-data-fra \
+    tesseract-ocr-data-spa \
+    tesseract-ocr-data-hin \
     && rm -rf /var/cache/apk/*
 
 RUN adduser -D -u 10001 appuser

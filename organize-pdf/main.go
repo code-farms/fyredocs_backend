@@ -20,6 +20,7 @@ import (
 	"fyredocs/shared/storage"
 	"fyredocs/shared/telemetry"
 
+	"organize-pdf/internal/httpapi"
 	"organize-pdf/internal/models"
 	"organize-pdf/internal/worker"
 	"organize-pdf/processing"
@@ -110,6 +111,9 @@ func main() {
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
+
+	// Internal service-to-service endpoints (edge detection for the scanner).
+	httpapi.RegisterInternalRoutes(r, store, os.Getenv("INTERNAL_API_TOKEN"))
 
 	r.GET("/readyz", func(c *gin.Context) {
 		checks := gin.H{}

@@ -23,6 +23,8 @@ The Job Service is the central orchestration service for all file processing ope
 7. **Guest Job Tracking** -- Manage guest tokens in Redis to allow anonymous users to track their jobs
 8. **Tool-to-Service Routing** -- Use a centralized `ToolServiceMap` to dispatch jobs to the correct worker service
 9. **MIME-Type Validation** -- Validate uploaded file content types using `http.DetectContentType()` over the object's first 512 bytes (read via a ranged GET) against an allowlist per tool category (pdf, word, excel, ppt, image)
+10. **Per-Tool Options Validation** -- Validate tool-specific `options` payloads against a schema at the public boundary (currently `scan-to-pdf`); rejections return 400 `INVALID_OPTIONS`
+11. **Edge Detection Relay** -- `POST /api/organize-pdf/detect-edges` peeks at a completed image upload (without consuming it) and synchronously relays detection to organize-pdf's internal endpoint for the mobile scanner UI
 
 ## Presigned Upload Protocol
 
@@ -77,6 +79,8 @@ Job Service :8081  (control plane only — no file bytes)
 | `handlers/jobs.go` | Job CRUD, presigned download redirect, job history |
 | `handlers/sse.go` | SSE endpoint for real-time job status updates via NATS JetStream |
 | `handlers/uploads.go` | Presigned multipart upload protocol (init, parts, complete, status, abort, 410 chunk stub) |
+| `handlers/tool_options.go` | Per-tool options schema validation (`validateToolOptions`; currently scan-to-pdf) |
+| `handlers/detect.go` | `DetectEdges` — synchronous relay to organize-pdf `/internal/v1/detect-edges` |
 | `handlers/storage.go` | `ObjectStore` interface (narrow slice of `shared/storage.Client`) + boot-time injection |
 | `handlers/auth.go` | Extract authenticated user ID from auth context |
 | `internal/routing/routing.go` | `ToolServiceMap` -- single source of truth for tool-to-service mapping |
@@ -151,6 +155,56 @@ These are registered under `/api/convert-from-pdf`, `/api/convert-to-pdf`, `/api
 
 Where `{category}` is one of: `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`.
 
+### Detect Edges (organize-pdf group only)
+
+| Method | Path | Handler | Description |
+|--------|------|---------|-------------|
+| POST | `/api/organize-pdf/detect-edges` | `DetectEdges` | Detect the document quad in an uploaded photo for the scanner UI (per-IP `RATE_LIMIT_DETECT` limiter, default 60/window) |
+
+Registered in `routes/upload_routes.go` with its own IP rate limiter (`ratelimit:detect`). Auth is the same as the other tool routes (JWT or guest token via the shared middleware). Request body: `{"uploadId": "..."}` — the id of a **completed** presigned upload that sniffs as an image (PDF uploads are rejected with 400). The handler **peeks** at the upload without consuming it (no `releaseUpload`), so the same `uploadId` remains valid for the subsequent scan-to-pdf job creation, then synchronously relays `{key}` to organize-pdf's `POST /internal/v1/detect-edges` (base URL `ORGANIZE_PDF_URL`, 15s timeout, `X-Internal-Token` header when `INTERNAL_API_TOKEN` is set).
+
+**Success (200):**
+```json
+{
+  "success": true,
+  "message": "Edges detected",
+  "data": {
+    "corners": {"tl":{"x":0.04,"y":0.06},"tr":{"x":0.97,"y":0.05},"br":{"x":0.96,"y":0.95},"bl":{"x":0.05,"y":0.94}},
+    "confidence": 0.83,
+    "width": 3024,
+    "height": 4032
+  }
+}
+```
+Corners are normalized `0..1` against the decoded pixel grid. When no document is found, organize-pdf returns full-image corners with `confidence: 0` — still a 200.
+
+**Errors:**
+
+| Error Code | HTTP Status | Condition |
+|------------|-------------|-----------|
+| `INVALID_INPUT` | 400 | Missing/unknown `uploadId`, or the upload is a PDF |
+| relayed upstream code (e.g. `UNDECODABLE_IMAGE`, `IMAGE_TOO_LARGE`) | 422 | organize-pdf rejected the image (4xx relayed through) |
+| `DETECTION_UNAVAILABLE` | 502 | organize-pdf down, 5xx, or 15s timeout |
+| `RATE_LIMIT_EXCEEDED` | 429 | More than `RATE_LIMIT_DETECT` requests per IP per window |
+
+### Per-Tool Options Validation
+
+`CreateJobFromTool` calls `validateToolOptions(toolType, options)` (`handlers/tool_options.go`) **before** `consumeUpload`. Options were historically an opaque passthrough; scan-to-pdf is the first tool with a schema'd payload. Tools without a schema (and empty options) pass through unchanged; job-service owns its own copy of the shape — no shared DTOs across services. Workers still re-clamp defensively on their side (a bad enum never fails a job downstream).
+
+**scan-to-pdf schema** (all fields optional; unknown fields ignored for forward compatibility; string enums case-insensitive):
+
+| Field | Rule |
+|-------|------|
+| `ocr` | boolean |
+| `language` | whitelist: `eng`, `deu`, `fra`, `spa`, `hin` |
+| `pageSize` | whitelist: `""`, `auto`, `a4`, `letter`, `id` |
+| `enhance` | whitelist: `""`, `none`, `grayscale`, `bw`, `color-boost` |
+| `pages` | max 50 entries (index-aligned with `uploadIds`) |
+| `pages[i].rotation` | one of `0`, `90`, `180`, `270` |
+| `pages[i].corners` | all four of `tl`/`tr`/`br`/`bl` or omitted; each with numeric `x`,`y` in `[0, 1]` |
+
+Any violation (including unparseable JSON) is rejected with 400 `INVALID_OPTIONS`.
+
 ### Job API Response
 
 All job endpoints (`CreateJobFromTool`, `GetJobByID`, `GetJobsByTool`, `GetJobHistory`) return a `jobResponse` wrapper that includes the original `ProcessingJob` fields plus a computed `outputFileName` field. This field contains the expected output file name with the correct extension for the tool type (e.g., `"photo.pdf"` for an image-to-pdf job with input `"photo.jpeg"`, or `"report.docx"` for pdf-to-word). Frontend clients should use `outputFileName` for display and download naming.
@@ -173,7 +227,7 @@ The SSE endpoint creates an ephemeral NATS JetStream consumer on the `JOBS_EVENT
 | Event | Description |
 |-------|-------------|
 | `connected` | Initial connection confirmation with jobId |
-| `job-update` | Job status change with jobId, status, progress, toolType |
+| `job-update` | Job status change with jobId, status, progress, toolType. Includes `fileSize` when non-zero (completed jobs) and `failureReason` when non-empty (failed jobs), so clients can show the real failure reason instead of a generic message |
 | `done` | Job completed or failed; stream will close |
 | `error` | Error condition (e.g., event stream unavailable) |
 
@@ -301,6 +355,7 @@ CREATE INDEX idx_file_metadata_job_id ON file_metadata(job_id);
 | `guest:<token>:jobs` | Set | `GUEST_JOB_TTL` | Job IDs belonging to a guest session |
 | `ratelimit:upload:<ip>` | ZSet | Rate limit window | Upload rate limit counter |
 | `ratelimit:jobcreate:<ip>` | ZSet | Rate limit window | Job-creation rate limit counter (`RATE_LIMIT_JOB_CREATE`, default 20/min) |
+| `ratelimit:detect:<ip>` | ZSet | Rate limit window | Detect-edges rate limit counter (`RATE_LIMIT_DETECT`, default 60/window) |
 | `idempotency:<key>` | String | 10 minutes | Maps idempotency key to job ID for deduplication |
 
 ## Sequence Diagrams
@@ -486,6 +541,7 @@ sequenceDiagram
 | `INVALID_INPUT` | 400 | File type mismatch for tool (e.g., non-PDF for pdf-to-word) |
 | `INVALID_INPUT` | 400 | File MIME content type (sniffed from the object's first 512 bytes) does not match the expected type for the tool |
 | `INVALID_INPUT` | 400 | Uploaded object missing from the uploads bucket (upload never completed) |
+| `INVALID_OPTIONS` | 400 | `options` payload fails the per-tool schema (scan-to-pdf: bad JSON, non-whitelisted language/pageSize/enhance, >50 pages entries, invalid rotation, partial corners, coordinates outside [0,1]) |
 | `FILE_TOO_LARGE` | 413 | File size exceeds plan limit from `X-User-Plan-Max-File-MB` (direct multipart path; default 10 MB) |
 | `TOO_MANY_FILES` | 400 | Number of files exceeds plan limit from `X-User-Plan-Max-Files` (default 5 files) |
 | `RATE_LIMIT_EXCEEDED` | 429 | More than `RATE_LIMIT_JOB_CREATE` job creations per IP per window |
@@ -569,7 +625,10 @@ The service fails fast at boot if object storage is misconfigured or the buckets
 | `PRO_JOB_TTL` | `720h` (30d) | Pro plan user job expiration |
 | `RATE_LIMIT_UPLOAD` | `30` | Upload-endpoint rate limit per IP per window |
 | `RATE_LIMIT_JOB_CREATE` | `20` | Job-creation rate limit per IP per window |
+| `RATE_LIMIT_DETECT` | `60` | Detect-edges rate limit per IP per window |
 | `RATE_LIMIT_WINDOW` | `60s` | Rate limit time window |
+| `ORGANIZE_PDF_URL` | `http://organize-pdf:8084` | Base URL for the synchronous detect-edges relay to organize-pdf |
+| `INTERNAL_API_TOKEN` | `""` | Optional shared secret sent as `X-Internal-Token` on internal calls to organize-pdf (organize-pdf verifies it when set on its side) |
 | `TRUSTED_PROXIES` | `127.0.0.1,::1` | Trusted proxy IP addresses |
 | `AUTH_DENYLIST_ENABLED` | `true` | Enable token denylist |
 | `AUTH_DENYLIST_PREFIX` | `denylist:jwt` | Redis key prefix for denylist |

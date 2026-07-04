@@ -140,6 +140,12 @@ func CreateJobFromTool(c *gin.Context) {
 		}
 
 		optionsRaw = string(uploadReq.Options)
+		// Validate before consuming uploads so a rejected request doesn't
+		// burn the same-uploadId idempotency record.
+		if err := validateToolOptions(toolType, optionsRaw); err != nil {
+			response.BadRequest(c, "INVALID_OPTIONS", err.Error())
+			return
+		}
 
 		for _, uploadID := range uploadIDs {
 			consumed, err := consumeUpload(c.Request.Context(), toolType, uploadID)
@@ -186,6 +192,10 @@ func CreateJobFromTool(c *gin.Context) {
 
 		if len(form.Value["options"]) > 0 {
 			optionsRaw = form.Value["options"][0]
+		}
+		if err := validateToolOptions(toolType, optionsRaw); err != nil {
+			response.BadRequest(c, "INVALID_OPTIONS", err.Error())
+			return
 		}
 		originalName = files[0].Filename
 		if toolType == "merge-pdf" {

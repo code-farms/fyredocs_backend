@@ -129,6 +129,54 @@ sequenceDiagram
     Worker->>NATS: ACK
 ```
 
+## Scan to PDF Processing (with image preprocessing)
+
+Each input image runs through the `internal/imaging` preprocessing stage (perspective warp → rotate → enhance) before pdfcpu import. Options arrive validated by job-service; the worker re-clamps defensively and never fails a job on a bad enum (degrades with `slog.Warn`). PDF inputs skip preprocessing untouched.
+
+```mermaid
+sequenceDiagram
+    participant NATS as NATS JetStream
+    participant Worker as organize-pdf worker
+    participant Processing as processing.ProcessFile()
+    participant IMG as internal/imaging
+    participant PC as pdfcpu / Tesseract
+    participant PG as PostgreSQL
+    participant S3 as MinIO / S3
+
+    NATS->>Worker: Fetch message<br/>{toolType: "scan-to-pdf", inputPaths: [image keys], options: {ocr, language, pageSize, enhance, pages[]}}
+
+    Worker->>PG: SET status=processing, progress=20
+    Worker->>S3: Download image keys → scratch/in
+    Worker->>Processing: ProcessFile(ctx, jobId, "scan-to-pdf", [scratch/in/*], options, scratch/out)
+
+    loop each image (pages[i] index-aligned with inputs)
+        Processing->>IMG: Decode (jpeg/png/webp, ≤50MP)
+        opt pages[i].corners present (all 4)
+            Processing->>IMG: Validate quad + perspective warp (homography)
+        end
+        opt pages[i].rotation ∈ {90,180,270}
+            Processing->>IMG: Rotate clockwise (after warp)
+        end
+        opt enhance ∈ {grayscale, bw, color-boost}
+            Processing->>IMG: Enhance (bw = adaptive threshold)
+        end
+        Processing->>Processing: Re-encode (PNG for bw, JPEG q92 otherwise)
+    end
+
+    alt ocr=false
+        Processing->>PC: pdfcpu ImportImagesFile with page-size config<br/>(form:A4 / form:Letter / dim:243 153pt for id · auto = nil)
+    else ocr=true
+        Processing->>PC: tesseract -l &lt;language&gt; → searchable PDF<br/>(pageSize IGNORED — image-sized pages)
+    end
+
+    PC-->>Worker: scratch/out/&lt;jobId&gt;.pdf
+    Worker->>S3: Upload outputs bucket jobs/&lt;jobId&gt;/&lt;jobId&gt;.pdf
+    Worker->>PG: Record output (object key + uploaded size), SET status=completed
+    Worker->>NATS: ACK
+```
+
+Note: `corners`/`rotation` are relative to the **decoded pixel grid** — EXIF orientation is ignored by the Go decoders, so clients bake orientation into pixels before upload.
+
 ## Extract Pages Processing
 
 ```mermaid

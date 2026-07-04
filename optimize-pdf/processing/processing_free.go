@@ -198,6 +198,121 @@ func findGhostscript() (string, error) {
 	return "", fmt.Errorf("ghostscript not found. Install with: apk add ghostscript")
 }
 
+// ocrMaxImageDim returns the maximum allowed pixel length for the longest edge
+// of a rasterized OCR page. Rendering a large page at a high DPI can produce an
+// image big enough to make tesseract fail (and exhaust memory); capping the
+// effective DPI to this bound keeps OCR reliable. Overridable via
+// OCR_MAX_IMAGE_DIM (values < 1 fall back to the default).
+func ocrMaxImageDim() int {
+	const def = 10000
+	if v := os.Getenv("OCR_MAX_IMAGE_DIM"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// computeSafeDPI returns a render resolution that keeps the longest edge of the
+// output image within maxDim pixels, never exceeding requestedDPI. Page
+// dimensions are in PDF points (1 point = 1/72 inch), so pixels = pts/72 * dpi.
+// If page dimensions are unknown (<= 0) or maxDim <= 0, requestedDPI is returned
+// unchanged. The size bound takes precedence over resolution: an extremely large
+// page may be rendered below the requested DPI (down to a floor of 1) so OCR
+// still succeeds rather than failing on an oversized image.
+func computeSafeDPI(widthPts, heightPts float64, requestedDPI, maxDim int) int {
+	longest := widthPts
+	if heightPts > longest {
+		longest = heightPts
+	}
+	if longest <= 0 || maxDim <= 0 {
+		return requestedDPI
+	}
+
+	fitDPI := int(float64(maxDim) * 72.0 / longest)
+	if fitDPI >= requestedDPI {
+		return requestedDPI
+	}
+	if fitDPI < 1 {
+		return 1
+	}
+	return fitDPI
+}
+
+// pdfPageDimensions returns the media-box width and height (in PDF points) of the
+// document's first page by parsing `pdfinfo` output (poppler-utils). It is used
+// only to bound the render DPI, so callers treat errors as non-fatal.
+func pdfPageDimensions(ctx context.Context, inputPath string) (float64, float64, error) {
+	out, err := exec.CommandContext(ctx, "pdfinfo", inputPath).Output()
+	if err != nil {
+		return 0, 0, fmt.Errorf("pdfinfo failed: %w", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(line, "Page size:") {
+			continue
+		}
+		// Example: "Page size:      1224 x 1584 pts (letter)"
+		rest := strings.TrimSpace(strings.TrimPrefix(line, "Page size:"))
+		fields := strings.Fields(rest)
+		if len(fields) < 3 || fields[1] != "x" {
+			break
+		}
+		w, errW := strconv.ParseFloat(fields[0], 64)
+		h, errH := strconv.ParseFloat(fields[2], 64)
+		if errW != nil || errH != nil {
+			break
+		}
+		return w, h, nil
+	}
+	return 0, 0, fmt.Errorf("could not parse page size from pdfinfo output")
+}
+
+// resolveLanguage picks a tesseract language that is actually installed. The
+// requested code is already mapped to tesseract's ISO 639-2 form (e.g. "eng").
+// If it is available it is used as-is; otherwise it falls back to "eng", then to
+// the first available language, and finally to the requested value so tesseract
+// can surface its own error if nothing is installed.
+func resolveLanguage(requested string, available []string) string {
+	if len(available) == 0 {
+		return requested
+	}
+	has := func(lang string) bool {
+		for _, a := range available {
+			if a == lang {
+				return true
+			}
+		}
+		return false
+	}
+	if has(requested) {
+		return requested
+	}
+	if has("eng") {
+		return "eng"
+	}
+	return available[0]
+}
+
+// availableTesseractLangs returns the languages tesseract can OCR with, parsed
+// from `tesseract --list-langs`. Errors yield an empty slice (callers then keep
+// the requested language).
+func availableTesseractLangs(ctx context.Context) []string {
+	out, err := exec.CommandContext(ctx, "tesseract", "--list-langs").CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	var langs []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		// Skip the header line and any blank lines.
+		if line == "" || strings.HasPrefix(line, "List of available languages") {
+			continue
+		}
+		langs = append(langs, line)
+	}
+	return langs
+}
+
 func ocrPDF(ctx context.Context, inputPath string, outputPath string, options map[string]interface{}) (map[string]interface{}, error) {
 	slog.Info("adding OCR layer to PDF", "input", inputPath)
 
@@ -226,6 +341,13 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 		language = mapped
 	}
 
+	// Fall back to an installed language if the requested pack is missing, so a
+	// missing language pack degrades gracefully instead of failing the whole job.
+	if resolved := resolveLanguage(language, availableTesseractLangs(ctx)); resolved != language {
+		slog.Warn("requested OCR language unavailable, falling back", "requested", language, "using", resolved)
+		language = resolved
+	}
+
 	dpi := 150
 	if envDpi := os.Getenv("OCR_DEFAULT_DPI"); envDpi != "" {
 		if parsed, err := strconv.Atoi(envDpi); err == nil && parsed > 0 {
@@ -236,6 +358,17 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 		if parsed, err := strconv.Atoi(dpiStr); err == nil && parsed > 0 {
 			dpi = parsed
 		}
+	}
+
+	// Cap the effective DPI so large pages don't rasterize into images big enough
+	// to make tesseract (and the pdfcpu fallback) fail or exhaust memory.
+	if w, h, err := pdfPageDimensions(ctx, inputPath); err == nil {
+		if safe := computeSafeDPI(w, h, dpi, ocrMaxImageDim()); safe != dpi {
+			slog.Info("capping OCR render DPI to bound image size", "requested", dpi, "using", safe, "widthPts", w, "heightPts", h)
+			dpi = safe
+		}
+	} else {
+		slog.Warn("could not determine PDF page size; using requested DPI", "error", err)
 	}
 
 	tempDir, err := os.MkdirTemp("", "pdf-ocr-*")

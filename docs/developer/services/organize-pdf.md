@@ -9,7 +9,8 @@ The Organize-PDF service provides comprehensive PDF manipulation capabilities us
 **Port:** 8084
 **Bus:** NATS JetStream — pulls from `jobs.dispatch.organize-pdf`, publishes events to `jobs.events.<jobId>.*`, DLQ on `jobs.dlq.organize-pdf`
 **Engine:** [pdfcpu](https://github.com/pdfcpu/pdfcpu) (pure Go, no LibreOffice in this container)
-**OCR (optional):** Tesseract — used by `scan-to-pdf` when `options.ocr = true`
+**OCR (optional):** Tesseract — used by `scan-to-pdf` when `options.ocr = true`; language packs `eng`, `deu`, `fra`, `spa`, `hin` are installed in the runtime image
+**Internal HTTP API:** `POST /internal/v1/detect-edges` (document edge detection for the scanner UI, relayed by job-service)
 
 ## Supported Operations
 
@@ -117,13 +118,29 @@ curl -X POST http://localhost/api/organize-pdf/rotate-pdf \
 ```
 
 ### 7. Scan to PDF
-Converts images to PDF (similar to scanning documents).
+Converts images to PDF (similar to scanning documents), with optional per-page perspective correction, rotation, and enhancement for the mobile document scanner.
 
 **Tool:** `scan-to-pdf`
-**Input:** One or more image files (JPG, PNG, etc.)
+**Input:** One or more image files (JPEG, PNG, WebP; ≤ 50 MP each) — PDF inputs pass through preprocessing untouched
 **Output:** PDF document
-**Options:**
-- `ocr`: Enable OCR for searchable PDF (boolean, requires tesseract)
+**Options** (all optional, backward compatible — `{"ocr":true}` alone still works):
+
+| Option | Type | Default | Values | Description |
+|--------|------|---------|--------|-------------|
+| `ocr` | boolean | `false` | — | Produce a searchable PDF via Tesseract |
+| `language` | string | `eng` | `eng`, `deu`, `fra`, `spa`, `hin` | Tesseract language (`-l <language>`); whitelist matches the installed packs |
+| `pageSize` | string | `auto` | `""`, `auto`, `a4`, `letter`, `id` | PDF page size. `auto` = page matches image size; `id` = ISO ID-1 card (85.6×54 mm) |
+| `enhance` | string | none | `""`, `none`, `grayscale`, `bw`, `color-boost` | Image enhancement. `bw` applies an adaptive-threshold "scan" look |
+| `pages` | array | — | — | Per-page directives, **index-aligned with `uploadIds`**; each entry optional |
+| `pages[i].corners` | object | — | `{tl,tr,br,bl}` each `{x,y}` in `[0,1]` | Normalized document quad to perspective-warp; all four corners or omitted |
+| `pages[i].rotation` | integer | `0` | `0`, `90`, `180`, `270` | Clockwise rotation, applied after the warp |
+
+Per-image preprocessing pipeline (`processing/processing_scan.go`): decode (jpeg/png/webp, ≤ 50 MP) → if corners present: validate + perspective-warp via the pure-Go homography in `internal/imaging` → rotate → enhance → re-encode (PNG for `bw`, JPEG quality 92 otherwise) → pdfcpu `ImportImagesFile` with the page-size import config (`form:A4` / `form:Letter` / `dim:243 153`pt for `id`; `auto` = nil).
+
+**Caveats:**
+- **OCR path ignores `pageSize`** — Tesseract emits image-sized pages.
+- **EXIF contract:** Go image decoding ignores EXIF orientation. `corners` and `rotation` are relative to the **decoded pixel grid**; clients must bake EXIF orientation into the pixels before upload.
+- Options are validated by job-service at job creation (400 `INVALID_OPTIONS`); the worker re-clamps defensively and never fails a job on a bad enum value — it degrades to the default with a `slog.Warn`.
 
 **Example:**
 ```bash
@@ -131,7 +148,7 @@ curl -X POST http://localhost/api/organize-pdf/scan-to-pdf \
   -H "Authorization: Bearer $TOKEN" \
   -F "files=@scan1.jpg" \
   -F "files=@scan2.jpg" \
-  -F 'options={"ocr":true}'
+  -F 'options={"ocr":true,"language":"eng","pageSize":"a4","enhance":"bw","pages":[{"corners":{"tl":{"x":0.04,"y":0.06},"tr":{"x":0.97,"y":0.05},"br":{"x":0.96,"y":0.95},"bl":{"x":0.05,"y":0.94}},"rotation":90}]}'
 ```
 
 ### 8. Watermark PDF
@@ -266,6 +283,48 @@ GET /api/organize-pdf/:tool/:id/download
 ```
 Downloads the processed file once the job is completed.
 
+## Internal API (service-to-service)
+
+### Detect Edges
+```
+POST /internal/v1/detect-edges
+```
+Document edge detection for the scanner UI (`internal/httpapi/detect.go`, registered in `main.go` via `httpapi.RegisterInternalRoutes`). Only reachable on the Docker network — the public gateway never proxies here. job-service relays `POST /api/organize-pdf/detect-edges` to this endpoint.
+
+**Auth:** optional shared secret — when the `INTERNAL_API_TOKEN` env var is set, requests must carry it in the `X-Internal-Token` header (401 otherwise); the check is skipped when unset.
+
+**Request:**
+```json
+{ "bucket": "uploads", "key": "uploads/<uploadId>/<fileName>" }
+```
+`bucket` is optional and defaults to the uploads bucket.
+
+**Response (200, standard envelope):**
+```json
+{
+  "success": true,
+  "message": "Edges detected",
+  "data": {
+    "corners": {"tl":{"x":0.04,"y":0.06},"tr":{"x":0.97,"y":0.05},"br":{"x":0.96,"y":0.95},"bl":{"x":0.05,"y":0.94}},
+    "confidence": 0.83,
+    "width": 3024,
+    "height": 4032
+  }
+}
+```
+Corners are normalized `0..1` against the decoded pixel grid. Detection **never fails hard**: when no document is found it returns the full-image quad with `confidence: 0` (still 200).
+
+**Errors:**
+
+| Status | Code | Condition |
+|--------|------|-----------|
+| 400 | `INVALID_REQUEST` | Missing storage key |
+| 401 | `UNAUTHORIZED` | `INTERNAL_API_TOKEN` set and `X-Internal-Token` missing/wrong |
+| 404 | `OBJECT_NOT_FOUND` | Key not found in the bucket |
+| 413 | `IMAGE_TOO_LARGE` | Object larger than 30 MiB |
+| 422 | `UNDECODABLE_IMAGE` | Object is not a decodable image (or exceeds 50 MP) |
+| 500 | `STORAGE_ERROR` | Object storage read failed |
+
 ## Job Status Flow
 
 1. **pending** - Job created, waiting in queue
@@ -290,6 +349,7 @@ NATS_URL="nats://nats:4222"
 PROCESSING_TIMEOUT="5m"    # honoured via NATS AckWait (pdfcpu ops are fast)
 WORKER_CONCURRENCY="4"     # parallel jobs per container (semaphore-bounded goroutines)
 RESULT_CACHE_TTL_SECONDS="3600"  # result-cache entry TTL (keep <= outputs bucket TTL); 0 disables
+INTERNAL_API_TOKEN=""      # optional shared secret for /internal/v1/* — verifies X-Internal-Token when set (job-service sends the same value)
 ```
 
 ### Object Storage (S3 / MinIO)
@@ -340,10 +400,11 @@ Caching is **best-effort**: any cache-path error (Redis down, stat/copy failure,
 - **gorm.io/gorm** - Database ORM
 - **github.com/redis/go-redis** - Redis client
 - **github.com/golang-jwt/jwt** - JWT handling
+- **golang.org/x/image** - WebP decoding and drawing primitives for the imaging pipeline (direct dependency)
 
 ### System Dependencies
 - **poppler-utils** - PDF utilities (pdftoppm, pdftotext)
-- **tesseract-ocr** - Optional OCR support for scan-to-pdf
+- **tesseract-ocr** - Optional OCR support for scan-to-pdf, with language packs `tesseract-ocr-data-{eng,deu,fra,spa,hin}` installed in the runtime image
 
 ## Architecture
 
@@ -354,6 +415,24 @@ Caching is **best-effort**: any cache-path error (Redis down, stat/copy failure,
 3. **Worker** - Background job processing
 4. **Processing Functions** - PDF operations using pdfcpu
 5. **Database** - Job persistence (PostgreSQL)
+6. **Internal HTTP API** (`internal/httpapi`) - service-to-service endpoints (`/internal/v1/detect-edges`)
+7. **Imaging** (`internal/imaging`) - pure-Go image pipeline shared by scan preprocessing and edge detection
+
+### Internal Package Layout (imaging)
+
+| Package | Files | Purpose |
+|---------|-------|---------|
+| `internal/imaging` | `decode.go` | Image decoding (jpeg/png/webp) with a 50 MP guard |
+| | `geometry.go` | Points/quads, normalized-coordinate validation |
+| | `homography.go` | Pure-Go perspective transform (document warp from a 4-corner quad) |
+| | `enhance.go` | `grayscale`, `bw` (adaptive threshold), `color-boost` enhancement modes |
+| | `resize.go` | Downscaling for the detection pipeline |
+| | `detect.go` | Document quad detection (see pipeline below) |
+| `internal/httpapi` | `detect.go` | `/internal/v1/detect-edges` handler + optional `X-Internal-Token` auth |
+
+### Edge Detection Pipeline (internal/imaging/detect.go)
+
+Pure Go, no OpenCV: downscale to 500 px → grayscale → Gaussian blur → Sobel gradients → percentile threshold → Hough lines → quad intersection + validation. It never fails hard — when no plausible document quad is found it falls back to the full-image quad with confidence 0.
 
 ### Processing Flow
 
@@ -619,7 +698,8 @@ sequenceDiagram
     else organize-pdf (reorder)
         W->>PC: pdfcpu reorder pages [3,1,2,4]
     else scan-to-pdf
-        W->>PC: pdfcpu import images to PDF (+ optional Tesseract OCR layer)
+        W->>W: preprocess images (warp corners → rotate → enhance, internal/imaging)
+        W->>PC: pdfcpu import images to PDF with page-size config (+ optional Tesseract OCR)
     else watermark-pdf
         W->>PC: pdfcpu add text/image watermark
     else protect-pdf
@@ -748,7 +828,7 @@ When retries are exhausted (MaxDeliver reached), the failed job payload is publi
 
 - Page thumbnails for preview
 - Batch processing for multiple documents
-- Advanced OCR with multi-language support
+- Additional OCR language packs beyond eng/deu/fra/spa/hin
 - PDF metadata editing
 - Watermarking support
 - PDF compression options

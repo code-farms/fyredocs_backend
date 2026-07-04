@@ -2,19 +2,16 @@ package processing
 
 import (
 	"archive/zip"
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
-	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
 func mergePDFs(inputPaths []string, outputPath string) error {
@@ -173,60 +170,6 @@ func organizePDF(inputPath string, outputPath string, order string) error {
 	}
 
 	return api.CollectFile(inputPath, outputPath, pageStrings, nil)
-}
-
-func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, options map[string]interface{}) error {
-	slog.Info("converting images to PDF (scan-to-pdf)", "count", len(inputPaths))
-
-	if len(inputPaths) == 0 {
-		return fmt.Errorf("no input images provided")
-	}
-
-	ocr, _ := options["ocr"].(bool)
-	if ocr {
-		return scanToPDFWithOCR(ctx, inputPaths, outputPath)
-	}
-
-	conf := model.NewDefaultConfiguration()
-	return api.ImportImagesFile(inputPaths, outputPath, nil, conf)
-}
-
-func scanToPDFWithOCR(ctx context.Context, inputPaths []string, outputPath string) error {
-	slog.Info("converting images to searchable PDF using OCR")
-
-	if _, err := exec.LookPath("tesseract"); err != nil {
-		return fmt.Errorf("OCR requires tesseract to be installed")
-	}
-
-	tempDir, err := os.MkdirTemp("", "pdf-ocr-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	pdfFiles := make([]string, len(inputPaths))
-	for i, imgPath := range inputPaths {
-		baseName := filepath.Base(imgPath)
-		nameWithoutExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
-		outputBase := filepath.Join(tempDir, fmt.Sprintf("ocr_%d_%s", i, nameWithoutExt))
-
-		cmd := exec.CommandContext(ctx, "tesseract", imgPath, outputBase, "-l", "eng", "pdf")
-		if err := cmd.Run(); err != nil {
-			slog.Warn("OCR failed, falling back to non-OCR", "image", imgPath, "error", err)
-			pdfFile := outputBase + ".pdf"
-			if err := api.ImportImagesFile([]string{imgPath}, pdfFile, nil, nil); err != nil {
-				return fmt.Errorf("failed to process image %s: %w", imgPath, err)
-			}
-			pdfFiles[i] = pdfFile
-		} else {
-			pdfFiles[i] = outputBase + ".pdf"
-		}
-	}
-
-	if len(pdfFiles) == 1 {
-		return copyFile(pdfFiles[0], outputPath)
-	}
-	return api.MergeCreateFile(pdfFiles, outputPath, false, nil)
 }
 
 func rotatePDF(inputPath string, outputPath string, rotation int, applyTo string) error {

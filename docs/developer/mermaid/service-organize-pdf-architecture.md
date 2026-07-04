@@ -17,6 +17,14 @@ graph TB
             RECOVERY["Recovery Middleware"]
             HEALTHZ["/healthz"]
             METRICSEP["/metrics"]
+            DETECTEP["POST /internal/v1/detect-edges<br/>(internal/httpapi · optional X-Internal-Token)"]
+        end
+
+        subgraph Imaging["internal/imaging (pure Go)"]
+            DECODE["decode (jpeg/png/webp · ≤50MP)"]
+            HOMOG["homography<br/>(perspective warp)"]
+            ENHANCE["enhance<br/>(grayscale/bw/color-boost)"]
+            DETECTPIPE["detect<br/>(downscale→500px · blur · Sobel ·<br/>threshold · Hough · quad)"]
         end
 
         subgraph Worker["NATS Worker (goroutine)"]
@@ -35,7 +43,7 @@ graph TB
             EXTRACT["extract-pages (CollectFile)"]
             ORGANIZE["organize-pdf (reorder)"]
             ROTATE["rotate-pdf<br/>(90/180/270 · all/odd/even)"]
-            SCAN["scan-to-pdf (+ optional Tesseract OCR)"]
+            SCAN["scan-to-pdf<br/>(warp/rotate/enhance preprocessing ·<br/>page-size import · optional Tesseract OCR)"]
             WATERMARK["watermark-pdf<br/>(text or image)"]
             PROTECT["protect-pdf"]
             UNLOCK["unlock-pdf"]
@@ -71,7 +79,7 @@ graph TB
     PROC --> PAGENO
 
     DISPATCH -->|Update status| DB_CONN
-    DISPATCH -->|jobs.events.&lt;jobId&gt;.{processing,completed,failed}| EVENTS["JOBS_EVENTS"]
+    DISPATCH -->|"jobs.events.&lt;jobId&gt;.{processing,completed,failed}"| EVENTS["JOBS_EVENTS"]
     DISPATCH -.->|on MaxDeliver| DLQ["jobs.dlq.organize-pdf · JOBS_DLQ · 7d"]
     DB_CONN --> PG[(PostgreSQL)]
     HEALTHZ -->|Ping| Redis[(Redis)]
@@ -80,6 +88,13 @@ graph TB
     STAGE -->|DownloadToFile| MINIO
     STORE -->|UploadFromFile| MINIO
     PROC --> Scratch[(container-local scratch dir<br/>job-&lt;jobId&gt;-* · removed after job)]
+
+    JOBSVC["job-service<br/>(POST /api/organize-pdf/detect-edges relay)"] -->|"POST {bucket?, key}"| DETECTEP
+    DETECTEP -->|GetObject ≤30MiB| MINIO
+    DETECTEP --> DECODE --> DETECTPIPE
+    SCAN --> DECODE
+    SCAN --> HOMOG
+    SCAN --> ENHANCE
 ```
 
 ## Allowed Tool Types

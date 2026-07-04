@@ -526,7 +526,7 @@
                 "forgot-password"
               ]
             },
-            "description": "Request a password reset link. Always returns 200 \u2014 the response is identical whether or not the email is registered. Rate-limited 3/min per IP. When RESEND_API_KEY is unset on the server, the link is logged via slog instead of emailed."
+            "description": "Request a password reset link. Always returns 200 — the response is identical whether or not the email is registered. Rate-limited 3/min per IP. When RESEND_API_KEY is unset on the server, the link is logged via slog instead of emailed."
           },
           "response": []
         },
@@ -644,7 +644,7 @@
     },
     {
       "name": "2. File Upload",
-      "description": "Presigned S3 multipart upload protocol. File bytes go browser \u2192 object storage directly via presigned URLs; the API only brokers the session. Flow: init \u2192 PUT each part to its presigned URL (collect ETags) \u2192 complete \u2192 use uploadId in a job-creation request.",
+      "description": "Presigned S3 multipart upload protocol. File bytes go browser → object storage directly via presigned URLs; the API only brokers the session. Flow: init → PUT each part to its presigned URL (collect ETags) → complete → use uploadId in a job-creation request.",
       "item": [
         {
           "name": "Initialize Upload",
@@ -975,7 +975,7 @@
                 "{{upload_id}}"
               ]
             },
-            "description": "Cancel an in-progress upload: aborts the S3 multipart upload (freeing stored parts) and clears the session. Idempotent \u2014 returns 204 even for unknown/expired sessions."
+            "description": "Cancel an in-progress upload: aborts the S3 multipart upload (freeing stored parts) and clears the session. Idempotent — returns 204 even for unknown/expired sessions."
           },
           "response": [
             {
@@ -3061,7 +3061,7 @@
                 },
                 {
                   "key": "options",
-                  "value": "{\"ocr\":true}",
+                  "value": "{\"ocr\":true,\"language\":\"eng\",\"pageSize\":\"a4\",\"enhance\":\"bw\",\"pages\":[{\"corners\":{\"tl\":{\"x\":0.04,\"y\":0.06},\"tr\":{\"x\":0.97,\"y\":0.05},\"br\":{\"x\":0.96,\"y\":0.95},\"bl\":{\"x\":0.05,\"y\":0.94}},\"rotation\":90}]}",
                   "type": "text"
                 }
               ]
@@ -3077,7 +3077,7 @@
                 "scan-to-pdf"
               ]
             },
-            "description": "Convert images to PDF with optional OCR (requires Tesseract)"
+            "description": "Convert images to PDF with the full scanner options: OCR (Tesseract, languages eng/deu/fra/spa/hin), pageSize (auto/a4/letter/id — ignored when ocr=true), enhance (none/grayscale/bw/color-boost), and per-page corners (normalized 0..1 perspective-warp quad, e.g. from Detect Edges) + rotation (0/90/180/270, clockwise, applied after the warp). pages[] is index-aligned with the input files. All options are optional and validated at job creation (400 INVALID_OPTIONS)."
           },
           "response": [
             {
@@ -3100,7 +3100,7 @@
                     },
                     {
                       "key": "options",
-                      "value": "{\"ocr\":true}",
+                      "value": "{\"ocr\":true,\"language\":\"eng\",\"pageSize\":\"a4\",\"enhance\":\"bw\",\"pages\":[{\"corners\":{\"tl\":{\"x\":0.04,\"y\":0.06},\"tr\":{\"x\":0.97,\"y\":0.05},\"br\":{\"x\":0.96,\"y\":0.95},\"bl\":{\"x\":0.05,\"y\":0.94}},\"rotation\":90}]}",
                       "type": "text"
                     }
                   ]
@@ -3126,6 +3126,89 @@
                 }
               ],
               "body": "{\n  \"success\": true,\n  \"message\": \"Organization job created\",\n  \"data\": {\n    \"id\": \"job_abc123\",\n    \"tool\": \"scan-to-pdf\",\n    \"status\": \"pending\",\n    \"createdAt\": \"2026-03-03T12:00:00Z\"\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Detect Edges",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "pm.test(\"Response indicates success\", function() {",
+                  "    pm.expect(response.success).to.eql(true);",
+                  "});",
+                  "if (response.data && response.data.corners) {",
+                  "    console.log('Detected corners:', JSON.stringify(response.data.corners), 'confidence:', response.data.confidence);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uploadId\": \"{{upload_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/organize-pdf/detect-edges",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "organize-pdf",
+                "detect-edges"
+              ]
+            },
+            "description": "Detect the document quad in a completed image upload (mobile scanner assist). The upload is peeked at, not consumed — the same uploadId stays valid for the subsequent Scan to PDF job. Corners are normalized 0..1 against the decoded pixel grid and can be passed into scan-to-pdf options.pages[i].corners. When no document is found, full-image corners with confidence 0 are returned (still 200). Rate-limited per IP (RATE_LIMIT_DETECT, default 60/window). Errors: 400 INVALID_INPUT (unknown uploadId or PDF upload), 422 relayed upstream code (e.g. UNDECODABLE_IMAGE, IMAGE_TOO_LARGE), 502 DETECTION_UNAVAILABLE."
+          },
+          "response": [
+            {
+              "name": "200 - Edges Detected",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"uploadId\": \"{{upload_id}}\"\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/api/organize-pdf/detect-edges",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "organize-pdf",
+                    "detect-edges"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"message\": \"Edges detected\",\n  \"data\": {\n    \"corners\": {\n      \"tl\": {\"x\": 0.04, \"y\": 0.06},\n      \"tr\": {\"x\": 0.97, \"y\": 0.05},\n      \"br\": {\"x\": 0.96, \"y\": 0.95},\n      \"bl\": {\"x\": 0.05, \"y\": 0.94}\n    },\n    \"confidence\": 0.83,\n    \"width\": 3024,\n    \"height\": 4032\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
             }
           ]
         },

@@ -15,6 +15,25 @@ import (
 	"fyredocs/shared/response"
 )
 
+// buildSSEPayload converts an internal JobEvent into the JSON shape sent to SSE
+// clients. failureReason is included only when present so the frontend can show
+// the real reason on failed jobs instead of a generic message.
+func buildSSEPayload(event queue.JobEvent) gin.H {
+	payload := gin.H{
+		"jobId":    event.JobID,
+		"status":   event.EventType,
+		"progress": event.Progress,
+		"toolType": event.ToolType,
+	}
+	if event.FileSize > 0 {
+		payload["fileSize"] = event.FileSize
+	}
+	if event.FailureReason != "" {
+		payload["failureReason"] = event.FailureReason
+	}
+	return payload
+}
+
 // SSEJobUpdates streams real-time job status updates via Server-Sent Events.
 // Clients connect to GET /api/jobs/:id/events to receive updates for a specific job.
 func SSEJobUpdates(c *gin.Context) {
@@ -93,16 +112,7 @@ func SSEJobUpdates(c *gin.Context) {
 					continue
 				}
 
-				ssePayload := gin.H{
-					"jobId":    event.JobID,
-					"status":   event.EventType,
-					"progress": event.Progress,
-					"toolType": event.ToolType,
-				}
-				if event.FileSize > 0 {
-					ssePayload["fileSize"] = event.FileSize
-				}
-				data, _ := json.Marshal(ssePayload)
+				data, _ := json.Marshal(buildSSEPayload(event))
 				fmt.Fprintf(c.Writer, "event: job-update\ndata: %s\n\n", data)
 				c.Writer.Flush()
 				_ = msg.Ack()
