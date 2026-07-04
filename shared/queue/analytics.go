@@ -11,6 +11,7 @@ import (
 // AnalyticsEvent represents a tracking event for business metrics.
 type AnalyticsEvent struct {
 	EventType string          `json:"eventType"`
+	JobID     string          `json:"jobId,omitempty"`
 	UserID    string          `json:"userId,omitempty"`
 	IsGuest   bool            `json:"isGuest,omitempty"`
 	ToolType  string          `json:"toolType,omitempty"`

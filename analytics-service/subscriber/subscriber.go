@@ -110,8 +110,19 @@ func handleAnalyticsEvent(msg jetstream.Msg) {
 		}
 	}
 
+	// JobID links job.created rows to their job.completed counterparts so the
+	// reliability latency percentiles (processing duration) can be computed.
+	var jobID *uuid.UUID
+	if event.JobID != "" {
+		parsed, err := uuid.Parse(event.JobID)
+		if err == nil {
+			jobID = &parsed
+		}
+	}
+
 	record := models.AnalyticsEvent{
 		EventType:   event.EventType,
+		JobID:       jobID,
 		UserID:      userID,
 		IsGuest:     event.IsGuest,
 		ToolType:    event.ToolType,

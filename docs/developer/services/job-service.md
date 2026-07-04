@@ -281,7 +281,7 @@ Alongside the dispatch event, `job-service` publishes fire-and-forget analytics 
 
 | Event type | When | Payload highlights |
 |------------|------|--------------------|
-| `analytics.events.job.created` | On successful job creation (`publishJobAnalyticsEvent`) | `toolType`, `fileSize`, `isGuest`, `userId?` |
+| `analytics.events.job.created` | On successful job creation (`publishJobAnalyticsEvent`) | `jobId`, `toolType`, `fileSize`, `isGuest`, `userId?` |
 | `analytics.events.plan.limit_hit` | When a plan limit blocks a job (`publishPlanLimitHit`) | `toolType`, `isGuest`, `metadata.limitType` |
 
 These are consumed by analytics-service (see its subscriber). Job **lifecycle** events (`JobProgress`/`JobCompleted`/`JobFailed`) are published by the **workers** to `jobs.events.<jobId>.*` on the `JOBS_EVENTS` stream — job-service only reads those (for the SSE endpoint), it does not publish them.

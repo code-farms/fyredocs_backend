@@ -336,7 +336,7 @@ func CreateJobFromTool(c *gin.Context) {
 		redisstore.Client.Set(c.Request.Context(), redisKey, job.ID.String(), 10*time.Minute)
 	}
 
-	publishJobAnalyticsEvent(c.Request.Context(), "job.created", toolType, userID, totalSize)
+	publishJobAnalyticsEvent(c.Request.Context(), "job.created", job.ID.String(), toolType, userID, totalSize)
 	slog.Info("job queued", "jobId", job.ID, "tool", toolType, "correlationId", correlationID)
 	response.Created(c, "Your file is being processed!", createJobResponse{
 		jobResponse: toJobResponse(job),
@@ -1141,12 +1141,13 @@ func guestToken(c *gin.Context) string {
 	return ""
 }
 
-func publishJobAnalyticsEvent(ctx context.Context, eventType string, toolType string, userID *uuid.UUID, fileSize int64) {
+func publishJobAnalyticsEvent(ctx context.Context, eventType string, jobID string, toolType string, userID *uuid.UUID, fileSize int64) {
 	if natsconn.JS == nil {
 		return
 	}
 	event := queue.AnalyticsEvent{
 		EventType: eventType,
+		JobID:     jobID,
 		ToolType:  toolType,
 		FileSize:  fileSize,
 		IsGuest:   userID == nil,

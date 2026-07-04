@@ -32,7 +32,7 @@ Events are persisted to the `analytics_events` PostgreSQL table for querying.
 | `user.signup` | auth-service | New user registration |
 | `user.login` | auth-service | User login |
 | `plan.changed` | auth-service | User changed subscription plan (metadata: oldPlan, newPlan) |
-| `job.created` | job-service | New processing job created |
+| `job.created` | job-service | New processing job created (carries `jobId` for latency correlation) |
 | `job.completed` | worker services (via JOBS_EVENTS) | Job finished successfully (includes UserID) |
 | `job.failed` | worker services (via JOBS_EVENTS) | Job processing failed (includes UserID) |
 | `plan.limit_hit` | job-service | User hit plan limit (file size or file count) |
@@ -91,6 +91,7 @@ Behaviour by caller:
 | id | UUID | Primary key |
 | event_type | TEXT | Event type (indexed) |
 | user_id | UUID | Optional user ID (indexed) |
+| job_id | UUID | Optional job ID (indexed). Set on `job.created` (and job lifecycle events) so `job.created`↔`job.completed` can be joined to compute processing-duration percentiles. |
 | is_guest | BOOLEAN | Whether the user was a guest |
 | tool_type | TEXT | Tool used (indexed) |
 | plan_name | TEXT | User's plan at time of event |
