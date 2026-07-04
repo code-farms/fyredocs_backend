@@ -696,7 +696,7 @@ sequenceDiagram
 
 ### Structured Error Codes
 
-Failure reasons use structured error codes prefixed in brackets. The `classifyError()` function categorizes failures automatically.
+`classifyError()` categorizes each failure into one of the codes below. The raw error (with its code) is written to the service logs for debugging, while the job's persisted and SSE-published `failure_reason` is a **user-friendly message** (`friendlyMessage()`), so end users never see technical details.
 
 | Code | Meaning |
 |------|---------|
@@ -706,7 +706,7 @@ Failure reasons use structured error codes prefixed in brackets. The `classifyEr
 | `OUTPUT_FAILED` | Failed to write or record output file |
 | `TIMEOUT` | Processing exceeded deadline |
 
-Example: `[TIMEOUT] context deadline exceeded`
+Example — logged (raw): `[TIMEOUT] context deadline exceeded`; shown to the user: `This file took too long to process. Please try again, or use a smaller file.`
 
 ### Processing Errors
 

@@ -257,6 +257,13 @@ func addPageNumbers(inputPath string, outputPath string, options map[string]inte
 	return nil
 }
 
+// signatureWatermarkDesc builds the pdfcpu watermark description for placing a
+// signature image. It uses the unambiguous "scalefactor" key — the abbreviated
+// "sc" prefix is rejected by pdfcpu as ambiguous ("ambiguous parameter prefix").
+func signatureWatermarkDesc(pdfcpuPos string) string {
+	return fmt.Sprintf("pos:%s, scalefactor:0.25, rot:0, opacity:1", pdfcpuPos)
+}
+
 func signPDF(inputPath string, outputPath string, options map[string]interface{}) error {
 	slog.Info("signing PDF", "input", inputPath)
 
@@ -322,7 +329,7 @@ func signPDF(inputPath string, outputPath string, options map[string]interface{}
 		pdfcpuPos = "br"
 	}
 
-	desc := fmt.Sprintf("pos:%s, sc:.25, rot:0, opacity:1", pdfcpuPos)
+	desc := signatureWatermarkDesc(pdfcpuPos)
 
 	wm, err := pdfcpu.ParseImageWatermarkDetails(sigPath, desc, true, types.POINTS)
 	if err != nil {

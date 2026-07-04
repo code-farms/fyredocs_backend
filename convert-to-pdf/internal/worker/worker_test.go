@@ -107,6 +107,23 @@ func TestJobPayloadUnmarshalInvalid(t *testing.T) {
 	}
 }
 
+func TestFriendlyMessage(t *testing.T) {
+	cases := map[string]string{
+		ErrCodeTimeout:          "This file took too long to process. Please try again, or use a smaller file.",
+		ErrCodeUnsupportedTool:  "This operation isn't supported for this file.",
+		ErrCodeConversionFailed: "We couldn't process this file. It may be corrupted, password-protected, or in an unsupported format. Please try a different file.",
+	}
+	for code, want := range cases {
+		if got := friendlyMessage(code); got != want {
+			t.Errorf("friendlyMessage(%q) = %q, want %q", code, got, want)
+		}
+	}
+	// Unknown code falls back to the generic message (never echoes the raw code).
+	if got := friendlyMessage("SOMETHING_ELSE"); got != "Something went wrong while processing your file. Please try again." {
+		t.Errorf("friendlyMessage(unknown) = %q, want generic default", got)
+	}
+}
+
 func TestClassifyError(t *testing.T) {
 	tests := []struct {
 		name string

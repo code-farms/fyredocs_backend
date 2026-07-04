@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -14,6 +15,21 @@ func TestProcessFileNoInputs(t *testing.T) {
 	_, err := ProcessFile(context.Background(), uuid.New(), "merge-pdf", nil, nil, "")
 	if err == nil {
 		t.Error("expected error for no input files")
+	}
+}
+
+func TestSignatureWatermarkDesc(t *testing.T) {
+	desc := signatureWatermarkDesc("br")
+	// Must use the unambiguous "scalefactor" key; the abbreviated "sc:" prefix is
+	// rejected by pdfcpu as an ambiguous parameter prefix.
+	if !strings.Contains(desc, "scalefactor:") {
+		t.Errorf("desc %q should use the unambiguous scalefactor key", desc)
+	}
+	if strings.Contains(desc, "sc:") {
+		t.Errorf("desc %q must not use the ambiguous sc: key", desc)
+	}
+	if !strings.Contains(desc, "pos:br") {
+		t.Errorf("desc %q should include the position", desc)
 	}
 }
 

@@ -78,6 +78,22 @@ func classifyError(err error) string {
 	return ErrCodeConversionFailed
 }
 
+// friendlyMessage maps a structured error code to a user-facing message. The raw
+// error is logged separately (see handleFailure / the unsupported-tool branch),
+// so users never see technical details while operators keep full context in logs.
+func friendlyMessage(code string) string {
+	switch code {
+	case ErrCodeTimeout:
+		return "This file took too long to process. Please try again, or use a smaller file."
+	case ErrCodeUnsupportedTool:
+		return "This operation isn't supported for this file."
+	case ErrCodeConversionFailed:
+		return "We couldn't process this file. It may be corrupted, password-protected, or in an unsupported format. Please try a different file."
+	default:
+		return "Something went wrong while processing your file. Please try again."
+	}
+}
+
 // backoff mirrors the consumer BackOff configuration so that NakWithDelay
 // can supply a sensible delay on each redelivery.
 var backoff = []time.Duration{10 * time.Second, 30 * time.Second, 2 * time.Minute}
@@ -272,7 +288,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 
 	if !cfg.AllowedTools[payload.ToolType] {
 		logger.Warn("unsupported tool", "tool", payload.ToolType, "jobId", payload.JobID)
-		failMsg := fmt.Sprintf("[%s] %s", ErrCodeUnsupportedTool, payload.ToolType)
+		failMsg := friendlyMessage(ErrCodeUnsupportedTool)
 		updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, failMsg)
 		if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
 			publishStatusEvent(cfg.JS, parsed, payload.ToolType, "failed", 0, failMsg)
@@ -523,7 +539,7 @@ func handleFailure(cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err 
 		"error", err,
 	)
 	errCode := classifyError(err)
-	failMsg := fmt.Sprintf("[%s] %v", errCode, err)
+	failMsg := friendlyMessage(errCode)
 	updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, failMsg)
 	if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
 		publishStatusEvent(cfg.JS, parsed, payload.ToolType, "failed", 0, failMsg)

@@ -199,6 +199,10 @@ Stamps a signature image onto a specific page.
 - `page`: 1-indexed page number (default 1)
 - `position`: `"top-left"`, `"top-right"`, `"bottom-left"`, `"bottom-right"`, `"center"` (default)
 
+The pdfcpu watermark description is built by `signatureWatermarkDesc()` using the
+unambiguous `scalefactor` key (the abbreviated `sc` prefix is rejected by pdfcpu as an
+ambiguous parameter prefix).
+
 ### 12. Edit PDF
 
 Adds free-form text annotations to a PDF.
@@ -567,7 +571,7 @@ curl -O http://localhost/api/organize-pdf/merge-pdf/$JOB_ID/download \
 
 ### Structured Error Codes
 
-Failure reasons use structured error codes prefixed in brackets. The `classifyError()` function categorizes failures automatically.
+`classifyError()` categorizes each failure into one of the codes below. The raw error (with its code) is written to the service logs for debugging, while the job's persisted and SSE-published `failure_reason` is a **user-friendly message** (`friendlyMessage()`), so end users never see technical details.
 
 | Code | Meaning |
 |------|---------|
@@ -577,7 +581,7 @@ Failure reasons use structured error codes prefixed in brackets. The `classifyEr
 | `OUTPUT_FAILED` | Failed to write or record output file |
 | `TIMEOUT` | Processing exceeded deadline |
 
-Example: `[TIMEOUT] context deadline exceeded`
+Example — logged (raw): `[TIMEOUT] context deadline exceeded`; shown to the user: `This file took too long to process. Please try again, or use a smaller file.`
 
 ### Common Errors
 - **"no file uploaded"** - No files provided in request
