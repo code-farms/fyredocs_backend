@@ -68,7 +68,7 @@ Auth Service :8086
 | `handlers/password_reset.go` | ForgotPassword, ResetPassword endpoints; magic-link token issuance |
 | `handlers/admin.go` | RevokeUserSessions, RevokeSession (internal API) |
 | `handlers/internal_api.go` | GetUserPlan (internal API) |
-| `handlers/plans.go` | GetAllPlans (public, lists non-anonymous plans) |
+| `handlers/plans.go` | GetAllPlans (public, lists all plans incl. guest) |
 | `internal/token/` | JWT issuance with HS256; AccessToken (8h, includes role) and RefreshToken (7d) |
 | `fyredocs/shared/authverify` | JWT verification, denylist, gin middleware (shared package, replaces the old `internal/authverify` copy) |
 | `internal/email/` | `Mailer` interface, `ResendMailer` (HTTPS API), `NoopMailer` (dev/test) |
@@ -88,7 +88,7 @@ Auth Service :8086
 | POST | `/auth/refresh` | `Refresh` | 10/min per IP | Issue a new access token from a valid refresh cookie (DB-backed rotation) |
 | POST | `/auth/forgot-password` | `ForgotPassword` | 3/min per IP | Issue a single-use reset token and email it; always responds 200 regardless of whether the email is registered |
 | POST | `/auth/reset-password` | `ResetPassword` | 5/min per IP | Consume a reset token, update password hash, revoke every active session for the user |
-| GET | `/auth/plans` | `GetAllPlans` | none | List all non-anonymous subscription plans with limits |
+| GET | `/auth/plans` | `GetAllPlans` | none | List all subscription plans (guest/free/pro) with limits |
 
 ### Authenticated Endpoints
 
@@ -165,10 +165,15 @@ CREATE TABLE subscription_plans (
 
 Three rows are seeded at startup:
 
+These rows are the **single source of truth** for plan limits, served to the frontend via
+`GET /auth/plans` and used for enforcement. `seedPlans` upserts them on boot (updating limit
+columns), so changing the seed/DB propagates. Guest limits come from `shared/config`
+(`GUEST_MAX_FILE_MB` / `GUEST_MAX_FILES`).
+
 | name | max_file_size_mb | max_files_per_job | retention_days |
 |------|------------------|-------------------|----------------|
-| `anonymous` | 10 | 5 | 0 |
-| `free` | 25 | 10 | 7 |
+| `guest` | 20 | 5 | 0 |
+| `free` | 50 | 10 | 7 |
 | `pro` | 500 | 50 | 30 |
 
 ### user_sessions (refresh-token rotation)
@@ -540,7 +545,7 @@ The middleware checks for authentication tokens in this order:
 
 1. **Authorization Header** (`Bearer <token>`) — API clients, mobile apps, testing
 2. **`access_token` Cookie** — primary for browsers (HTTP-only, Secure)
-3. **`guest_token` Cookie** — anonymous users (issued + verified at the gateway)
+3. **`guest_token` Cookie** — guest users (issued + verified at the gateway)
 
 ### Security Features
 
@@ -761,7 +766,7 @@ Returns 204. Side effects: deletes the matching `user_sessions` row, denies the 
 
 ### GET /auth/plans
 
-Returns all non-anonymous plans (`free`, `pro` by default).
+Returns all plans (`guest`, `free`, `pro`).
 
 ### POST /auth/forgot-password
 

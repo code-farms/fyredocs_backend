@@ -13,15 +13,15 @@ import (
 )
 
 func TestLimitForPlan(t *testing.T) {
-	cfg := Config{AnonLimit: 10, FreeLimit: 50, ProLimit: 200}
+	cfg := Config{GuestLimit: 10, FreeLimit: 50, ProLimit: 200}
 	cases := map[string]int{
-		"pro":       200,
-		"PRO":       200,
-		"free":      50,
-		" Free ":    50,
-		"anonymous": 10,
-		"":          10,
-		"garbage":   10,
+		"pro":     200,
+		"PRO":     200,
+		"free":    50,
+		" Free ":  50,
+		"guest":   10,
+		"":        10,
+		"garbage": 10,
 	}
 	for plan, want := range cases {
 		if got := cfg.limitForPlan(plan); got != want {
@@ -107,8 +107,8 @@ func TestMiddlewareSkipsNonAPIRoutes(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer client.Close()
 
-	h, hits := newTestMiddleware(t, Config{Client: client, Window: time.Minute, AnonLimit: 1})
-	// /auth and SPA paths bypass the limiter even when way over the anon limit.
+	h, hits := newTestMiddleware(t, Config{Client: client, Window: time.Minute, GuestLimit: 1})
+	// /auth and SPA paths bypass the limiter even when way over the guest limit.
 	for _, p := range []string{"/auth/login", "/", "/metrics"} {
 		for i := 0; i < 5; i++ {
 			rec := httptest.NewRecorder()
@@ -124,12 +124,12 @@ func TestMiddlewareSkipsNonAPIRoutes(t *testing.T) {
 	}
 }
 
-func TestMiddlewareEnforcesAnonLimitByIP(t *testing.T) {
+func TestMiddlewareEnforcesGuestLimitByIP(t *testing.T) {
 	mr := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer client.Close()
 
-	h, hits := newTestMiddleware(t, Config{Client: client, Window: time.Minute, AnonLimit: 3})
+	h, hits := newTestMiddleware(t, Config{Client: client, Window: time.Minute, GuestLimit: 3})
 
 	do := func() *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -164,7 +164,7 @@ func TestMiddlewareProPlanGetsHigherCeiling(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer client.Close()
 
-	h, _ := newTestMiddleware(t, Config{Client: client, Window: time.Minute, AnonLimit: 1, FreeLimit: 2, ProLimit: 5})
+	h, _ := newTestMiddleware(t, Config{Client: client, Window: time.Minute, GuestLimit: 1, FreeLimit: 2, ProLimit: 5})
 
 	proCtx := authverify.AuthContext{UserID: "pro-user", Plan: "pro"}
 	do := func() int {

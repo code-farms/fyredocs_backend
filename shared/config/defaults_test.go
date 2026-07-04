@@ -89,19 +89,19 @@ func TestStaleMultipartAge(t *testing.T) {
 
 func TestMaxUploadBytes(t *testing.T) {
 	t.Setenv("MAX_UPLOAD_MB", "")
-	if got := MaxUploadBytes(); got != 50*1024*1024 {
-		t.Errorf("default MaxUploadBytes = %d, want 50MiB", got)
+	if got := MaxUploadBytes(); got != 500*1024*1024 {
+		t.Errorf("default MaxUploadBytes = %d, want 500MiB", got)
 	}
 	t.Setenv("MAX_UPLOAD_MB", "100")
 	if got := MaxUploadBytes(); got != 100*1024*1024 {
 		t.Errorf("MaxUploadBytes = %d, want 100MiB", got)
 	}
 	t.Setenv("MAX_UPLOAD_MB", "-5")
-	if got := MaxUploadBytes(); got != 50*1024*1024 {
-		t.Errorf("negative MaxUploadBytes = %d, want fallback 50MiB", got)
+	if got := MaxUploadBytes(); got != 500*1024*1024 {
+		t.Errorf("negative MaxUploadBytes = %d, want fallback 500MiB", got)
 	}
 	t.Setenv("MAX_UPLOAD_MB", "abc")
-	if got := MaxUploadBytes(); got != 50*1024*1024 {
-		t.Errorf("invalid MaxUploadBytes = %d, want fallback 50MiB", got)
+	if got := MaxUploadBytes(); got != 500*1024*1024 {
+		t.Errorf("invalid MaxUploadBytes = %d, want fallback 500MiB", got)
 	}
 }

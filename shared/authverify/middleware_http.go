@@ -5,18 +5,20 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"fyredocs/shared/config"
 )
 
-// anonymousPlan holds the limits applied to requests with no valid token.
-// These mirror the "anonymous" row in the subscription_plans table.
-var anonymousPlan = struct {
-	Name           string
-	MaxFileSizeMB  int
-	MaxFilesPerJob int
-}{
-	Name:           "anonymous",
-	MaxFileSizeMB:  10,
-	MaxFilesPerJob: 5,
+// guestPlanContext returns the limits applied to requests with no valid token.
+// The values come from shared/config, which also seeds the "guest" row in the
+// subscription_plans table — so guest enforcement matches what /auth/plans
+// serves to the frontend (the DB is the source of truth).
+func guestPlanContext() AuthContext {
+	return AuthContext{
+		Plan:               "guest",
+		PlanMaxFileSizeMB:  config.GuestMaxFileSizeMB(),
+		PlanMaxFilesPerJob: config.GuestMaxFilesPerJob(),
+	}
 }
 
 // PlanResolver resolves plan info for a user and enriches the AuthContext.
@@ -31,7 +33,7 @@ type HTTPMiddlewareOptions struct {
 	AccessTokenCookieName string
 	ResolvePlan           PlanResolver
 	// PublicPaths lists URL paths that skip token verification entirely.
-	// Requests to these paths are always treated as anonymous, even if a
+	// Requests to these paths are always treated as guest, even if a
 	// stale access_token cookie is present. This prevents an authentication
 	// deadlock where expired cookies block login/signup/refresh endpoints.
 	PublicPaths []string
@@ -65,12 +67,7 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 
 			// Public paths bypass token verification to prevent stale-cookie deadlock.
 			if _, ok := publicSet[strings.TrimRight(r.URL.Path, "/")]; ok {
-				anonCtx := AuthContext{
-					Plan:               anonymousPlan.Name,
-					PlanMaxFileSizeMB:  anonymousPlan.MaxFileSizeMB,
-					PlanMaxFilesPerJob: anonymousPlan.MaxFilesPerJob,
-				}
-				next.ServeHTTP(w, SetRequestAuth(r, anonCtx))
+				next.ServeHTTP(w, SetRequestAuth(r, guestPlanContext()))
 				return
 			}
 
@@ -118,13 +115,8 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 				return
 			}
 
-			// No token — anonymous request. Apply anonymous plan limits.
-			anonCtx := AuthContext{
-				Plan:               anonymousPlan.Name,
-				PlanMaxFileSizeMB:  anonymousPlan.MaxFileSizeMB,
-				PlanMaxFilesPerJob: anonymousPlan.MaxFilesPerJob,
-			}
-			next.ServeHTTP(w, SetRequestAuth(r, anonCtx))
+			// No token — unauthenticated request. Apply guest plan limits.
+			next.ServeHTTP(w, SetRequestAuth(r, guestPlanContext()))
 		})
 	}
 }

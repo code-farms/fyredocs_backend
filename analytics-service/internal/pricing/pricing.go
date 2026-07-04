@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultPrices   = "anonymous=0,free=0,pro=12"
+	defaultPrices   = "guest=0,free=0,pro=12"
 	defaultCurrency = "USD"
 )
 

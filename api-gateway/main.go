@@ -207,11 +207,11 @@ func main() {
 	// auth middleware so the resolved AuthContext (user ID + plan) is available
 	// for keying; fails open on Redis errors.
 	rateLimit := ratelimit.Middleware(ratelimit.Config{
-		Client:    redisClient,
-		Window:    config.GetEnvDuration("RATE_LIMIT_API_WINDOW", time.Minute),
-		AnonLimit: config.GetEnvInt("RATE_LIMIT_API_ANON", 30),
-		FreeLimit: config.GetEnvInt("RATE_LIMIT_API_FREE", 120),
-		ProLimit:  config.GetEnvInt("RATE_LIMIT_API_PRO", 600),
+		Client:     redisClient,
+		Window:     config.GetEnvDuration("RATE_LIMIT_API_WINDOW", time.Minute),
+		GuestLimit: config.GetEnvInt("RATE_LIMIT_API_GUEST", 30),
+		FreeLimit:  config.GetEnvInt("RATE_LIMIT_API_FREE", 120),
+		ProLimit:   config.GetEnvInt("RATE_LIMIT_API_PRO", 600),
 	})
 
 	// SPA static files and presigned MinIO byte traffic are handled by the

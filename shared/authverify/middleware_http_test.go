@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"fyredocs/shared/config"
 )
 
 func TestExtractBearerToken(t *testing.T) {
@@ -90,14 +92,14 @@ func TestHTTPAuthMiddlewareAnonymousPlanDefaults(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if gotCtx.Plan != "anonymous" {
-		t.Errorf("expected anonymous plan for unauthenticated request, got %q", gotCtx.Plan)
+	if gotCtx.Plan != "guest" {
+		t.Errorf("expected guest plan for unauthenticated request, got %q", gotCtx.Plan)
 	}
-	if gotCtx.PlanMaxFileSizeMB != 10 {
-		t.Errorf("expected PlanMaxFileSizeMB 10 for anonymous, got %d", gotCtx.PlanMaxFileSizeMB)
+	if gotCtx.PlanMaxFileSizeMB != config.GuestMaxFileSizeMB() {
+		t.Errorf("expected PlanMaxFileSizeMB %d for guest, got %d", config.GuestMaxFileSizeMB(), gotCtx.PlanMaxFileSizeMB)
 	}
-	if gotCtx.PlanMaxFilesPerJob != 5 {
-		t.Errorf("expected PlanMaxFilesPerJob 5 for anonymous, got %d", gotCtx.PlanMaxFilesPerJob)
+	if gotCtx.PlanMaxFilesPerJob != config.GuestMaxFilesPerJob() {
+		t.Errorf("expected PlanMaxFilesPerJob %d for guest, got %d", config.GuestMaxFilesPerJob(), gotCtx.PlanMaxFilesPerJob)
 	}
 }
 
@@ -252,8 +254,8 @@ func TestHTTPAuthMiddlewarePublicPathBypassesStaleCookie(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200 for public path with stale cookie, got %d", rec.Code)
 	}
-	if gotCtx.Plan != "anonymous" {
-		t.Errorf("expected anonymous plan on public path, got %q", gotCtx.Plan)
+	if gotCtx.Plan != "guest" {
+		t.Errorf("expected guest plan on public path, got %q", gotCtx.Plan)
 	}
 }
 

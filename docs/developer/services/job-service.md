@@ -20,7 +20,7 @@ The Job Service is the central orchestration service for all file processing ope
 4. **Job Deletion** -- Delete jobs from the database and their objects from the uploads/outputs buckets
 5. **File Download** -- 302-redirect to a presigned GET URL with attachment Content-Disposition and the computed Content-Type
 6. **Job History** -- Return full job history for authenticated users
-7. **Guest Job Tracking** -- Manage guest tokens in Redis to allow anonymous users to track their jobs
+7. **Guest Job Tracking** -- Manage guest tokens in Redis to allow guest users to track their jobs
 8. **Tool-to-Service Routing** -- Use a centralized `ToolServiceMap` to dispatch jobs to the correct worker service
 9. **MIME-Type Validation** -- Validate uploaded file content types using `http.DetectContentType()` over the object's first 512 bytes (read via a ranged GET) against an allowlist per tool category (pdf, word, excel, ppt, image)
 10. **Per-Tool Options Validation** -- Validate tool-specific `options` payloads against a schema at the public boundary (currently `scan-to-pdf`); rejections return 400 `INVALID_OPTIONS`
@@ -109,7 +109,7 @@ Operational notes:
 - `file_metadata.path` values starting with `/` are pre-object-storage legacy filesystem paths — skipped and logged; migrate with `scripts/migrate-files-to-minio.sh`.
 - Logs/metrics ship with the job-service container (`docker compose logs -f job-service`, grep `cleanup`); sweep activity appears in job-service's `/metrics`.
 
-Retention TTL fallbacks (`GUEST_JOB_TTL` 30m, `FREE_JOB_TTL` 7d, `PRO_JOB_TTL` 30d, `UPLOAD_TTL` 30m, `CLEANUP_INTERVAL` 15m, `MULTIPART_ABORT_TTL` 24h, `MAX_UPLOAD_MB` 50) live once in `shared/config/defaults.go`, read by both the handlers and the sweep, so the values cannot drift.
+Retention TTL fallbacks (`GUEST_JOB_TTL` 30m, `FREE_JOB_TTL` 7d, `PRO_JOB_TTL` 30d, `UPLOAD_TTL` 30m, `CLEANUP_INTERVAL` 15m, `MULTIPART_ABORT_TTL` 24h, `MAX_UPLOAD_MB` 500, guest plan `GUEST_MAX_FILE_MB` 20 / `GUEST_MAX_FILES` 5) live once in `shared/config/defaults.go`, read by both the handlers and the sweep, so the values cannot drift.
 
 ### ToolServiceMap (routing.go)
 
@@ -511,7 +511,7 @@ sequenceDiagram
     participant R as Redis
     participant DB as PostgreSQL
 
-    Note over C: No JWT token -- anonymous user
+    Note over C: No JWT token -- guest user
     C->>JS: POST /api/convert-to-pdf/word-to-pdf {uploadId}
     JS->>JS: authUserID() returns nil (guest)
     JS->>DB: INSERT processing_job (user_id=NULL, expires_at=NOW+GUEST_JOB_TTL)
@@ -618,7 +618,7 @@ The service fails fast at boot if object storage is misconfigured or the buckets
 | `S3_REGION` | `us-east-1` | Signing region |
 | `S3_USE_SSL` | `false` | TLS to the internal endpoint |
 | `UPLOAD_PART_SIZE_MB` | `8` | Multipart part size in MiB (clamped to the S3 5 MiB minimum) |
-| `MAX_UPLOAD_MB` | `50` | Server-side hard cap on file size in MB (per-user plan limits are enforced via `X-User-Plan-Max-File-MB` header) |
+| `MAX_UPLOAD_MB` | `500` | Absolute server-side hard cap on file size in MB — must be ≥ the largest plan (pro 500) or that plan is unreachable. Per-plan limits are enforced via the `X-User-Plan-Max-File-MB` header |
 | `UPLOAD_TTL` | `30m` | Upload session expiration (fallback from `shared/config/defaults.go`) |
 | `GUEST_JOB_TTL` | `30m` | Guest job expiration (no user) |
 | `FREE_JOB_TTL` | `168h` (7d) | Free plan user job expiration |
@@ -670,7 +670,7 @@ job-service:
     S3_PUBLIC_ENDPOINT: http://localhost   # the Caddy edge (PUBLIC_ORIGIN)
     S3_ACCESS_KEY: ${S3_ACCESS_KEY}
     S3_SECRET_KEY: ${S3_SECRET_KEY}
-    MAX_UPLOAD_MB: "50"
+    MAX_UPLOAD_MB: "500"
     GUEST_JOB_TTL: "30m"
     FREE_JOB_TTL: "168h"
   depends_on:

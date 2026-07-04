@@ -10,8 +10,8 @@ func TestGetPlanInfoNilClient(t *testing.T) {
 	if info.Plan != "free" {
 		t.Errorf("expected default plan 'free', got %q", info.Plan)
 	}
-	if info.MaxFileMB != 25 {
-		t.Errorf("expected default MaxFileMB 25, got %d", info.MaxFileMB)
+	if info.MaxFileMB != 50 {
+		t.Errorf("expected default MaxFileMB 50, got %d", info.MaxFileMB)
 	}
 	if info.MaxFiles != 10 {
 		t.Errorf("expected default MaxFiles 10, got %d", info.MaxFiles)

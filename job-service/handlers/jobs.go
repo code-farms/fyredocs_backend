@@ -872,29 +872,29 @@ func maxUploadBytes() int64 {
 }
 
 // planMaxFileSizeMB reads the per-plan file size limit from X-User-Plan-Max-File-MB.
-// Falls back to 10MB (anonymous limit) if the header is absent.
+// Falls back to the guest limit if the header is absent.
 func planMaxFileSizeMB(c *gin.Context) int {
 	val := c.GetHeader("X-User-Plan-Max-File-MB")
 	if val == "" {
-		return 10
+		return config.GuestMaxFileSizeMB()
 	}
 	mb, err := strconv.Atoi(val)
 	if err != nil || mb <= 0 {
-		return 10
+		return config.GuestMaxFileSizeMB()
 	}
 	return mb
 }
 
 // planMaxFilesPerJob reads the per-plan file count limit from X-User-Plan-Max-Files.
-// Falls back to 5 (anonymous limit) if the header is absent.
+// Falls back to the guest limit if the header is absent.
 func planMaxFilesPerJob(c *gin.Context) int {
 	val := c.GetHeader("X-User-Plan-Max-Files")
 	if val == "" {
-		return 5
+		return config.GuestMaxFilesPerJob()
 	}
 	n, err := strconv.Atoi(val)
 	if err != nil || n <= 0 {
-		return 5
+		return config.GuestMaxFilesPerJob()
 	}
 	return n
 }

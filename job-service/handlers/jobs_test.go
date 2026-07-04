@@ -299,11 +299,11 @@ func TestClampInt(t *testing.T) {
 }
 
 func TestMaxUploadBytes(t *testing.T) {
-	t.Run("default 50MB", func(t *testing.T) {
+	t.Run("default 500MB", func(t *testing.T) {
 		t.Setenv("MAX_UPLOAD_MB", "")
 		got := maxUploadBytes()
-		if got != 50*1024*1024 {
-			t.Errorf("expected %d, got %d", 50*1024*1024, got)
+		if got != 500*1024*1024 {
+			t.Errorf("expected %d, got %d", 500*1024*1024, got)
 		}
 	})
 
@@ -318,16 +318,16 @@ func TestMaxUploadBytes(t *testing.T) {
 	t.Run("invalid uses default", func(t *testing.T) {
 		t.Setenv("MAX_UPLOAD_MB", "abc")
 		got := maxUploadBytes()
-		if got != 50*1024*1024 {
-			t.Errorf("expected %d, got %d", 50*1024*1024, got)
+		if got != 500*1024*1024 {
+			t.Errorf("expected %d, got %d", 500*1024*1024, got)
 		}
 	})
 
 	t.Run("zero uses default", func(t *testing.T) {
 		t.Setenv("MAX_UPLOAD_MB", "0")
 		got := maxUploadBytes()
-		if got != 50*1024*1024 {
-			t.Errorf("expected %d, got %d", 50*1024*1024, got)
+		if got != 500*1024*1024 {
+			t.Errorf("expected %d, got %d", 500*1024*1024, got)
 		}
 	})
 }

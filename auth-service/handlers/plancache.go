@@ -8,7 +8,7 @@ import (
 	"fyredocs/shared/config"
 )
 
-// Subscription plans are a tiny, rarely-changing set (free/pro/anonymous/…) but
+// Subscription plans are a tiny, rarely-changing set (guest/free/pro/…) but
 // they are read by name on every login, refresh, /me, /profile and internal API
 // call. The database is remote, so each of those lookups costs a full network
 // round-trip. An in-process TTL cache keyed by plan name removes that round-trip

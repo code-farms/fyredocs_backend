@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"fyredocs/shared/config"
 	"fyredocs/shared/database"
 )
 
@@ -71,15 +72,29 @@ func Migrate() {
 	seedPlans()
 }
 
-// seedPlans inserts the default subscription plans if they do not already exist.
-// Uses INSERT ... ON CONFLICT DO NOTHING so it is safe to run on every startup.
+// seedPlans upserts the canonical subscription plans so their limits are the
+// single source of truth in the DB. Runs on every startup: it UPDATES existing
+// rows (so changed limits propagate) and inserts any missing ones. The guest
+// limits come from shared/config so the seeded DB row, the frontend (/auth/plans),
+// and the gateway's guest fallback all agree.
 func seedPlans() {
+	// One-time rename of the legacy "anonymous" plan to "guest".
+	if err := DB.Model(&SubscriptionPlan{}).
+		Where("name = ?", "anonymous").
+		Update("name", "guest").Error; err != nil {
+		slog.Warn("Renaming legacy anonymous plan failed", "error", err)
+	}
+
 	plans := []SubscriptionPlan{
-		{ID: uuid.New(), Name: "anonymous", MaxFileSizeMB: 10, MaxFilesPerJob: 5, RetentionDays: 0},
-		{ID: uuid.New(), Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7},
+		{ID: uuid.New(), Name: "guest", MaxFileSizeMB: config.GuestMaxFileSizeMB(), MaxFilesPerJob: config.GuestMaxFilesPerJob(), RetentionDays: 0},
+		{ID: uuid.New(), Name: "free", MaxFileSizeMB: 50, MaxFilesPerJob: 10, RetentionDays: 7},
 		{ID: uuid.New(), Name: "pro", MaxFileSizeMB: 500, MaxFilesPerJob: 50, RetentionDays: 30},
 	}
-	if err := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&plans).Error; err != nil {
+	// Upsert on the unique plan name: update the limit columns, keep the existing id.
+	if err := DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "name"}},
+		DoUpdates: clause.AssignmentColumns([]string{"max_file_size_mb", "max_files_per_job", "retention_days"}),
+	}).Create(&plans).Error; err != nil {
 		slog.Warn("Plan seeding encountered an error", "error", err)
 	} else {
 		slog.Info("Subscription plans seeded")

@@ -196,14 +196,15 @@ For authenticated requests the gateway reads the user's plan info from **Redis**
 | `X-User-Plan-Max-File-MB` | Redis cache `max_file_mb` | `25` |
 | `X-User-Plan-Max-Files` | Redis cache `max_files` | `10` |
 
-If the Redis key is missing (e.g., cache expired), defaults to the free plan (25 MB, 10 files).
+If the Redis key is missing (e.g., cache expired), defaults to the free plan (50 MB, 10 files).
 
-For anonymous requests (no valid token, no guest token), the gateway forwards anonymous-plan defaults:
+For guest requests (no valid token, no guest token), the gateway forwards guest-plan defaults
+(from `shared/config`: `GUEST_MAX_FILE_MB` / `GUEST_MAX_FILES`, matching the DB `guest` row):
 
 | Header | Default Value |
 |--------|---------------|
-| `X-User-Plan` | `anonymous` |
-| `X-User-Plan-Max-File-MB` | `10` |
+| `X-User-Plan` | `guest` |
+| `X-User-Plan-Max-File-MB` | `20` |
 | `X-User-Plan-Max-Files` | `5` |
 
 These headers are cleared from incoming client requests before proxying (`ClearUserHeaders`) to prevent spoofing.
@@ -635,10 +636,10 @@ All `/api/*` routes pass through a Redis sliding-window limiter
 plan and identity:
 
 - **Key**: `apilimit:{plan}:user:{userID}` for authenticated users,
-  `apilimit:{plan}:ip:{clientIP}` for anonymous/guest requests (client IP taken
+  `apilimit:{plan}:ip:{clientIP}` for guest requests (client IP taken
   from `X-Forwarded-For`, else `RemoteAddr`).
 - **Ceilings per window** (`RATE_LIMIT_API_WINDOW`, default `1m`):
-  `RATE_LIMIT_API_ANON` (30), `RATE_LIMIT_API_FREE` (120), `RATE_LIMIT_API_PRO` (600).
+  `RATE_LIMIT_API_GUEST` (30), `RATE_LIMIT_API_FREE` (120), `RATE_LIMIT_API_PRO` (600).
 - **Excluded**: `/auth/*` (limited by auth-service), `/metrics`, and `/healthz`.
   The SPA and the presigned object routes are served at the Caddy edge and never
   reach the limiter.

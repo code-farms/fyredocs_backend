@@ -17,10 +17,11 @@ type PlanInfo struct {
 	MaxFiles  int    `json:"max_files"`
 }
 
-// DefaultPlan is returned when no cached plan is found.
+// DefaultPlan is returned when no cached plan is found for an authenticated user
+// (a rare cache miss). Kept in sync with the free plan's DB limits.
 var DefaultPlan = PlanInfo{
 	Plan:      "free",
-	MaxFileMB: 25,
+	MaxFileMB: 50,
 	MaxFiles:  10,
 }
 

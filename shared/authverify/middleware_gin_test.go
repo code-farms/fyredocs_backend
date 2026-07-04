@@ -130,7 +130,7 @@ func TestGinAuthMiddlewareNoTokenPassesThroughWithoutAuth(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (fail-open with no auth context)", w.Code)
 	}
 	if ok {
-		t.Errorf("expected no auth context for anonymous request, got %+v", got)
+		t.Errorf("expected no auth context for unauthenticated request, got %+v", got)
 	}
 }
 

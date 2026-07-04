@@ -35,9 +35,9 @@ type Config struct {
 	// Window is the sliding-window duration (e.g. 1 minute).
 	Window time.Duration
 	// Per-plan request ceilings within Window.
-	AnonLimit int
-	FreeLimit int
-	ProLimit  int
+	GuestLimit int
+	FreeLimit  int
+	ProLimit   int
 	// KeyPrefix namespaces the Redis keys; defaults to "apilimit".
 	KeyPrefix string
 }
@@ -60,7 +60,7 @@ return count
 `)
 
 // limitForPlan maps a plan name to its request ceiling. Unknown/empty plans
-// and guests fall back to the anonymous ceiling.
+// and guests fall back to the guest ceiling.
 func (c Config) limitForPlan(plan string) int {
 	switch strings.ToLower(strings.TrimSpace(plan)) {
 	case "pro":
@@ -68,7 +68,7 @@ func (c Config) limitForPlan(plan string) int {
 	case "free":
 		return c.FreeLimit
 	default:
-		return c.AnonLimit
+		return c.GuestLimit
 	}
 }
 
@@ -82,7 +82,7 @@ func shouldLimit(path string) bool {
 
 // identity derives the rate-limit bucket key suffix and the plan for a request.
 // Authenticated users are keyed by user ID; everyone else by client IP. Guests
-// are always treated as the anonymous plan regardless of any cached plan value.
+// are always treated as the guest plan regardless of any cached plan value.
 func identity(authCtx authverify.AuthContext, ok bool, clientIP string) (subject, plan string) {
 	if ok && !authCtx.IsGuest && strings.TrimSpace(authCtx.UserID) != "" {
 		return "user:" + authCtx.UserID, authCtx.Plan
@@ -115,8 +115,8 @@ func Middleware(cfg Config) func(http.Handler) http.Handler {
 	if cfg.Window <= 0 {
 		cfg.Window = time.Minute
 	}
-	if cfg.AnonLimit <= 0 {
-		cfg.AnonLimit = 30
+	if cfg.GuestLimit <= 0 {
+		cfg.GuestLimit = 30
 	}
 	if cfg.FreeLimit <= 0 {
 		cfg.FreeLimit = 120
