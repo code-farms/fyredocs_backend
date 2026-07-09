@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -45,8 +47,13 @@ func APITrends(c *gin.Context) {
 			P99Ms        float64
 		}
 		var rows []bucketRow
-		models.DB.Raw(`
-			SELECT DATE_TRUNC(?, sampled_at) as time,
+		// resolution is whitelisted ('hour'|'day'), never user input, so it is safe
+		// to inline. It must NOT be a bound param: a parameterized DATE_TRUNC in both
+		// SELECT and GROUP BY becomes two distinct params ($1/$4), which Postgres
+		// rejects with "must appear in the GROUP BY clause". GROUP BY 1 (ordinal)
+		// references the SELECT expression exactly.
+		bucketQuery := fmt.Sprintf(`
+			SELECT DATE_TRUNC('%s', sampled_at) as time,
 				COALESCE(SUM(requests), 0) as requests,
 				COALESCE(SUM(client_errors), 0) as client_errors,
 				COALESCE(SUM(server_errors), 0) as server_errors,
@@ -57,9 +64,12 @@ func APITrends(c *gin.Context) {
 				COALESCE(AVG(p99_ms), 0) as p99_ms
 			FROM api_metric_samples
 			WHERE sampled_at >= ? AND sampled_at < ?
-			GROUP BY DATE_TRUNC(?, sampled_at)
-			ORDER BY time ASC
-		`, resolution, since, now, resolution).Scan(&rows)
+			GROUP BY 1
+			ORDER BY 1 ASC
+		`, resolution)
+		if err := models.DB.Raw(bucketQuery, since, now).Scan(&rows).Error; err != nil {
+			slog.Warn("api-trends bucket query failed", "error", err)
+		}
 
 		for _, r := range rows {
 			errs := r.ClientErrors + r.ServerErrors + r.Timeouts
