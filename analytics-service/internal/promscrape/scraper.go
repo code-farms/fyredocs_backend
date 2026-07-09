@@ -199,6 +199,80 @@ func ParseHTTPHistogram(families map[string]*dto.MetricFamily) []HistogramEndpoi
 	return results
 }
 
+// HTTPAggregate holds gateway-wide HTTP metrics for one scrape: cumulative
+// request/error counts split by status class, plus overall latency percentiles.
+type HTTPAggregate struct {
+	Requests     int64
+	ClientErrors int64 // 4xx
+	ServerErrors int64 // 5xx excluding 504
+	Timeouts     int64 // 504
+	AvgMs        float64
+	P50Ms        float64
+	P95Ms        float64
+	P99Ms        float64
+}
+
+// AggregateHTTP collapses the http_request_duration_seconds histogram across all
+// endpoints into gateway-wide totals with a status-class breakdown and overall
+// latency percentiles. Counts are cumulative (as scraped); callers delta them.
+func AggregateHTTP(families map[string]*dto.MetricFamily) HTTPAggregate {
+	var agg HTTPAggregate
+
+	fam, ok := families["http_request_duration_seconds"]
+	if !ok || fam.GetType() != dto.MetricType_HISTOGRAM {
+		return agg
+	}
+
+	var totalCount, totalSum float64
+	bucketMap := make(map[float64]float64)
+
+	for _, m := range fam.GetMetric() {
+		var status string
+		for _, l := range m.GetLabel() {
+			if l.GetName() == "status" {
+				status = l.GetValue()
+			}
+		}
+		h := m.GetHistogram()
+		if h == nil {
+			continue
+		}
+		count := float64(h.GetSampleCount())
+		totalCount += count
+		totalSum += h.GetSampleSum()
+
+		switch {
+		case status == "504":
+			agg.Timeouts += int64(count)
+		case len(status) > 0 && status[0] == '5':
+			agg.ServerErrors += int64(count)
+		case len(status) > 0 && status[0] == '4':
+			agg.ClientErrors += int64(count)
+		}
+
+		for _, b := range h.GetBucket() {
+			bucketMap[b.GetUpperBound()] += float64(b.GetCumulativeCount())
+		}
+	}
+
+	agg.Requests = int64(totalCount)
+	if totalCount == 0 {
+		return agg
+	}
+
+	sorted := make([]bucketEntry, 0, len(bucketMap))
+	for ub, cnt := range bucketMap {
+		sorted = append(sorted, bucketEntry{UpperBound: ub, Count: cnt})
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].UpperBound < sorted[j].UpperBound })
+
+	agg.AvgMs = (totalSum / totalCount) * 1000
+	agg.P50Ms = histogramPercentile(sorted, totalCount, 0.50) * 1000
+	agg.P95Ms = histogramPercentile(sorted, totalCount, 0.95) * 1000
+	agg.P99Ms = histogramPercentile(sorted, totalCount, 0.99) * 1000
+	return agg
+}
+
 // histogramPercentile estimates a percentile from histogram bucket data using linear interpolation.
 func histogramPercentile(buckets []bucketEntry, total float64, q float64) float64 {
 	if len(buckets) == 0 || total == 0 {

@@ -47,3 +47,28 @@ func (d *DailyMetric) BeforeCreate(tx *gorm.DB) error {
 	}
 	return nil
 }
+
+// APIMetricSample is one periodic sample of gateway HTTP metrics. Counts are
+// per-interval deltas (current cumulative scrape minus the previous), latency
+// columns are the overall snapshot at sample time. Written by the API metrics
+// sampler and read by the /admin/metrics/api-trends handler.
+type APIMetricSample struct {
+	ID           uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	SampledAt    time.Time `gorm:"index:idx_api_sample_time;not null" json:"sampledAt"`
+	Requests     int64     `gorm:"default:0" json:"requests"`
+	ClientErrors int64     `gorm:"default:0" json:"clientErrors"`
+	ServerErrors int64     `gorm:"default:0" json:"serverErrors"`
+	Timeouts     int64     `gorm:"default:0" json:"timeouts"`
+	AvgMs        float64   `gorm:"default:0" json:"avgMs"`
+	P50Ms        float64   `gorm:"default:0" json:"p50Ms"`
+	P95Ms        float64   `gorm:"default:0" json:"p95Ms"`
+	P99Ms        float64   `gorm:"default:0" json:"p99Ms"`
+	CreatedAt    time.Time `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
+}
+
+func (s *APIMetricSample) BeforeCreate(tx *gorm.DB) error {
+	if s.ID == uuid.Nil {
+		s.ID = uuid.Must(uuid.NewV7())
+	}
+	return nil
+}

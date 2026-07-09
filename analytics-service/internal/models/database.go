@@ -38,6 +38,7 @@ func Migrate() {
 	if err := DB.AutoMigrate(
 		&AnalyticsEvent{},
 		&DailyMetric{},
+		&APIMetricSample{},
 	); err != nil {
 		slog.Error("Database migration failed", "error", err)
 		os.Exit(1)

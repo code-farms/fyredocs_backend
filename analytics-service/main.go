@@ -19,6 +19,7 @@ import (
 	"fyredocs/shared/telemetry"
 
 	"analytics-service/handlers"
+	"analytics-service/internal/apisampler"
 	"analytics-service/internal/models"
 	"analytics-service/routes"
 	"analytics-service/subscriber"
@@ -60,6 +61,13 @@ func main() {
 		slog.Error("failed to start analytics subscribers", "error", err)
 		os.Exit(1)
 	}
+
+	// Periodically sample the gateway's Prometheus metrics into api_metric_samples
+	// so /admin/metrics/api-trends can render a time series (counters alone have no
+	// history). Runs for the lifetime of the process.
+	samplerCtx, stopSampler := context.WithCancel(context.Background())
+	defer stopSampler()
+	apisampler.Start(samplerCtx, models.DB)
 
 	r := gin.Default()
 	r.Use(telemetry.GinTraceMiddleware("analytics-service"))

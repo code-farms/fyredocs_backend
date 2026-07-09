@@ -2,10 +2,64 @@ package promscrape
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 )
+
+const httpHistogramFixture = `# TYPE http_request_duration_seconds histogram
+http_request_duration_seconds_bucket{method="GET",path="/a",status="200",le="0.1"} 8
+http_request_duration_seconds_bucket{method="GET",path="/a",status="200",le="0.5"} 10
+http_request_duration_seconds_bucket{method="GET",path="/a",status="200",le="+Inf"} 10
+http_request_duration_seconds_sum{method="GET",path="/a",status="200"} 1.5
+http_request_duration_seconds_count{method="GET",path="/a",status="200"} 10
+http_request_duration_seconds_bucket{method="POST",path="/b",status="404",le="0.1"} 3
+http_request_duration_seconds_bucket{method="POST",path="/b",status="404",le="+Inf"} 3
+http_request_duration_seconds_sum{method="POST",path="/b",status="404"} 0.3
+http_request_duration_seconds_count{method="POST",path="/b",status="404"} 3
+http_request_duration_seconds_bucket{method="POST",path="/c",status="500",le="1.0"} 2
+http_request_duration_seconds_bucket{method="POST",path="/c",status="500",le="+Inf"} 2
+http_request_duration_seconds_sum{method="POST",path="/c",status="500"} 2.0
+http_request_duration_seconds_count{method="POST",path="/c",status="500"} 2
+http_request_duration_seconds_bucket{method="POST",path="/d",status="504",le="5.0"} 1
+http_request_duration_seconds_bucket{method="POST",path="/d",status="504",le="+Inf"} 1
+http_request_duration_seconds_sum{method="POST",path="/d",status="504"} 5.0
+http_request_duration_seconds_count{method="POST",path="/d",status="504"} 1
+`
+
+func TestAggregateHTTP(t *testing.T) {
+	var parser expfmt.TextParser
+	families, err := parser.TextToMetricFamilies(strings.NewReader(httpHistogramFixture))
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	agg := AggregateHTTP(families)
+
+	if agg.Requests != 16 {
+		t.Errorf("Requests = %d, want 16", agg.Requests)
+	}
+	if agg.ClientErrors != 3 {
+		t.Errorf("ClientErrors = %d, want 3", agg.ClientErrors)
+	}
+	if agg.ServerErrors != 2 {
+		t.Errorf("ServerErrors = %d, want 2 (5xx excluding 504)", agg.ServerErrors)
+	}
+	if agg.Timeouts != 1 {
+		t.Errorf("Timeouts = %d, want 1 (504)", agg.Timeouts)
+	}
+	if agg.P50Ms <= 0 || agg.P95Ms < agg.P50Ms || agg.AvgMs <= 0 {
+		t.Errorf("latency percentiles look wrong: avg=%f p50=%f p95=%f p99=%f", agg.AvgMs, agg.P50Ms, agg.P95Ms, agg.P99Ms)
+	}
+}
+
+func TestAggregateHTTP_Empty(t *testing.T) {
+	agg := AggregateHTTP(map[string]*dto.MetricFamily{})
+	if agg.Requests != 0 || agg.P95Ms != 0 {
+		t.Errorf("empty families should yield zero aggregate, got %+v", agg)
+	}
+}
 
 func TestHistogramPercentile_EmptyBuckets(t *testing.T) {
 	result := histogramPercentile(nil, 0, 0.5)

@@ -75,7 +75,8 @@ Behaviour by caller:
 | GET | `/admin/metrics/executive?days=30` | Executive overview: 8 KPIs (totalUsers, activeUsers, revenue, jobsCreated, successRate, apiRequests, apiErrorRate, activeServers) each with `current`, `previous`, and a daily `sparkline`. `revenue` is ESTIMATED (see `/revenue`); `apiRequests`/`apiErrorRate` are null until the metrics sampler is deployed. |
 | GET | `/admin/metrics/revenue?days=30` | **Estimated** revenue from the active plan distribution × the configured `PLAN_PRICES` map (no billing integration). Returns `mrr`, `arr`, `previousMrr`, `byPlan`, a daily `trend`, `planChanges` (upgrades/downgrades ranked by price), `prices`, `currency`, and `estimated: true`. |
 | GET | `/admin/metrics/acquisition?days=30` | Signup counts grouped by acquisition channel (organic/referral/paid/campaign/direct/unknown), classified from referrer/UTM in `user.signup` metadata. Returns `channels` (with percent), `daily`, `topReferrers`, and a `previous` period comparison. Signups without referrer/UTM metadata bucket as `unknown`. |
-| GET | `/admin/metrics/api-performance` | API performance (per-endpoint latency p50/p95/p99, throughput, error rates, slowest/most-erroring endpoints). Supports query params: `page` (default 1), `limit` (default 50, max 200), `search` (partial path match), `method` (exact HTTP method), `sortBy` (requests\|avgLatencyMs\|p50LatencyMs\|p95LatencyMs\|p99LatencyMs\|errorRate\|path\|method), `sortDir` (asc\|desc). Returns paginated endpoints with `meta` containing `page`, `limit`, `total`. |
+| GET | `/admin/metrics/api-performance` | API performance (per-endpoint latency p50/p95/p99, throughput, error rates, slowest/most-erroring endpoints). Supports query params: `page` (default 1), `limit` (default 50, max 200), `search` (partial path match), `method` (exact HTTP method), `sortBy` (requests\|avgLatencyMs\|p50LatencyMs\|p95LatencyMs\|p99LatencyMs\|errorRate\|path\|method), `sortDir` (asc\|desc). Returns paginated endpoints with `meta` containing `page`, `limit`, `total`. **Live snapshot** from the gateway Prometheus scrape (no history). |
+| GET | `/admin/metrics/api-trends?days=7` | API traffic time series built from `api_metric_samples` (written by the API metrics sampler). Returns `series[]` (`time`, `requests`, `errors`, `errorRate` (fraction), `avgMs`, `p50Ms`, `p95Ms`, `p99Ms`), `errorClasses[]` (`time`, `clientErrors`(4xx), `serverErrors`(5xx≠504), `timeouts`(504)), `totals`, `previous` (prior equal window), `resolution` (`hour` when days≤2 else `day`), and `sampledSince` (earliest sample, or null). Empty until the sampler has ≥2 samples; historical pre-sampler traffic is not backfilled. |
 
 ### Infrastructure
 | Method | Path | Description |
@@ -119,6 +120,23 @@ Behaviour by caller:
 | created_at | TIMESTAMP | Row creation time |
 | updated_at | TIMESTAMP | Last update time |
 
+### api_metric_samples
+Periodic samples of gateway HTTP metrics written by the **API metrics sampler**
+(`internal/apisampler`); read by `/admin/metrics/api-trends`.
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Primary key |
+| sampled_at | TIMESTAMP | Sample time (indexed) |
+| requests | BIGINT | Per-interval request count (delta) |
+| client_errors | BIGINT | Per-interval 4xx count (delta) |
+| server_errors | BIGINT | Per-interval 5xx≠504 count (delta) |
+| timeouts | BIGINT | Per-interval 504 count (delta) |
+| avg_ms / p50_ms / p95_ms / p99_ms | FLOAT8 | Overall latency at sample time (snapshot) |
+
+The sampler scrapes `API_GATEWAY_METRICS_URL` every `API_SAMPLE_INTERVAL`, stores the delta from
+the previous cumulative scrape (counter resets fall back to the current value), and prunes rows
+older than `API_METRIC_RETENTION_DAYS`.
+
 ## Environment Variables
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -128,8 +146,10 @@ Behaviour by caller:
 | NATS_MONITOR_URL | http://nats:8222 | NATS HTTP monitoring endpoint (`-m 8222`), internal-only. Scraped by `/admin/metrics/nats`. |
 | TRUSTED_PROXIES | 127.0.0.1,::1 | Trusted proxy addresses |
 | SERVICE_URLS | api-gateway=http://api-gateway:8080,auth-service=http://auth-service:8086,job-service=http://job-service:8081,convert-from-pdf=http://convert-from-pdf:8082,convert-to-pdf=http://convert-to-pdf:8083,organize-pdf=http://organize-pdf:8084,optimize-pdf=http://optimize-pdf:8085 | Service name=URL pairs for performance scraping |
-| API_GATEWAY_METRICS_URL | http://api-gateway:8080/metrics | API gateway Prometheus metrics URL |
-| PLAN_PRICES | anonymous=0,free=0,pro=12 | Comma-separated `plan=monthlyPrice` pairs used to compute **estimated** revenue (MRR/ARR). No billing integration. |
+| API_GATEWAY_METRICS_URL | http://api-gateway:8080/metrics | API gateway Prometheus metrics URL (used by `/admin/metrics/api-performance` and the API metrics sampler) |
+| API_SAMPLE_INTERVAL | 60s | How often the API metrics sampler scrapes the gateway and writes an `api_metric_samples` row |
+| API_METRIC_RETENTION_DAYS | 30 | How long `api_metric_samples` rows are kept before the sampler prunes them |
+| PLAN_PRICES | guest=0,free=0,pro=12 | Comma-separated `plan=monthlyPrice` pairs used to compute **estimated** revenue (MRR/ARR). No billing integration. |
 | PLAN_CURRENCY | USD | Currency code reported with estimated revenue figures. |
 | REDIS_ADDR | redis:6379 | Redis host:port (backs the dashboard response cache) |
 | REDIS_PASSWORD | — | Redis password |
