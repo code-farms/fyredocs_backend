@@ -19,6 +19,7 @@ type Tag struct {
 	CreatedAt      time.Time  `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
 }
 
+// BeforeCreate assigns a time-ordered UUIDv7 primary key when one was not set.
 func (t *Tag) BeforeCreate(tx *gorm.DB) error {
 	if t.ID == uuid.Nil {
 		t.ID = uuid.Must(uuid.NewV7())

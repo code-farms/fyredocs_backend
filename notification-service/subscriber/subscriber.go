@@ -17,10 +17,15 @@ import (
 	"notification-service/internal/models"
 )
 
+// Subscribers holds the running NATS consumers so they can be stopped on
+// shutdown.
 type Subscribers struct {
 	jobs jetstream.ConsumeContext
 }
 
+// Start subscribes to the job-events stream and begins turning completion and
+// failure events into notifications. It uses a durable consumer so redeliveries
+// survive restarts, and returns the running handle for graceful shutdown.
 func Start(ctx context.Context) (*Subscribers, error) {
 	consumer, err := natsconn.JS.CreateOrUpdateConsumer(ctx, "JOBS_EVENTS", jetstream.ConsumerConfig{
 		Durable:       "notification-job-events",
@@ -39,6 +44,8 @@ func Start(ctx context.Context) (*Subscribers, error) {
 	return &Subscribers{jobs: cc}, nil
 }
 
+// Stop halts the consumers. It is safe to call on a nil or already-stopped
+// Subscribers.
 func (s *Subscribers) Stop() {
 	if s == nil || s.jobs == nil {
 		return

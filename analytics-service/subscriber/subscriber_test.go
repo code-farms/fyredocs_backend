@@ -16,7 +16,14 @@ func newFakeConsumeContext() *fakeConsumeContext {
 	return &fakeConsumeContext{closed: make(chan struct{})}
 }
 
-func (f *fakeConsumeContext) Stop()                   { f.stopped.Add(1); select { case <-f.closed: default: close(f.closed) } }
+func (f *fakeConsumeContext) Stop() {
+	f.stopped.Add(1)
+	select {
+	case <-f.closed:
+	default:
+		close(f.closed)
+	}
+}
 func (f *fakeConsumeContext) Drain()                  { f.Stop() }
 func (f *fakeConsumeContext) Closed() <-chan struct{} { return f.closed }
 

@@ -1,3 +1,6 @@
+// Package processing performs the optimize-pdf operations: heavy
+// Ghostscript/Tesseract work such as compression, repair, and OCR, dispatching
+// each tool type to the appropriate handler.
 package processing
 
 import (
@@ -13,11 +16,16 @@ import (
 	"github.com/google/uuid"
 )
 
+// Result is the output of an operation: the produced file's path and any
+// metadata to surface on the job.
 type Result struct {
 	OutputPath string
 	Metadata   map[string]interface{}
 }
 
+// ProcessFile runs the optimize operation for toolType over the given inputs
+// and writes the result into outputDir. It validates inputs and routes to the
+// tool-specific handler.
 func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (Result, error) {
 	if outputDir == "" {
 		outputDir = "outputs"

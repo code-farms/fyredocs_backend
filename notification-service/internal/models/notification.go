@@ -20,6 +20,7 @@ type Notification struct {
 	CreatedAt   time.Time  `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
 }
 
+// BeforeCreate assigns a time-ordered UUIDv7 primary key when one was not set.
 func (n *Notification) BeforeCreate(tx *gorm.DB) error {
 	if n.ID == uuid.Nil {
 		n.ID = uuid.Must(uuid.NewV7())

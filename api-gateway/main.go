@@ -1,3 +1,8 @@
+// Command api-gateway is the single public entry point for the backend. It
+// authenticates requests, enforces per-plan rate limits, and reverse-proxies
+// each route to the owning microservice. File bytes bypass the gateway entirely
+// (browser to MinIO via presigned URLs at the Caddy edge); only API traffic
+// flows through here.
 package main
 
 import (
@@ -22,6 +27,8 @@ import (
 	"fyredocs/shared/telemetry"
 )
 
+// routeConfig maps an inbound gateway prefix to an upstream service and the
+// base path the request is re-rooted under before forwarding.
 type routeConfig struct {
 	prefix         string
 	targetBasePath string
@@ -75,9 +82,9 @@ func main() {
 	}
 
 	// Job service owns all job CRUD, uploads, and tool endpoints.
-	// Auth routes go to auth-service when it exists, otherwise job-service.
 	jobServiceURL := config.GetEnv("JOB_SERVICE_URL", "http://job-service:8081")
-	authServiceURL := config.GetEnv("AUTH_SERVICE_URL", jobServiceURL) // Phase 2: separate auth-service
+	// Auth routes fall back to job-service when AUTH_SERVICE_URL is unset.
+	authServiceURL := config.GetEnv("AUTH_SERVICE_URL", jobServiceURL)
 	analyticsServiceURL := config.GetEnv("ANALYTICS_SERVICE_URL", "http://analytics-service:8087")
 	documentServiceURL := config.GetEnv("DOCUMENT_SERVICE_URL", "http://document-service:8089")
 	userServiceURL := config.GetEnv("USER_SERVICE_URL", "http://user-service:8090")
@@ -166,7 +173,8 @@ func main() {
 
 	mux.Handle("/metrics", metrics.HTTPMetricsHandler())
 
-	// Fix #28: Deep health check - ping Redis
+	// Deep health check: the gateway is only healthy if Redis (auth, denylist,
+	// rate limiting) is reachable, so report unhealthy when the ping fails.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()

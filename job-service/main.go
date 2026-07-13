@@ -1,3 +1,7 @@
+// Command job-service is the orchestration hub for document processing. It
+// handles presigned uploads, creates processing jobs, routes each to the owning
+// worker service over NATS, streams progress via SSE, serves job downloads, and
+// runs a TTL sweep that reaps expired jobs and files.
 package main
 
 import (
@@ -88,7 +92,6 @@ func main() {
 		slog.Warn("cleanup loop disabled (CLEANUP_ENABLED=false)")
 	}
 
-	// Initialize denylist for JWT verification
 	var denylist authverify.TokenDenylist
 	if config.GetEnvBool("AUTH_DENYLIST_ENABLED", true) {
 		denylist = authverify.NewRedisTokenDenylist(redisstore.Client, os.Getenv("AUTH_DENYLIST_PREFIX"))
@@ -121,7 +124,6 @@ func main() {
 		port = "8081"
 	}
 
-	// Fix #14: Graceful shutdown
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: r,

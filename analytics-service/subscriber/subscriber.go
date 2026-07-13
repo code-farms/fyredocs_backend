@@ -1,3 +1,5 @@
+// Package subscriber consumes analytics events from NATS and persists them as
+// AnalyticsEvent rows for later aggregation and querying.
 package subscriber
 
 import (

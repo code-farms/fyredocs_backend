@@ -45,6 +45,8 @@ const (
 	defaultPartSizeMB = 8
 )
 
+// UploadInitRequest declares the file a client intends to upload. The size is
+// checked against the plan limit before any presigned URL is issued.
 type UploadInitRequest struct {
 	FileName    string `json:"fileName"`
 	FileSize    int64  `json:"fileSize"`
@@ -56,10 +58,13 @@ type uploadPartURL struct {
 	URL        string `json:"url"`
 }
 
+// UploadCompleteRequest carries the ETags of the parts the client uploaded,
+// used to finalize the multipart upload.
 type UploadCompleteRequest struct {
 	Parts []UploadCompletedPart `json:"parts"`
 }
 
+// UploadCompletedPart is one uploaded part identified by its number and ETag.
 type UploadCompletedPart struct {
 	PartNumber int    `json:"partNumber"`
 	ETag       string `json:"etag"`

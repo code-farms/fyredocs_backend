@@ -23,6 +23,7 @@ type AnalyticsEvent struct {
 	PersistedAt time.Time      `gorm:"default:CURRENT_TIMESTAMP" json:"persistedAt"`
 }
 
+// BeforeCreate assigns a time-ordered UUIDv7 primary key when one was not set.
 func (e *AnalyticsEvent) BeforeCreate(tx *gorm.DB) error {
 	if e.ID == uuid.Nil {
 		e.ID = uuid.Must(uuid.NewV7())
@@ -41,6 +42,7 @@ type DailyMetric struct {
 	UpdatedAt   time.Time      `gorm:"default:CURRENT_TIMESTAMP" json:"updatedAt"`
 }
 
+// BeforeCreate assigns a time-ordered UUIDv7 primary key when one was not set.
 func (d *DailyMetric) BeforeCreate(tx *gorm.DB) error {
 	if d.ID == uuid.Nil {
 		d.ID = uuid.Must(uuid.NewV7())
@@ -66,6 +68,7 @@ type APIMetricSample struct {
 	CreatedAt    time.Time `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
 }
 
+// BeforeCreate assigns a time-ordered UUIDv7 primary key when one was not set.
 func (s *APIMetricSample) BeforeCreate(tx *gorm.DB) error {
 	if s.ID == uuid.Nil {
 		s.ID = uuid.Must(uuid.NewV7())

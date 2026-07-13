@@ -126,7 +126,7 @@ func (ae *AuthEndpoints) ResetPassword(c *gin.Context) {
 		return
 	}
 
-	// Mirror Signup password rules (handlers/auth.go:74-80).
+	// Mirror the password length rules enforced in Signup.
 	if len(payload.NewPassword) < 8 {
 		response.Err(c, http.StatusBadRequest, "WEAK_PASSWORD", "Password must be at least 8 characters")
 		return
@@ -176,7 +176,7 @@ func (ae *AuthEndpoints) ResetPassword(c *gin.Context) {
 
 	// Add each revoked session's access token to the Redis denylist so other
 	// services treat the token as invalid until it expires naturally. Mirrors
-	// handlers/admin.go:36-46.
+	// the denylist step in the admin session-revocation handler.
 	if ae.Denylist != nil {
 		ctx := c.Request.Context()
 		for _, s := range revokedSessions {

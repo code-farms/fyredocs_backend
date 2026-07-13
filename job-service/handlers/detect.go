@@ -17,12 +17,6 @@ import (
 	"fyredocs/shared/response"
 )
 
-// DetectEdges gives the mobile scanner a document-quad suggestion for an
-// uploaded photo. It peeks at the upload (consumeUpload without
-// releaseUpload — the upload stays usable for the subsequent scan-to-pdf
-// job) and relays detection to organize-pdf's internal endpoint, which owns
-// the imaging logic.
-
 type detectEdgesRequest struct {
 	UploadID string `json:"uploadId"`
 }
@@ -35,6 +29,10 @@ func organizePdfBaseURL() string {
 	return strings.TrimRight(config.GetEnv("ORGANIZE_PDF_URL", "http://organize-pdf:8084"), "/")
 }
 
+// DetectEdges gives the mobile scanner a document-quad suggestion for an
+// uploaded photo. It peeks at the upload (consumeUpload without releaseUpload —
+// the upload stays usable for the subsequent scan-to-pdf job) and relays
+// detection to organize-pdf's internal endpoint, which owns the imaging logic.
 func DetectEdges(c *gin.Context) {
 	var req detectEdgesRequest
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.UploadID) == "" {

@@ -19,6 +19,7 @@ type Folder struct {
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
+// BeforeCreate assigns a time-ordered UUIDv7 primary key when one was not set.
 func (f *Folder) BeforeCreate(tx *gorm.DB) error {
 	if f.ID == uuid.Nil {
 		f.ID = uuid.Must(uuid.NewV7())

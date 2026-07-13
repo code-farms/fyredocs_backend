@@ -162,4 +162,3 @@ func Rotate(src image.Image, degrees int) image.Image {
 	}
 	return out
 }
-

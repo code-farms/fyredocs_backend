@@ -1,3 +1,6 @@
+// Command optimize-pdf is a processing worker for heavy PDF operations —
+// Ghostscript compression and repair, and Tesseract OCR. It consumes dispatched
+// jobs from NATS and reports completion through the shared worker loop.
 package main
 
 import (
@@ -101,6 +104,7 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
 
+	// Readiness probe: reports 503 unless Redis, NATS, and Postgres are all reachable.
 	r.GET("/readyz", func(c *gin.Context) {
 		checks := gin.H{}
 		ready := true
@@ -108,7 +112,6 @@ func main() {
 		hctx, hcancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer hcancel()
 
-		// Check Redis
 		if err := redisstore.Client.Ping(hctx).Err(); err != nil {
 			checks["redis"] = err.Error()
 			ready = false
@@ -116,7 +119,6 @@ func main() {
 			checks["redis"] = "ok"
 		}
 
-		// Check NATS
 		if natsconn.Conn == nil || !natsconn.Conn.IsConnected() {
 			checks["nats"] = "disconnected"
 			ready = false
@@ -124,7 +126,6 @@ func main() {
 			checks["nats"] = "ok"
 		}
 
-		// Check DB
 		if err := models.DB.Exec("SELECT 1").Error; err != nil {
 			checks["postgres"] = err.Error()
 			ready = false
@@ -166,4 +167,3 @@ func main() {
 		slog.Error("server shutdown error", "error", err)
 	}
 }
-

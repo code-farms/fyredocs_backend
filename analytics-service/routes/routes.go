@@ -10,6 +10,9 @@ import (
 	"fyredocs/shared/response"
 )
 
+// SetupRouter registers the health probes, the role-aware user dashboard, and
+// the super-admin-only /admin metrics endpoints. Admin access is gated by
+// adminAuth using the gateway-injected role header.
 func SetupRouter(r *gin.Engine) {
 	r.GET("/healthz", handlers.HealthCheck)
 	r.GET("/readyz", handlers.ReadyCheck)

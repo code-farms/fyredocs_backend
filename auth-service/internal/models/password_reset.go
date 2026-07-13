@@ -19,6 +19,7 @@ type PasswordResetToken struct {
 	RequestIP string    `gorm:"type:text" json:"-"`
 }
 
+// BeforeCreate assigns a time-ordered UUIDv7 primary key when one was not set.
 func (p *PasswordResetToken) BeforeCreate(tx *gorm.DB) (err error) {
 	if p.ID == uuid.Nil {
 		p.ID = uuid.Must(uuid.NewV7())

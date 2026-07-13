@@ -10,6 +10,7 @@ import (
 	"fyredocs/shared/database"
 )
 
+// DB is the package-global GORM handle for convert-from-pdf, initialized by Connect.
 var DB *gorm.DB
 
 // PoolConfig aliases the shared pool settings so main() call sites keep
@@ -34,6 +35,7 @@ func Connect(pool ...PoolConfig) {
 	DB = database.MustConnectFromEnv(servicePoolBase(), pool...)
 }
 
+// Migrate auto-migrates this service's owned tables and fail-fasts on error.
 func Migrate() {
 	if err := DB.AutoMigrate(
 		&ProcessingJob{},

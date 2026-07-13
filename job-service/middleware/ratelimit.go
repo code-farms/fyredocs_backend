@@ -1,3 +1,7 @@
+// Package middleware provides job-service's per-endpoint, Redis-backed
+// sliding-window rate limiter. It throttles the upload, job-creation, and
+// edge-detection endpoints by client IP and fails open so a Redis outage never
+// blocks request serving.
 package middleware
 
 import (
@@ -14,6 +18,8 @@ import (
 	"fyredocs/shared/response"
 )
 
+// RateLimitConfig configures a RateLimiter. Burst, when positive, is added to
+// MaxRequests to form the effective ceiling within Window.
 type RateLimitConfig struct {
 	RedisClient *redis.Client
 	KeyPrefix   string
@@ -22,6 +28,8 @@ type RateLimitConfig struct {
 	Burst       int
 }
 
+// RateLimiter enforces a sliding-window request ceiling for a single endpoint,
+// keyed by a caller-supplied prefix.
 type RateLimiter struct {
 	client      *redis.Client
 	keyPrefix   string
@@ -31,7 +39,9 @@ type RateLimiter struct {
 	script      *redis.Script
 }
 
-// Fix #16: Lua script for atomic rate limiting (fixes TOCTOU race)
+// rateLimitLua atomically trims the window, counts current entries, records this
+// request, and refreshes the key TTL. Runs server-side to avoid the check-then-act
+// race a client-side implementation would have. Returns the pre-insert count.
 var rateLimitLua = redis.NewScript(`
 local key = KEYS[1]
 local window_start = tonumber(ARGV[1])
@@ -47,6 +57,8 @@ redis.call('EXPIRE', key, ttl)
 return count
 `)
 
+// NewRateLimiter builds a RateLimiter, applying sane defaults for an empty
+// prefix, non-positive request ceiling, or non-positive window.
 func NewRateLimiter(config RateLimitConfig) *RateLimiter {
 	if config.KeyPrefix == "" {
 		config.KeyPrefix = "ratelimit"
@@ -67,6 +79,10 @@ func NewRateLimiter(config RateLimitConfig) *RateLimiter {
 	}
 }
 
+// RateLimitByIP returns a Gin middleware that limits requests by client IP. It
+// sets the standard X-RateLimit-* headers and aborts with 429 once the ceiling
+// is exceeded. It fails open: a nil client or a Redis error lets the request
+// through rather than locking users out.
 func (rl *RateLimiter) RateLimitByIP() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if rl.client == nil {
@@ -103,6 +119,9 @@ func (rl *RateLimiter) RateLimitByIP() gin.HandlerFunc {
 	}
 }
 
+// checkLimit runs the sliding-window script for identifier and reports whether
+// the request is allowed, how many requests remain in the window, and when the
+// window resets.
 func (rl *RateLimiter) checkLimit(ctx context.Context, identifier string) (allowed bool, remaining int, resetTime time.Time, err error) {
 	key := fmt.Sprintf("%s:%s", rl.keyPrefix, identifier)
 	now := time.Now()

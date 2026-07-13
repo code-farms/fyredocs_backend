@@ -10,6 +10,7 @@ import (
 	"fyredocs/shared/database"
 )
 
+// DB is the package-global GORM handle for job-service, initialized by Connect.
 var DB *gorm.DB
 
 // PoolConfig aliases the shared pool settings so main() call sites keep
@@ -34,6 +35,10 @@ func Connect(pool ...PoolConfig) {
 	DB = database.MustConnectFromEnv(servicePoolBase(), pool...)
 }
 
+// Migrate brings the job-service schema up to date: it auto-migrates the job
+// and file-metadata tables, adds composite indexes, and enforces the job-status
+// check constraint. It fail-fasts on the core migration but treats indexes and
+// constraints as best-effort.
 func Migrate() {
 	if err := DB.AutoMigrate(
 		&ProcessingJob{},

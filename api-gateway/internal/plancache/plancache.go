@@ -1,3 +1,7 @@
+// Package plancache reads the per-user plan limits that auth-service publishes
+// to Redis. The gateway consults it on every authenticated request to key rate
+// limits and enforce upload ceilings, so lookups fall back to conservative
+// defaults rather than failing the request on a cache miss or Redis error.
 package plancache
 
 import (

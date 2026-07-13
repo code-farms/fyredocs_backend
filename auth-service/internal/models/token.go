@@ -22,6 +22,7 @@ type UserSession struct {
 	CreatedAt        time.Time  `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
 }
 
+// BeforeCreate assigns a time-ordered UUIDv7 primary key when one was not set.
 func (s *UserSession) BeforeCreate(tx *gorm.DB) (err error) {
 	if s.ID == uuid.Nil {
 		s.ID = uuid.Must(uuid.NewV7())

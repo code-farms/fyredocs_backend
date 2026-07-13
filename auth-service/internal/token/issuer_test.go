@@ -353,4 +353,3 @@ func TestVerifyRefreshTokenWrongSecret(t *testing.T) {
 		t.Error("expected error for wrong secret")
 	}
 }
-

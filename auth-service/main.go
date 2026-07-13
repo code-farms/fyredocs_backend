@@ -1,3 +1,7 @@
+// Command auth-service owns user accounts and is the platform's sole token
+// issuer: it handles signup, login, refresh, logout, password reset, plan
+// changes, and admin impersonation. It also runs a background sweep that prunes
+// expired sessions and reset tokens.
 package main
 
 import (
@@ -102,7 +106,8 @@ func main() {
 		mailer = email.NoopMailer{}
 	}
 
-	// Auth middleware applied selectively to protected routes only (not login/signup/refresh)
+	// Applied selectively to protected routes only; login, signup, and refresh
+	// stay public.
 	authMiddleware := buildAuthMiddleware(redisClient, denylist)
 	routes.SetupRouter(r, issuer, denylist, redisClient, mailer, authMiddleware)
 
@@ -171,6 +176,8 @@ func main() {
 	slog.Info("server exited")
 }
 
+// buildAuthMiddleware assembles the token verifier and guest store into the Gin
+// auth middleware. It fail-fasts if the verifier cannot be configured.
 func buildAuthMiddleware(redisClient *redis.Client, denylist authverify.TokenDenylist) gin.HandlerFunc {
 	trustGateway := config.GetEnvBool("AUTH_TRUST_GATEWAY_HEADERS", false)
 

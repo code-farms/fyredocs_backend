@@ -1,3 +1,6 @@
+// Package processing performs the convert-to-pdf conversions: it turns office
+// documents, images, and HTML into PDF (and the related ODF conversions),
+// dispatching each tool type to the appropriate converter.
 package processing
 
 import (
@@ -13,6 +16,8 @@ import (
 	"github.com/google/uuid"
 )
 
+// Result is the output of a conversion: the produced file's path and any
+// metadata to surface on the job.
 type Result struct {
 	OutputPath string
 	Metadata   map[string]interface{}
@@ -22,6 +27,9 @@ type Result struct {
 // current is the current item (1-based), total is the total number of items.
 type ProgressFunc func(current, total int)
 
+// ProcessFile converts the given inputs for toolType and writes the result into
+// outputDir, reporting progress via onProgress. It validates inputs and routes
+// to the tool-specific converter.
 func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string, onProgress ProgressFunc) (Result, error) {
 	if outputDir == "" {
 		outputDir = "outputs"

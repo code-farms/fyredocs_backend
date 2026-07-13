@@ -1,3 +1,6 @@
+// Package handlers implements the analytics HTTP endpoints: the role-aware user
+// dashboard and the admin metrics API (overview, growth, engagement, revenue,
+// reliability, system health, and related reports).
 package handlers
 
 import (

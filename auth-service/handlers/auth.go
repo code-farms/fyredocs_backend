@@ -29,6 +29,7 @@ import (
 	"fyredocs/shared/response"
 )
 
+// authCredentials is the inbound signup/login payload.
 type authCredentials struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -38,6 +39,8 @@ type authCredentials struct {
 	Image    string `json:"image"`
 }
 
+// authUser is the sanitized user representation returned to clients; it never
+// carries the password hash.
 type authUser struct {
 	ID       string `json:"id"`
 	Email    string `json:"email"`
@@ -49,6 +52,9 @@ type authUser struct {
 	PlanName string `json:"planName,omitempty"`
 }
 
+// AuthEndpoints groups the dependencies shared by the authentication handlers:
+// the token issuer, the cross-service token denylist, the Redis client used for
+// the plan cache, and the transactional mailer.
 type AuthEndpoints struct {
 	Issuer      *token.Issuer
 	Denylist    authverify.TokenDenylist
@@ -56,6 +62,9 @@ type AuthEndpoints struct {
 	Mailer      email.Mailer
 }
 
+// Signup registers a new account. It validates and normalizes the payload,
+// rejects duplicate emails, hashes the password with bcrypt, persists the user,
+// emits a signup analytics event, and responds with a fresh token pair.
 func (ae *AuthEndpoints) Signup(c *gin.Context) {
 	payload, ok := parseAuthPayload(c)
 	if !ok {
@@ -121,6 +130,9 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 	ae.respondWithTokens(c, user)
 }
 
+// Login authenticates a user by email and password and, on success, issues a
+// fresh token pair. All failure paths return the same generic message to avoid
+// leaking whether an email is registered (account enumeration).
 func (ae *AuthEndpoints) Login(c *gin.Context) {
 	payload, ok := parseAuthPayload(c)
 	if !ok {
@@ -155,6 +167,10 @@ func (ae *AuthEndpoints) Login(c *gin.Context) {
 	ae.respondWithTokens(c, user)
 }
 
+// Refresh rotates the access token using the refresh-token cookie. It verifies
+// the refresh token, confirms a matching active session still exists, reloads
+// the user's current plan and role, refreshes the plan cache, and updates the
+// session's access-token hash. Any failure is reported as an expired session.
 func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 	cookieName := config.GetEnv("AUTH_REFRESH_COOKIE", "refresh_token")
 	refreshToken, err := c.Cookie(cookieName)
@@ -206,7 +222,6 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 
 	accessTTL := config.GetEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
 
-	// Refresh plan cache in Redis
 	ae.cachePlanInfo(c.Request.Context(), user.ID.String(), plan, accessTTL)
 
 	accessToken, _, accessExpiresAt, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, accessTTL)
@@ -230,6 +245,7 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 	})
 }
 
+// Me returns the authenticated user's profile under the "user" key.
 func (ae *AuthEndpoints) Me(c *gin.Context) {
 	user, authCtx, ok := loadUserFromAuth(c)
 	if !ok {
@@ -246,6 +262,7 @@ func (ae *AuthEndpoints) Me(c *gin.Context) {
 	})
 }
 
+// Profile returns the authenticated user's profile under the "profile" key.
 func (ae *AuthEndpoints) Profile(c *gin.Context) {
 	user, authCtx, ok := loadUserFromAuth(c)
 	if !ok {
@@ -262,6 +279,9 @@ func (ae *AuthEndpoints) Profile(c *gin.Context) {
 	})
 }
 
+// Logout revokes the current session: it denylists the access token for
+// cross-service invalidation, drops the user's plan cache, and clears the auth
+// cookies.
 func (ae *AuthEndpoints) Logout(c *gin.Context) {
 	authCtx, ok := authverify.GetGinAuth(c)
 	if !ok || strings.TrimSpace(authCtx.UserID) == "" {
@@ -278,7 +298,6 @@ func (ae *AuthEndpoints) Logout(c *gin.Context) {
 		}
 	}
 
-	// Delete plan cache from Redis
 	ae.deletePlanCache(ctx, authCtx.UserID)
 
 	clearAccessTokenCookie(c)
@@ -286,6 +305,9 @@ func (ae *AuthEndpoints) Logout(c *gin.Context) {
 	response.NoContent(c)
 }
 
+// respondWithTokens issues an access/refresh token pair for the user, persists
+// the session, populates the gateway's plan cache, and sets the auth cookies.
+// Shared by the signup and login success paths.
 func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 	plan, ok := lookupPlan(user.PlanName)
 	if !ok {
@@ -300,7 +322,7 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 	accessTTL := config.GetEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
 	refreshTTL := config.GetEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour)
 
-	// Cache plan info in Redis for the API gateway to read
+	// The gateway reads this cache on every request to enforce plan limits.
 	ae.cachePlanInfo(c.Request.Context(), user.ID.String(), plan, accessTTL)
 
 	accessToken, jti, accessExpiresAt, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, accessTTL)
@@ -337,14 +359,16 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 	})
 }
 
+// denyAccessToken revokes a token on two tiers: it deletes the local session
+// row and adds the token to the Redis denylist so peer services reject it
+// immediately, without waiting for natural expiry. The denylist TTL matches the
+// token's remaining lifetime so entries self-expire.
 func (ae *AuthEndpoints) denyAccessToken(ctx context.Context, tokenStr string) error {
-	// Delete the session from the database
 	hash := models.HashToken(tokenStr)
 	if err := models.RevokeSessionByAccessHash(models.DB, hash); err != nil {
 		slog.Warn("failed to revoke session from database", "error", err)
 	}
 
-	// Also add to Redis denylist for cross-service invalidation
 	if ae.Denylist == nil {
 		return nil
 	}
@@ -527,6 +551,10 @@ func getTokenRemainingTTL(tokenString string) (time.Duration, error) {
 	return remaining, nil
 }
 
+// ChangePlan moves the authenticated user to a different subscription plan. It
+// rejects unknown plans and no-op changes, updates the plan cache immediately so
+// new limits take effect without waiting for token refresh, and emits a
+// plan.changed analytics event.
 func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 	user, _, ok := loadUserFromAuth(c)
 	if !ok {
@@ -571,7 +599,6 @@ func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 		return
 	}
 
-	// Update plan cache in Redis immediately
 	accessTTL := config.GetEnvDuration("JWT_ACCESS_TTL", 8*time.Hour)
 	ae.cachePlanInfo(c.Request.Context(), user.ID.String(), plan, accessTTL)
 

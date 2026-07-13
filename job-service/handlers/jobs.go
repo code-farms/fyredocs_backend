@@ -52,12 +52,17 @@ var allowedMIMETypes = map[string][]string{
 	"odp":   {"application/vnd.oasis.opendocument.presentation", "application/zip"},
 }
 
+// UploadJobRequest is the job-creation payload. It accepts either a single
+// UploadID or a batch via UploadIDs, plus tool-specific Options.
 type UploadJobRequest struct {
 	UploadID  string          `json:"uploadId"`
 	UploadIDs []string        `json:"uploadIds"`
 	Options   json.RawMessage `json:"options"`
 }
 
+// CreateJobFromTool validates the tool and upload, enforces per-key idempotency,
+// persists a ProcessingJob, and publishes it to the owning worker service's
+// queue for asynchronous processing.
 func CreateJobFromTool(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
@@ -262,7 +267,6 @@ func CreateJobFromTool(c *gin.Context) {
 		return
 	}
 
-	// Fix #12: Progress is now int, FileSize is now int64
 	job := models.ProcessingJob{
 		ID:        jobID,
 		UserID:    userID,
@@ -344,7 +348,8 @@ func CreateJobFromTool(c *gin.Context) {
 	})
 }
 
-// Fix #29: Add pagination to GetJobsByTool
+// GetJobsByTool returns the caller's jobs for the given tool type, paginated and
+// ordered most-recent-first.
 func GetJobsByTool(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
@@ -388,6 +393,8 @@ func GetJobsByTool(c *gin.Context) {
 	response.OKWithMeta(c, "Jobs loaded successfully", toJobResponses(jobs), &response.Meta{Page: page, Limit: limit})
 }
 
+// GetJobByID returns a single job the caller is authorized to see. Unknown and
+// unauthorized jobs are both reported as not found to avoid leaking existence.
 func GetJobByID(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
@@ -410,6 +417,8 @@ func GetJobByID(c *gin.Context) {
 	response.OK(c, "Job details loaded", toJobResponse(job))
 }
 
+// DeleteJobByID removes a job the caller owns along with its stored input and
+// output objects. Object removal is best-effort; the DB rows are always deleted.
 func DeleteJobByID(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
@@ -460,6 +469,8 @@ func DeleteJobByID(c *gin.Context) {
 	response.NoContent(c)
 }
 
+// DownloadJobFile redirects an authorized caller to a short-lived presigned URL
+// for a completed job's output. It rejects jobs that are not yet completed.
 func DownloadJobFile(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
@@ -525,6 +536,8 @@ func redirectToOutput(c *gin.Context, key string, fileName string, contentType s
 	c.Redirect(http.StatusFound, signed)
 }
 
+// GetJobHistory returns the authenticated user's jobs, most recent first, with
+// pagination. Guests have no history and are rejected as unauthorized.
 func GetJobHistory(c *gin.Context) {
 	userID := authUserID(c)
 	if userID == nil {

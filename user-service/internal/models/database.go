@@ -10,6 +10,7 @@ import (
 	"fyredocs/shared/database"
 )
 
+// DB is the package-global GORM handle for user-service, initialized by Connect.
 var DB *gorm.DB
 
 // PoolConfig aliases the shared pool settings so main() call sites keep
@@ -34,6 +35,9 @@ func Connect(pool ...PoolConfig) {
 	DB = database.MustConnectFromEnv(servicePoolBase(), pool...)
 }
 
+// Migrate brings the user-service schema up to date: it auto-migrates the owned
+// tables and adds supporting indexes. It fail-fasts if the core migration fails
+// but treats index creation as best-effort.
 func Migrate() {
 	if err := DB.AutoMigrate(&Organization{}, &Membership{}); err != nil {
 		slog.Error("Database migration failed", "error", err)

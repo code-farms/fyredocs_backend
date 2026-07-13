@@ -1,3 +1,7 @@
+// Package worker runs the NATS JetStream consumer loop shared by the PDF
+// processing services. It pulls dispatched jobs, downloads inputs from object
+// storage, invokes the service-specific Process function, uploads outputs, and
+// publishes completion or failure events with bounded concurrency and retries.
 package worker
 
 import (
@@ -26,13 +30,19 @@ import (
 	"fyredocs/shared/storage"
 )
 
+// ProcessResult is what a Process function returns: the local path of the
+// produced output and any metadata to attach to the completion event.
 type ProcessResult struct {
 	OutputPath string
 	Metadata   map[string]interface{}
 }
 
+// ProcessFunc performs the actual work for a job. Each service supplies its own
+// implementation; the worker handles transport, storage, and lifecycle.
 type ProcessFunc func(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string) (*ProcessResult, error)
 
+// WorkerConfig wires the worker to its service: the tools it accepts, the
+// Process implementation, and the NATS, DB, storage, and Redis dependencies.
 type WorkerConfig struct {
 	ServiceName  string
 	AllowedTools map[string]bool
@@ -43,6 +53,7 @@ type WorkerConfig struct {
 	RedisClient  *redis.Client // optional – only used for processing markers; may be nil
 }
 
+// JobPayload is the dispatch message consumed from the JOBS_DISPATCH stream.
 type JobPayload struct {
 	EventType     string          `json:"eventType"`
 	JobID         string          `json:"jobId"`
@@ -115,6 +126,9 @@ func concurrencyFromEnv() int {
 	return 2
 }
 
+// Run starts the worker loop and blocks until ctx is cancelled. It maintains a
+// durable pull consumer, processes jobs up to a concurrency limit derived from
+// the environment, and drains in-flight work on shutdown.
 func Run(ctx context.Context, cfg WorkerConfig) {
 	logger := slog.Default().With("service", cfg.ServiceName)
 

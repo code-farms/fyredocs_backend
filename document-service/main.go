@@ -1,3 +1,6 @@
+// Command document-service owns the user document library: documents, folders,
+// tags, and exports, with organization-scoped RBAC. It also runs a subscriber
+// that finalizes completed processing jobs into documents.
 package main
 
 import (

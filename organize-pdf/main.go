@@ -1,3 +1,7 @@
+// Command organize-pdf is a processing worker for fast pdfcpu-based PDF
+// manipulation (merge, split, rotate, watermark, protect, scan-to-pdf, and
+// more). It consumes dispatched jobs from NATS and also exposes an internal
+// edge-detection endpoint for the mobile scanner.
 package main
 
 import (
@@ -115,6 +119,7 @@ func main() {
 	// Internal service-to-service endpoints (edge detection for the scanner).
 	httpapi.RegisterInternalRoutes(r, store, os.Getenv("INTERNAL_API_TOKEN"))
 
+	// Readiness probe: reports 503 unless Redis, NATS, and Postgres are all reachable.
 	r.GET("/readyz", func(c *gin.Context) {
 		checks := gin.H{}
 		ready := true
@@ -122,7 +127,6 @@ func main() {
 		hctx, hcancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer hcancel()
 
-		// Check Redis
 		if err := redisstore.Client.Ping(hctx).Err(); err != nil {
 			checks["redis"] = err.Error()
 			ready = false
@@ -130,7 +134,6 @@ func main() {
 			checks["redis"] = "ok"
 		}
 
-		// Check NATS
 		if natsconn.Conn == nil || !natsconn.Conn.IsConnected() {
 			checks["nats"] = "disconnected"
 			ready = false
@@ -138,7 +141,6 @@ func main() {
 			checks["nats"] = "ok"
 		}
 
-		// Check DB
 		if err := models.DB.Exec("SELECT 1").Error; err != nil {
 			checks["postgres"] = err.Error()
 			ready = false
@@ -180,4 +182,3 @@ func main() {
 		slog.Error("server shutdown error", "error", err)
 	}
 }
-

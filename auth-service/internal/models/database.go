@@ -13,6 +13,7 @@ import (
 	"fyredocs/shared/database"
 )
 
+// DB is the package-global GORM handle for auth-service, initialized by Connect.
 var DB *gorm.DB
 
 // PoolConfig aliases the shared pool settings so main() call sites keep
@@ -37,6 +38,11 @@ func Connect(pool ...PoolConfig) {
 	DB = database.MustConnectFromEnv(servicePoolBase(), pool...)
 }
 
+// Migrate brings the auth-service schema up to date: it auto-migrates the owned
+// tables, adds composite indexes and the role check constraint, and seeds the
+// canonical subscription plans. It fail-fasts if the core migration fails but
+// treats index/constraint errors as warnings so a partially-migrated database
+// can still start.
 func Migrate() {
 	if err := DB.AutoMigrate(
 		&User{},

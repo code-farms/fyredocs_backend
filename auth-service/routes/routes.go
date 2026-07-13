@@ -18,6 +18,9 @@ import (
 	"fyredocs/shared/config"
 )
 
+// SetupRouter wires the auth-service routes onto r. It registers per-endpoint
+// IP rate limiters, then mounts the public auth routes, the token-protected auth
+// routes, the internal service-to-service API, and the health/readiness probes.
 func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenDenylist, redisClient *redis.Client, mailer email.Mailer, authMiddleware gin.HandlerFunc) {
 	authEndpoints := &handlers.AuthEndpoints{
 		Issuer:      issuer,
@@ -103,6 +106,7 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 		c.String(200, "ok")
 	})
 
+	// Readiness probe: reports 503 unless Postgres and Redis are both reachable.
 	r.GET("/readyz", func(c *gin.Context) {
 		checks := gin.H{}
 		ready := true
@@ -110,7 +114,6 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 		hctx, hcancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer hcancel()
 
-		// Check PostgreSQL
 		if err := models.DB.Exec("SELECT 1").Error; err != nil {
 			checks["postgres"] = err.Error()
 			ready = false
@@ -118,7 +121,6 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 			checks["postgres"] = "ok"
 		}
 
-		// Check Redis
 		if err := redisClient.Ping(hctx).Err(); err != nil {
 			checks["redis"] = err.Error()
 			ready = false

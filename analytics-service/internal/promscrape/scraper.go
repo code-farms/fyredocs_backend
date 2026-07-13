@@ -1,3 +1,5 @@
+// Package promscrape scrapes Prometheus metrics endpoints and parses the
+// exposition format into the aggregates the analytics dashboards consume.
 package promscrape
 
 import (

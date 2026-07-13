@@ -17,6 +17,10 @@ import (
 	"job-service/middleware"
 )
 
+// SetupRouter wires the job-service routes onto r: the presigned upload
+// protocol, per-tool job creation/query/download endpoints, job history and SSE
+// updates, and the health/readiness probes. Sensitive endpoints get their own
+// IP rate limiters keyed by concern (upload, job creation, edge detection).
 func SetupRouter(r *gin.Engine) {
 	window := config.GetEnvDuration("RATE_LIMIT_WINDOW", 60*time.Second)
 
@@ -99,6 +103,7 @@ func SetupRouter(r *gin.Engine) {
 		c.String(200, "ok")
 	})
 
+	// Readiness probe: reports 503 unless Postgres, Redis, and NATS are all reachable.
 	r.GET("/readyz", func(c *gin.Context) {
 		checks := gin.H{}
 		ready := true
@@ -106,7 +111,6 @@ func SetupRouter(r *gin.Engine) {
 		hctx, hcancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer hcancel()
 
-		// Check PostgreSQL
 		if err := models.DB.Exec("SELECT 1").Error; err != nil {
 			checks["postgres"] = err.Error()
 			ready = false
@@ -114,7 +118,6 @@ func SetupRouter(r *gin.Engine) {
 			checks["postgres"] = "ok"
 		}
 
-		// Check Redis
 		if err := redisstore.Client.Ping(hctx).Err(); err != nil {
 			checks["redis"] = err.Error()
 			ready = false
@@ -122,7 +125,6 @@ func SetupRouter(r *gin.Engine) {
 			checks["redis"] = "ok"
 		}
 
-		// Check NATS
 		if natsconn.Conn == nil || !natsconn.Conn.IsConnected() {
 			checks["nats"] = "disconnected"
 			ready = false

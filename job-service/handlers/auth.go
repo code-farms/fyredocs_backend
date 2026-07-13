@@ -9,7 +9,10 @@ import (
 	"fyredocs/shared/authverify"
 )
 
-// Fix #3: Removed X-User-ID header fallback - only trust auth context from JWT
+// authUserID returns the authenticated user's ID from the JWT-verified auth
+// context, or nil when the request is unauthenticated. It deliberately ignores
+// the client-supplied X-User-ID header so identity can only come from a
+// verified token.
 func authUserID(c *gin.Context) *uuid.UUID {
 	if c == nil {
 		return nil

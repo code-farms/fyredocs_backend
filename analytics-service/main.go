@@ -1,3 +1,6 @@
+// Command analytics-service ingests platform events and metrics and serves the
+// user dashboard and the admin analytics API. It consumes analytics events from
+// NATS, samples gateway HTTP metrics, and scrapes Prometheus for system health.
 package main
 
 import (

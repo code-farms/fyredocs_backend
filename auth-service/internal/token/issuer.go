@@ -1,3 +1,6 @@
+// Package token issues and verifies the HS256 JWTs that authenticate users
+// across the platform. auth-service is the sole issuer; every other service
+// only verifies, keeping the signing secret confined to this service.
 package token
 
 import (
@@ -10,6 +13,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// Claims is the JWT claim set carried by access tokens: the standard registered
+// claims plus the platform's authorization fields (role, scope, guest flag) and
+// the optional impersonation marker.
 type Claims struct {
 	jwt.RegisteredClaims
 	Role    string   `json:"role,omitempty"`
@@ -20,12 +26,17 @@ type Claims struct {
 	ImpersonatedBy string `json:"impersonated_by,omitempty"`
 }
 
+// Issuer signs and verifies tokens with a single HS256 secret, binding every
+// token to the configured issuer and audience.
 type Issuer struct {
 	hmacSecret []byte
 	issuer     string
 	audience   string
 }
 
+// NewIssuerFromEnv builds an Issuer from the JWT_* environment variables. The
+// secret, issuer, and audience are all mandatory so the service refuses to start
+// with an unsafe or ambiguous token configuration.
 func NewIssuerFromEnv() (*Issuer, error) {
 	secret := os.Getenv("JWT_HS256_SECRET")
 	if secret == "" {
@@ -155,4 +166,3 @@ func (i *Issuer) VerifyRefreshToken(tokenStr string) (userID string, err error) 
 
 	return claims.Subject, nil
 }
-

@@ -35,6 +35,7 @@ type Export struct {
 	CompletedAt    *time.Time     `json:"completedAt,omitempty"`
 }
 
+// BeforeCreate assigns a time-ordered UUIDv7 primary key when one was not set.
 func (e *Export) BeforeCreate(tx *gorm.DB) error {
 	if e.ID == uuid.Nil {
 		e.ID = uuid.Must(uuid.NewV7())

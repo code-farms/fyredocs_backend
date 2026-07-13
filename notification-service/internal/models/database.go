@@ -10,6 +10,7 @@ import (
 	"fyredocs/shared/database"
 )
 
+// DB is the package-global GORM handle for notification-service, initialized by Connect.
 var DB *gorm.DB
 
 // PoolConfig aliases the shared pool settings so main() call sites keep
@@ -34,6 +35,9 @@ func Connect(pool ...PoolConfig) {
 	DB = database.MustConnectFromEnv(servicePoolBase(), pool...)
 }
 
+// Migrate brings the notification-service schema up to date: it auto-migrates
+// the notifications table and adds the query and idempotency indexes. It
+// fail-fasts on the core migration but treats index creation as best-effort.
 func Migrate() {
 	if err := DB.AutoMigrate(&Notification{}); err != nil {
 		slog.Error("Database migration failed", "error", err)

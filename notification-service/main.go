@@ -1,3 +1,6 @@
+// Command notification-service delivers in-app notifications. It consumes
+// job-completion events to persist a durable per-user feed and pushes live
+// updates to connected SSE clients over NATS.
 package main
 
 import (

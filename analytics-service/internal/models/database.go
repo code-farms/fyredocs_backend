@@ -10,6 +10,7 @@ import (
 	"fyredocs/shared/database"
 )
 
+// DB is the package-global GORM handle for analytics-service, initialized by Connect.
 var DB *gorm.DB
 
 // PoolConfig aliases the shared pool settings so main() call sites keep
@@ -34,6 +35,10 @@ func Connect(pool ...PoolConfig) {
 	DB = database.MustConnectFromEnv(servicePoolBase(), pool...)
 }
 
+// Migrate brings the analytics-service schema up to date: it auto-migrates the
+// event and metric tables and adds composite indexes tuned for the dashboard
+// queries. It fail-fasts on the core migration but treats index creation as
+// best-effort.
 func Migrate() {
 	if err := DB.AutoMigrate(
 		&AnalyticsEvent{},

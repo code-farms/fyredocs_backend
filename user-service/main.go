@@ -1,3 +1,5 @@
+// Command user-service owns organizations and memberships, providing the
+// role-based access control (RBAC) anchor for multi-tenant document ownership.
 package main
 
 import (

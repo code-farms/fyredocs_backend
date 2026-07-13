@@ -36,6 +36,9 @@ func NewResendMailerFromEnv() (*ResendMailer, error) {
 	}, nil
 }
 
+// SendPasswordReset delivers the reset email via Resend. The reset URL and
+// request IP are HTML-escaped before interpolation to prevent injection into
+// the message body.
 func (m *ResendMailer) SendPasswordReset(ctx context.Context, to, resetURL, requestIP string, ttl time.Duration) error {
 	minutes := int(ttl.Minutes())
 	if minutes < 1 {
