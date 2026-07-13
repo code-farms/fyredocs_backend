@@ -1,6 +1,7 @@
 package authverify
 
 import (
+	"context"
 	"testing"
 )
 
@@ -20,11 +21,11 @@ func TestNewRedisTokenDenylistNilClient(t *testing.T) {
 
 func TestDenylistNilReceiverSafe(t *testing.T) {
 	var d *RedisTokenDenylist
-	denied, err := d.IsTokenDenied(nil, "token")
+	denied, err := d.IsTokenDenied(context.Background(), "token")
 	if denied || err != nil {
 		t.Errorf("expected false/nil for nil receiver, got %v/%v", denied, err)
 	}
-	err = d.DenyToken(nil, "token", 0)
+	err = d.DenyToken(context.Background(), "token", 0)
 	if err != nil {
 		t.Errorf("expected nil for nil receiver, got %v", err)
 	}
@@ -32,7 +33,7 @@ func TestDenylistNilReceiverSafe(t *testing.T) {
 
 func TestGuestStoreNilReceiverSafe(t *testing.T) {
 	var s *RedisGuestStore
-	valid, err := s.ValidateGuestToken(nil, "token")
+	valid, err := s.ValidateGuestToken(context.Background(), "token")
 	if valid || err != nil {
 		t.Errorf("expected false/nil for nil receiver, got %v/%v", valid, err)
 	}

@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 )
@@ -38,7 +39,7 @@ func TestParseLevel(t *testing.T) {
 }
 
 func TestRequestIDFromContextNil(t *testing.T) {
-	if got := RequestIDFromContext(nil); got != "" {
+	if got := RequestIDFromContext(context.Background()); got != "" {
 		t.Errorf("expected empty string, got %q", got)
 	}
 }

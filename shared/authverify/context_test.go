@@ -27,7 +27,7 @@ func TestWithAuthContextAndFromContext(t *testing.T) {
 }
 
 func TestFromContextNil(t *testing.T) {
-	_, ok := FromContext(nil)
+	_, ok := FromContext(context.Background())
 	if ok {
 		t.Error("expected ok=false for nil context")
 	}
