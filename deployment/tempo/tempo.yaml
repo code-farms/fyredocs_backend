@@ -1,0 +1,31 @@
+# Grafana Tempo — single-binary trace backend.
+#
+# Receives spans from the otel-collector over OTLP/gRPC (:4317) and stores them
+# on a local volume. Grafana queries traces via the HTTP API (:3200).
+# Started only under the compose "observability" profile.
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+# Flush traces promptly so they are queryable soon after ingestion (dev-friendly).
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 48h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks

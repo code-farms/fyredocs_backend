@@ -111,6 +111,35 @@ graph TB
     DOC -.->|POST /internal/notifications| NOT
 ```
 
+## Observability (opt-in `observability` profile)
+
+Every service already emits OpenTelemetry traces (`shared/telemetry`) and
+Prometheus metrics at `/metrics` (`shared/metrics`). The backing stack below is
+**not** started by a plain `docker compose up` — bring it up with
+`docker compose --profile observability up -d`. When it is down, the services'
+OTLP endpoint probe fails and tracing self-disables cleanly.
+
+```mermaid
+graph LR
+    subgraph Services["All 11 services"]
+        SVC["api-gateway · auth · job · workers ·<br/>analytics · document · user · notification<br/>(OTLP traces + /metrics)"]
+    end
+
+    subgraph Obs["Observability stack (profile: observability)"]
+        COL["otel-collector<br/>OTLP/HTTP :4318 · gRPC :4317<br/>self-metrics :8888"]
+        TEMPO["tempo<br/>trace store · HTTP API :3200"]
+        PROM["prometheus :9090<br/>scrapes /metrics (loopback UI)"]
+        GRAF["grafana :3000<br/>dashboards + trace explorer (loopback UI)"]
+    end
+
+    SVC -->|OTLP/HTTP :4318| COL
+    COL -->|OTLP/gRPC :4317| TEMPO
+    PROM -->|scrape /metrics| SVC
+    PROM -->|scrape :8888| COL
+    GRAF -->|PromQL| PROM
+    GRAF -->|traces| TEMPO
+```
+
 ## Data Flow Overview
 
 ```mermaid

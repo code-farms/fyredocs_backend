@@ -6,7 +6,7 @@ All compose files live in `deployment/` and share the same project name (`fyredo
 
 | File | Role | When to use |
 |------|------|-------------|
-| `docker-compose.yml` | **Canonical stack** — all 11 services + infra (db, redis, nats, minio, caddy) + backups. The single source of truth for every service's config. | Full deploys (`deployment/deploy.sh` uses it). |
+| `docker-compose.yml` | **Canonical stack** — all 11 services + infra (db, redis, nats, minio, caddy) + backups, plus an opt-in `observability` profile (otel-collector, tempo, prometheus, grafana). The single source of truth for every service's config. | Full deploys (`deployment/deploy.sh` uses it). |
 | `docker-compose.essentials.yml` | **Infra only** — db (5432), redis (6379), nats (4222), minio (9000, console 9001), minio-init. Ports published to the host. Creates `fyredocs_net`. | Local dev where services run on the host via `go run`, or as the dependency provider for per-service files. |
 | `docker-compose-<service>.yml` × 11 | **One service each** — extends the service's definition from `docker-compose.yml`. | Build/redeploy a single service against already-running infra. |
 
@@ -51,6 +51,25 @@ deployment\deploy.bat auth-service         # Windows
 ```
 
 Equivalent Makefile shorthand against the canonical file: `make up SVC=auth-service`.
+
+## Observability profile (opt-in)
+
+The canonical file carries an optional monitoring stack behind the compose
+profile `observability`: `otel-collector`, `tempo`, `prometheus`, `grafana`.
+Because they declare `profiles: ["observability"]`, a plain `docker compose up`
+(and `deploy.sh`) never starts them — services keep emitting telemetry, and when
+the stack is down their OTLP endpoint probe fails so tracing self-disables
+cleanly.
+
+```bash
+# start the monitoring stack alongside a running core stack
+docker compose -f deployment/docker-compose.yml --env-file .env --profile observability up -d
+```
+
+Config lives in `deployment/{otel-collector,tempo,prometheus,grafana}/` (mounted
+read-only). Grafana (`http://127.0.0.1:3000`) and Prometheus
+(`http://127.0.0.1:9090`) are bound loopback-only. See
+[observability.md](./observability.md) for the full data flow and details.
 
 ## Validation
 

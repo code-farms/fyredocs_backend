@@ -88,6 +88,7 @@ Client → Caddy edge (:80/:443 — TLS, gzip)
 - **Message Bus**: NATS JetStream — streams: `JOBS_DISPATCH`, `JOBS_EVENTS`, `JOBS_DLQ`, `ANALYTICS`
 - **Document Processing**: LibreOffice + unoserver, pdf2docx, pdfcpu, Poppler, Ghostscript, Tesseract OCR
 - **Auth**: JWT (HS256) with HTTP-only cookies, refresh-token rotation, DB-backed sessions
+- **Observability**: OpenTelemetry tracing + Prometheus `/metrics` in every service; opt-in backing stack (OTel Collector → Tempo, Prometheus, Grafana) via the `observability` compose profile
 - **Containerization**: Docker Compose (per-service compose file under `deployment/`)
 
 ## Documentation
@@ -95,7 +96,7 @@ Client → Caddy edge (:80/:443 — TLS, gzip)
 All detailed documentation lives under [`docs/`](docs/):
 
 - **Service docs**: [`docs/developer/services/`](docs/developer/services/) — architecture, endpoints, and configuration for each service
-- **Architecture**: [`docs/developer/architecture/`](docs/developer/architecture/) — Redis layout, error logging, base image setup
+- **Architecture**: [`docs/developer/architecture/`](docs/developer/architecture/) — Redis layout, error logging, base image setup, [observability stack](docs/developer/architecture/observability.md)
 - **API spec**: [`docs/developer/swagger/openapi.yaml`](docs/developer/swagger/openapi.yaml) — OpenAPI specification
 - **Diagrams**: [`docs/developer/mermaid/`](docs/developer/mermaid/) — system overview + per-service architecture & sequence diagrams
 - **Postman**: [`Fyredocs_API.postman_collection.json`](Fyredocs_API.postman_collection.json) — importable API collection

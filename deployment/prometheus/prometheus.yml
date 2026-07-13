@@ -1,0 +1,41 @@
+# Prometheus scrape configuration for the fyredocs stack.
+#
+# Scrapes the /metrics endpoint every service exposes (shared/metrics) plus the
+# otel-collector's own telemetry. Targets are the internal service DNS names on
+# fyredocs_net. Started only under the compose "observability" profile.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: fyredocs-services
+    metrics_path: /metrics
+    static_configs:
+      # NOTE: api-gateway is hardcoded to 8080 here. It is coupled to
+      # ${API_GATEWAY_PORT:-8080} in docker-compose.yml — keep them in sync if
+      # the gateway port changes.
+      - targets:
+          - api-gateway:8080
+          - auth-service:8086
+          - job-service:8081
+          - convert-from-pdf:8082
+          - convert-to-pdf:8083
+          - organize-pdf:8084
+          - optimize-pdf:8085
+          - analytics-service:8087
+          - document-service:8089
+          - user-service:8090
+          - notification-service:8091
+
+  # otel-collector self-telemetry (span throughput, queue sizes, export errors).
+  - job_name: otel-collector
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - otel-collector:8888
+
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090

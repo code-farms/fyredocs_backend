@@ -1,0 +1,46 @@
+# OpenTelemetry Collector (contrib) configuration.
+#
+# Single ingestion point for all fyredocs services. Every service ships spans
+# via OTLP/HTTP to otel-collector:4318 (OTEL_EXPORTER_OTLP_ENDPOINT); the
+# collector batches them and forwards to Tempo over OTLP/gRPC (tempo:4317).
+#
+# Started only under the compose "observability" profile. When it is not
+# running, services' endpoint probe fails and tracing self-disables cleanly.
+
+receivers:
+  otlp:
+    protocols:
+      # Services speak OTLP/HTTP here — this port MUST stay 4318 to match
+      # OTEL_EXPORTER_OTLP_ENDPOINT in every service's compose block.
+      http:
+        endpoint: 0.0.0.0:4318
+      # gRPC receiver kept available for any future gRPC exporters.
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch: {}
+
+exporters:
+  # Forward traces to Tempo over OTLP/gRPC. tls.insecure: internal network,
+  # no TLS between collector and Tempo.
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+service:
+  # Expose the collector's own metrics for Prometheus to scrape (:8888/metrics).
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/tempo]

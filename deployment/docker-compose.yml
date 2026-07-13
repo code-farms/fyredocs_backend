@@ -1030,6 +1030,139 @@ services:
     networks:
       - fyredocs_net
 
+  # ==================== OBSERVABILITY ====================
+  # Opt-in backing stack for the tracing/metrics the services already emit.
+  # NOT started by a plain `docker compose up` — every service below carries
+  # profiles: ["observability"]. Start it with:
+  #   docker compose --profile observability up -d
+  # When it is down, services' OTLP endpoint probe fails and tracing
+  # self-disables cleanly (shared/telemetry probeEndpoint).
+  #
+  # Data flow:
+  #   services --OTLP/HTTP :4318--> otel-collector --OTLP/gRPC :4317--> tempo
+  #   prometheus --scrape /metrics--> services + otel-collector
+  #   grafana --> Prometheus + Tempo datasources
+  # UIs (Grafana, Prometheus) are bound loopback-only, like the MinIO console.
+
+  # OTLP ingestion point. Receives spans over HTTP on 4318 (matches every
+  # service's OTEL_EXPORTER_OTLP_ENDPOINT) and forwards them to Tempo.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.156.0
+    profiles: ["observability"]
+    restart: always
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    deploy:
+      resources:
+        limits:
+          memory: ${OTEL_COLLECTOR_MEM_LIMIT:-256M}
+          cpus: "${OTEL_COLLECTOR_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${OTEL_COLLECTOR_MEM_RESERVATION:-64M}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      tempo:
+        condition: service_started
+    networks:
+      - fyredocs_net
+
+  # Trace storage/query backend. Ingests from the collector over OTLP/gRPC
+  # (:4317); Grafana queries it over HTTP (:3200).
+  tempo:
+    image: grafana/tempo:2.6.1
+    profiles: ["observability"]
+    restart: always
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    deploy:
+      resources:
+        limits:
+          memory: ${TEMPO_MEM_LIMIT:-512M}
+          cpus: "${TEMPO_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${TEMPO_MEM_RESERVATION:-128M}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - fyredocs_net
+
+  # Scrapes the /metrics endpoint of every service (see prometheus/prometheus.yml).
+  # Console loopback-only for operators — never public.
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    profiles: ["observability"]
+    restart: always
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    deploy:
+      resources:
+        limits:
+          memory: ${PROMETHEUS_MEM_LIMIT:-512M}
+          cpus: "${PROMETHEUS_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${PROMETHEUS_MEM_RESERVATION:-128M}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - fyredocs_net
+
+  # Dashboards + trace explorer. Datasources (Prometheus, Tempo) and the
+  # fyredocs-overview dashboard are auto-provisioned from ./grafana.
+  # UI loopback-only; default admin password overridable via env.
+  grafana:
+    image: grafana/grafana:11.4.0
+    profiles: ["observability"]
+    restart: always
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    deploy:
+      resources:
+        limits:
+          memory: ${GRAFANA_MEM_LIMIT:-256M}
+          cpus: "${GRAFANA_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${GRAFANA_MEM_RESERVATION:-64M}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      prometheus:
+        condition: service_started
+      tempo:
+        condition: service_started
+    networks:
+      - fyredocs_net
+
 networks:
   fyredocs_net:
     name: fyredocs_net
@@ -1042,3 +1175,6 @@ volumes:
   minio_data:
   caddy_data:
   caddy_config:
+  tempo_data:
+  prometheus_data:
+  grafana_data:
