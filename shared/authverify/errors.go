@@ -6,6 +6,7 @@ import (
 	"fyredocs/shared/response"
 )
 
+// ErrorCode is a stable machine-readable auth error code returned to clients.
 type ErrorCode string
 
 const (

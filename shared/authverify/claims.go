@@ -8,8 +8,12 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// ScopeList is a set of scope strings that tolerates either JSON encoding used
+// by token issuers: a space/comma-delimited string or a JSON array.
 type ScopeList []string
 
+// UnmarshalJSON accepts a scope claim as either a delimited string or a string
+// array, normalizing both to a trimmed, non-empty slice.
 func (s *ScopeList) UnmarshalJSON(data []byte) error {
 	if len(data) == 0 || string(data) == "null" {
 		*s = nil
@@ -49,6 +53,8 @@ func splitScope(value string) []string {
 	return clean
 }
 
+// Claims is the verifier's view of a token: the standard registered claims plus
+// the platform's authorization fields (role, scope, guest flag, impersonation).
 type Claims struct {
 	jwt.RegisteredClaims
 	Role           string    `json:"role,omitempty"`
@@ -57,6 +63,8 @@ type Claims struct {
 	ImpersonatedBy string    `json:"impersonated_by,omitempty"`
 }
 
+// ToAuthContext projects verified claims into the AuthContext carried through
+// request handling, trimming whitespace and dropping empty scopes.
 func (c Claims) ToAuthContext() AuthContext {
 	scope := make([]string, 0, len(c.Scope))
 	for _, entry := range c.Scope {

@@ -9,6 +9,9 @@ import (
 	"fyredocs/shared/response"
 )
 
+// GinMiddlewareOptions configures GinAuthMiddleware: the token verifier, an
+// optional guest store, whether to trust pre-resolved gateway headers, and the
+// header/cookie names carrying credentials.
 type GinMiddlewareOptions struct {
 	Verifier              *Verifier
 	GuestStore            GuestStore
@@ -18,6 +21,12 @@ type GinMiddlewareOptions struct {
 	AccessTokenCookieName string
 }
 
+// GinAuthMiddleware resolves the caller's AuthContext for each request. When
+// TrustGatewayHeaders is set it accepts the gateway's pre-verified X-User-*
+// headers; otherwise it verifies a bearer token (header or cookie), falling back
+// to a validated guest token. A present-but-invalid token is rejected with 401;
+// no credentials passes through as an anonymous request for downstream handlers
+// to gate.
 func GinAuthMiddleware(options GinMiddlewareOptions) gin.HandlerFunc {
 	headerName := options.GuestTokenHeaderName
 	if headerName == "" {

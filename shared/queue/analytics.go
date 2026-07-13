@@ -1,3 +1,6 @@
+// Package queue defines the event payloads and publish/consume helpers exchanged
+// over NATS JetStream: analytics tracking events and job pipeline events (dispatch
+// and status updates).
 package queue
 
 import (

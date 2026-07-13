@@ -13,21 +13,28 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// GuestStore validates anonymous guest tokens so guest sessions can be admitted
+// without a full JWT.
 type GuestStore interface {
 	ValidateGuestToken(ctx context.Context, token string) (bool, error)
 }
 
+// GuestStoreConfig customizes the Redis key layout for guest tokens.
 type GuestStoreConfig struct {
 	KeyPrefix string
 	KeySuffix string
 }
 
+// RedisGuestStore is the Redis-backed GuestStore implementation.
 type RedisGuestStore struct {
 	client    *redis.Client
 	keyPrefix string
 	keySuffix string
 }
 
+// NewRedisGuestStore builds a RedisGuestStore with default key prefix/suffix
+// when unset. Returns nil when client is nil so callers can treat guest support
+// as disabled.
 func NewRedisGuestStore(client *redis.Client, config GuestStoreConfig) *RedisGuestStore {
 	if client == nil {
 		return nil
@@ -47,6 +54,8 @@ func NewRedisGuestStore(client *redis.Client, config GuestStoreConfig) *RedisGue
 	}
 }
 
+// ValidateGuestToken reports whether the guest token maps to a live Redis key.
+// A nil store, nil client, or empty token is treated as invalid (not an error).
 func (s *RedisGuestStore) ValidateGuestToken(ctx context.Context, token string) (bool, error) {
 	if s == nil || s.client == nil || token == "" {
 		return false, nil
@@ -59,16 +68,23 @@ func (s *RedisGuestStore) ValidateGuestToken(ctx context.Context, token string) 
 	return result > 0, nil
 }
 
+// TokenDenylist tracks access tokens revoked before their natural expiry,
+// enabling immediate cross-service logout/revocation.
 type TokenDenylist interface {
 	IsTokenDenied(ctx context.Context, token string) (bool, error)
 	DenyToken(ctx context.Context, token string, ttl time.Duration) error
 }
 
+// RedisTokenDenylist is the Redis-backed TokenDenylist implementation. Tokens
+// are stored by SHA-256 hash so raw tokens never land in Redis.
 type RedisTokenDenylist struct {
 	client    *redis.Client
 	keyPrefix string
 }
 
+// NewRedisTokenDenylist builds a RedisTokenDenylist with a default key prefix
+// when unset. Returns nil when client is nil so callers can treat the denylist
+// as disabled.
 func NewRedisTokenDenylist(client *redis.Client, keyPrefix string) *RedisTokenDenylist {
 	if client == nil {
 		return nil
@@ -82,6 +98,8 @@ func NewRedisTokenDenylist(client *redis.Client, keyPrefix string) *RedisTokenDe
 	}
 }
 
+// IsTokenDenied reports whether the token has been revoked. A nil denylist, nil
+// client, or empty token is treated as not-denied (not an error).
 func (d *RedisTokenDenylist) IsTokenDenied(ctx context.Context, token string) (bool, error) {
 	if d == nil || d.client == nil || token == "" {
 		return false, nil
@@ -94,6 +112,8 @@ func (d *RedisTokenDenylist) IsTokenDenied(ctx context.Context, token string) (b
 	return result > 0, nil
 }
 
+// DenyToken revokes a token until ttl elapses, so the entry self-expires around
+// the token's own expiry. A non-positive ttl falls back to 8 hours.
 func (d *RedisTokenDenylist) DenyToken(ctx context.Context, token string, ttl time.Duration) error {
 	if d == nil || d.client == nil || token == "" {
 		return nil
@@ -110,6 +130,8 @@ func (d *RedisTokenDenylist) key(token string) string {
 	return fmt.Sprintf("%s:%s", d.keyPrefix, hex.EncodeToString(hash[:]))
 }
 
+// NewRedisClientFromEnv connects a Redis client from REDIS_* environment
+// variables and verifies it with a ping, returning an error if unreachable.
 func NewRedisClientFromEnv() (*redis.Client, error) {
 	addr := config.GetEnv("REDIS_ADDR", "redis:6379")
 	password := os.Getenv("REDIS_PASSWORD")

@@ -1,3 +1,8 @@
+// Package authverify verifies the platform's JWTs and derives the per-request
+// AuthContext used for authorization. It is the read side of authentication:
+// auth-service issues tokens, and every service (via the gateway or directly)
+// uses this package to verify them, resolve identity/role/scope, honor the
+// revocation denylist, and enforce role/scope requirements.
 package authverify
 
 import (
@@ -15,12 +20,17 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// Verification error sentinels returned by Verify, letting callers distinguish a
+// missing, malformed, or expired token.
 var (
 	ErrTokenMissing = errors.New("token missing")
 	ErrTokenInvalid = errors.New("token invalid")
 	ErrTokenExpired = errors.New("token expired")
 )
 
+// VerifierConfig configures a Verifier: the permitted signing algorithms and
+// their keys, the expected issuer/audience, allowed clock skew, and an optional
+// revocation denylist.
 type VerifierConfig struct {
 	AllowedAlgs  []string
 	HMACSecret   []byte
@@ -31,6 +41,8 @@ type VerifierConfig struct {
 	Denylist     TokenDenylist
 }
 
+// Verifier validates tokens against a fixed configuration. It is safe for
+// concurrent use.
 type Verifier struct {
 	allowedAlgs  map[string]struct{}
 	hmacSecret   []byte
@@ -41,6 +53,9 @@ type Verifier struct {
 	denylist     TokenDenylist
 }
 
+// NewVerifier validates the config and builds a Verifier. It rejects the "none"
+// algorithm and any allowed algorithm whose key is missing, so a misconfigured
+// verifier fails fast rather than silently accepting unsigned tokens.
 func NewVerifier(config VerifierConfig) (*Verifier, error) {
 	allowed := make(map[string]struct{}, len(config.AllowedAlgs))
 	for _, alg := range config.AllowedAlgs {
@@ -73,6 +88,9 @@ func NewVerifier(config VerifierConfig) (*Verifier, error) {
 	}, nil
 }
 
+// NewVerifierFromEnv builds a Verifier from the JWT_* environment variables,
+// wiring in the given denylist. HS256 secret falls back from JWT_HS256_SECRET to
+// JWT_SECRET.
 func NewVerifierFromEnv(denylist TokenDenylist) (*Verifier, error) {
 	allowed := parseCommaList(config.GetEnv("JWT_ALLOWED_ALGS", "HS256"))
 	clockSkew := config.GetEnvDuration("JWT_CLOCK_SKEW", 60*time.Second)
@@ -95,6 +113,10 @@ func NewVerifierFromEnv(denylist TokenDenylist) (*Verifier, error) {
 	})
 }
 
+// Verify checks a token end to end: denylist, signing method and key, issuer,
+// audience, and expiry (with configured clock skew), plus required registered
+// claims (subject, iat, exp). It returns the parsed Claims or one of the
+// Err* sentinels.
 func (v *Verifier) Verify(ctx context.Context, tokenString string) (*Claims, error) {
 	if strings.TrimSpace(tokenString) == "" {
 		return nil, ErrTokenMissing

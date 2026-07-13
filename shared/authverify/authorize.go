@@ -10,14 +10,19 @@ import (
 	"fyredocs/shared/response"
 )
 
+// IsAuthenticated reports whether the context belongs to a real, non-guest user.
 func IsAuthenticated(authCtx AuthContext) bool {
 	return strings.TrimSpace(authCtx.UserID) != "" && !authCtx.IsGuest
 }
 
+// IsGuest reports whether the context belongs to an anonymous guest.
 func IsGuest(authCtx AuthContext) bool {
 	return authCtx.IsGuest
 }
 
+// HasRole reports whether the caller holds any of the given roles. Admins are
+// always granted. Matches use a constant-time comparison to avoid leaking role
+// names via timing.
 func HasRole(authCtx AuthContext, roles ...string) bool {
 	if strings.EqualFold(authCtx.Role, "admin") {
 		return true
@@ -30,6 +35,8 @@ func HasRole(authCtx AuthContext, roles ...string) bool {
 	return false
 }
 
+// HasScope reports whether the caller holds any of the given scopes. Admins are
+// always granted; scope matching is constant-time.
 func HasScope(authCtx AuthContext, scopes ...string) bool {
 	if strings.EqualFold(authCtx.Role, "admin") {
 		return true
@@ -47,6 +54,8 @@ func HasScope(authCtx AuthContext, scopes ...string) bool {
 	return false
 }
 
+// RequireAuthenticatedGin returns middleware that rejects unauthenticated or
+// guest requests with 401/403 before the handler runs.
 func RequireAuthenticatedGin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authCtx, ok := GetGinAuth(c)
@@ -62,6 +71,8 @@ func RequireAuthenticatedGin() gin.HandlerFunc {
 	}
 }
 
+// RequireRoleGin returns middleware that admits only authenticated non-guest
+// callers who hold one of the given roles (admins always pass).
 func RequireRoleGin(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authCtx, ok := GetGinAuth(c)
@@ -81,6 +92,8 @@ func RequireRoleGin(roles ...string) gin.HandlerFunc {
 	}
 }
 
+// RequireScopeGin returns middleware that admits only authenticated non-guest
+// callers who hold one of the given scopes (admins always pass).
 func RequireScopeGin(scopes ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authCtx, ok := GetGinAuth(c)
@@ -100,6 +113,8 @@ func RequireScopeGin(scopes ...string) gin.HandlerFunc {
 	}
 }
 
+// secureEqual compares two strings in constant time, returning false for empty
+// or length-mismatched inputs, so authorization checks don't leak values via timing.
 func secureEqual(left string, right string) bool {
 	if left == "" || right == "" {
 		return false

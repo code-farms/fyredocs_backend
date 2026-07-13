@@ -1,3 +1,6 @@
+// Package redisstore provides the shared Redis client used for rate limiting,
+// caching, and guest/denylist storage. Connect initializes the package-global
+// Client from REDIS_* environment variables.
 package redisstore
 
 import (
@@ -10,8 +13,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// Client is the package-global Redis client, initialized by Connect.
 var Client *redis.Client
 
+// Connect initializes Client from REDIS_* environment variables and verifies it
+// with a ping, exiting the process if Redis is unreachable.
 func Connect() {
 	addr := config.GetEnv("REDIS_ADDR", "redis:6379")
 	password := os.Getenv("REDIS_PASSWORD")
@@ -32,9 +38,9 @@ func Connect() {
 	slog.Info("Redis connection established")
 }
 
+// Close releases the shared client if it was initialized; safe to call when nil.
 func Close() {
 	if Client != nil {
 		_ = Client.Close()
 	}
 }
-

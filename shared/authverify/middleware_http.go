@@ -24,6 +24,10 @@ func guestPlanContext() AuthContext {
 // PlanResolver resolves plan info for a user and enriches the AuthContext.
 type PlanResolver func(r *http.Request, authCtx *AuthContext)
 
+// HTTPMiddlewareOptions configures HTTPAuthMiddleware. It mirrors
+// GinMiddlewareOptions and adds a PlanResolver hook (used by the gateway to
+// enrich the context with plan limits) and PublicPaths that always skip
+// verification.
 type HTTPMiddlewareOptions struct {
 	Verifier              *Verifier
 	GuestStore            GuestStore
@@ -39,6 +43,10 @@ type HTTPMiddlewareOptions struct {
 	PublicPaths []string
 }
 
+// HTTPAuthMiddleware is the net/http counterpart to GinAuthMiddleware, used by
+// the gateway. It verifies the caller (gateway headers, bearer token, or guest
+// token), optionally resolves plan limits, applies guest defaults on public
+// paths, and forwards the resolved identity to upstream services.
 func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.Handler {
 	guestCookieName := options.GuestCookieName
 	if guestCookieName == "" {
@@ -121,6 +129,7 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 	}
 }
 
+// SplitScopes parses a space/comma-delimited scope header into a cleaned slice.
 func SplitScopes(header string) []string {
 	return splitScope(strings.TrimSpace(header))
 }

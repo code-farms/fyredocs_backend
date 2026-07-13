@@ -1,3 +1,6 @@
+// Package logger configures the shared structured logger (slog) and provides
+// request-ID propagation and operation-logging helpers. Each service calls Init
+// once at startup; there is no global shared instance across processes.
 package logger
 
 import (

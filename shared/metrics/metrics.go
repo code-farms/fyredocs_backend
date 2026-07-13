@@ -1,3 +1,6 @@
+// Package metrics defines the shared Prometheus collectors and the HTTP/Gin
+// middleware that records request counts and latencies, plus the /metrics
+// handler each service exposes for scraping.
 package metrics
 
 import (

@@ -1,3 +1,6 @@
+// Package config loads environment-based configuration shared by all services:
+// .env loading, typed env-var getters with defaults, plan/server defaults, and
+// the Postgres DSN builder.
 package config
 
 import (
@@ -11,6 +14,8 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// LoadConfig loads a local .env file if present, then relies on the process
+// environment. A missing .env is not an error (expected in production).
 func LoadConfig() {
 	if err := godotenv.Load(); err != nil {
 		slog.Info("No .env file found, relying on environment variables")

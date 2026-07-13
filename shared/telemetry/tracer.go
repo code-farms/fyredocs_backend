@@ -1,3 +1,6 @@
+// Package telemetry wires OpenTelemetry tracing for each service: it configures
+// the tracer provider and exporter and provides HTTP/Gin middleware that starts
+// a span and propagates trace context per request.
 package telemetry
 
 import (
@@ -18,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// Tracer is the package-global tracer for creating spans, set by Init.
 var Tracer trace.Tracer
 
 // Init sets up the OpenTelemetry tracer provider for the given service.

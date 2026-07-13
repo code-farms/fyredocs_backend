@@ -1,3 +1,6 @@
+// Package response defines the unified API response envelope and helpers for
+// writing success and error responses consistently from both net/http and Gin
+// handlers across every service.
 package response
 
 // APIResponse is the unified envelope for all API responses.

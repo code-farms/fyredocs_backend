@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// AuthContext is the verified identity and plan/authorization data carried
+// through a request after authentication. The gateway resolves it once and
+// forwards it to upstream services via the X-User-* headers below.
 type AuthContext struct {
 	UserID             string
 	Role               string
@@ -24,10 +27,13 @@ type authContextKey struct{}
 
 var authKey = authContextKey{}
 
+// WithAuthContext returns a copy of ctx carrying the given AuthContext.
 func WithAuthContext(ctx context.Context, authCtx AuthContext) context.Context {
 	return context.WithValue(ctx, authKey, authCtx)
 }
 
+// FromContext extracts the AuthContext previously stored by WithAuthContext;
+// ok is false when none is present.
 func FromContext(ctx context.Context) (AuthContext, bool) {
 	if ctx == nil {
 		return AuthContext{}, false
@@ -37,6 +43,7 @@ func FromContext(ctx context.Context) (AuthContext, bool) {
 	return authCtx, ok
 }
 
+// SetRequestAuth returns r with the AuthContext attached to its context.
 func SetRequestAuth(r *http.Request, authCtx AuthContext) *http.Request {
 	if r == nil {
 		return r
@@ -44,6 +51,8 @@ func SetRequestAuth(r *http.Request, authCtx AuthContext) *http.Request {
 	return r.WithContext(WithAuthContext(r.Context(), authCtx))
 }
 
+// ApplyUserHeaders writes the AuthContext onto the outbound X-User-* headers so
+// upstream services receive the caller's identity. Only non-empty fields are set.
 func ApplyUserHeaders(header http.Header, authCtx AuthContext) {
 	if header == nil {
 		return
@@ -71,6 +80,9 @@ func ApplyUserHeaders(header http.Header, authCtx AuthContext) {
 	}
 }
 
+// ClearUserHeaders strips all X-User-* headers. The gateway calls this on every
+// inbound request before applying its own, so a client cannot spoof identity by
+// sending these headers directly.
 func ClearUserHeaders(header http.Header) {
 	if header == nil {
 		return

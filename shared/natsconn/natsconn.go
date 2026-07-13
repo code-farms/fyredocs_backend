@@ -1,3 +1,6 @@
+// Package natsconn manages the shared NATS/JetStream connection and stream
+// setup used for cross-service events and job dispatch. It exposes the core
+// connection and the JetStream context as package globals initialized by Connect.
 package natsconn
 
 import (
