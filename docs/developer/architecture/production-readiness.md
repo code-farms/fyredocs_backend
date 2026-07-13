@@ -307,6 +307,10 @@ Lean and modern: gin, gorm, go-redis v9, nats.go (current jetstream API — not 
 
 ## 9. Refactoring Roadmap
 
+> The staged, do-this-then-this **how-to** for executing the horizontal-scaling
+> parts of this roadmap lives in [horizontal-scaling.md](./horizontal-scaling.md).
+> This section remains the authoritative *analysis*; that doc is the operator runbook.
+
 ### Priority-classified findings
 
 🔴 **Critical**

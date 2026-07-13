@@ -78,7 +78,7 @@ sequenceDiagram
 | Matcher | Paths | Upstream / action | Notes |
 |---------|-------|-------------------|-------|
 | `@objects` | `/{$S3_BUCKET_UPLOADS}/*`, `/{$S3_BUCKET_OUTPUTS}/*` (default `uploads`/`outputs`) | `reverse_proxy minio:9000` | `header_up Host {host}` (SigV4), `flush_interval -1`, no auth middleware — the presigned signature is the credential |
-| `@api` | `/api/*`, `/auth/*`, `/admin/*`, `/healthz` | `reverse_proxy api-gateway:8080` | `flush_interval -1` for SSE streams |
+| `@api` | `/api/*`, `/auth/*`, `/admin/*`, `/healthz` | `reverse_proxy` → **dynamic `a` upstreams** for `api-gateway:8080` | Load balanced (`lb_policy least_conn`) across every running gateway replica; `flush_interval -1` for SSE streams. See [Scaling the gateway](#scaling-the-gateway) |
 | (fallback) | everything else | `file_server` from `/srv/spa` | `try_files {path} /index.html`; `/assets/*` served `Cache-Control: public, max-age=31536000, immutable` |
 
 ### Why Host preservation is load-bearing
@@ -90,6 +90,33 @@ and the canonical path. Caddy forwards the **original** `Host` (`header_up Host
 signature against what it receives. Rewriting the Host (or stripping the bucket
 prefix) would invalidate every presigned URL. See
 [object-storage.md](./object-storage.md#presigned-flow-through-the-caddy-edge-same-origin).
+
+## Scaling the gateway
+
+The `@api` route load balances across api-gateway replicas using Caddy's
+**dynamic upstreams** (`dynamic a`). Instead of a fixed `api-gateway:8080`
+target, Caddy re-resolves the Compose service name against Docker's embedded
+DNS (`127.0.0.11`) every `5s`. Docker returns one A record per running replica,
+so scaling is a runtime operation — no Caddyfile edit:
+
+```bash
+docker compose up -d --scale api-gateway=3   # add replicas
+docker compose up -d --scale api-gateway=1   # scale back
+```
+
+The `api-gateway` service intentionally has **no `container_name`** so Compose
+can run multiple instances; keep it that way.
+
+Balancing and resilience settings on the route:
+
+- `lb_policy least_conn` — send each request to the replica with the fewest
+  active connections.
+- `lb_try_duration 5s` / `lb_try_interval 250ms` — a failed request is
+  transparently retried against another replica.
+- Passive health (`max_fails 3`, `fail_duration 30s`, `unhealthy_status 5xx`) —
+  a replica returning 5xx is ejected temporarily. Active `health_uri` checks do
+  **not** apply to dynamic upstreams; the DNS refresh removes departed replicas
+  and passive checks cover failing ones.
 
 ## TLS modes
 

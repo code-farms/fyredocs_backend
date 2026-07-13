@@ -59,3 +59,9 @@ for f in deployment/docker-compose*.yml; do
   docker compose -f "$f" --env-file .env config -q || echo "FAIL $f"
 done
 ```
+
+## Multi-host
+
+The same per-service `extends` files are how you run a subset of services (e.g.
+the conversion workers) on a **second host** pointed at shared infra. See the
+[horizontal-scaling runbook](./horizontal-scaling.md#4-stage-2--add-a-second-host-for-workers).

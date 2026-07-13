@@ -37,7 +37,29 @@
 	# the internal network; metrics are no longer internet-reachable.
 	@api path /api/* /auth/* /admin/* /healthz
 	handle @api {
-		reverse_proxy api-gateway:8080 {
+		# Load balanced across every running api-gateway replica. The
+		# upstreams are resolved dynamically from Docker's embedded DNS
+		# (127.0.0.11), which returns one A record per replica, so
+		# `docker compose up -d --scale api-gateway=N` is picked up on the
+		# next refresh with no edit here. Active health_uri checks do NOT
+		# apply to dynamic upstreams — the DNS refresh drops departed
+		# replicas and the passive checks below eject failing ones.
+		reverse_proxy {
+			dynamic a {
+				name      api-gateway
+				port      8080
+				refresh   5s
+				resolvers 127.0.0.11
+			}
+
+			lb_policy       least_conn
+			lb_try_duration 5s
+			lb_try_interval 250ms
+
+			fail_duration    30s
+			max_fails        3
+			unhealthy_status 5xx
+
 			flush_interval -1
 		}
 	}
