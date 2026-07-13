@@ -99,6 +99,15 @@ target, Caddy re-resolves the Compose service name against Docker's embedded
 DNS (`127.0.0.11`) every `5s`. Docker returns one A record per running replica,
 so scaling is a runtime operation — no Caddyfile edit:
 
+> **Gateway port is configurable.** The upstream port is
+> `port {$API_GATEWAY_PORT:8080}`, resolved from the `API_GATEWAY_PORT` env var
+> (default `8080`, set in the root `.env`). The same var drives the gateway
+> container's `PORT`/`expose`/healthcheck and the analytics dashboard's
+> gateway-scrape URLs, so they always agree. The gateway is **internal-only**
+> (never host-published — only Caddy's 80/443 are), so this port is not reachable
+> from outside; choosing a non-obvious value is defense-in-depth on the internal
+> network. The `.env` ships a non-default value (e.g. `47821`).
+
 ```bash
 docker compose up -d --scale api-gateway=3   # add replicas
 docker compose up -d --scale api-gateway=1   # scale back

@@ -60,6 +60,26 @@ for f in deployment/docker-compose*.yml; do
 done
 ```
 
+## Port-exposure invariant
+
+**Only the Caddy edge publishes host ports (`80`/`443`). Every other service is
+internal to `fyredocs_net`, and any dev-only published infra port is bound to
+`127.0.0.1`** (Postgres, Redis, NATS, MinIO in `docker-compose.essentials.yml`).
+Backend services (8081–8091) declare no `ports:` at all, so they are never
+reachable from the host or internet — and the api-gateway's port is configurable
+via `API_GATEWAY_PORT` (see [caddy-edge.md](./caddy-edge.md#scaling-the-gateway)).
+
+This matters because Docker's published ports **bypass host firewalls** (e.g.
+UFW), so a stray `ports:` mapping silently exposes an internal service. Guard
+against it — no Docker daemon required:
+
+```bash
+make check-ports        # -> deployment/scripts/check-port-exposure.sh
+```
+
+It fails if any compose file host-publishes a port other than Caddy's `80`/`443`
+or a `127.0.0.1`-bound mapping. Run it in CI and before deploys.
+
 ## Multi-host
 
 The same per-service `extends` files are how you run a subset of services (e.g.

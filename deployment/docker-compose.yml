@@ -249,6 +249,9 @@ services:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-:80}
       S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
+      # Internal port the api-gateway listens on; the Caddyfile @api upstream
+      # resolves {$API_GATEWAY_PORT:8080} to this. Must match the gateway's PORT.
+      API_GATEWAY_PORT: ${API_GATEWAY_PORT:-8080}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ../../fyredocs_frontend/dist:/srv/spa:ro
@@ -288,10 +291,13 @@ services:
       context: ..
       dockerfile: api-gateway/Dockerfile
     restart: always
+    # Internal-only (Caddy is the public edge). The listen port is configurable
+    # via API_GATEWAY_PORT so it need not sit at a well-known/sequential value;
+    # this is NOT host-published, so it is defense-in-depth on the internal net.
     expose:
-      - "8080"
+      - "${API_GATEWAY_PORT:-8080}"
     environment:
-      PORT: "8080"
+      PORT: "${API_GATEWAY_PORT:-8080}"
       JOB_SERVICE_URL: http://job-service:8081
       AUTH_SERVICE_URL: http://auth-service:8086
       ANALYTICS_SERVICE_URL: http://analytics-service:8087
@@ -324,7 +330,9 @@ services:
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     healthcheck:
-      test: ["CMD", "./healthcheck", "http://localhost:8080/healthz"]
+      # Exec form (images are scratch — no /bin/sh); ${API_GATEWAY_PORT} is
+      # substituted by compose at config time, not by a shell in the container.
+      test: ["CMD", "./healthcheck", "http://localhost:${API_GATEWAY_PORT:-8080}/healthz"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -802,6 +810,11 @@ services:
       # NATS HTTP monitoring endpoint (`-m 8222`), internal-only. Scraped by the
       # admin NATS dashboard tab (/admin/metrics/nats).
       NATS_MONITOR_URL: http://nats:8222
+      # The admin dashboard scrapes the gateway; these must track API_GATEWAY_PORT.
+      # SERVICE_URLS, when set, REPLACES the built-in default map (server_performance.go),
+      # so every service is listed — only the api-gateway entry is parameterized.
+      API_GATEWAY_METRICS_URL: http://api-gateway:${API_GATEWAY_PORT:-8080}/metrics
+      SERVICE_URLS: "api-gateway=http://api-gateway:${API_GATEWAY_PORT:-8080},auth-service=http://auth-service:8086,job-service=http://job-service:8081,convert-from-pdf=http://convert-from-pdf:8082,convert-to-pdf=http://convert-to-pdf:8083,organize-pdf=http://organize-pdf:8084,optimize-pdf=http://optimize-pdf:8085"
       # Redis backs the short-TTL /api/dashboard response cache.
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}

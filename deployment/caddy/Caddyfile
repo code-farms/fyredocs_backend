@@ -47,7 +47,7 @@
 		reverse_proxy {
 			dynamic a {
 				name      api-gateway
-				port      8080
+				port      {$API_GATEWAY_PORT:8080}
 				refresh   5s
 				resolvers 127.0.0.11
 			}

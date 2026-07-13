@@ -12,7 +12,7 @@ SERVICES = shared api-gateway auth-service job-service \
 # Omit SVC to act on the whole stack.
 COMPOSE = docker compose -f deployment/docker-compose.yml --env-file .env
 
-.PHONY: up down logs ps test test-v $(addprefix test-,$(SERVICES)) $(addprefix test-v-,$(SERVICES))
+.PHONY: up down logs ps check-ports test test-v $(addprefix test-,$(SERVICES)) $(addprefix test-v-,$(SERVICES))
 
 ## Start service(s) (SVC=…) or the whole stack; env comes from the root .env
 up:
@@ -29,6 +29,10 @@ logs:
 ## Show container status
 ps:
 	$(COMPOSE) ps
+
+## Fail if any compose file host-publishes a port other than Caddy 80/443 or 127.0.0.1-bound
+check-ports:
+	@sh deployment/scripts/check-port-exposure.sh
 
 ## Run all tests across every service
 test:

@@ -497,7 +497,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "📋 Service Endpoints:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  🌐 App (Caddy edge):      $EDGE_URL  (SPA + APIs under /api, /auth, /admin)"
-echo "  🌐 API Gateway:           internal only (caddy → api-gateway:8080)"
+echo "  🌐 API Gateway:           internal only (caddy → api-gateway:${API_GATEWAY_PORT:-8080})"
 echo "  🔑 Auth Service:          internal only (auth-service:8086)"
 echo "  📤 Job Service:           internal only (job-service:8081, + in-process cleanup sweeps)"
 echo "  📄 Convert-From-PDF:      internal only (convert-from-pdf:8082)"

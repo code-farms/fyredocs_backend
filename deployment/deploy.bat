@@ -159,7 +159,7 @@ echo %GREEN%All services started successfully!%NC%
 echo.
 echo Service Endpoints:
 echo   App (Caddy edge):     http://localhost  (SPA + APIs under /api, /auth, /admin)
-echo   API Gateway:          internal only (caddy -^> api-gateway:8080)
+echo   API Gateway:          internal only (caddy -^> api-gateway, port API_GATEWAY_PORT)
 echo   Auth Service:         internal only (auth-service:8086)
 echo   Job Service:          internal only (job-service:8081, + in-process cleanup sweeps)
 echo   PDF Workers:          internal only (convert-from-pdf:8082, convert-to-pdf:8083, organize-pdf:8084, optimize-pdf:8085)

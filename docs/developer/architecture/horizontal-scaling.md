@@ -156,9 +156,10 @@ that way** — a fixed `container_name` breaks scaling.
 denylist / guest store, worker WorkQueue balancing, per-worker `tmpfs /tmp`
 scratch (ephemeral, no shared disk).
 
-**Metrics caveat:** the analytics sampler scrapes `api-gateway:8080/metrics` by
-Compose DNS, so with N gateway replicas it samples only *one* per tick and
-undercounts. Once you have Prometheus (§0), scrape all replicas instead.
+**Metrics caveat:** the analytics sampler scrapes the gateway's `/metrics`
+(`http://api-gateway:${API_GATEWAY_PORT}/metrics`) by Compose DNS, so with N
+gateway replicas it samples only *one* per tick and undercounts. Once you have
+Prometheus (§0), scrape all replicas instead.
 
 **Verify:** `docker compose ps` shows N replicas; requests spread across them in
 `docker compose logs`; kill one replica and traffic continues.
