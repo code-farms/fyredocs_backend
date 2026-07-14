@@ -8,15 +8,196 @@
   "tags": ["fyredocs"],
   "time": { "from": "now-1h", "to": "now" },
   "timezone": "",
+  "refresh": "15s",
   "templating": { "list": [] },
   "panels": [
     {
+      "id": 100,
+      "type": "row",
+      "title": "Overview",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
       "id": 1,
-      "type": "timeseries",
-      "title": "Request rate by service (req/s)",
+      "type": "stat",
+      "title": "Request rate",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 2,
+          "color": { "mode": "fixed", "fixedColor": "#8b5cf6" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "graphMode": "area",
+        "colorMode": "value",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(http_request_duration_seconds_count[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Error rate (5xx)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "graphMode": "area",
+        "colorMode": "value",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "100 * (sum(rate(http_request_duration_seconds_count{status=~\"5..\"}[5m])) or vector(0)) / sum(rate(http_request_duration_seconds_count[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "p95 latency",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "graphMode": "area",
+        "colorMode": "value",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Jobs processed (1h)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "fixed", "fixedColor": "#8b5cf6" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "graphMode": "area",
+        "colorMode": "value",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(increase(jobs_processed_total[1h])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 101,
+      "type": "row",
+      "title": "Traffic & Latency",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Request rate by service",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisPlacement": "auto",
+            "scaleDistribution": { "type": "linear" },
+            "stacking": { "mode": "none", "group": "A" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "analytics-service:8087" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#73BF69" } }] },
+          { "matcher": { "id": "byName", "options": "api-gateway:8080" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3B82F6" } }] },
+          { "matcher": { "id": "byName", "options": "auth-service:8086" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#FF9830" } }] },
+          { "matcher": { "id": "byName", "options": "convert-from-pdf:8082" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#FACC15" } }] },
+          { "matcher": { "id": "byName", "options": "convert-to-pdf:8083" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#EF4444" } }] },
+          { "matcher": { "id": "byName", "options": "document-service:8089" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#A855F7" } }] },
+          { "matcher": { "id": "byName", "options": "job-service:8081" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#EC4899" } }] },
+          { "matcher": { "id": "byName", "options": "notification-service:8091" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#06B6D4" } }] },
+          { "matcher": { "id": "byName", "options": "optimize-pdf:8085" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#84CC16" } }] },
+          { "matcher": { "id": "byName", "options": "organize-pdf:8084" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#F97316" } }] },
+          { "matcher": { "id": "byName", "options": "user-service:8090" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#6366F1" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "showLegend": false },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
       "targets": [
         {
           "refId": "A",
@@ -27,12 +208,46 @@
       ]
     },
     {
-      "id": 2,
+      "id": 6,
       "type": "timeseries",
       "title": "p95 request latency by service",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisPlacement": "auto",
+            "scaleDistribution": { "type": "linear" },
+            "stacking": { "mode": "none", "group": "A" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "analytics-service:8087" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#73BF69" } }] },
+          { "matcher": { "id": "byName", "options": "api-gateway:8080" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3B82F6" } }] },
+          { "matcher": { "id": "byName", "options": "auth-service:8086" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#FF9830" } }] },
+          { "matcher": { "id": "byName", "options": "convert-from-pdf:8082" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#FACC15" } }] },
+          { "matcher": { "id": "byName", "options": "convert-to-pdf:8083" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#EF4444" } }] },
+          { "matcher": { "id": "byName", "options": "document-service:8089" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#A855F7" } }] },
+          { "matcher": { "id": "byName", "options": "job-service:8081" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#EC4899" } }] },
+          { "matcher": { "id": "byName", "options": "notification-service:8091" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#06B6D4" } }] },
+          { "matcher": { "id": "byName", "options": "optimize-pdf:8085" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#84CC16" } }] },
+          { "matcher": { "id": "byName", "options": "organize-pdf:8084" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#F97316" } }] },
+          { "matcher": { "id": "byName", "options": "user-service:8090" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#6366F1" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "showLegend": false },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
       "targets": [
         {
           "refId": "A",
@@ -43,12 +258,53 @@
       ]
     },
     {
-      "id": 3,
+      "id": 102,
+      "type": "row",
+      "title": "Reliability & Jobs",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }
+    },
+    {
+      "id": 7,
       "type": "timeseries",
-      "title": "5xx error rate by service (req/s)",
+      "title": "5xx error rate by service",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
-      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisPlacement": "auto",
+            "scaleDistribution": { "type": "linear" },
+            "stacking": { "mode": "none", "group": "A" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "analytics-service:8087" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#73BF69" } }] },
+          { "matcher": { "id": "byName", "options": "api-gateway:8080" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3B82F6" } }] },
+          { "matcher": { "id": "byName", "options": "auth-service:8086" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#FF9830" } }] },
+          { "matcher": { "id": "byName", "options": "convert-from-pdf:8082" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#FACC15" } }] },
+          { "matcher": { "id": "byName", "options": "convert-to-pdf:8083" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#EF4444" } }] },
+          { "matcher": { "id": "byName", "options": "document-service:8089" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#A855F7" } }] },
+          { "matcher": { "id": "byName", "options": "job-service:8081" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#EC4899" } }] },
+          { "matcher": { "id": "byName", "options": "notification-service:8091" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#06B6D4" } }] },
+          { "matcher": { "id": "byName", "options": "optimize-pdf:8085" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#84CC16" } }] },
+          { "matcher": { "id": "byName", "options": "organize-pdf:8084" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#F97316" } }] },
+          { "matcher": { "id": "byName", "options": "user-service:8090" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#6366F1" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "showLegend": false },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
       "targets": [
         {
           "refId": "A",
@@ -59,34 +315,46 @@
       ]
     },
     {
-      "id": 4,
+      "id": 8,
       "type": "timeseries",
-      "title": "Jobs processed (per tool_type / status)",
+      "title": "Jobs (processed vs failed, per tool)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisPlacement": "auto",
+            "scaleDistribution": { "type": "linear" },
+            "stacking": { "mode": "none", "group": "A" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (tool_type, status) (rate(jobs_processed_total[5m]))",
-          "legendFormat": "{{tool_type}} / {{status}}"
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "type": "timeseries",
-      "title": "Jobs failed (per tool_type / reason)",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
-      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
-      "targets": [
+          "expr": "sum by (tool_type) (rate(jobs_processed_total[5m]))",
+          "legendFormat": "{{tool_type}} processed"
+        },
         {
-          "refId": "A",
+          "refId": "B",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (tool_type, reason) (rate(jobs_failed_total[5m]))",
-          "legendFormat": "{{tool_type}} / {{reason}}"
+          "expr": "sum by (tool_type) (rate(jobs_failed_total[5m]))",
+          "legendFormat": "{{tool_type}} failed"
         }
       ]
     }

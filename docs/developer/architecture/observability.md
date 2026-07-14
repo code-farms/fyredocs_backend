@@ -114,7 +114,7 @@ Config lives under `deployment/`, mounted read-only into each container
 | `prometheus/prometheus.yml` | Scrape jobs: all 11 services (by service DNS + port) + `otel-collector:8888` |
 | `grafana/provisioning/datasources/datasources.yaml` | Prometheus (default) + Tempo datasources |
 | `grafana/provisioning/dashboards/dashboards.yaml` | Dashboard file provider |
-| `grafana/dashboards/fyredocs-overview.json` | Starter dashboard: request rate, p95 latency, 5xx rate, jobs processed/failed |
+| `grafana/dashboards/fyredocs-overview.json` | Overview dashboard: a KPI stat header (request rate, error %, p95 latency, jobs/1h) over grouped rows of by-service timeseries (request rate, p95 latency, 5xx error rate, jobs processed/failed) with value-table legends |
 
 > **Note:** `prometheus.yml` hardcodes the api-gateway target as
 > `api-gateway:8080`. It is coupled to `${API_GATEWAY_PORT:-8080}` in
