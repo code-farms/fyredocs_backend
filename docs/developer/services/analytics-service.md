@@ -57,6 +57,7 @@ Behaviour by caller:
 ### Admin Endpoints (require `X-User-Role: super-admin` header)
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/admin/authz` | Lightweight authorization probe — returns 200 for super-admins, 401/403 otherwise. Does no work; exists so the Caddy edge can `forward_auth` the `/grafana/*` observability embed through the gateway and admit only super-admins. See [observability.md](../architecture/observability.md#in-app-embedding-admin-observability-tab). |
 | GET | `/admin/metrics/overview` | Today's summary (signups, DAU, jobs, errors) |
 | GET | `/admin/metrics/daily?from=YYYY-MM-DD&to=YYYY-MM-DD` | Daily aggregated metrics |
 | GET | `/admin/metrics/tools?days=30` | Tool usage breakdown |

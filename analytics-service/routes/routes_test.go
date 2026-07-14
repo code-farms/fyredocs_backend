@@ -71,6 +71,46 @@ func TestAdminAuth_EmptyRole_Returns401(t *testing.T) {
 	}
 }
 
+func TestAuthzProbe_GatedByAdminAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	newRouter := func() *gin.Engine {
+		r := gin.New()
+		admin := r.Group("/admin")
+		admin.Use(adminAuth())
+		admin.GET("/authz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+		return r
+	}
+
+	cases := []struct {
+		name   string
+		userID string
+		role   string
+		want   int
+	}{
+		{"no headers -> 401", "", "", http.StatusUnauthorized},
+		{"regular user -> 403", "some-uuid", "user", http.StatusForbidden},
+		{"super-admin -> 200", "admin-uuid", "super-admin", http.StatusOK},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/admin/authz", nil)
+			if tc.userID != "" {
+				req.Header.Set("X-User-ID", tc.userID)
+			}
+			if tc.role != "" {
+				req.Header.Set("X-User-Role", tc.role)
+			}
+			w := httptest.NewRecorder()
+			newRouter().ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Errorf("expected %d, got %d", tc.want, w.Code)
+			}
+		})
+	}
+}
+
 func TestNewEndpoints_RequireAdminAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

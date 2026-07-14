@@ -64,6 +64,22 @@
 		}
 	}
 
+	# ---- Grafana (observability profile) → embedded in the admin SPA ---
+	# Same-origin path so the admin "Observability" tab can iframe Grafana.
+	# This bypasses the gateway proxy, so it carries its OWN auth: forward_auth
+	# hands each request to the gateway's /admin/authz probe (JWT verify +
+	# super-admin role via analytics-service adminAuth). A non-2xx short-circuits
+	# before Grafana is reached, so only admins can load the embed even though
+	# Grafana itself runs in anonymous Viewer mode. Only started under the
+	# `observability` compose profile — 502s here when the profile is down.
+	@grafana path /grafana /grafana/*
+	handle @grafana {
+		forward_auth api-gateway:{$API_GATEWAY_PORT:8080} {
+			uri /admin/authz
+		}
+		reverse_proxy grafana:3000
+	}
+
 	# ---- SPA (client-side routed) --------------------------------------
 	handle {
 		root * /srv/spa

@@ -25,6 +25,14 @@ func SetupRouter(r *gin.Engine) {
 	admin := r.Group("/admin")
 	admin.Use(adminAuth())
 	{
+		// Lightweight authorization probe. Does no work — it exists so the
+		// Caddy edge can forward_auth the /grafana/* embed route through the
+		// gateway and admit only super-admins (adminAuth). Must stay cheap:
+		// it fires on every embedded Grafana asset request.
+		admin.GET("/authz", func(c *gin.Context) {
+			response.OK(c, "authorized", nil)
+		})
+
 		admin.GET("/metrics/overview", handlers.Overview)
 		admin.GET("/metrics/daily", handlers.Daily)
 		admin.GET("/metrics/tools", handlers.ToolUsage)

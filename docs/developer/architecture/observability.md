@@ -72,6 +72,36 @@ The service runs normally — no export timeouts, no errors. Start the profile a
 restart (or redeploy) the services and they log
 `"OpenTelemetry tracing initialized"` instead.
 
+## In-app embedding (admin Observability tab)
+
+The `fyredocs-overview` dashboard is embedded in the frontend admin area under
+**Admin → Observability** (`/admin/observability`, super-admin only). The SPA
+renders an `<iframe>` pointing at `/grafana/d/fyredocs-overview/...?kiosk`,
+served same-origin through the Caddy edge.
+
+Wiring:
+
+- **Edge** — `deployment/caddy/Caddyfile` adds a `@grafana path /grafana /grafana/*`
+  handle block that `forward_auth`s each request to the gateway's `/admin/authz`
+  probe, then `reverse_proxy grafana:3000`. Because this path bypasses the
+  gateway proxy, `forward_auth` is what enforces access: the gateway verifies the
+  JWT and analytics-service's `adminAuth` requires `super-admin`, so a non-admin
+  gets 401/403 and Grafana is never reached.
+- **Authz probe** — `analytics-service` exposes `GET /admin/authz` inside its
+  existing admin group (returns 200 for super-admins). It does no work; it exists
+  only for `forward_auth`. See [analytics-service.md](../services/analytics-service.md).
+- **Grafana** — runs in **anonymous Viewer** mode (`GF_AUTH_ANONYMOUS_ENABLED=true`)
+  and under the `/grafana` sub-path (`GF_SERVER_SERVE_FROM_SUB_PATH=true`,
+  `GF_SERVER_ROOT_URL`), with `GF_SECURITY_ALLOW_EMBEDDING=true` so the same-origin
+  iframe is permitted. The edge is the real gate; anonymous mode only removes the
+  second login for the embed.
+- **Frontend** — `src/pages/admin/ObservabilityPage.tsx`, registered in
+  `src/components/admin/adminNav.ts` and routed in `src/App.tsx` under the
+  super-admin `RoleRoute`. The iframe theme follows the app theme (`next-themes`).
+
+When the observability profile is down, the iframe 502s and the tab shows a
+helper note — the rest of the app is unaffected.
+
 ## Configuration files
 
 Config lives under `deployment/`, mounted read-only into each container

@@ -1128,15 +1128,27 @@ services:
 
   # Dashboards + trace explorer. Datasources (Prometheus, Tempo) and the
   # fyredocs-overview dashboard are auto-provisioned from ./grafana.
-  # UI loopback-only; default admin password overridable via env.
+  # Served under /grafana via the Caddy edge and embedded in the admin SPA's
+  # Observability tab. Loopback port kept for direct operator access.
   grafana:
     image: grafana/grafana:11.4.0
     profiles: ["observability"]
     restart: always
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # Serve under the /grafana sub-path so the SPA can iframe it same-origin
+      # through the Caddy edge (deployment/caddy/Caddyfile @grafana block).
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # Drop Grafana's X-Frame-Options: deny and set CSP frame-ancestors to
+      # 'self' so the same-origin iframe embed is allowed.
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      # Anonymous read-only access: the embed renders with no second login.
+      # Access is gated at the edge (Caddy forward_auth → gateway /admin/authz),
+      # so only authenticated super-admins ever reach Grafana.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro

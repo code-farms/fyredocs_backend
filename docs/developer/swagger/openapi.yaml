@@ -1920,6 +1920,34 @@ paths:
               schema:
                 $ref: "#/components/schemas/APIResponse"
 
+  /admin/authz:
+    get:
+      tags: [Admin Analytics]
+      summary: Authorization probe (super-admin)
+      description: >-
+        Lightweight probe that returns 200 for super-admins and 401/403
+        otherwise. Does no work; used by the Caddy edge forward_auth to gate the
+        embedded Grafana observability dashboards (/grafana/*).
+      operationId: adminAuthz
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          description: JWT cookie auth with super-admin role required
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Authorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "401":
+          description: Not authenticated
+        "403":
+          description: Authenticated but not a super-admin
+
   /admin/metrics/overview:
     get:
       tags: [Admin Analytics]

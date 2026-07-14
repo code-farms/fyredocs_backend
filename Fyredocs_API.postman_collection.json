@@ -4832,6 +4832,38 @@
       "name": "11. Admin Analytics",
       "item": [
         {
+          "name": "Authorization Probe (super-admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/admin/authz",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "authz"
+              ]
+            },
+            "description": "Lightweight authorization probe. Returns 200 for super-admins, 401/403 otherwise. Does no work; used by the Caddy edge forward_auth to gate the embedded Grafana observability dashboards (/grafana/*)."
+          },
+          "response": []
+        },
+        {
           "name": "NATS / JetStream Stats",
           "event": [
             {
