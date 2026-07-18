@@ -255,6 +255,9 @@ services:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-:80}
       S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
+      # Ad-network hosts appended to the CSP script/img/connect/frame-src (empty =
+      # strict, same-origin only). Set CSP_AD_DOMAINS in .env to enable ads.
+      CSP_AD_DOMAINS: ${CSP_AD_DOMAINS:-}
       # Internal port the api-gateway listens on; the Caddyfile @api upstream
       # resolves {$API_GATEWAY_PORT:8080} to this. Must match the gateway's PORT.
       API_GATEWAY_PORT: ${API_GATEWAY_PORT:-8080}

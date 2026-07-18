@@ -99,7 +99,12 @@
 			# chart <style>, and inline Mermaid SVG. VALIDATE against the running app
 			# (open the docs page with Mermaid + charts, watch the browser console)
 			# and relax a single directive only if a legitimate resource is blocked.
-			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+			#
+			# {$CSP_AD_DOMAINS} is empty by default (→ strict, same-origin only). To
+			# run ad networks, set CSP_AD_DOMAINS in .env to their space-separated
+			# hosts (and usually 'unsafe-inline'); it is appended to script/img/
+			# connect/frame-src. See docs/developer/architecture/caddy-edge.md.
+			Content-Security-Policy "default-src 'self'; script-src 'self' {$CSP_AD_DOMAINS}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: {$CSP_AD_DOMAINS}; font-src 'self' data:; connect-src 'self' {$CSP_AD_DOMAINS}; frame-src 'self' {$CSP_AD_DOMAINS}; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		}
 		@assets path /assets/*
 		header @assets Cache-Control "public, max-age=31536000, immutable"

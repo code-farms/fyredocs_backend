@@ -101,6 +101,32 @@ by Caddy directly, so they previously carried none. Caddy now sets them at the e
   MIME-sniffed into an executable type on this origin (downloads also force
   attachment disposition via the presigned `response-content-disposition`).
 
+#### Allowing ad networks — `CSP_AD_DOMAINS`
+
+The CSP is strict (same-origin) by default, which blocks third-party ads. To run
+one or more ad networks without editing the Caddyfile, set `CSP_AD_DOMAINS` in the
+root `.env` to the networks' hosts (space-separated). The value is substituted into
+the `script-src`, `img-src`, `connect-src`, and `frame-src` directives via
+`{$CSP_AD_DOMAINS}` (empty by default → strict, no ads). Compose passes it to the
+caddy container (`CSP_AD_DOMAINS: ${CSP_AD_DOMAINS:-}`).
+
+```dotenv
+# several networks can share one line; 'unsafe-inline' covers most ad init snippets
+CSP_AD_DOMAINS='unsafe-inline' https://pagead2.googlesyndication.com https://*.doubleclick.net https://*.google.com
+```
+
+One knob feeds all four directives (ad hosts span every type; a host landing in a
+directive it doesn't need is ignored by the browser). `'unsafe-inline'` is only
+meaningful in `script-src`. `frame-ancestors 'none'` is unaffected — it controls
+who may frame *our* site, not the ad iframes *we* embed.
+
+> **Security tradeoff:** allowing external ad scripts (and `'unsafe-inline'`)
+> measurably weakens the CSP's XSS protection. This is unavoidable for ad-supported
+> sites; the strict default protects everything until ads are enabled. After
+> setting the var, load the site and clear any remaining console CSP errors by
+> adding the exact hosts they name. (Ads usually also need a cookie-consent banner
+> for EU users — separate concern.)
+
 ### Why Host preservation is load-bearing
 
 Presigned SigV4 URLs are signed against the **public origin the browser uses**
