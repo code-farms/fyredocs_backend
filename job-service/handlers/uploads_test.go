@@ -63,6 +63,22 @@ func doJSON(t *testing.T, r *gin.Engine, method, path string, body interface{}, 
 	return rec, env
 }
 
+// withSessionCookie replays the guest_token cookie set by a prior response (as a
+// browser does automatically), merged with any extra headers, so a follow-up
+// request is recognized as the same upload-session owner (finding F4).
+func withSessionCookie(rec *httptest.ResponseRecorder, extra map[string]string) map[string]string {
+	h := map[string]string{}
+	for k, v := range extra {
+		h[k] = v
+	}
+	for _, ck := range rec.Result().Cookies() {
+		if ck.Name == "guest_token" {
+			h["Cookie"] = ck.Name + "=" + ck.Value
+		}
+	}
+	return h
+}
+
 func initUpload(t *testing.T, r *gin.Engine, fileName string, fileSize int64, planMB string) (*httptest.ResponseRecorder, apiEnvelope) {
 	t.Helper()
 	headers := map[string]string{}
@@ -197,10 +213,10 @@ func TestGetUploadParts_RepresignsRequestedParts(t *testing.T) {
 	withFakeStore(t)
 	r := newUploadTestRouter()
 
-	_, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
+	recInit, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
 	uploadID := env.Data["uploadId"].(string)
 
-	rec, env := doJSON(t, r, http.MethodGet, "/api/uploads/"+uploadID+"/parts?partNumbers=2,3", nil, nil)
+	rec, env := doJSON(t, r, http.MethodGet, "/api/uploads/"+uploadID+"/parts?partNumbers=2,3", nil, withSessionCookie(recInit, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -224,10 +240,10 @@ func TestGetUploadParts_AllPartsWhenOmitted(t *testing.T) {
 	withFakeStore(t)
 	r := newUploadTestRouter()
 
-	_, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
+	recInit, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
 	uploadID := env.Data["uploadId"].(string)
 
-	rec, env := doJSON(t, r, http.MethodGet, "/api/uploads/"+uploadID+"/parts", nil, nil)
+	rec, env := doJSON(t, r, http.MethodGet, "/api/uploads/"+uploadID+"/parts", nil, withSessionCookie(recInit, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -250,6 +266,45 @@ func TestGetUploadParts_SessionGone(t *testing.T) {
 	}
 }
 
+// TestUploadSession_DeniesNonOwner verifies owner-binding (finding F4): a client
+// that knows the uploadId but does NOT hold the initiating session cookie cannot
+// re-presign parts, complete, abort, or read the status of someone else's upload.
+func TestUploadSession_DeniesNonOwner(t *testing.T) {
+	withMiniRedis(t)
+	withFakeStore(t)
+	r := newUploadTestRouter()
+
+	// Owner initiates (gets a guest_token cookie bound to the session).
+	recInit, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
+	uploadID := env.Data["uploadId"].(string)
+	// Sanity: the owner CAN read status with the cookie.
+	if rec, _ := doJSON(t, r, http.MethodGet, "/api/uploads/"+uploadID+"/status", nil, withSessionCookie(recInit, nil)); rec.Code != http.StatusOK {
+		t.Fatalf("owner status = %d, want 200", rec.Code)
+	}
+
+	// An attacker with the uploadId but no session cookie is rejected on every
+	// session endpoint (404 — existence is not leaked).
+	for _, tc := range []struct {
+		name, method, path string
+		body               interface{}
+	}{
+		{"parts", http.MethodGet, "/api/uploads/" + uploadID + "/parts", nil},
+		{"status", http.MethodGet, "/api/uploads/" + uploadID + "/status", nil},
+		{"complete", http.MethodPost, "/api/uploads/" + uploadID + "/complete", completeBody(1, 2, 3)},
+		{"abort", http.MethodDelete, "/api/uploads/" + uploadID, nil},
+	} {
+		rec, _ := doJSON(t, r, tc.method, tc.path, tc.body, nil) // no cookie
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s as non-owner: status = %d, want 404", tc.name, rec.Code)
+		}
+	}
+
+	// The owner's session must survive the attacker's failed abort attempt.
+	if rec, _ := doJSON(t, r, http.MethodGet, "/api/uploads/"+uploadID+"/status", nil, withSessionCookie(recInit, nil)); rec.Code != http.StatusOK {
+		t.Errorf("owner status after attacker abort = %d, want 200 (session must be intact)", rec.Code)
+	}
+}
+
 func completeBody(parts ...int) UploadCompleteRequest {
 	req := UploadCompleteRequest{}
 	for _, n := range parts {
@@ -263,10 +318,10 @@ func TestCompleteUpload_PartCountMismatch(t *testing.T) {
 	withFakeStore(t)
 	r := newUploadTestRouter()
 
-	_, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50") // 3 parts
+	recInit, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50") // 3 parts
 	uploadID := env.Data["uploadId"].(string)
 
-	rec, env := doJSON(t, r, http.MethodPost, "/api/uploads/"+uploadID+"/complete", completeBody(1, 2), nil)
+	rec, env := doJSON(t, r, http.MethodPost, "/api/uploads/"+uploadID+"/complete", completeBody(1, 2), withSessionCookie(recInit, nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
@@ -281,12 +336,12 @@ func TestCompleteUpload_OversizeRemovedAfterTrueSizeCheck(t *testing.T) {
 	fs.completeSize = 60 * 1024 * 1024 // true size exceeds the 50MB plan
 	r := newUploadTestRouter()
 
-	_, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
+	recInit, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
 	uploadID := env.Data["uploadId"].(string)
 	key := env.Data["key"].(string)
 
 	rec, env := doJSON(t, r, http.MethodPost, "/api/uploads/"+uploadID+"/complete", completeBody(1, 2, 3),
-		map[string]string{"X-User-Plan-Max-File-MB": "50"})
+		withSessionCookie(recInit, map[string]string{"X-User-Plan-Max-File-MB": "50"}))
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -314,12 +369,12 @@ func TestCompleteUpload_HappyPath(t *testing.T) {
 	fs.completeSize = 20 * 1024 * 1024
 	r := newUploadTestRouter()
 
-	_, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
+	recInit, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
 	uploadID := env.Data["uploadId"].(string)
 	key := env.Data["key"].(string)
 
 	rec, env := doJSON(t, r, http.MethodPost, "/api/uploads/"+uploadID+"/complete", completeBody(1, 2, 3),
-		map[string]string{"X-User-Plan-Max-File-MB": "50"})
+		withSessionCookie(recInit, map[string]string{"X-User-Plan-Max-File-MB": "50"}))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -359,10 +414,10 @@ func TestAbortUpload_AbortsAndClearsState(t *testing.T) {
 	fs := withFakeStore(t)
 	r := newUploadTestRouter()
 
-	_, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
+	recInit, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
 	uploadID := env.Data["uploadId"].(string)
 
-	rec, _ := doJSON(t, r, http.MethodDelete, "/api/uploads/"+uploadID, nil, nil)
+	rec, _ := doJSON(t, r, http.MethodDelete, "/api/uploads/"+uploadID, nil, withSessionCookie(recInit, nil))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rec.Code)
 	}
@@ -390,10 +445,10 @@ func TestGetUploadStatus(t *testing.T) {
 	withFakeStore(t)
 	r := newUploadTestRouter()
 
-	_, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
+	recInit, env := initUpload(t, r, "report.pdf", 20*1024*1024, "50")
 	uploadID := env.Data["uploadId"].(string)
 
-	rec, env := doJSON(t, r, http.MethodGet, "/api/uploads/"+uploadID+"/status", nil, nil)
+	rec, env := doJSON(t, r, http.MethodGet, "/api/uploads/"+uploadID+"/status", nil, withSessionCookie(recInit, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}

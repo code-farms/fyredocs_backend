@@ -267,6 +267,38 @@ func pdfPageDimensions(ctx context.Context, inputPath string) (float64, float64,
 	return 0, 0, fmt.Errorf("could not parse page size from pdfinfo output")
 }
 
+// ocrLangMap maps ISO 639-1 codes (as the frontend sends) to tesseract's ISO
+// 639-2/T codes.
+var ocrLangMap = map[string]string{
+	"en": "eng", "es": "spa", "fr": "fra", "de": "deu",
+	"it": "ita", "pt": "por", "zh": "chi_sim", "ja": "jpn",
+	"ko": "kor", "ar": "ara",
+}
+
+// ocrAllowedLanguages is the whitelist of tesseract language codes OCR will pass
+// to `tesseract -l`. Anything outside it (an unmapped or crafted option value) is
+// coerced to the default so an attacker-influenced language can never reach the
+// tesseract invocation verbatim (finding I1). Extend this if more language packs
+// are installed in the image.
+var ocrAllowedLanguages = map[string]bool{
+	"eng": true, "spa": true, "fra": true, "deu": true, "ita": true,
+	"por": true, "chi_sim": true, "jpn": true, "kor": true, "ara": true,
+}
+
+// sanitizeOCRLanguage maps a requested language (ISO 639-1 or a tesseract code) to
+// a whitelisted tesseract code, falling back to "eng" for anything unrecognized or
+// empty. This is the trust boundary for the user-supplied "language" option.
+func sanitizeOCRLanguage(requested string) string {
+	requested = strings.TrimSpace(requested)
+	if mapped, ok := ocrLangMap[requested]; ok {
+		requested = mapped
+	}
+	if ocrAllowedLanguages[requested] {
+		return requested
+	}
+	return "eng"
+}
+
 // resolveLanguage picks a tesseract language that is actually installed. The
 // requested code is already mapped to tesseract's ISO 639-2 form (e.g. "eng").
 // If it is available it is used as-is; otherwise it falls back to "eng", then to
@@ -323,23 +355,13 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 		return nil, fmt.Errorf("tesseract not found. Install with: apk add tesseract-ocr")
 	}
 
-	// Map ISO 639-1 (frontend) to ISO 639-2/T (tesseract) language codes.
-	var langMap = map[string]string{
-		"en": "eng", "es": "spa", "fr": "fra", "de": "deu",
-		"it": "ita", "pt": "por", "zh": "chi_sim", "ja": "jpn",
-		"ko": "kor", "ar": "ara",
-	}
-
 	language, _ := optionString(options, "language")
 	if language == "" {
 		language = os.Getenv("OCR_DEFAULT_LANGUAGE")
-		if language == "" {
-			language = "eng"
-		}
 	}
-	if mapped, ok := langMap[language]; ok {
-		language = mapped
-	}
+	// Map ISO 639-1 → tesseract codes and whitelist the result: only known codes
+	// may reach `tesseract -l`; any unmapped/crafted value becomes "eng" (I1).
+	language = sanitizeOCRLanguage(language)
 
 	// Fall back to an installed language if the requested pack is missing, so a
 	// missing language pack degrades gracefully instead of failing the whole job.

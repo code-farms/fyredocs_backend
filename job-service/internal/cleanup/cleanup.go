@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
 	"fyredocs/shared/config"
@@ -31,12 +32,27 @@ type ObjectStore interface {
 	ListIncompleteUploads(ctx context.Context, bucket string, olderThan time.Duration) ([]storage.IncompleteUpload, error)
 }
 
-// RunSweep executes one full cleanup pass. A Redis SetNX lock guards against
-// concurrent sweeps from multiple cleanup replicas.
+const cleanupLockKey = "cleanup-worker:lock"
+
+// cleanupLockReleaseScript releases the lock only if we still own it (finding B3).
+// Comparing the stored token to ours before deleting stops a replica whose sweep
+// outran the lock TTL from deleting a DIFFERENT replica's freshly-acquired lock,
+// which would otherwise permit concurrent sweeps.
+var cleanupLockReleaseScript = redis.NewScript(`
+if redis.call("get", KEYS[1]) == ARGV[1] then
+	return redis.call("del", KEYS[1])
+end
+return 0
+`)
+
+// RunSweep executes one full cleanup pass. A Redis lock guards against concurrent
+// sweeps from multiple cleanup replicas: each holder writes a unique token and
+// releases only if the token still matches (compare-and-delete), so a slow sweep
+// that outlives the TTL can never delete another holder's lock.
 func RunSweep(ctx context.Context, store ObjectStore) {
-	lockKey := "cleanup-worker:lock"
 	lockTTL := 10 * time.Minute
-	ok, err := redisstore.Client.SetNX(ctx, lockKey, "1", lockTTL).Result()
+	token := uuid.NewString()
+	ok, err := redisstore.Client.SetNX(ctx, cleanupLockKey, token, lockTTL).Result()
 	if err != nil {
 		slog.Error("failed to acquire cleanup lock", "error", err)
 		return
@@ -45,12 +61,25 @@ func RunSweep(ctx context.Context, store ObjectStore) {
 		slog.Debug("cleanup lock held by another instance, skipping")
 		return
 	}
-	defer redisstore.Client.Del(ctx, lockKey)
+	// Release only if we still own the lock (see releaseCleanupLock).
+	defer releaseCleanupLock(token)
 
 	cleanupExpiredJobs(ctx, store)
 	cleanupUploadState(ctx, store)
 	abortStaleMultipartUploads(ctx, store)
 	backfillExpiry(ctx)
+}
+
+// releaseCleanupLock deletes the sweep lock only when the stored token still
+// matches ours (compare-and-delete). It runs on a fresh background context
+// because the sweep's context may already be cancelled. A mismatch is a no-op —
+// another replica now owns the lock and must not have it deleted.
+func releaseCleanupLock(token string) {
+	relCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := cleanupLockReleaseScript.Run(relCtx, redisstore.Client, []string{cleanupLockKey}, token).Err(); err != nil {
+		slog.Warn("failed to release cleanup lock", "error", err)
+	}
 }
 
 // bucketFor maps a FileMetadata.Kind to the bucket that holds the object.

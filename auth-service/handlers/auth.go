@@ -555,9 +555,33 @@ func getTokenRemainingTTL(tokenString string) (time.Duration, error) {
 // rejects unknown plans and no-op changes, updates the plan cache immediately so
 // new limits take effect without waiting for token refresh, and emits a
 // plan.changed analytics event.
+// planChangeAllowedRoles are the caller roles permitted to change a plan through
+// this endpoint. End users must NOT be able to self-upgrade: there is no billing
+// or entitlement gate here, so an unrestricted PUT /auth/plan lets anyone grant
+// themselves a paid tier. Plan changes are therefore an admin action (or, in
+// future, a billing-webhook-driven internal endpoint).
+var planChangeAllowedRoles = map[string]bool{
+	"admin":       true,
+	"super-admin": true,
+}
+
+// canChangePlan reports whether a caller with the given role may change a plan
+// through PUT /auth/plan. Only admins/super-admins qualify — end users must not be
+// able to self-upgrade to a paid tier since there is no billing/entitlement gate.
+func canChangePlan(role string) bool {
+	return planChangeAllowedRoles[strings.TrimSpace(role)]
+}
+
 func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 	user, _, ok := loadUserFromAuth(c)
 	if !ok {
+		return
+	}
+
+	// Authorization: only admins/super-admins may change a plan. Without this,
+	// any authenticated user can upgrade themselves to a paid plan for free.
+	if !canChangePlan(user.Role) {
+		response.Forbidden(c, "FORBIDDEN", "You are not allowed to change plans.")
 		return
 	}
 

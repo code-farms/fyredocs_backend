@@ -80,7 +80,26 @@ sequenceDiagram
 | `@objects` | `/{$S3_BUCKET_UPLOADS}/*`, `/{$S3_BUCKET_OUTPUTS}/*` (default `uploads`/`outputs`) | `reverse_proxy minio:9000` | `header_up Host {host}` (SigV4), `flush_interval -1`, no auth middleware — the presigned signature is the credential |
 | `@api` | `/api/*`, `/auth/*`, `/admin/*`, `/healthz` | `reverse_proxy` → **dynamic `a` upstreams** for `api-gateway:8080` | Load balanced (`lb_policy least_conn`) across every running gateway replica; `flush_interval -1` for SSE streams. See [Scaling the gateway](#scaling-the-gateway) |
 | `@grafana` | `/grafana`, `/grafana/*` | `forward_auth` → gateway `/admin/authz`, then `reverse_proxy grafana:3000` | Serves the embedded observability dashboards. `forward_auth` enforces super-admin (this path bypasses the gateway proxy). Only present when the `observability` compose profile is up. See [observability.md](./observability.md#in-app-embedding-admin-observability-tab) |
-| (fallback) | everything else | `file_server` from `/srv/spa` | `try_files {path} /index.html`; `/assets/*` served `Cache-Control: public, max-age=31536000, immutable` |
+| (fallback) | everything else | `file_server` from `/srv/spa` | `try_files {path} /index.html`; `/assets/*` served `Cache-Control: public, max-age=31536000, immutable`; **security headers** (see below) |
+
+### Security headers (finding A1 / production-readiness S8)
+
+The api-gateway sets response security headers only on the routes it proxies
+(`/api /auth /admin /healthz`). The SPA document and the object routes are served
+by Caddy directly, so they previously carried none. Caddy now sets them at the edge:
+
+- **SPA `handle`** — `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, and a
+  `Content-Security-Policy`:
+  `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`.
+  `style-src 'unsafe-inline'` is required for Tailwind/Radix inline styles, the
+  chart `<style>`, and inline Mermaid SVG; `default-src 'self'` still permits the
+  same-origin Grafana iframe. **Validate the CSP against the running SPA** (open the
+  docs page with Mermaid + charts and watch the browser console) before treating it
+  as final — relax a single directive only for a legitimately-blocked resource.
+- **`@objects`** — `X-Content-Type-Options: nosniff` so object bytes can't be
+  MIME-sniffed into an executable type on this origin (downloads also force
+  attachment disposition via the presigned `response-content-disposition`).
 
 ### Why Host preservation is load-bearing
 

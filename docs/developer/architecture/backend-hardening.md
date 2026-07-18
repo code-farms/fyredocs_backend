@@ -300,6 +300,50 @@ The Fyredocs backend is a well-architected microservices system. Clean service b
 
 ---
 
+### 3.20 Security Audit Remediation `Critical`/`High`
+
+A pre-production audit (SQL injection, XSS, confidentiality/authz, race conditions)
+found the codebase strong overall — parameterized queries throughout (verified
+across all ~29 `Raw()` sites, not "two"), argv-based worker exec, correct job/
+document/notification ownership, private buckets. The following residual gaps were
+fixed; the rest are tracked as a ranked backlog (see production-readiness.md §5.9).
+
+- **SSE job-event IDOR (F1) `High`.** `GET /jobs/:id/events` had no auth/ownership
+  check, so any client with a job ID could stream another tenant's status/
+  progress/failureReason. Now loads the job and calls the same `authorizeJobAccess`
+  its sibling handlers use (owner or guest-token binding), before any SSE header is
+  written; missing/denied both return 404. `job-service/handlers/sse.go`.
+- **Plan self-upgrade (F2 / S1) `High`.** `PUT /auth/plan` let any authenticated
+  user set themselves to a paid plan (no billing gate). Restricted to
+  `admin`/`super-admin` via `canChangePlan`; a future billing webhook uses the
+  internal path. `auth-service/handlers/auth.go`.
+- **Duplicate-job race (B1) `High`.** Concurrent `POST /api/<tool>` with the same
+  `uploadId` both created jobs (quota/compute double-spend). Added an atomic
+  per-upload Redis claim (`claim:upload:<id>` SetNX) before consuming; a conflict
+  returns the existing job or `409`. `job-service/handlers/jobs.go`.
+- **Idempotency-Key atomicity (B2) `Medium`.** The key is now reserved with SetNX
+  (to this request's jobID) up front instead of check-then-set. `jobs.go`.
+- **Cleanup lock (B3) `Medium`.** The distributed sweep lock used a constant value
+  with an unconditional delete, so a slow sweep could delete another replica's
+  lock. Now a unique token + compare-and-delete Lua release on a background
+  context. `job-service/internal/cleanup/cleanup.go`.
+- **Upload-session ownership (F4) `Medium`.** Upload sessions are now bound to their
+  initiator (`user:<id>` or a minted `guest:<token>`); re-presign/complete/abort/
+  status verify the caller owns the session (404 otherwise). Legacy sessions with
+  no owner are still honored for backward compatibility. `job-service/handlers/uploads.go`.
+- **Edge security headers / CSP (A1 / S8) `Medium`.** The Caddy-served SPA and
+  object routes shipped no `X-Frame-Options`, `nosniff`, or CSP. Added them at the
+  edge (see caddy-edge.md). `deployment/caddy/Caddyfile`.
+- **OCR language whitelist (I1) `Low`.** The `language` OCR option could reach
+  `tesseract -l` verbatim when the language probe failed; it is now mapped and
+  whitelisted (`sanitizeOCRLanguage`), defaulting unknown values to `eng`.
+  `optimize-pdf/processing/processing_free.go`.
+
+**Tests:** `sse_test.go`, `change_plan_test.go`, `upload_claim_test.go`,
+`internal/cleanup/lock_test.go`, `uploads_test.go`, `optimize-pdf/processing/ocr_language_test.go`.
+
+---
+
 ## 4. Planned Changes (Not Yet Implemented)
 
 ### 4.1 Database Migrations Tool

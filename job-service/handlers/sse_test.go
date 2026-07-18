@@ -1,15 +1,38 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/queue"
+
+	"job-service/internal/models"
 )
+
+// stubJob overrides the SSE ownership lookup so tests need no live database,
+// restoring the original on cleanup.
+func stubJob(t *testing.T, job *models.ProcessingJob, err error) {
+	t.Helper()
+	prev := loadJobByID
+	loadJobByID = func(string) (*models.ProcessingJob, error) { return job, err }
+	t.Cleanup(func() { loadJobByID = prev })
+}
+
+// ownerAuth returns a gin middleware that injects a verified auth context for uid,
+// simulating what the gateway does after JWT verification.
+func ownerAuth(uid uuid.UUID) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authverify.SetGinAuth(c, authverify.AuthContext{UserID: uid.String()})
+		c.Next()
+	}
+}
 
 func TestBuildSSEPayload(t *testing.T) {
 	t.Run("failed event includes failureReason", func(t *testing.T) {
@@ -57,16 +80,16 @@ func TestBuildSSEPayload(t *testing.T) {
 	})
 }
 
-func TestSSEJobUpdates_MissingJobID(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+// ownedJob returns a job owned by uid, plus a router that authenticates as uid,
+// so the request passes the ownership gate and exercises the SSE path.
+func ownedJobRouter(t *testing.T) *gin.Engine {
+	t.Helper()
+	uid := uuid.New()
+	stubJob(t, &models.ProcessingJob{ID: uuid.New(), UserID: &uid}, nil)
 	r := gin.New()
+	r.Use(ownerAuth(uid))
 	r.GET("/api/jobs/:id/events", SSEJobUpdates)
-
-	// Gin requires the parameter to be present in the URL pattern,
-	// but we can test with an empty-like ID by using a space or checking
-	// the behavior when the param is present but we want to verify headers.
-	// Since Gin always fills :id from the URL segment, an empty id is not
-	// reachable via normal routing. We test the SSE headers path instead.
+	return r
 }
 
 func TestSSEJobUpdates_NilJetStream(t *testing.T) {
@@ -77,8 +100,7 @@ func TestSSEJobUpdates_NilJetStream(t *testing.T) {
 	natsconn.JS = nil
 	defer func() { natsconn.JS = originalJS }()
 
-	r := gin.New()
-	r.GET("/api/jobs/:id/events", SSEJobUpdates)
+	r := ownedJobRouter(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/jobs/test-job-123/events", nil)
 	w := httptest.NewRecorder()
@@ -88,7 +110,7 @@ func TestSSEJobUpdates_NilJetStream(t *testing.T) {
 	result := w.Result()
 	defer result.Body.Close()
 
-	// Should set SSE headers
+	// Should set SSE headers (auth passed, then JS nil)
 	if ct := result.Header.Get("Content-Type"); ct != "text/event-stream" {
 		t.Errorf("expected Content-Type text/event-stream, got %q", ct)
 	}
@@ -103,7 +125,6 @@ func TestSSEJobUpdates_NilJetStream(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	// Should contain the error event since JS is nil
 	expected := "event: error\ndata: {\"message\":\"event stream unavailable\"}\n\n"
 	if body != expected {
 		t.Errorf("expected body %q, got %q", expected, body)
@@ -118,8 +139,7 @@ func TestSSEJobUpdates_SetsSSEHeaders(t *testing.T) {
 	natsconn.JS = nil
 	defer func() { natsconn.JS = originalJS }()
 
-	r := gin.New()
-	r.GET("/api/jobs/:id/events", SSEJobUpdates)
+	r := ownedJobRouter(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/jobs/abc-def-123/events", nil)
 	w := httptest.NewRecorder()
@@ -140,5 +160,49 @@ func TestSSEJobUpdates_SetsSSEHeaders(t *testing.T) {
 		if got != want {
 			t.Errorf("header %s = %q, want %q", key, got, want)
 		}
+	}
+}
+
+// TestSSEJobUpdates_DeniesNonOwner verifies the ownership gate: an unauthenticated
+// caller (or any non-owner) requesting another user's job gets 404 and NO SSE
+// stream is opened.
+func TestSSEJobUpdates_DeniesNonOwner(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Job owned by some user; the request carries no auth context and no guest token.
+	owner := uuid.New()
+	stubJob(t, &models.ProcessingJob{ID: uuid.New(), UserID: &owner}, nil)
+
+	r := gin.New() // no auth middleware → caller is anonymous
+	r.GET("/api/jobs/:id/events", SSEJobUpdates)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs/someones-job/events", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for a non-owner", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct == "text/event-stream" {
+		t.Error("SSE stream must not be opened for an unauthorized caller")
+	}
+}
+
+// TestSSEJobUpdates_JobNotFound verifies a missing job returns 404 without opening
+// a stream.
+func TestSSEJobUpdates_JobNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	stubJob(t, nil, errors.New("record not found"))
+
+	r := gin.New()
+	r.GET("/api/jobs/:id/events", SSEJobUpdates)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs/missing/events", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for a missing job", w.Code)
 	}
 }

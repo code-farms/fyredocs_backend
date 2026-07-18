@@ -10,10 +10,22 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"job-service/internal/models"
+
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/queue"
 	"fyredocs/shared/response"
 )
+
+// loadJobByID fetches a job by its ID for the SSE ownership gate. It is a package
+// variable so tests can inject a job without a live database.
+var loadJobByID = func(id string) (*models.ProcessingJob, error) {
+	var job models.ProcessingJob
+	if err := models.DB.First(&job, "id = ?", id).Error; err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
 
 // buildSSEPayload converts an internal JobEvent into the JSON shape sent to SSE
 // clients. failureReason is included only when present so the frontend can show
@@ -40,6 +52,22 @@ func SSEJobUpdates(c *gin.Context) {
 	jobID := c.Param("id")
 	if jobID == "" {
 		response.BadRequest(c, "INVALID_INPUT", "job ID required")
+		return
+	}
+
+	// Authorize BEFORE any SSE headers are written (so a denial can still return a
+	// normal JSON status). Load the job and require the caller to own it — the
+	// authenticated owner, or a guest whose token is bound to this job. This
+	// mirrors GetJobByID/DownloadJobFile; without it, any client that learns a job
+	// ID could stream another tenant's live status/progress/failureReason.
+	// A missing job and a denied job both return 404 so existence isn't leaked.
+	job, err := loadJobByID(jobID)
+	if err != nil {
+		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
+		return
+	}
+	if !authorizeJobAccess(c, job) {
+		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
 		return
 	}
 

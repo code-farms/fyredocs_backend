@@ -142,6 +142,9 @@ func InitUpload(c *gin.Context) {
 		"partSize":     partSize,
 		"totalParts":   totalParts,
 		"createdAt":    time.Now().UTC().Format(time.RFC3339),
+		// Bind the session to its initiator so only they can resume, complete,
+		// abort, or inspect it (finding F4).
+		"owner": uploadOwnerID(c, true),
 	})
 	pipe.Expire(ctx, uploadKey, uploadTTL())
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -184,6 +187,11 @@ func GetUploadParts(c *gin.Context) {
 			response.InternalErrorf(c, "SERVER_ERROR", "Could not load the upload session. Please try again.", err,
 				"op", "redis.fetch_upload_state", "uploadId", uploadID)
 		}
+		return
+	}
+
+	if !uploadOwnerMatches(c, state) {
+		response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
 		return
 	}
 
@@ -239,6 +247,11 @@ func CompleteUpload(c *gin.Context) {
 			response.InternalErrorf(c, "SERVER_ERROR", "Could not load the upload session. Please try again.", err,
 				"op", "redis.fetch_upload_state", "uploadId", uploadID)
 		}
+		return
+	}
+
+	if !uploadOwnerMatches(c, state) {
+		response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
 		return
 	}
 
@@ -312,6 +325,10 @@ func AbortUpload(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	state, err := fetchUploadState(ctx, uploadID)
+	if err == nil && !uploadOwnerMatches(c, state) {
+		response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
+		return
+	}
 	if err == nil && state["s3UploadId"] != "" && objStore != nil {
 		if abortErr := objStore.AbortMultipart(ctx, state["bucket"], state["key"], state["s3UploadId"]); abortErr != nil {
 			response.InternalErrorf(c, "SERVER_ERROR", "Could not cancel the upload. Please try again.", abortErr,
@@ -344,6 +361,11 @@ func GetUploadStatus(c *gin.Context) {
 			response.InternalErrorf(c, "SERVER_ERROR", "Upload session expired. Please upload your file again.", err,
 				"op", "redis.fetch_upload_state", "uploadId", uploadID)
 		}
+		return
+	}
+
+	if !uploadOwnerMatches(c, state) {
+		response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
 		return
 	}
 
@@ -417,6 +439,40 @@ func sanitizeFileName(name string) string {
 		return ""
 	}
 	return base
+}
+
+// uploadOwnerID returns a stable identity string used to bind an upload session
+// to its initiator (finding F4): "user:<uuid>" for an authenticated caller, else
+// "guest:<token>" from the guest_token cookie. When mint is true and a guest has
+// no token yet, one is generated and set as a cookie so the guest has a stable
+// owner for the rest of the multipart flow; when mint is false the cookie is only
+// read. Returns "" when no identity can be established.
+func uploadOwnerID(c *gin.Context, mint bool) string {
+	if uid := authUserID(c); uid != nil {
+		return "user:" + uid.String()
+	}
+	token := guestToken(c)
+	if token == "" {
+		if !mint || redisstore.Client == nil {
+			return ""
+		}
+		token = uuid.NewString()
+		c.SetCookie("guest_token", token, int(config.GuestJobTTL().Seconds()), "/", "", false, true)
+	}
+	return "guest:" + token
+}
+
+// uploadOwnerMatches reports whether the caller owns the given upload session.
+// Sessions created before owner-binding shipped have no "owner" field; those are
+// allowed so in-flight uploads aren't broken by a deploy. New sessions always
+// carry an owner, so possession of the uploadId UUID alone is no longer enough to
+// re-presign, complete, abort, or inspect someone else's upload.
+func uploadOwnerMatches(c *gin.Context, state map[string]string) bool {
+	owner := state["owner"]
+	if owner == "" {
+		return true
+	}
+	return uploadOwnerID(c, false) == owner
 }
 
 func fetchUploadState(ctx context.Context, uploadID string) (map[string]string, error) {

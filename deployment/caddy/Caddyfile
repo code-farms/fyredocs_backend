@@ -24,6 +24,9 @@
 	# routes — no auth middleware applies.
 	@objects path /{$S3_BUCKET_UPLOADS:uploads}/* /{$S3_BUCKET_OUTPUTS:outputs}/*
 	handle @objects {
+		# Never let a browser MIME-sniff object bytes into an executable type on
+		# this origin (defense-in-depth; downloads already force attachment).
+		header X-Content-Type-Options nosniff
 		reverse_proxy minio:9000 {
 			header_up Host {host}
 			# Multipart parts arrive from the browser in parallel; allow
@@ -83,6 +86,21 @@
 	# ---- SPA (client-side routed) --------------------------------------
 	handle {
 		root * /srv/spa
+		# Security headers on the app document + assets. The api-gateway sets its
+		# own headers on /api /auth /admin; these cover the Caddy-served SPA, which
+		# previously shipped none (production-readiness S8 / finding A1).
+		header {
+			X-Frame-Options "DENY"
+			X-Content-Type-Options "nosniff"
+			Referrer-Policy "strict-origin-when-cross-origin"
+			# CSP: the SPA is self-contained — same-origin APIs, presigned URLs, and
+			# the same-origin Grafana embed (default-src 'self' permits that iframe).
+			# style-src allows 'unsafe-inline' for Tailwind/Radix inline styles, the
+			# chart <style>, and inline Mermaid SVG. VALIDATE against the running app
+			# (open the docs page with Mermaid + charts, watch the browser console)
+			# and relax a single directive only if a legitimate resource is blocked.
+			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		}
 		@assets path /assets/*
 		header @assets Cache-Control "public, max-age=31536000, immutable"
 		try_files {path} /index.html

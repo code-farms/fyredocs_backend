@@ -60,3 +60,22 @@ func TestChangePlan_NoAuthContext_Returns401(t *testing.T) {
 		t.Errorf("expected 401 without auth context, got %d", rec.Code)
 	}
 }
+
+// TestCanChangePlan is the authorization gate that stops an end user from
+// self-upgrading to a paid plan (finding F2). Only admins/super-admins qualify.
+func TestCanChangePlan(t *testing.T) {
+	cases := map[string]bool{
+		"user":        false,
+		"":            false,
+		"pro":         false, // a plan name is not a role
+		"admin":       true,
+		"super-admin": true,
+		"  admin  ":   true, // trimmed
+		"Admin":       false, // case-sensitive: only exact roles allowed
+	}
+	for role, want := range cases {
+		if got := canChangePlan(role); got != want {
+			t.Errorf("canChangePlan(%q) = %v, want %v", role, got, want)
+		}
+	}
+}

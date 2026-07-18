@@ -75,30 +75,51 @@ func CreateJobFromTool(c *gin.Context) {
 		return
 	}
 
-	// Idempotency: check for Idempotency-Key header
-	idempotencyKey := c.GetHeader("Idempotency-Key")
-	if idempotencyKey != "" && redisstore.Client != nil {
-		redisKey := fmt.Sprintf("idempotency:%s", idempotencyKey)
-		existing, err := redisstore.Client.Get(c.Request.Context(), redisKey).Result()
-		if err == nil && existing != "" {
-			var existingJob models.ProcessingJob
-			if err := models.DB.First(&existingJob, "id = ?", existing).Error; err == nil {
-				guestTok := assignGuestTokenIfNeeded(c, authUserID(c), existingJob.ID)
-				response.Created(c, "Your file is being processed!", createJobResponse{
-					jobResponse: toJobResponse(existingJob),
-					GuestToken:  guestTok,
-				})
-				return
-			}
-		}
-	}
-
 	if objStore == nil {
 		response.InternalError(c, "SERVER_ERROR", "File storage is unavailable. Please try again later.")
 		return
 	}
 
 	jobID := uuid.New()
+
+	// Idempotency: an Idempotency-Key header dedups retries of the same logical
+	// request. Reserve it ATOMICALLY (SetNX) with this request's jobID so two
+	// concurrent requests carrying the same key cannot both create a job (finding
+	// B2 — the old GET-then-SET was a check-then-set race). The reservation is
+	// deleted if we fail before the job is committed, so a client can safely retry.
+	idempotencyKey := c.GetHeader("Idempotency-Key")
+	idempotencyRedisKey := ""
+	idempotencyReserved := false
+	idempotencyCommitted := false
+	if idempotencyKey != "" && redisstore.Client != nil {
+		idempotencyRedisKey = fmt.Sprintf("idempotency:%s", idempotencyKey)
+		reserved, err := redisstore.Client.SetNX(c.Request.Context(), idempotencyRedisKey, jobID.String(), idempotencyKeyTTL).Result()
+		if err == nil && !reserved {
+			// The key is already owned by a prior/concurrent request. Return its
+			// committed job, or ask the client to wait rather than duplicating.
+			if existing, gerr := redisstore.Client.Get(c.Request.Context(), idempotencyRedisKey).Result(); gerr == nil && existing != "" {
+				var existingJob models.ProcessingJob
+				if dberr := models.DB.First(&existingJob, "id = ?", existing).Error; dberr == nil {
+					guestTok := assignGuestTokenIfNeeded(c, authUserID(c), existingJob.ID)
+					response.Created(c, "Your file is being processed!", createJobResponse{
+						jobResponse: toJobResponse(existingJob),
+						GuestToken:  guestTok,
+					})
+					return
+				}
+			}
+			response.Err(c, http.StatusConflict, "ALREADY_PROCESSING", "This request is already being processed. Please wait a moment.")
+			return
+		}
+		idempotencyReserved = err == nil && reserved
+	}
+	// Release the idempotency reservation if we bail before committing the job, so
+	// a same-key retry isn't blocked pointing at a job that never existed.
+	defer func() {
+		if idempotencyReserved && !idempotencyCommitted && redisstore.Client != nil {
+			_ = redisstore.Client.Del(context.Background(), idempotencyRedisKey).Err()
+		}
+	}()
 
 	var totalSize int64
 	var inputPaths []string
@@ -151,6 +172,32 @@ func CreateJobFromTool(c *gin.Context) {
 			response.BadRequest(c, "INVALID_OPTIONS", err.Error())
 			return
 		}
+
+		// Atomically claim the uploads so a concurrent duplicate submission
+		// (double-click, client retry, two tabs) cannot consume the same upload
+		// and create a second job (finding B1). Claims are released on return;
+		// the winner's consumed-upload record dedups later duplicates.
+		claimed, conflict, cerr := claimUploads(c.Request.Context(), uploadIDs)
+		if cerr != nil {
+			response.InternalErrorf(c, "SERVER_ERROR", "Something went wrong. Please try again.", cerr,
+				"op", "claim_uploads", "tool", toolType, "jobId", jobID)
+			return
+		}
+		if conflict {
+			// A concurrent request already holds these uploads. If it has
+			// committed, return its job; otherwise ask the client to wait.
+			if existingJob, ok := findExistingJobForUploads(c.Request.Context(), uploadIDs); ok {
+				guestTok := assignGuestTokenIfNeeded(c, authUserID(c), existingJob.ID)
+				response.Created(c, "Your file is being processed!", createJobResponse{
+					jobResponse: toJobResponse(*existingJob),
+					GuestToken:  guestTok,
+				})
+				return
+			}
+			response.Err(c, http.StatusConflict, "ALREADY_PROCESSING", "This file is already being processed. Please wait a moment.")
+			return
+		}
+		defer releaseUploadClaims(context.Background(), claimed)
 
 		for _, uploadID := range uploadIDs {
 			consumed, err := consumeUpload(c.Request.Context(), toolType, uploadID)
@@ -298,6 +345,9 @@ func CreateJobFromTool(c *gin.Context) {
 			"op", "db.processing_jobs.transaction", "tool", toolType, "jobId", jobID)
 		return
 	}
+	// The job row now exists; the Idempotency-Key reservation (set to this jobID
+	// up front) is authoritative, so the deferred cleanup must not delete it.
+	idempotencyCommitted = true
 
 	guestTok := assignGuestTokenIfNeeded(c, userID, jobID)
 
@@ -334,11 +384,8 @@ func CreateJobFromTool(c *gin.Context) {
 		releaseUpload(c.Request.Context(), id)
 	}
 
-	// Store idempotency key in Redis with 10-minute TTL
-	if idempotencyKey != "" && redisstore.Client != nil {
-		redisKey := fmt.Sprintf("idempotency:%s", idempotencyKey)
-		redisstore.Client.Set(c.Request.Context(), redisKey, job.ID.String(), 10*time.Minute)
-	}
+	// The Idempotency-Key was reserved with this jobID up front (see the top of
+	// the handler), so no post-commit write is needed here.
 
 	publishJobAnalyticsEvent(c.Request.Context(), "job.created", job.ID.String(), toolType, userID, totalSize)
 	slog.Info("job queued", "jobId", job.ID, "tool", toolType, "correlationId", correlationID)
@@ -664,11 +711,63 @@ func releaseUpload(ctx context.Context, uploadID string) {
 }
 
 // consumedUploadIdempotencyTTL bounds how long a same-uploadId replay is
-// deduplicated to the original job. Matches the existing Idempotency-Key TTL.
+// deduplicated to the original job. Matches the Idempotency-Key TTL.
 const consumedUploadIdempotencyTTL = 10 * time.Minute
+
+// idempotencyKeyTTL bounds how long an Idempotency-Key reservation lives.
+const idempotencyKeyTTL = 10 * time.Minute
+
+// uploadClaimTTL bounds a per-upload processing claim (finding B1). It is only a
+// safety net: the claim is released when the request returns, and expires on its
+// own if the process dies mid-flight.
+const uploadClaimTTL = 10 * time.Minute
 
 func consumedUploadKey(uploadID string) string {
 	return "idempotency:upload:" + uploadID
+}
+
+func uploadClaimKey(uploadID string) string {
+	return "claim:upload:" + uploadID
+}
+
+// claimUploads atomically reserves every uploadID so that two concurrent job
+// submissions cannot consume the same upload and create duplicate jobs
+// (finding B1 — quota/compute double-spend). It returns claimed=all-ids only when
+// EVERY id was newly reserved; on any id already held it releases what it took and
+// returns conflict=true; a Redis error returns err. The caller releases the
+// claims on return (see releaseUploadClaims); the winner's consumed-upload record
+// dedups any later duplicate before it ever reaches this claim.
+func claimUploads(ctx context.Context, uploadIDs []string) (claimed []string, conflict bool, err error) {
+	if redisstore.Client == nil {
+		return nil, false, nil
+	}
+	for _, id := range uploadIDs {
+		ok, e := redisstore.Client.SetNX(ctx, uploadClaimKey(id), "1", uploadClaimTTL).Result()
+		if e != nil {
+			releaseUploadClaims(ctx, claimed)
+			return nil, false, e
+		}
+		if !ok {
+			releaseUploadClaims(ctx, claimed)
+			return nil, true, nil
+		}
+		claimed = append(claimed, id)
+	}
+	return claimed, false, nil
+}
+
+// releaseUploadClaims deletes the processing claims taken by claimUploads. Uses a
+// background context so the release still runs if the request context is already
+// cancelled; a missed delete is harmless (the claim expires on uploadClaimTTL).
+func releaseUploadClaims(ctx context.Context, uploadIDs []string) {
+	if redisstore.Client == nil || len(uploadIDs) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(uploadIDs))
+	for _, id := range uploadIDs {
+		keys = append(keys, uploadClaimKey(id))
+	}
+	_ = redisstore.Client.Del(ctx, keys...).Err()
 }
 
 // recordConsumedUpload remembers which job consumed an uploadId so a duplicate
