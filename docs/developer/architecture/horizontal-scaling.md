@@ -97,7 +97,11 @@ ever buy.** Compose limits and worker pools are auto-budgeted by `deploy.sh` fro
 the host's RAM/CPU, so a bigger box needs almost no config change.
 
 1. **Give the box more resources / raise the budget.** `deploy.sh` sizes every
-   container to `RESOURCE_BUDGET_PCT` (default 70%) of host RAM/CPU. Move to a
+   container to `RESOURCE_BUDGET_PCT` (default 70%; production `.env` sets 80) of
+   host RAM/CPU — the co-located Postgres (`db`) and `db-backup` are folded into
+   this weighted budget too (only `caddy` is left out, in the reserved OS/edge
+   headroom). On sub-8GB hosts where `db` would land below ~512MB, lower
+   `DB_SHARED_BUFFERS` (default `256MB`) or use a managed Postgres. Move to a
    bigger VPS, then preview and apply:
    ```bash
    ./deployment/deploy.sh --dry-run                 # see computed limits

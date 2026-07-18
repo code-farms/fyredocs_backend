@@ -475,9 +475,17 @@ the round-trip itself is now sub-millisecond, so absolute latency is tiny.
   procedure: `pg_dump "<neon-url>" --no-owner --no-privileges | psql "<local-url>"`
   from a `postgres:18-alpine` container joined to `fyredocs_net`.
 - Tuned flags: `max_connections=200` (sum of per-service pools ~155),
-  `shared_buffers=256MB`, `work_mem=8MB`. Under k6 `mixed-realistic` load, peak
-  was **19/200** connections — ample headroom; PgBouncer is the scale path if
-  pools grow.
+  `shared_buffers=${DB_SHARED_BUFFERS:-256MB}`, `work_mem=8MB`. Under k6
+  `mixed-realistic` load, peak was **19/200** connections — ample headroom;
+  PgBouncer is the scale path if pools grow.
+- **Resource limits are budgeted, not hardcoded.** `db`'s memory/CPU come from
+  `${DB_MEM_LIMIT:-1G}` / `${DB_CPU_LIMIT:-1.5}` (and `db-backup` likewise), which
+  `deploy.sh` sizes as part of the `RESOURCE_BUDGET_PCT` (80%) cap — so Postgres
+  is counted inside the whole-stack budget. The fallbacks equal the previous fixed
+  values, so a plain `docker compose up` is unchanged. `shared_buffers` is now
+  env-overridable: on a host small enough that the budgeted `db` limit lands below
+  ~512MB (≈ sub-8GB at 80%), lower `DB_SHARED_BUFFERS` or point `DATABASE_URL` at a
+  managed Postgres to avoid OOM.
 - All 11 DB-using services `depends_on: db {condition: service_healthy}`;
   schema + `subscription_plans` seed are created automatically on first boot by
   each service's `Migrate()`/`seedPlans()`.

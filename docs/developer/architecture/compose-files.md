@@ -6,7 +6,7 @@ All compose files live in `deployment/` and share the same project name (`fyredo
 
 | File | Role | When to use |
 |------|------|-------------|
-| `docker-compose.yml` | **Canonical stack** — all 11 services + infra (db, redis, nats, minio, caddy) + backups, plus an opt-in `observability` profile (otel-collector, tempo, prometheus, grafana). The single source of truth for every service's config. | Full deploys (`deployment/deploy.sh` uses it). |
+| `docker-compose.yml` | **Canonical stack** — all 11 services + infra (db, redis, nats, minio, caddy) + backups, plus two opt-in profiles: `observability` (otel-collector, tempo, prometheus, grafana) and `notifications` (notification-service — off by default). The single source of truth for every service's config. | Full deploys (`deployment/deploy.sh` uses it). |
 | `docker-compose.essentials.yml` | **Infra only** — db (5432), redis (6379), nats (4222), minio (9000, console 9001), minio-init. Ports published to the host. Creates `fyredocs_net`. | Local dev where services run on the host via `go run`, or as the dependency provider for per-service files. |
 | `docker-compose-<service>.yml` × 11 | **One service each** — extends the service's definition from `docker-compose.yml`. | Build/redeploy a single service against already-running infra. |
 
@@ -70,6 +70,27 @@ Config lives in `deployment/{otel-collector,tempo,prometheus,grafana}/` (mounted
 read-only). Grafana (`http://127.0.0.1:3000`) and Prometheus
 (`http://127.0.0.1:9090`) are bound loopback-only. See
 [observability.md](./observability.md) for the full data flow and details.
+
+## Notifications profile (opt-in — off by default)
+
+`notification-service` carries `profiles: ["notifications"]`, so a plain
+`docker compose up` (and `deploy.sh`) does **not** start it — it is disabled by
+default. Its config stays fully intact and `docker compose build` still builds
+the image (build is not profile-gated), so it stays ready to enable with no
+rebuild. Runtime coupling is best-effort — document-service's notifyclient
+swallows errors and the gateway only proxies `/api/notifications` on demand — so
+the rest of the stack runs normally without it. Because Compose auto-starts a
+profiled service that an enabled service `depends_on`, the two
+`depends_on: notification-service` edges (api-gateway, document-service) were
+removed; their `NOTIFICATION_SERVICE_URL` env still resolves once it is enabled.
+
+```bash
+# enable it later, alongside a running stack (no rebuild needed)
+docker compose -f deployment/docker-compose.yml --env-file .env --profile notifications up -d
+# or via the dedicated single-service file / wrapper:
+docker compose -f deployment/docker-compose-notification-service.yml --env-file .env up -d --build
+./deployment/deploy.sh notification-service
+```
 
 ## Validation
 

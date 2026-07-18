@@ -28,7 +28,10 @@ services:
       - -c
       - max_connections=200
       - -c
-      - shared_buffers=256MB
+      # Env-overridable (default unchanged). On hosts small enough that the
+      # budgeted db memory limit falls below ~512MB (roughly sub-8GB at 80%),
+      # lower DB_SHARED_BUFFERS, or point DATABASE_URL at a managed Postgres.
+      - shared_buffers=${DB_SHARED_BUFFERS:-256MB}
       - -c
       - effective_cache_size=768MB
       - -c
@@ -43,13 +46,16 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    # Limits are env-driven so deploy.sh's resource budget folds Postgres into the
+    # RESOURCE_BUDGET_PCT (80%) cap like every other service. The fallbacks equal
+    # the previous hardcoded values, so a plain `docker compose up` is unchanged.
     deploy:
       resources:
         limits:
-          memory: 1G
-          cpus: '1.5'
+          memory: ${DB_MEM_LIMIT:-1G}
+          cpus: "${DB_CPU_LIMIT:-1.5}"
         reservations:
-          memory: 256M
+          memory: ${DB_MEM_RESERVATION:-256M}
     logging:
       driver: "json-file"
       options:
@@ -363,8 +369,9 @@ services:
         condition: service_started
       user-service:
         condition: service_started
-      notification-service:
-        condition: service_started
+      # notification-service intentionally omitted: it is disabled by default
+      # (notifications profile). The gateway proxies /api/notifications on demand
+      # and NOTIFICATION_SERVICE_URL below still resolves when it is enabled.
     networks:
       - fyredocs_net
 
@@ -393,7 +400,9 @@ services:
 
       # Auth Cookie Settings
       AUTH_COOKIE_DOMAIN: ""
-      AUTH_COOKIE_SECURE: "false"
+      # Default preserved for HTTP/dev; set AUTH_COOKIE_SECURE=true in the
+      # production .env so auth cookies carry the Secure flag over HTTPS.
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       AUTH_COOKIE_SAMESITE: "lax"
       AUTH_REFRESH_COOKIE: "refresh_token"
 
@@ -890,8 +899,9 @@ services:
         condition: service_healthy
       user-service:
         condition: service_started
-      notification-service:
-        condition: service_started
+      # notification-service intentionally omitted: it is disabled by default
+      # (notifications profile). notifyclient is best-effort (errors swallowed)
+      # and NOTIFICATION_SERVICE_URL below still resolves when it is enabled.
     networks:
       - fyredocs_net
 
@@ -932,7 +942,16 @@ services:
       - fyredocs_net
 
   # ==================== NOTIFICATION SERVICE ====================
+  # Disabled by default via the `notifications` profile: a plain `docker compose
+  # up -d` (and deploy.sh) does NOT start it, but `docker compose build` still
+  # builds the image so it stays ready to enable. Runtime coupling is best-effort
+  # (document-service's notifyclient swallows errors; the gateway only proxies
+  # /api/notifications on demand), so the rest of the stack runs fine without it.
+  # Enable later:
+  #   docker compose -f deployment/docker-compose.yml --env-file .env --profile notifications up -d
+  #   (or) ./deployment/deploy.sh notification-service
   notification-service:
+    profiles: ["notifications"]
     build:
       context: ..
       dockerfile: notification-service/Dockerfile
@@ -1010,13 +1029,15 @@ services:
       # Outputs only by default — uploads are ephemeral (2-day expiry).
       BACKUP_FILES_BUCKETS: ${BACKUP_FILES_BUCKETS:-outputs}
       BACKUP_FILES_PREFIX: ${BACKUP_FILES_PREFIX:-minio/}
+    # Env-driven so deploy.sh folds this sidecar into the 80% budget too; the
+    # fallbacks equal the previous hardcoded values (backward compatible).
     deploy:
       resources:
         limits:
-          memory: 128M
-          cpus: "0.5"
+          memory: ${DB_BACKUP_MEM_LIMIT:-128M}
+          cpus: "${DB_BACKUP_CPU_LIMIT:-0.5}"
         reservations:
-          memory: 32M
+          memory: ${DB_BACKUP_MEM_RESERVATION:-32M}
     logging:
       driver: "json-file"
       options:

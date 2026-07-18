@@ -77,8 +77,10 @@ done
 # it up next run). Override with MEM_TOTAL_MB / NCPU env vars (used for the
 # --dry-run "what would a bigger box get?" check).
 #
-# The budget is distributed across the 15 containers by responsibility-based
-# weights (see the MEMW/CPUW tables below), so the absolute numbers scale to the
+# The budget is distributed across the 16 weighted containers by
+# responsibility-based weights (see the MEMW/CPUW tables below) — this includes
+# the co-located Postgres (db) and the db-backup sidecar; only caddy is excluded
+# (it belongs to the reserved OS/edge headroom). The absolute numbers scale to the
 # budget on any host. Because a container can never exceed its own cgroup limit,
 # Σ(limits) ≤ budget guarantees the whole project stays within the cap.
 #
@@ -93,7 +95,8 @@ compute_resource_budget() {
     # associative arrays). Order: name, mem weight (MB), cpu weight (tenths).
     local NAMES=(redis nats minio api-gateway auth-service job-service \
         convert-from-pdf convert-to-pdf organize-pdf optimize-pdf \
-        analytics-service document-service user-service notification-service)
+        analytics-service document-service user-service notification-service \
+        db db-backup)
     # Weights reflect each service's real responsibilities (not the old 8 GB-box
     # limits). Memory: LibreOffice/OCR workers + MinIO get the bulk; redis and
     # the light Go CRUD services stay lean. CPU: the heavy workers AND the
@@ -102,9 +105,15 @@ compute_resource_budget() {
     # Sums are computed below so the arrays can be retuned in isolation.
     # job-service's weights include its in-process cleanup sweep (formerly
     # the separate cleanup-worker container).
-    #              redis nats minio  gw auth  job   cF  cT org opt  an doc usr ntf
-    local MEMW=(     8   12   34   14    7   24   48  48  24  46    6   6   6   6)
-    local CPUW=(     2    2    7   10    2    6   18  18  12  18    1   1   1   1)
+    # db = the co-located Postgres backing the whole stack: the largest non-worker
+    # memory weight (lands ~1G on a 16 GB box) and a gateway-sized CPU share (it is
+    # app/IO-bound, not DB-CPU-bound). db-backup = a near-idle pg_dump|gzip|rclone
+    # sidecar. Both were previously hardcoded OUTSIDE this budget; folding them in
+    # is what makes Σ(limits) ≤ budget actually hold for the full stack. (caddy is
+    # deliberately excluded — it belongs to the reserved OS/edge headroom.)
+    #              redis nats minio  gw auth  job   cF  cT org opt  an doc usr ntf   db db-bk
+    local MEMW=(     8   12   34   14    7   24   48  48  24  46    6   6   6   6   26    3)
+    local CPUW=(     2    2    7   10    2    6   18  18  12  18    1   1   1   1   10    1)
     local MEMW_SUM=0 CPUW_SUM=0 wi
     for wi in "${!MEMW[@]}"; do
         MEMW_SUM=$(( MEMW_SUM + MEMW[wi] )); CPUW_SUM=$(( CPUW_SUM + CPUW[wi] ))
