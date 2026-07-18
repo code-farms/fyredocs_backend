@@ -124,8 +124,28 @@ who may frame *our* site, not the ad iframes *we* embed.
 > measurably weakens the CSP's XSS protection. This is unavoidable for ad-supported
 > sites; the strict default protects everything until ads are enabled. After
 > setting the var, load the site and clear any remaining console CSP errors by
-> adding the exact hosts they name. (Ads usually also need a cookie-consent banner
-> for EU users — separate concern.)
+> adding the exact hosts they name.
+
+> **CSP allows, consent decides.** `CSP_AD_DOMAINS` only makes the ad host
+> *permitted* by the browser; whether ads actually load is gated by the user's
+> cookie-consent choice. The SPA ships a GDPR consent banner
+> (`fyredocs_frontend/src/components/common/CookieConsent.tsx`) backed by
+> `fyredocs_frontend/src/lib/consent.ts`. When wiring an ad network, inject its
+> `<script>` only when `hasMarketingConsent()` is true (and re-check on the
+> `fyredocs:consent-change` event), or use Google Consent Mode. The app's own
+> analytics (Plausible) is cookieless and needs no consent.
+>
+> **Regional default:** before an explicit choice, marketing consent defaults **ON
+> outside the EU/EEA/UK** (opt-out) and **OFF inside it** (opt-in, GDPR/UK-PECR).
+> Region is currently inferred from the **browser timezone** (`isConsentRequiredRegion()`
+> in `consent.ts`) — dependency-free and guest-covering, but a heuristic. For higher
+> accuracy, inject a country header at this edge (a Caddy GeoIP build, or a CDN such
+> as Cloudflare's `CF-IPCountry`) and prefer it in `isConsentRequiredRegion()`.
+>
+> **Banner visibility:** the consent banner **auto-shows only in consent-required
+> regions** (EU/EEA/UK). Elsewhere it stays hidden (ads default on), but the footer
+> **"Cookie settings"** link opens the preferences dialog everywhere so any visitor
+> can still opt out. A country header (above) automatically tightens this too.
 
 ### Why Host preservation is load-bearing
 
