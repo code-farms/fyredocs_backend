@@ -51,6 +51,12 @@ func Migrate() {
 	compositeIndexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_job_user_tool_created ON processing_jobs (user_id, tool_type, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_filemeta_job_kind ON file_metadata (job_id, kind)`,
+		// GetJobHistory: user_id = ? ORDER BY created_at DESC (tool_type absent → the composite above can't serve the sort).
+		`CREATE INDEX IF NOT EXISTS idx_job_user_created ON processing_jobs (user_id, created_at DESC)`,
+		// cleanup uploadObjectConsumed: file_metadata WHERE path = ?
+		`CREATE INDEX IF NOT EXISTS idx_filemeta_path ON file_metadata (path)`,
+		// backfillExpiry sweep: UPDATE ... WHERE user_id IS NOT NULL AND expires_at IS NULL (runs every sweep).
+		`CREATE INDEX IF NOT EXISTS idx_job_missing_expiry ON processing_jobs (id) WHERE expires_at IS NULL AND user_id IS NOT NULL`,
 	}
 	for _, idx := range compositeIndexes {
 		if err := DB.Exec(idx).Error; err != nil {

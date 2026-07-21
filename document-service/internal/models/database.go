@@ -60,6 +60,10 @@ func Migrate() {
 		`DROP INDEX IF EXISTS idx_tag_user_name`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_personal ON tags (user_id, name) WHERE organization_id IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_org ON tags (organization_id, name) WHERE organization_id IS NOT NULL`,
+		// Org-scoped library listing: organization_id = ? ORDER BY created_at DESC.
+		`CREATE INDEX IF NOT EXISTS idx_doc_org_created ON documents (organization_id, created_at DESC)`,
+		// Tag-filtered document/export lists join document_tags WHERE tag_id = ? (join-table PK leads with document_id).
+		`CREATE INDEX IF NOT EXISTS idx_doctags_tag ON document_tags (tag_id, document_id)`,
 	}
 	for _, s := range stmts {
 		if err := DB.Exec(s).Error; err != nil {

@@ -11,11 +11,11 @@ import (
 // AnalyticsEvent stores individual analytics events for detailed querying.
 type AnalyticsEvent struct {
 	ID          uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	EventType   string         `gorm:"type:text;not null;index:idx_event_type" json:"eventType"`
-	UserID      *uuid.UUID     `gorm:"type:uuid;index:idx_event_user" json:"userId,omitempty"`
-	JobID       *uuid.UUID     `gorm:"type:uuid;index:idx_event_job" json:"jobId,omitempty"`
+	EventType   string         `gorm:"type:text;not null" json:"eventType"`
+	UserID      *uuid.UUID     `gorm:"type:uuid" json:"userId,omitempty"`
+	JobID       *uuid.UUID     `gorm:"type:uuid" json:"jobId,omitempty"`
 	IsGuest     bool           `gorm:"default:false" json:"isGuest"`
-	ToolType    string         `gorm:"type:text;index:idx_event_tool" json:"toolType,omitempty"`
+	ToolType    string         `gorm:"type:text" json:"toolType,omitempty"`
 	PlanName    string         `gorm:"type:text" json:"planName,omitempty"`
 	FileSize    int64          `gorm:"default:0" json:"fileSize,omitempty"`
 	Metadata    datatypes.JSON `gorm:"type:jsonb" json:"metadata,omitempty"`

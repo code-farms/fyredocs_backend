@@ -47,6 +47,8 @@ func Migrate() {
 		`CREATE INDEX IF NOT EXISTS idx_notif_user_created ON notifications (user_id, created_at DESC)`,
 		// One notification per (user, source job) keeps the subscriber idempotent.
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_notif_user_source ON notifications (user_id, source_job_id) WHERE source_job_id IS NOT NULL`,
+		// Unread-badge count: user_id = ? AND read_at IS NULL.
+		`CREATE INDEX IF NOT EXISTS idx_notif_user_unread ON notifications (user_id) WHERE read_at IS NULL`,
 	}
 	for _, s := range stmts {
 		if err := DB.Exec(s).Error; err != nil {

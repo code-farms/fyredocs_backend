@@ -13,7 +13,7 @@ import (
 // are recorded as FileMetadata rows. ExpiresAt drives the TTL cleanup sweep.
 type ProcessingJob struct {
 	ID            uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID        *uuid.UUID     `gorm:"type:uuid;index" json:"userId,omitempty"`
+	UserID        *uuid.UUID     `gorm:"type:uuid" json:"userId,omitempty"`
 	ToolType      string         `gorm:"type:text;not null;index" json:"toolType"`
 	Status        string         `gorm:"type:text;not null;default:'queued';index" json:"status"`
 	Progress      int            `gorm:"default:0" json:"progress"`

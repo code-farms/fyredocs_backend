@@ -53,6 +53,10 @@ func Migrate() {
 		`CREATE INDEX IF NOT EXISTS idx_event_user_type_created ON analytics_events (user_id, event_type, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_event_created_user ON analytics_events (created_at, user_id) WHERE user_id IS NOT NULL AND is_guest = false`,
 		`CREATE INDEX IF NOT EXISTS idx_event_job_type ON analytics_events (job_id, event_type) WHERE job_id IS NOT NULL`,
+		// Hot admin-metrics / dashboard patterns: filter by one equality col + created_at range/sort.
+		`CREATE INDEX IF NOT EXISTS idx_event_type_created ON analytics_events (event_type, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_event_user_created ON analytics_events (user_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_event_tool_created ON analytics_events (tool_type, created_at)`,
 	}
 	for _, idx := range compositeIndexes {
 		if err := DB.Exec(idx).Error; err != nil {

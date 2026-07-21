@@ -13,7 +13,7 @@ import (
 // One row = one login.
 type UserSession struct {
 	ID               uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID           uuid.UUID  `gorm:"type:uuid;not null;index:idx_user_sessions_user_id;constraint:OnDelete:CASCADE" json:"userId"`
+	UserID           uuid.UUID  `gorm:"type:uuid;not null;constraint:OnDelete:CASCADE" json:"userId"`
 	User             *User      `gorm:"foreignKey:UserID" json:"-"`
 	AccessTokenHash  string     `gorm:"type:text;not null;uniqueIndex:idx_user_sessions_access_hash" json:"-"`
 	RefreshTokenHash string     `gorm:"type:text;uniqueIndex:idx_user_sessions_refresh_hash" json:"-"`

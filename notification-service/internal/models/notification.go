@@ -10,7 +10,7 @@ import (
 // Notification is an in-app message for a user. ReadAt nil = unread.
 type Notification struct {
 	ID          uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID      uuid.UUID  `gorm:"type:uuid;not null;index" json:"userId"`
+	UserID      uuid.UUID  `gorm:"type:uuid;not null" json:"userId"`
 	Type        string     `gorm:"type:text;not null" json:"type"`
 	Title       string     `gorm:"type:text;not null" json:"title"`
 	Body        string     `gorm:"type:text" json:"body,omitempty"`

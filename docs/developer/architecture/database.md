@@ -52,8 +52,24 @@ out to be the single biggest lever.
 | `idx_event_user_type_created (user_id, event_type, created_at)` | `analytics_events` | Growth metrics — DAU/WAU/MAU by user activity |
 | `idx_event_created_user (created_at, user_id) WHERE ...` | `analytics_events` | Time-range queries filtered to registered users |
 | `idx_event_job_type (job_id, event_type) WHERE job_id IS NOT NULL` | `analytics_events` | Processing time JOIN between created/completed events |
+| `idx_event_type_created (event_type, created_at)` | `analytics_events` | Admin metrics — count events of a type over a time window |
+| `idx_event_user_created (user_id, created_at)` | `analytics_events` | Per-user dashboard — a user's activity over time (no event_type) |
+| `idx_event_tool_created (tool_type, created_at)` | `analytics_events` | Tool-usage trends over a time window |
+| `idx_job_user_created (user_id, created_at DESC)` | `processing_jobs` | `GetJobHistory` — user's jobs by date (tool_type absent) |
+| `idx_filemeta_path (path)` | `file_metadata` | Cleanup — resolve a file row by object path |
+| `idx_job_missing_expiry (id) WHERE expires_at IS NULL AND user_id IS NOT NULL` | `processing_jobs` | Partial index for the `backfillExpiry` sweep so it scans only un-expired rows |
+| `idx_doc_org_created (organization_id, created_at DESC)` | `documents` | Org library listing sorted by date |
+| `idx_doctags_tag (tag_id, document_id)` | `document_tags` | Tag-filtered document/export lists (join-table PK leads with document_id) |
+| `idx_notif_user_unread (user_id) WHERE read_at IS NULL` | `notifications` | Unread-badge count |
 
-**Best practice**: Always create indexes that match your actual query patterns. The column order matters — put equality filters first, range/sort columns last.
+**Redundant single-col indexes removed** (superseded by the composites above, which the planner uses
+via their leading-column prefix — fewer indexes = cheaper writes on hot tables): `idx_event_type`,
+`idx_event_user`, `idx_event_job`, `idx_event_tool` (analytics_events); `idx_processing_jobs_user_id`;
+`idx_documents_organization_id`; `idx_notifications_user_id`; `idx_user_sessions_user_id` (its FK
+cascade is still covered by `idx_session_user_access_exp`); `idx_tags_organization_id`. The
+corresponding `gorm:"index"` struct tags were removed so `AutoMigrate` does not recreate them.
+
+**Best practice**: Always create indexes that match your actual query patterns. The column order matters — put equality filters first, range/sort columns last. A single-column index is redundant when a composite already leads with that column — drop it to save write overhead.
 
 **Files**: `auth-service/internal/models/database.go`, `job-service/internal/models/database.go`, `analytics-service/internal/models/database.go`
 

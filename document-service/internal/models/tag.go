@@ -13,7 +13,7 @@ import (
 type Tag struct {
 	ID             uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
 	UserID         uuid.UUID  `gorm:"type:uuid;not null;index" json:"userId"`
-	OrganizationID *uuid.UUID `gorm:"type:uuid;index" json:"organizationId,omitempty"`
+	OrganizationID *uuid.UUID `gorm:"type:uuid" json:"organizationId,omitempty"`
 	Name           string     `gorm:"type:text;not null" json:"name"`
 	Color          string     `gorm:"type:text" json:"color,omitempty"`
 	CreatedAt      time.Time  `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`

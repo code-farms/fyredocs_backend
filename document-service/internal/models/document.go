@@ -21,7 +21,7 @@ const (
 type Document struct {
 	ID             uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
 	UserID         uuid.UUID  `gorm:"type:uuid;not null;index:idx_doc_user_created,priority:1" json:"userId"`
-	OrganizationID *uuid.UUID `gorm:"type:uuid;index" json:"organizationId,omitempty"`
+	OrganizationID *uuid.UUID `gorm:"type:uuid" json:"organizationId,omitempty"`
 	FolderID       *uuid.UUID `gorm:"type:uuid;index" json:"folderId,omitempty"`
 	Name           string     `gorm:"type:text;not null" json:"name"`
 	FileType       string     `gorm:"type:text" json:"fileType,omitempty"`
