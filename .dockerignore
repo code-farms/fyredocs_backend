@@ -1,0 +1,35 @@
+# Keep the build context small and stable so edits to non-build files don't
+# invalidate Docker layers. Nothing excluded here is a Go build input
+# (no go:embed of these paths; services resolve `shared` via replace directives).
+
+.git
+.gitignore
+
+# Secrets — never copy into any build layer (the go-builder base does `COPY . .`,
+# and base images may be pushed to a registry).
+.env
+.env.*
+*.env
+.jwt_secret
+**/*.pem
+**/*.key
+
+# Tests are never compiled by `go build .`, and editing one should not bust the
+# build cache (running `go test` happens on the host, not in the image build).
+**/*_test.go
+
+# Runtime data / generated output — never part of a build.
+**/uploads/
+**/outputs/
+files/
+
+# Docs, API collections, and helper scripts — not build inputs.
+# NOTE: do NOT exclude deployment/backup/ — the db-backup image COPYs
+# deployment/backup/backup.sh (see deployment/backup/Dockerfile).
+docs/
+postman/
+scripts/
+**/*.md
+
+# OS / editor cruft
+**/.DS_Store

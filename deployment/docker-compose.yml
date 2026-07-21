@@ -587,7 +587,9 @@ services:
     tmpfs:
       - /tmp:size=1g
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/healthz || exit 1"]
+      # Runtime image is python:3.11-slim (Debian) which has no wget/curl; use the
+      # bundled python3. urlopen raises (non-zero exit) on any non-2xx or connection error.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/healthz', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 3

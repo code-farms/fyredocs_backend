@@ -1,38 +1,18 @@
 # ---- Builder Stage ----
-FROM golang:1.25-alpine AS builder
+# Uses the shared fyredocs-go-builder base (deps + warm Go build cache baked in).
+# Build/refresh it with ./deployment/build-base-image.sh when go.mod deps change.
+FROM fyredocs-go-builder:latest AS builder
+
+ARG GO_BUILD_PARALLELISM=6
 
 WORKDIR /app
 
-# 1. Copy the master workspace files first
-COPY go.work go.work.sum* ./
-
-# 2. Copy only the dependency blueprints for the required modules
-COPY shared/go.mod shared/go.sum* ./shared/
-COPY api-gateway/go.mod* ./api-gateway/
-COPY auth-service/go.mod* ./auth-service/
-COPY convert-from-pdf/go.mod* ./convert-from-pdf/
-COPY convert-to-pdf/go.mod* ./convert-to-pdf/
-COPY optimize-pdf/go.mod* ./optimize-pdf/
-COPY organize-pdf/go.mod* ./organize-pdf/
-COPY job-service/go.mod* ./job-service/
-COPY analytics-service/go.mod* ./analytics-service/
-COPY document-service/go.mod* ./document-service/
-COPY user-service/go.mod* ./user-service/
-COPY notification-service/go.mod* ./notification-service/
-
-# 3. Download dependencies ONCE, using Docker's permanent BuildKit cache
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
-
-# 4. Now copy the actual changing source code
+# Fresh source on top of the base's warm cache — only these packages recompile.
 COPY shared/ ./shared/
 COPY convert-to-pdf/ ./convert-to-pdf/
 
-# 5. Build the binary using both the module cache AND the Go build cache
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    cd convert-to-pdf && \
-    CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/convert-to-pdf .
+RUN cd convert-to-pdf && \
+    CGO_ENABLED=0 GOOS=linux go build -p ${GO_BUILD_PARALLELISM} -trimpath -ldflags="-s -w" -o /app/bin/convert-to-pdf .
 
 # ---- Runtime Stage ----
 FROM fyredocs-base:latest

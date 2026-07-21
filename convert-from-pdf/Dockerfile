@@ -1,40 +1,18 @@
 # ---- Builder Stage ----
-FROM golang:1.25-alpine AS builder
+# Uses the shared fyredocs-go-builder base (deps + warm Go build cache baked in).
+# Build/refresh it with ./deployment/build-base-image.sh when go.mod deps change.
+FROM fyredocs-go-builder:latest AS builder
 
-# Prepare system files and non-root user
-RUN apk add --no-cache ca-certificates tzdata && \
-    adduser -D -u 10001 appuser
+ARG GO_BUILD_PARALLELISM=6
 
 WORKDIR /app
 
-# 1. Copy workspace blueprints for global caching
-COPY go.work go.work.sum* ./
-COPY shared/go.mod shared/go.sum* ./shared/
-COPY api-gateway/go.mod* ./api-gateway/
-COPY auth-service/go.mod* ./auth-service/
-COPY convert-from-pdf/go.mod* ./convert-from-pdf/
-COPY convert-to-pdf/go.mod* ./convert-to-pdf/
-COPY optimize-pdf/go.mod* ./optimize-pdf/
-COPY organize-pdf/go.mod* ./organize-pdf/
-COPY job-service/go.mod* ./job-service/
-COPY analytics-service/go.mod* ./analytics-service/
-COPY document-service/go.mod* ./document-service/
-COPY user-service/go.mod* ./user-service/
-COPY notification-service/go.mod* ./notification-service/
-
-# 2. Download dependencies (cached via BuildKit)
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
-
-# 3. Copy source code
+# Fresh source on top of the base's warm cache — only these packages recompile.
 COPY shared/ ./shared/
 COPY convert-from-pdf/ ./convert-from-pdf/
 
-# 4. Build binary with Go build cache
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    cd convert-from-pdf && \
-    CGO_ENABLED=0 GOOS=linux go build -p 2 -trimpath -ldflags="-s -w" -o /app/bin/convert-from-pdf .
+RUN cd convert-from-pdf && \
+    CGO_ENABLED=0 GOOS=linux go build -p ${GO_BUILD_PARALLELISM} -trimpath -ldflags="-s -w" -o /app/bin/convert-from-pdf .
 
 # ---- Runtime Stage ----
 # Runtime uses Python (pdf2docx for pdf→word), LibreOffice (pdf→xlsx/odt/ods/odp +

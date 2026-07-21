@@ -35,6 +35,33 @@ print_error() {
     echo -e "${RED}✗ $1${NC}"
 }
 
+# Go build parallelism: how many parallel compile actions `go build` may run.
+# Capped below the core count so the Docker daemon/OS keep headroom during builds
+# (8-core box → leave 2). Override per-machine: GO_BUILD_PARALLELISM=4 deployment/deploy.sh
+GO_BUILD_PARALLELISM="${GO_BUILD_PARALLELISM:-6}"
+
+# Build the shared base images that every service FROM-s — only if they're missing.
+# These are "build once" images: rebuild them explicitly with
+# ./deployment/build-base-image.sh whenever go.mod deps, the Go toolchain, or the
+# LibreOffice/Alpine versions change. fyredocs-go-builder bakes the Go module cache
+# AND a warm go-build cache into image layers, so each service recompiles only its
+# own packages (turns a cold ~20-min compile into tens of seconds) and the cache
+# survives `docker builder prune` / fresh machines.
+ensure_base_images() {
+    if ! docker image inspect fyredocs-base:latest >/dev/null 2>&1; then
+        print_step "Building fyredocs-base image (LibreOffice/poppler)..."
+        docker build -f deployment/base-alpine-libreoffice.Dockerfile -t fyredocs-base:latest .
+        print_success "fyredocs-base image built"
+    fi
+    if ! docker image inspect fyredocs-go-builder:latest >/dev/null 2>&1; then
+        print_step "Building fyredocs-go-builder image (Go deps + warm build cache)..."
+        docker build -f deployment/base-go-builder.Dockerfile \
+            --build-arg GO_BUILD_PARALLELISM="$GO_BUILD_PARALLELISM" \
+            -t fyredocs-go-builder:latest .
+        print_success "fyredocs-go-builder image built"
+    fi
+}
+
 usage() {
     cat <<'USAGE'
 Usage: deployment/deploy.sh [options] [service ...]
@@ -321,10 +348,15 @@ if [ ${#SERVICES_TO_DEPLOY[@]} -gt 0 ]; then
         fi
     done
 
+    # Every service builds FROM the shared base images — make sure they exist.
+    ensure_base_images
+
     for SVC in "${SERVICES_TO_DEPLOY[@]}"; do
         SVC_FILE="$SCRIPT_DIR/docker-compose-$SVC.yml"
         print_step "Deploying single service: $SVC"
         STEP_START=$SECONDS
+        # `compose up --build` uses the Dockerfile's GO_BUILD_PARALLELISM default (6);
+        # to change it, rebuild the base with GO_BUILD_PARALLELISM=N build-base-image.sh.
         docker compose -f "$SVC_FILE" up -d --build "$SVC"
         print_success "$SVC built + started (took $(( SECONDS - STEP_START ))s)"
 
@@ -389,12 +421,16 @@ export DOCKER_BUILDKIT=1
 export COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 export COMPOSE_ENV_FILES="$ROOT_DIR/.env"
 
+# Every service builds FROM fyredocs-go-builder (+ fyredocs-base). Build them once
+# up front; the warm Go cache they carry is what makes the per-service builds fast.
+ensure_base_images
+
 for SERVICE in "${GO_SERVICES[@]}"; do
     echo -e "${YELLOW}🔨 Starting build for: $SERVICE...${NC}"
     STEP_START=$SECONDS
-    
-    docker compose build "$SERVICE"
-    
+
+    docker compose build --build-arg GO_BUILD_PARALLELISM="$GO_BUILD_PARALLELISM" "$SERVICE"
+
     STEP_DURATION=$(( SECONDS - STEP_START ))
     print_success "$SERVICE build complete (took ${STEP_DURATION}s)"
 done
@@ -467,6 +503,9 @@ for i in {1..30}; do
 done
 
 # 5. Post-Deployment Cleanup
+# NOTE: keep this as `docker image prune -f` (dangling images only). Do NOT change it
+# to `docker builder prune` or `docker system prune -a` — those wipe the BuildKit build
+# cache and the fyredocs-go-builder image, reintroducing the ~20-min cold Go compile.
 print_step "Optimizing Disk Space"
 docker image prune -f
 print_success "Removed unused image layers"
