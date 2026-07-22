@@ -169,6 +169,12 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 			go func(m jetstream.Msg) {
 				defer wg.Done()
 				defer func() { <-sem }() // release semaphore slot
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Error("worker panic recovered", "error", fmt.Sprintf("panic: %v", r), "op", "worker.process_panic")
+						_ = m.Term()
+					}
+				}()
 				processMessage(ctx, cfg, m, logger)
 			}(msg)
 		}
@@ -213,7 +219,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 
 	jobID, err := uuid.Parse(payload.JobID)
 	if err != nil {
-		logger.Error("invalid job id", "jobId", payload.JobID, "err", err)
+		logger.Error("invalid job id", "jobId", payload.JobID, "error", err)
 		_ = msg.Ack()
 		return
 	}
@@ -480,7 +486,7 @@ func updateJobStatus(db *gorm.DB, jobID uuid.UUID, status string, progress int, 
 func updateJobStatusString(db *gorm.DB, jobID string, status string, progress int, failureReason string) {
 	parsed, err := uuid.Parse(jobID)
 	if err != nil {
-		slog.Warn("updateJobStatusString: invalid uuid", "jobId", jobID, "err", err)
+		slog.Warn("updateJobStatusString: invalid uuid", "jobId", jobID, "error", err)
 		return
 	}
 	updateJobStatus(db, parsed, status, progress, failureReason)

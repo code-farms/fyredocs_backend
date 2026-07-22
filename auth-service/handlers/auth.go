@@ -210,7 +210,7 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 		return
 	}
 
-	plan, ok := lookupPlan(user.PlanName)
+	plan, ok := lookupPlan(c.Request.Context(), user.PlanName)
 	if !ok {
 		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
 	}
@@ -252,7 +252,7 @@ func (ae *AuthEndpoints) Me(c *gin.Context) {
 		return
 	}
 
-	plan, ok := lookupPlan(user.PlanName)
+	plan, ok := lookupPlan(c.Request.Context(), user.PlanName)
 	if !ok {
 		plan = models.SubscriptionPlan{Name: user.PlanName}
 	}
@@ -269,7 +269,7 @@ func (ae *AuthEndpoints) Profile(c *gin.Context) {
 		return
 	}
 
-	plan, ok := lookupPlan(user.PlanName)
+	plan, ok := lookupPlan(c.Request.Context(), user.PlanName)
 	if !ok {
 		plan = models.SubscriptionPlan{Name: user.PlanName}
 	}
@@ -309,7 +309,7 @@ func (ae *AuthEndpoints) Logout(c *gin.Context) {
 // the session, populates the gateway's plan cache, and sets the auth cookies.
 // Shared by the signup and login success paths.
 func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
-	plan, ok := lookupPlan(user.PlanName)
+	plan, ok := lookupPlan(c.Request.Context(), user.PlanName)
 	if !ok {
 		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
 	}

@@ -40,7 +40,7 @@ func pdfToImages(ctx context.Context, inputPath string, outputDir string, baseNa
 	// page index, so the globs below stay in page order.
 	cmd := exec.CommandContext(ctx, "pdftoppm", "-png", inputPath, filepath.Join(tempDir, "page"))
 	if err := cmd.Run(); err != nil {
-		slog.Error("pdftoppm failed", "error", err)
+		slog.ErrorContext(ctx, "pdftoppm failed", "error", err, "op", "pdftoppm.render")
 		return "", fmt.Errorf("PDF to image conversion requires pdftoppm (poppler-utils): %w", err)
 	}
 
@@ -78,7 +78,7 @@ func pdfToPdfa(ctx context.Context, inputPath string, outputPath string) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		slog.Error("ghostscript PDF/A conversion failed", "output", string(output))
+		slog.ErrorContext(ctx, "ghostscript PDF/A conversion failed", "error", err, "op", "ghostscript.pdfa", "output", string(output))
 		return fmt.Errorf("Ghostscript not available or conversion failed: %w", err)
 	}
 
@@ -101,7 +101,7 @@ func pdfToOffice(ctx context.Context, inputPath string, outputPath string, outpu
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		slog.Error("libreoffice conversion failed", "output", string(output))
+		slog.ErrorContext(ctx, "libreoffice conversion failed", "error", err, "op", "libreoffice.pdf_to_office", "format", outputFormat, "output", string(output))
 		return fmt.Errorf("PDF to %s conversion failed: %w", outputFormat, err)
 	}
 
@@ -257,7 +257,7 @@ func pdfToHTML(ctx context.Context, inputPath string, outputPath string) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		slog.Error("pdftohtml failed", "output", string(output))
+		slog.ErrorContext(ctx, "pdftohtml failed", "error", err, "op", "pdftohtml.convert", "output", string(output))
 		return fmt.Errorf("PDF to HTML conversion failed: %w", err)
 	}
 
@@ -271,7 +271,7 @@ func pdfToText(ctx context.Context, inputPath string, outputPath string) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		slog.Error("pdftotext failed", "output", string(output))
+		slog.ErrorContext(ctx, "pdftotext failed", "error", err, "op", "pdftotext.convert", "output", string(output))
 		return fmt.Errorf("PDF to text conversion failed: %w", err)
 	}
 

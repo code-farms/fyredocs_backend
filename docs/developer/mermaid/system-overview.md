@@ -121,25 +121,35 @@ skipped by a plain `docker compose up`, but `deploy.sh` activates the
 `docker compose --profile observability up -d`). When it is down, the services'
 OTLP endpoint probe fails and tracing self-disables cleanly.
 
+Logs are structured JSON on stdout (`shared/logger`) carrying `trace_id`/`span_id`/
+`request_id`; Alloy tails every container and ships to Loki, so logs, traces, and
+metrics are all correlated in Grafana.
+
 ```mermaid
 graph LR
     subgraph Services["All 11 services"]
-        SVC["api-gateway · auth · job · workers ·<br/>analytics · document · user · notification<br/>(OTLP traces + /metrics)"]
+        SVC["api-gateway · auth · job · workers ·<br/>analytics · document · user · notification<br/>(OTLP traces + /metrics + JSON stdout logs)"]
     end
 
     subgraph Obs["Observability stack (profile: observability)"]
         COL["otel-collector<br/>OTLP/HTTP :4318 · gRPC :4317<br/>self-metrics :8888"]
         TEMPO["tempo<br/>trace store · HTTP API :3200"]
         PROM["prometheus :9090<br/>scrapes /metrics (loopback UI)"]
-        GRAF["grafana :3000<br/>dashboards + trace explorer (loopback UI)"]
+        ALLOY["alloy<br/>tails container stdout<br/>(docker.sock)"]
+        LOKI["loki :3100<br/>log store (loopback API)"]
+        GRAF["grafana :3000<br/>metrics + traces + logs (loopback UI)"]
     end
 
     SVC -->|OTLP/HTTP :4318| COL
     COL -->|OTLP/gRPC :4317| TEMPO
     PROM -->|scrape /metrics| SVC
     PROM -->|scrape :8888| COL
+    SVC -->|stdout| ALLOY
+    ALLOY -->|push logs| LOKI
     GRAF -->|PromQL| PROM
     GRAF -->|traces| TEMPO
+    GRAF -->|LogQL| LOKI
+    TEMPO <-.->|trace_id correlation| LOKI
 ```
 
 ## Data Flow Overview

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 	"fyredocs/shared/storage"
 
@@ -72,6 +73,8 @@ func detectEdgesHandler(store ObjectGetter) gin.HandlerFunc {
 
 		info, err := store.StatObject(c.Request.Context(), bucket, key)
 		if err != nil {
+			// Log so a storage outage isn't silently masked as a 404.
+			logger.LogWarn(c.Request.Context(), "s3.stat_detect_object", err, "bucket", bucket, "key", key)
 			response.NotFound(c, "OBJECT_NOT_FOUND", "The referenced upload could not be found.")
 			return
 		}
@@ -82,7 +85,8 @@ func detectEdgesHandler(store ObjectGetter) gin.HandlerFunc {
 
 		obj, err := store.GetObject(c.Request.Context(), bucket, key)
 		if err != nil {
-			response.InternalError(c, "STORAGE_ERROR", "Failed to read the uploaded image.")
+			response.InternalErrorf(c, "STORAGE_ERROR", "Failed to read the uploaded image.", err,
+				"op", "s3.get_detect_object", "bucket", bucket, "key", key)
 			return
 		}
 		defer obj.Close()

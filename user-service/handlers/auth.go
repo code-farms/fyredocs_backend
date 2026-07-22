@@ -1,13 +1,17 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
+	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 
 	"user-service/internal/models"
@@ -39,10 +43,14 @@ func RequireUser() gin.HandlerFunc {
 }
 
 // membershipRole returns the caller's role in an org, or ("", false) if they
-// are not a member.
-func membershipRole(orgID, uid uuid.UUID) (string, bool) {
+// are not a member. A real DB error (not just "not found") is logged so a
+// connection failure isn't silently treated as "not a member".
+func membershipRole(ctx context.Context, orgID, uid uuid.UUID) (string, bool) {
 	var m models.Membership
 	if err := models.DB.Where("organization_id = ? AND user_id = ?", orgID, uid).First(&m).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			logger.LogWarn(ctx, "db.membership.lookup", err, "orgId", orgID, "userId", uid)
+		}
 		return "", false
 	}
 	return m.Role, true

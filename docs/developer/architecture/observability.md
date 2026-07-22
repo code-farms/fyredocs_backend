@@ -25,23 +25,36 @@ telemetry. It is **opt-in**: nothing here runs unless you explicitly start the
 | `otel-collector` | `otel/opentelemetry-collector-contrib` | Single OTLP ingestion point; batches spans and forwards to Tempo | `4318` (OTLP/HTTP, internal), `4317` (OTLP/gRPC, internal), `8888` (self-metrics) |
 | `tempo` | `grafana/tempo` | Trace storage & query backend | `4317` (OTLP/gRPC in), `3200` (HTTP API) |
 | `prometheus` | `prom/prometheus` | Scrapes every service's `/metrics` + the collector | `9090` (loopback-only UI) |
-| `grafana` | `grafana/grafana` | Dashboards over Prometheus + trace explorer over Tempo | `3000` (loopback-only UI) |
+| `loki` | `grafana/loki` | Log storage & query backend (filesystem, ~7-day retention) | `3100` (loopback-only API) |
+| `alloy` | `grafana/alloy` | Log shipper — tails every container's stdout (Docker socket) and pushes to Loki | `12345` (internal UI) |
+| `grafana` | `grafana/grafana` | Dashboards + trace explorer + log explorer, over Prometheus / Tempo / Loki | `3000` (loopback-only UI) |
 
-All four are internal to `fyredocs_net`. Only the Grafana and Prometheus UIs
-publish a host port, and both are bound to `127.0.0.1` (operator-only, like the
+All are internal to `fyredocs_net`. Only the Grafana, Prometheus, and Loki
+endpoints publish a host port, all bound to `127.0.0.1` (operator-only, like the
 MinIO console) — never public.
 
 ## Data flow
 
 ```
-11 services --OTLP/HTTP :4318--> otel-collector --OTLP/gRPC :4317--> tempo :3200
-prometheus --scrape /metrics--> 11 services + otel-collector (:8888)
-grafana --> datasources: Prometheus (:9090) + Tempo (:3200)
+11 services --OTLP/HTTP :4318--> otel-collector --OTLP/gRPC :4317--> tempo :3200   (traces)
+prometheus  --scrape /metrics--> 11 services + otel-collector (:8888)              (metrics)
+11 services --stdout--> alloy (docker.sock) --push--> loki :3100                   (logs)
+grafana --> datasources: Prometheus (:9090) + Tempo (:3200) + Loki (:3100)
 ```
 
 The **services → collector** hop is OTLP/HTTP and is fixed by the service code
 (`otlptracehttp`, port `4318`). The **collector → Tempo** hop is OTLP/gRPC
-(`4317`). See the diagram in
+(`4317`). **Logs** are structured JSON on stdout (`shared/logger`); Alloy
+discovers containers via the Docker socket, labels each stream by compose
+`service` + `container`, and ships to Loki.
+
+### Trace ↔ log correlation
+Every log line carries `trace_id`/`span_id`/`request_id` (injected by the shared
+`contextHandler`). Grafana wires this both ways: the **Tempo** datasource has
+`tracesToLogsV2` (span → its Loki logs by `trace_id`), and the **Loki** datasource
+has a `trace_id` `derivedField` (log line → its Tempo trace). The gateway
+propagates `X-Request-ID` + W3C `traceparent` downstream, so one request keeps a
+single trace and request id across every service. See the diagram in
 [mermaid/system-overview.md](../mermaid/system-overview.md#observability-opt-in-observability-profile).
 
 ## Starting it
@@ -118,7 +131,9 @@ Config lives under `deployment/`, mounted read-only into each container
 | `otel-collector/config.yaml` | OTLP receivers (4318/4317), batch processor, OTLP exporter to `tempo:4317`, self-metrics on `:8888` |
 | `tempo/tempo.yaml` | OTLP/gRPC receiver, local trace storage, HTTP API `:3200` |
 | `prometheus/prometheus.yml` | Scrape jobs: all 11 services (by service DNS + port) + `otel-collector:8888` |
-| `grafana/provisioning/datasources/datasources.yaml` | Prometheus (default) + Tempo datasources |
+| `loki/loki-config.yaml` | Single-binary Loki: filesystem storage, 7-day retention, compaction |
+| `alloy/config.alloy` | Alloy: Docker service discovery → tail container stdout → relabel (`service`/`container`) → push to `loki:3100` |
+| `grafana/provisioning/datasources/datasources.yaml` | Prometheus (default) + Tempo + Loki datasources, with trace↔log correlation (`tracesToLogsV2`, `trace_id` `derivedField`) |
 | `grafana/provisioning/dashboards/dashboards.yaml` | Dashboard file provider |
 | `grafana/dashboards/fyredocs-overview.json` | Overview dashboard: a KPI stat header (request rate, error %, p95 latency, jobs/1h) over grouped rows of by-service timeseries (request rate, p95 latency, 5xx error rate, jobs processed/failed) with value-table legends |
 

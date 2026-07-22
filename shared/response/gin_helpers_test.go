@@ -73,8 +73,8 @@ func TestErrorfLogsAndRespondsWithEnvelope(t *testing.T) {
 	if line["level"] != "ERROR" {
 		t.Errorf("expected ERROR level, got %v", line["level"])
 	}
-	if line["err"] != "boom" {
-		t.Errorf("expected err=boom, got %v", line["err"])
+	if line["error"] != "boom" {
+		t.Errorf("expected error=boom, got %v", line["error"])
 	}
 	if line["code"] != "SERVER_ERROR" {
 		t.Errorf("expected code=SERVER_ERROR, got %v", line["code"])
@@ -85,9 +85,8 @@ func TestErrorfLogsAndRespondsWithEnvelope(t *testing.T) {
 	if line["tool"] != "word-to-pdf" {
 		t.Errorf("expected tool=word-to-pdf, got %v", line["tool"])
 	}
-	if line["requestId"] != "req-test-1" {
-		t.Errorf("expected requestId=req-test-1, got %v", line["requestId"])
-	}
+	// request_id/trace_id enrichment is the shared logger contextHandler's job
+	// (covered by shared/logger tests); here we only assert the fields Errorf builds.
 	if line["method"] != "POST" {
 		t.Errorf("expected method=POST, got %v", line["method"])
 	}
@@ -144,7 +143,7 @@ func TestAbortErrorfAbortsAndLogs(t *testing.T) {
 		t.Error("expected context aborted")
 	}
 	line := decodeLogLine(t, buf)
-	if line == nil || line["err"] != "token expired" {
-		t.Errorf("expected log with err='token expired', got %+v", line)
+	if line == nil || line["error"] != "token expired" {
+		t.Errorf("expected log with error='token expired', got %+v", line)
 	}
 }

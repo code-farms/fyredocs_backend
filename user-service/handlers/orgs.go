@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 
 	"user-service/internal/models"
@@ -18,7 +19,8 @@ func ListOrganizations(c *gin.Context) {
 	uid, _ := userID(c)
 	var memberships []models.Membership
 	if err := models.DB.Where("user_id = ?", uid).Find(&memberships).Error; err != nil {
-		response.InternalError(c, "LIST_FAILED", "Could not load organizations.")
+		response.InternalErrorf(c, "LIST_FAILED", "Could not load organizations.", err,
+			"op", "db.memberships.list", "userId", uid)
 		return
 	}
 	if len(memberships) == 0 {
@@ -32,7 +34,9 @@ func ListOrganizations(c *gin.Context) {
 		ids = append(ids, m.OrganizationID)
 	}
 	var orgs []models.Organization
-	models.DB.Where("id IN ?", ids).Order("created_at ASC").Find(&orgs)
+	if err := models.DB.Where("id IN ?", ids).Order("created_at ASC").Find(&orgs).Error; err != nil {
+		logger.LogWarn(c.Request.Context(), "db.orgs.list_by_ids", err, "userId", uid)
+	}
 
 	out := make([]gin.H, 0, len(orgs))
 	for _, o := range orgs {
@@ -77,7 +81,8 @@ func CreateOrganization(c *gin.Context) {
 		return tx.Create(&models.Membership{OrganizationID: org.ID, UserID: uid, Role: models.RoleOwner}).Error
 	})
 	if err != nil {
-		response.InternalError(c, "CREATE_FAILED", "Could not create organization.")
+		response.InternalErrorf(c, "CREATE_FAILED", "Could not create organization.", err,
+			"op", "db.orgs.create_tx", "userId", uid)
 		return
 	}
 	response.Created(c, "Organization created", gin.H{
@@ -95,7 +100,7 @@ func orgParam(c *gin.Context) (uuid.UUID, string, bool) {
 		response.BadRequest(c, "INVALID_ID", "Invalid organization id.")
 		return uuid.Nil, "", false
 	}
-	role, ok := membershipRole(id, uid)
+	role, ok := membershipRole(c.Request.Context(), id, uid)
 	if !ok {
 		response.NotFound(c, "NOT_FOUND", "Organization not found.")
 		return uuid.Nil, "", false
@@ -127,7 +132,9 @@ func ListMembers(c *gin.Context) {
 		return
 	}
 	var members []models.Membership
-	models.DB.Where("organization_id = ?", orgID).Order("created_at ASC").Find(&members)
+	if err := models.DB.Where("organization_id = ?", orgID).Order("created_at ASC").Find(&members).Error; err != nil {
+		logger.LogWarn(c.Request.Context(), "db.memberships.list", err, "orgId", orgID)
+	}
 	response.OK(c, "Members retrieved", members)
 }
 
@@ -174,13 +181,18 @@ func AddMember(c *gin.Context) {
 			response.Forbidden(c, "FORBIDDEN", "The organization owner's role cannot be changed here.")
 			return
 		}
-		models.DB.Model(&existing).Update("role", newRole)
+		if err := models.DB.Model(&existing).Update("role", newRole).Error; err != nil {
+			response.InternalErrorf(c, "UPDATE_FAILED", "Could not update member.", err,
+				"op", "db.memberships.update_role", "orgId", orgID, "targetUserId", targetID)
+			return
+		}
 		response.OK(c, "Member updated", existing)
 		return
 	}
 	m := models.Membership{OrganizationID: orgID, UserID: targetID, Role: newRole}
 	if err := models.DB.Create(&m).Error; err != nil {
-		response.InternalError(c, "ADD_FAILED", "Could not add member.")
+		response.InternalErrorf(c, "ADD_FAILED", "Could not add member.", err,
+			"op", "db.memberships.create", "orgId", orgID, "targetUserId", targetID)
 		return
 	}
 	response.Created(c, "Member added", m)
@@ -224,7 +236,11 @@ func UpdateMemberRole(c *gin.Context) {
 		response.Forbidden(c, "FORBIDDEN", "The organization owner's role cannot be changed.")
 		return
 	}
-	models.DB.Model(&m).Update("role", newRole)
+	if err := models.DB.Model(&m).Update("role", newRole).Error; err != nil {
+		response.InternalErrorf(c, "UPDATE_FAILED", "Could not update member role.", err,
+			"op", "db.memberships.update_role", "orgId", orgID, "targetUserId", targetID)
+		return
+	}
 	response.OK(c, "Member role updated", m)
 }
 
@@ -252,6 +268,10 @@ func RemoveMember(c *gin.Context) {
 		response.Forbidden(c, "FORBIDDEN", "The organization owner cannot be removed.")
 		return
 	}
-	models.DB.Delete(&m)
+	if err := models.DB.Delete(&m).Error; err != nil {
+		response.InternalErrorf(c, "REMOVE_FAILED", "Could not remove member.", err,
+			"op", "db.memberships.delete", "orgId", orgID, "targetUserId", targetID)
+		return
+	}
 	response.OK(c, "Member removed", gin.H{"organizationId": orgID, "userId": targetID})
 }

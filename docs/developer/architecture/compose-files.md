@@ -55,7 +55,8 @@ Equivalent Makefile shorthand against the canonical file: `make up SVC=auth-serv
 ## Observability profile (on by default in `deploy.sh`)
 
 The canonical file carries the monitoring stack behind the compose profile
-`observability`: `otel-collector`, `tempo`, `prometheus`, `grafana`. They declare
+`observability`: `otel-collector` + `tempo` (traces), `prometheus` (metrics),
+`loki` + `alloy` (logs), and `grafana` (UI over all three). They declare
 `profiles: ["observability"]`, so a **plain** `docker compose up` skips them — but
 `deploy.sh` activates the profile by default (`COMPOSE_PROFILES=observability`), so
 a normal deploy brings the monitoring stack up with everything else. When it is
@@ -70,9 +71,11 @@ COMPOSE_PROFILES= ./deployment/deploy.sh
 docker compose -f deployment/docker-compose.yml --env-file .env --profile observability up -d
 ```
 
-Config lives in `deployment/{otel-collector,tempo,prometheus,grafana}/` (mounted
-read-only). Grafana (`http://127.0.0.1:3000`) and Prometheus
-(`http://127.0.0.1:9090`) are bound loopback-only. See
+Config lives in `deployment/{otel-collector,tempo,prometheus,loki,alloy,grafana}/`
+(mounted read-only). Grafana (`http://127.0.0.1:3000`), Prometheus
+(`http://127.0.0.1:9090`), and Loki (`http://127.0.0.1:3100`) are bound
+loopback-only. Alloy tails container stdout via the read-only Docker socket and
+ships to Loki; logs are trace-correlated in Grafana. See
 [observability.md](./observability.md) for the full data flow and details.
 
 ## Notifications profile (opt-in — off by default)

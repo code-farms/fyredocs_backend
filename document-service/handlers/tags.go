@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"document-service/internal/models"
+	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 )
 
@@ -19,7 +20,7 @@ func ListTags(c *gin.Context) {
 	}
 	var tags []models.Tag
 	if err := scopeOwned(models.DB, uid, orgID).Order("name ASC").Find(&tags).Error; err != nil {
-		response.InternalError(c, "LIST_FAILED", "Could not load tags.")
+		response.InternalErrorf(c, "LIST_FAILED", "Could not load tags.", err, "op", "db.tags.list", "userId", uid)
 		return
 	}
 	response.OK(c, "Tags retrieved", tags)
@@ -59,7 +60,7 @@ func CreateTag(c *gin.Context) {
 	}
 	tag := models.Tag{UserID: uid, OrganizationID: orgID, Name: name, Color: strings.TrimSpace(req.Color)}
 	if err := models.DB.Create(&tag).Error; err != nil {
-		response.InternalError(c, "CREATE_FAILED", "Could not create tag.")
+		response.InternalErrorf(c, "CREATE_FAILED", "Could not create tag.", err, "op", "db.tags.create", "userId", uid)
 		return
 	}
 	response.Created(c, "Tag created", tag)
@@ -79,13 +80,15 @@ func DeleteTag(c *gin.Context) {
 	}
 	res := scopeOwned(models.DB, uid, orgID).Where("id = ?", id).Delete(&models.Tag{})
 	if res.Error != nil {
-		response.InternalError(c, "DELETE_FAILED", "Could not delete tag.")
+		response.InternalErrorf(c, "DELETE_FAILED", "Could not delete tag.", res.Error, "op", "db.tags.delete", "tagId", id)
 		return
 	}
 	if res.RowsAffected == 0 {
 		response.NotFound(c, "NOT_FOUND", "Tag not found.")
 		return
 	}
-	models.DB.Exec("DELETE FROM document_tags WHERE tag_id = ?", id)
+	if err := models.DB.Exec("DELETE FROM document_tags WHERE tag_id = ?", id).Error; err != nil {
+		logger.LogWarn(c.Request.Context(), "db.document_tags.cleanup", err, "tagId", id)
+	}
 	response.OK(c, "Tag deleted", gin.H{"id": id})
 }

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 // the end-to-end verification, consistent with the other auth handler tests.
 
 func TestLookupPlanEmptyName(t *testing.T) {
-	if _, ok := lookupPlan(""); ok {
+	if _, ok := lookupPlan(context.Background(), ""); ok {
 		t.Fatalf("expected ok=false for empty plan name")
 	}
 }
@@ -30,7 +31,7 @@ func TestLookupPlanServesFreshCacheEntry(t *testing.T) {
 		planCacheMu.Unlock()
 	})
 
-	got, ok := lookupPlan(name)
+	got, ok := lookupPlan(context.Background(), name)
 	if !ok {
 		t.Fatalf("expected cache hit for %q", name)
 	}

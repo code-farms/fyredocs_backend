@@ -6,10 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"fyredocs/shared/logger"
 )
 
 func baseURL() string {
@@ -34,16 +37,22 @@ type notifyReq struct {
 func Notify(ctx context.Context, userID, ntype, title, body, link, sourceID string) {
 	payload, err := json.Marshal(notifyReq{UserID: userID, Type: ntype, Title: title, Body: body, Link: link, SourceID: sourceID})
 	if err != nil {
+		logger.LogWarn(ctx, "notify.marshal", err, "userId", userID, "type", ntype)
 		return
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL()+"/internal/notifications", bytes.NewReader(payload))
 	if err != nil {
+		logger.LogWarn(ctx, "notify.build_request", err, "userId", userID, "type", ntype)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		logger.LogWarn(ctx, "notify.post", err, "userId", userID, "type", ntype)
 		return
 	}
-	_ = resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		slog.WarnContext(ctx, "notify non-2xx response", "op", "notify.post", "userId", userID, "type", ntype, "status", resp.StatusCode)
+	}
 }

@@ -25,6 +25,9 @@ import (
 	"fyredocs/shared/logger"
 	"fyredocs/shared/metrics"
 	"fyredocs/shared/telemetry"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // routeConfig maps an inbound gateway prefix to an upstream service and the
@@ -317,6 +320,24 @@ func newProxy(cfg routeConfig) http.Handler {
 		if authCtx, ok := authverify.FromContext(req.Context()); ok {
 			authverify.ApplyUserHeaders(req.Header, authCtx)
 		}
+		// Propagate correlation downstream so a request is traceable end-to-end
+		// instead of each service minting its own IDs: forward the gateway's
+		// request ID, and inject the W3C traceparent (the global propagator is
+		// TraceContext — shared/telemetry) so the server span continues downstream.
+		if id := logger.RequestIDFromContext(req.Context()); id != "" {
+			req.Header.Set(logger.RequestIDHeader, id)
+		}
+		otel.GetTextMapPropagator().Inject(req.Context(), propagation.HeaderCarrier(req.Header))
+	}
+
+	// Without this, an unreachable upstream (the gateway's primary failure mode)
+	// is logged by httputil's default handler via stdlib log to stderr — no slog,
+	// no request_id/trace_id. Log it ourselves at the request ctx, then 502.
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		slog.ErrorContext(r.Context(), "upstream proxy error",
+			"error", err, "op", "gateway.proxy",
+			"prefix", cfg.prefix, "target", cfg.targetURL, "path", r.URL.Path)
+		w.WriteHeader(http.StatusBadGateway)
 	}
 
 	return proxy

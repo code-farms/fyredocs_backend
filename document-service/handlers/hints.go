@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -9,6 +11,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"document-service/internal/models"
+	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 )
 
@@ -34,7 +37,9 @@ func SetJobWorkspaceHint(c *gin.Context) {
 
 	org := strings.TrimSpace(req.OrganizationID)
 	if org == "" {
-		models.DB.Where("job_id = ? AND user_id = ?", jobID, uid).Delete(&models.JobWorkspaceHint{})
+		if err := models.DB.Where("job_id = ? AND user_id = ?", jobID, uid).Delete(&models.JobWorkspaceHint{}).Error; err != nil {
+			logger.LogWarn(c.Request.Context(), "db.job_hint.clear", err, "jobId", jobID)
+		}
 		response.OK(c, "Workspace hint cleared", gin.H{"jobId": jobID})
 		return
 	}
@@ -47,7 +52,8 @@ func SetJobWorkspaceHint(c *gin.Context) {
 		Columns:   []clause.Column{{Name: "job_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"user_id", "organization_id"}),
 	}).Create(&hint).Error; err != nil {
-		response.InternalError(c, "HINT_FAILED", "Could not set workspace.")
+		response.InternalErrorf(c, "HINT_FAILED", "Could not set workspace.", err,
+			"op", "db.job_hint.upsert", "jobId", jobID)
 		return
 	}
 	response.OK(c, "Workspace hint set", hint)
@@ -55,9 +61,14 @@ func SetJobWorkspaceHint(c *gin.Context) {
 
 // WorkspaceForJob returns the org a completed job should finalize into, or nil
 // for personal. Read-only; call ClearJobWorkspace after a successful finalize.
-func WorkspaceForJob(db *gorm.DB, jobID, userID uuid.UUID) *uuid.UUID {
+func WorkspaceForJob(ctx context.Context, db *gorm.DB, jobID, userID uuid.UUID) *uuid.UUID {
 	var hint models.JobWorkspaceHint
 	if err := db.Where("job_id = ? AND user_id = ?", jobID, userID).First(&hint).Error; err != nil {
+		// Not-found is the common case (personal scope); a real DB error should
+		// not silently masquerade as "personal".
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			logger.LogWarn(ctx, "db.job_hint.lookup", err, "jobId", jobID, "userId", userID)
+		}
 		return nil
 	}
 	org := hint.OrganizationID

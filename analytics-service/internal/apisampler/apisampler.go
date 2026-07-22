@@ -8,6 +8,7 @@ package apisampler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -79,6 +80,13 @@ func Start(ctx context.Context, db *gorm.DB) {
 	}
 
 	go func() {
+		// Long-lived background loop: a panic here would silently kill the sampler
+		// for the whole process lifetime. Recover and log so it's visible.
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("api metrics sampler panic", "error", fmt.Sprintf("panic: %v", r), "op", "apisampler.panic")
+			}
+		}()
 		slog.Info("api metrics sampler started", "interval", interval.String(), "url", url)
 		var last *promscrape.HTTPAggregate
 		if cur, ok := scrape(); ok {

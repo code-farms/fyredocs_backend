@@ -16,7 +16,8 @@ func LogErr(ctx context.Context, op string, err error, attrs ...any) error {
 	if err == nil {
 		return nil
 	}
-	slog.Error(op+" failed", buildOpAttrs(ctx, op, err, attrs)...)
+	// *Context so the shared contextHandler attaches trace_id/span_id/request_id.
+	slog.ErrorContext(ctx, op+" failed", buildOpAttrs(op, err, attrs)...)
 	return err
 }
 
@@ -27,14 +28,12 @@ func LogWarn(ctx context.Context, op string, err error, attrs ...any) error {
 	if err == nil {
 		return nil
 	}
-	slog.Warn(op, buildOpAttrs(ctx, op, err, attrs)...)
+	slog.WarnContext(ctx, op, buildOpAttrs(op, err, attrs)...)
 	return err
 }
 
-func buildOpAttrs(ctx context.Context, op string, err error, extra []any) []any {
-	attrs := []any{"err", err, "op", op}
-	if reqID := RequestIDFromContext(ctx); reqID != "" {
-		attrs = append(attrs, "requestId", reqID)
-	}
-	return append(attrs, extra...)
+// buildOpAttrs assembles the op/error attrs. trace_id/span_id/request_id are added
+// automatically by the shared contextHandler from the ctx passed to *Context logs.
+func buildOpAttrs(op string, err error, extra []any) []any {
+	return append([]any{"error", err, "op", op}, extra...)
 }

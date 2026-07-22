@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"document-service/internal/models"
 	"document-service/internal/notifyclient"
+	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 )
 
@@ -58,7 +60,8 @@ func CreateExport(c *gin.Context) {
 	filters, _ := json.Marshal(exportFilters{Status: req.Status, FolderID: req.FolderID, TagID: req.TagID})
 	exp := models.Export{UserID: uid, OrganizationID: orgID, Format: format, Status: models.ExportQueued, Filters: filters}
 	if err := models.DB.Create(&exp).Error; err != nil {
-		response.InternalError(c, "CREATE_FAILED", "Could not create export.")
+		response.InternalErrorf(c, "CREATE_FAILED", "Could not create export.", err,
+			"op", "db.exports.create", "userId", uid)
 		return
 	}
 	go generateExport(exp.ID)
@@ -70,7 +73,7 @@ func ListExports(c *gin.Context) {
 	uid, _ := userID(c)
 	var exports []models.Export
 	if err := models.DB.Omit("Content").Where("user_id = ?", uid).Order("created_at DESC").Limit(50).Find(&exports).Error; err != nil {
-		response.InternalError(c, "LIST_FAILED", "Could not load exports.")
+		response.InternalErrorf(c, "LIST_FAILED", "Could not load exports.", err, "op", "db.exports.list", "userId", uid)
 		return
 	}
 	response.OK(c, "Exports retrieved", exports)
@@ -116,15 +119,34 @@ func DownloadExport(c *gin.Context) {
 // generateExport runs asynchronously: query the documents in scope, render the
 // artifact, and store it on the export row.
 func generateExport(id uuid.UUID) {
+	// Detached worker: the request context is gone once CreateExport responded, so
+	// use a fresh background context. Logs still carry service + op + exportId.
+	ctx := context.Background()
+	defer func() {
+		if r := recover(); r != nil {
+			logger.LogErr(ctx, "export.generate.panic", fmt.Errorf("panic: %v", r), "exportId", id)
+			models.DB.Model(&models.Export{}).Where("id = ?", id).
+				Updates(map[string]any{"status": models.ExportFailed, "error": fmt.Sprintf("panic: %v", r)})
+		}
+	}()
+
 	var exp models.Export
 	if err := models.DB.First(&exp, "id = ?", id).Error; err != nil {
+		logger.LogErr(ctx, "db.exports.load", err, "exportId", id)
 		return
 	}
-	models.DB.Model(&models.Export{}).Where("id = ?", id).Update("status", models.ExportProcessing)
+	slog.InfoContext(ctx, "export started", "op", "export.generate", "exportId", id, "format", exp.Format, "userId", exp.UserID)
+	if err := models.DB.Model(&models.Export{}).Where("id = ?", id).Update("status", models.ExportProcessing).Error; err != nil {
+		logger.LogWarn(ctx, "db.exports.update_status", err, "exportId", id)
+	}
 
 	docs, err := exportDocs(exp)
 	if err != nil {
-		models.DB.Model(&models.Export{}).Where("id = ?", id).Updates(map[string]any{"status": models.ExportFailed, "error": err.Error()})
+		logger.LogErr(ctx, "export.query_docs", err, "exportId", id)
+		if uerr := models.DB.Model(&models.Export{}).Where("id = ?", id).
+			Updates(map[string]any{"status": models.ExportFailed, "error": err.Error()}).Error; uerr != nil {
+			logger.LogWarn(ctx, "db.exports.mark_failed", uerr, "exportId", id)
+		}
 		return
 	}
 
@@ -132,7 +154,12 @@ func generateExport(id uuid.UUID) {
 	var contentType, ext string
 	switch exp.Format {
 	case "json":
-		content, _ = json.MarshalIndent(docsToJSON(docs), "", "  ")
+		if content, err = json.MarshalIndent(docsToJSON(docs), "", "  "); err != nil {
+			logger.LogErr(ctx, "export.marshal", err, "exportId", id)
+			models.DB.Model(&models.Export{}).Where("id = ?", id).
+				Updates(map[string]any{"status": models.ExportFailed, "error": err.Error()})
+			return
+		}
 		contentType, ext = "application/json", "json"
 	default:
 		content = docsToCSV(docs)
@@ -141,17 +168,21 @@ func generateExport(id uuid.UUID) {
 
 	now := time.Now().UTC()
 	fileName := fmt.Sprintf("documents-%s.%s", now.Format("20060102-150405"), ext)
-	models.DB.Model(&models.Export{}).Where("id = ?", id).Updates(map[string]any{
+	if err := models.DB.Model(&models.Export{}).Where("id = ?", id).Updates(map[string]any{
 		"status":         models.ExportReady,
 		"content":        content,
 		"content_type":   contentType,
 		"file_name":      fileName,
 		"document_count": len(docs),
 		"completed_at":   now,
-	})
+	}).Error; err != nil {
+		logger.LogErr(ctx, "db.exports.finalize", err, "exportId", id)
+		return
+	}
+	slog.InfoContext(ctx, "export completed", "op", "export.generate", "exportId", id, "documentCount", len(docs))
 
 	// Best-effort: raise an in-app notification (idempotent on the export id).
-	notifyclient.Notify(context.Background(), exp.UserID.String(), "export.ready",
+	notifyclient.Notify(ctx, exp.UserID.String(), "export.ready",
 		"Export ready", fileName, "/app/exports", id.String())
 }
 

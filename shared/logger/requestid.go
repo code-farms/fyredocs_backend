@@ -46,16 +46,15 @@ func GinRequestID() gin.HandlerFunc {
 func GinRequestLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
-		reqID, _ := c.Get("requestID")
 
 		c.Next()
 
-		slog.Info("request",
+		// *Context so the shared contextHandler attaches trace_id/span_id/request_id.
+		slog.InfoContext(c.Request.Context(), "request",
 			"method", c.Request.Method,
 			"path", c.Request.URL.Path,
 			"status", c.Writer.Status(),
 			"duration", time.Since(start).String(),
-			"requestId", reqID,
 		)
 	}
 }

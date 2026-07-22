@@ -61,7 +61,7 @@ func officeToPDF(ctx context.Context, inputPath string, outputPath string, fileT
 	cmd := exec.CommandContext(ctx, "libreoffice", "--headless", "--convert-to", "pdf", "--outdir", outputDir, inputPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		slog.Error("libreoffice fallback failed", "output", string(output))
+		slog.ErrorContext(ctx, "libreoffice convert failed", "error", err, "op", "libreoffice.convert", "type", fileType, "output", string(output))
 		return fmt.Errorf("conversion failed: %w", err)
 	}
 
@@ -85,7 +85,7 @@ func officeToOffice(ctx context.Context, inputPath string, outputPath string, ou
 	cmd := exec.CommandContext(ctx, "libreoffice", "--headless", "--convert-to", outputFormat, "--outdir", outputDir, inputPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		slog.Error("libreoffice fallback failed", "output", string(output))
+		slog.ErrorContext(ctx, "libreoffice convert failed", "error", err, "op", "libreoffice.convert", "format", outputFormat, "output", string(output))
 		return fmt.Errorf("conversion to %s failed: %w", outputFormat, err)
 	}
 

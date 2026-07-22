@@ -1,5 +1,6 @@
 # Grafana datasource provisioning — auto-loaded at startup.
-# Prometheus (metrics, default) and Tempo (traces) on the internal network.
+# Prometheus (metrics, default), Tempo (traces), and Loki (logs), wired for
+# trace ↔ log correlation both ways.
 
 apiVersion: 1
 
@@ -22,3 +23,26 @@ datasources:
       # Enable the service/span filters in the Tempo query UI.
       nodeGraph:
         enabled: true
+      # Trace → logs: from a span, jump to the matching Loki logs for that trace.
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: -1h
+        spanEndTimeShift: 1h
+        filterByTraceID: true
+        filterBySpanID: false
+
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      # Log → trace: our logs are JSON with a `trace_id` field; extract it and
+      # link to the matching Tempo trace.
+      derivedFields:
+        - name: trace_id
+          matcherType: regex
+          matcherRegex: '"trace_id":"(\w+)"'
+          url: '$${__value.raw}'
+          datasourceUid: tempo

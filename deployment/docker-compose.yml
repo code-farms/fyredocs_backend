@@ -1125,6 +1125,68 @@ services:
     networks:
       - fyredocs_net
 
+  # Log aggregation backend — Alloy ships every container's stdout here; Grafana
+  # queries it via the Loki datasource, with trace_id ↔ trace correlation. Free /
+  # self-hosted, single-binary, filesystem storage. Console loopback-only.
+  loki:
+    image: grafana/loki:3.3.2
+    profiles: ["observability"]
+    restart: always
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    volumes:
+      - ./loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    deploy:
+      resources:
+        limits:
+          memory: ${LOKI_MEM_LIMIT:-512M}
+          cpus: "${LOKI_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${LOKI_MEM_RESERVATION:-128M}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - fyredocs_net
+
+  # Log shipper — discovers running containers via the Docker socket (read-only),
+  # tails their stdout, labels each stream by compose service + container name, and
+  # pushes to Loki. Replaces per-container `docker logs` with central search.
+  alloy:
+    image: grafana/alloy:v1.5.1
+    profiles: ["observability"]
+    restart: always
+    command:
+      - "run"
+      - "--server.http.listen-addr=0.0.0.0:12345"
+      - "--storage.path=/var/lib/alloy/data"
+      - "/etc/alloy/config.alloy"
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    deploy:
+      resources:
+        limits:
+          memory: ${ALLOY_MEM_LIMIT:-256M}
+          cpus: "${ALLOY_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${ALLOY_MEM_RESERVATION:-64M}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      loki:
+        condition: service_started
+    networks:
+      - fyredocs_net
+
   # Scrapes the /metrics endpoint of every service (see prometheus/prometheus.yml).
   # Console loopback-only for operators — never public.
   prometheus:
@@ -1201,6 +1263,8 @@ services:
         condition: service_started
       tempo:
         condition: service_started
+      loki:
+        condition: service_started
     networks:
       - fyredocs_net
 
@@ -1219,3 +1283,5 @@ volumes:
   tempo_data:
   prometheus_data:
   grafana_data:
+  loki_data:
+  alloy_data:

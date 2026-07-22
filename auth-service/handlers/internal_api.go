@@ -31,7 +31,7 @@ func GetUserPlan(c *gin.Context) {
 		return
 	}
 
-	plan, ok := lookupPlan(user.PlanName)
+	plan, ok := lookupPlan(c.Request.Context(), user.PlanName)
 	if !ok {
 		logger.LogWarn(c.Request.Context(), "db.subscription_plans.lookup_fallback", nil,
 			"userId", user.ID, "planName", user.PlanName)

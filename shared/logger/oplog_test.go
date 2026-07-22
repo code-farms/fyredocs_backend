@@ -14,7 +14,9 @@ func captureLogs(t *testing.T, level slog.Level) (*bytes.Buffer, func()) {
 	t.Helper()
 	prev := slog.Default()
 	buf := &bytes.Buffer{}
-	h := slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: level})
+	// Wrap in contextHandler so ctx-derived fields (request_id/trace_id) are
+	// enriched exactly as in production (Init wires the same wrapper).
+	h := &contextHandler{Handler: slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: level})}
 	slog.SetDefault(slog.New(h))
 	return buf, func() { slog.SetDefault(prev) }
 }
@@ -59,8 +61,8 @@ func TestLogErrEmitsStructuredError(t *testing.T) {
 	if line["op"] != "db.create_job" {
 		t.Errorf("expected op=db.create_job, got %v", line["op"])
 	}
-	if line["err"] != "boom" {
-		t.Errorf("expected err=boom, got %v", line["err"])
+	if line["error"] != "boom" {
+		t.Errorf("expected error=boom, got %v", line["error"])
 	}
 	if line["jobId"] != "abc-123" {
 		t.Errorf("expected jobId=abc-123, got %v", line["jobId"])
@@ -90,8 +92,8 @@ func TestLogErrIncludesRequestIDFromContext(t *testing.T) {
 	if len(logs) != 1 {
 		t.Fatalf("expected 1 log line, got %d", len(logs))
 	}
-	if logs[0]["requestId"] != "req-xyz" {
-		t.Errorf("expected requestId=req-xyz, got %v", logs[0]["requestId"])
+	if logs[0]["request_id"] != "req-xyz" {
+		t.Errorf("expected request_id=req-xyz, got %v", logs[0]["request_id"])
 	}
 }
 

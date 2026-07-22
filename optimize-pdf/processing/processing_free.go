@@ -1,8 +1,10 @@
 package processing
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -58,11 +60,13 @@ func compressPDF(ctx context.Context, inputPath string, outputPath string, optio
 
 	args := buildCompressArgs(quality, outputPath, inputPath)
 
+	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, gsPath, args...)
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stdout
+	cmd.Stderr = &stderr
+	cmd.Stdout = io.Discard
 
 	if err := cmd.Run(); err != nil {
+		slog.ErrorContext(ctx, "ghostscript compress failed", "error", err, "op", "ghostscript.compress", "stderr", stderr.String())
 		return nil, fmt.Errorf("ghostscript compression failed: %w", err)
 	}
 
@@ -172,11 +176,13 @@ func repairPDF(ctx context.Context, inputPath string, outputPath string) error {
 		inputPath,
 	}
 
+	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, gsPath, args...)
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stdout
+	cmd.Stderr = &stderr
+	cmd.Stdout = io.Discard
 
 	if err := cmd.Run(); err != nil {
+		slog.ErrorContext(ctx, "ghostscript repair failed", "error", err, "op", "ghostscript.repair", "stderr", stderr.String())
 		return fmt.Errorf("ghostscript repair failed: %w", err)
 	}
 
@@ -409,6 +415,7 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 		imagePrefix,
 	)
 	if err := cmd.Run(); err != nil {
+		slog.ErrorContext(ctx, "pdftoppm ocr-render failed", "error", err, "op", "pdftoppm.ocr_render")
 		return nil, fmt.Errorf("pdftoppm conversion failed: %w", err)
 	}
 

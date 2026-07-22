@@ -54,7 +54,7 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		// when the fallback path takes over so the UI keeps moving.
 		err = pdfToDocxNativeTicking(ctx, inputPaths[0], outputPath, onProgress)
 		if err != nil {
-			slog.Warn("pdf2docx failed, falling back to LibreOffice", "input", inputPaths[0], "err", err)
+			slog.Warn("pdf2docx failed, falling back to LibreOffice", "input", inputPaths[0], "error", err)
 			err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "docx", onProgress)
 		}
 	case "pdf-to-excel", "pdf-to-xlsx":

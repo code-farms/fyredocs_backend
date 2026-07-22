@@ -1,11 +1,16 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"time"
 
+	"gorm.io/gorm"
+
 	"auth-service/internal/models"
 	"fyredocs/shared/config"
+	"fyredocs/shared/logger"
 )
 
 // Subscription plans are a tiny, rarely-changing set (guest/free/pro/…) but
@@ -34,7 +39,7 @@ var (
 // in-process cache when fresh and falling back to a single DB query on a miss.
 // The bool is false when the plan does not exist (or the DB lookup failed), so
 // callers can apply their own default — matching the previous inline behaviour.
-func lookupPlan(name string) (models.SubscriptionPlan, bool) {
+func lookupPlan(ctx context.Context, name string) (models.SubscriptionPlan, bool) {
 	if name == "" {
 		return models.SubscriptionPlan{}, false
 	}
@@ -50,6 +55,11 @@ func lookupPlan(name string) (models.SubscriptionPlan, bool) {
 
 	var plan models.SubscriptionPlan
 	if err := models.DB.Where("name = ?", name).First(&plan).Error; err != nil {
+		// "Not found" is benign (caller applies a default). A real DB error on this
+		// hot path (login/refresh/me) must NOT be silently downgraded to "free".
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			logger.LogWarn(ctx, "db.subscription_plans.lookup", err, "planName", name)
+		}
 		return models.SubscriptionPlan{}, false
 	}
 

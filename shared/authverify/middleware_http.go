@@ -106,7 +106,7 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 				}
 				claims, err := options.Verifier.Verify(r.Context(), token)
 				if err != nil {
-					slog.Warn("token verification failed", "err", err, "path", r.URL.Path, "method", r.Method)
+					slog.WarnContext(r.Context(), "token verification failed", "error", err, "op", "auth.verify_token", "path", r.URL.Path, "method", r.Method)
 					WriteError(w, http.StatusUnauthorized, ErrCodeUnauthorized, "Invalid or expired token")
 					return
 				}

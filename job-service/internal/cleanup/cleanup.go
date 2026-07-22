@@ -211,7 +211,7 @@ func cleanupUploadState(ctx context.Context, store ObjectStore) {
 		}
 		state, err := redisstore.Client.HGetAll(ctx, key).Result()
 		if err != nil {
-			slog.Warn("cleanup: read upload state failed", "key", key, "err", err)
+			slog.Warn("cleanup: read upload state failed", "key", key, "error", err)
 			continue
 		}
 		createdAt := state["createdAt"]
@@ -220,7 +220,7 @@ func cleanupUploadState(ctx context.Context, store ObjectStore) {
 		}
 		parsed, err := time.Parse(time.RFC3339, createdAt)
 		if err != nil {
-			slog.Warn("cleanup: parse createdAt failed", "key", key, "createdAt", createdAt, "err", err)
+			slog.Warn("cleanup: parse createdAt failed", "key", key, "createdAt", createdAt, "error", err)
 			continue
 		}
 		if time.Since(parsed) > reapAge {

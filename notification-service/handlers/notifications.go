@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -12,20 +14,28 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 
+	"fyredocs/shared/logger"
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/response"
 
 	"notification-service/internal/models"
 )
 
-// createAndPush persists a notification and fans it out to live SSE clients.
-func createAndPush(n *models.Notification) error {
+// createAndPush persists a notification and fans it out to live SSE clients. The
+// live push is best-effort (the durable row is the source of truth), but a push
+// failure is logged rather than silently dropped.
+func createAndPush(ctx context.Context, n *models.Notification) error {
 	if err := models.DB.Create(n).Error; err != nil {
 		return err
 	}
 	if natsconn.Conn != nil {
-		if data, err := json.Marshal(n); err == nil {
-			_ = natsconn.Conn.Publish("notify."+n.UserID.String(), data)
+		data, err := json.Marshal(n)
+		if err != nil {
+			logger.LogWarn(ctx, "notify.marshal_push", err, "userId", n.UserID)
+			return nil
+		}
+		if err := natsconn.Conn.Publish("notify."+n.UserID.String(), data); err != nil {
+			logger.LogWarn(ctx, "nats.publish_notify", err, "userId", n.UserID)
 		}
 	}
 	return nil
@@ -64,7 +74,9 @@ func CreateInternal(c *gin.Context) {
 		if parsed, err := uuid.Parse(s); err == nil {
 			src = &parsed
 			var count int64
-			models.DB.Model(&models.Notification{}).Where("user_id = ? AND source_job_id = ?", uid, parsed).Count(&count)
+			if err := models.DB.Model(&models.Notification{}).Where("user_id = ? AND source_job_id = ?", uid, parsed).Count(&count).Error; err != nil {
+				logger.LogWarn(c.Request.Context(), "db.notifications.dedup_count", err, "userId", uid)
+			}
 			if count > 0 {
 				response.OK(c, "Notification already exists", gin.H{})
 				return
@@ -77,8 +89,9 @@ func CreateInternal(c *gin.Context) {
 		ntype = "info"
 	}
 	n := models.Notification{UserID: uid, Type: ntype, Title: req.Title, Body: req.Body, Link: req.Link, SourceJobID: src}
-	if err := createAndPush(&n); err != nil {
-		response.InternalError(c, "CREATE_FAILED", "Could not create notification.")
+	if err := createAndPush(c.Request.Context(), &n); err != nil {
+		response.InternalErrorf(c, "CREATE_FAILED", "Could not create notification.", err,
+			"op", "db.notifications.create", "userId", uid)
 		return
 	}
 	response.Created(c, "Notification created", n)
@@ -125,14 +138,19 @@ func ListNotifications(c *gin.Context) {
 		defer wg.Done()
 		listErr = models.DB.Where("user_id = ?", uid).Order("created_at DESC").Limit(50).Find(&items).Error
 	}()
+	var unreadErr error
 	go func() {
 		defer wg.Done()
-		models.DB.Model(&models.Notification{}).Where("user_id = ? AND read_at IS NULL", uid).Count(&unread)
+		unreadErr = models.DB.Model(&models.Notification{}).Where("user_id = ? AND read_at IS NULL", uid).Count(&unread).Error
 	}()
 	wg.Wait()
 	if listErr != nil {
-		response.InternalError(c, "LIST_FAILED", "Could not load notifications.")
+		response.InternalErrorf(c, "LIST_FAILED", "Could not load notifications.", listErr,
+			"op", "db.notifications.list", "userId", uid)
 		return
+	}
+	if unreadErr != nil {
+		logger.LogWarn(c.Request.Context(), "db.notifications.count_unread", unreadErr, "userId", uid)
 	}
 
 	response.OK(c, "Notifications retrieved", gin.H{"notifications": items, "unreadCount": unread})
@@ -151,7 +169,8 @@ func MarkRead(c *gin.Context) {
 		Where("id = ? AND user_id = ? AND read_at IS NULL", id, uid).
 		Update("read_at", now)
 	if res.Error != nil {
-		response.InternalError(c, "UPDATE_FAILED", "Could not update notification.")
+		response.InternalErrorf(c, "UPDATE_FAILED", "Could not update notification.", res.Error,
+			"op", "db.notifications.mark_read", "notificationId", id, "userId", uid)
 		return
 	}
 	response.OK(c, "Notification marked read", gin.H{"id": id})
@@ -163,6 +182,7 @@ func MarkRead(c *gin.Context) {
 func StreamNotifications(c *gin.Context) {
 	uid, _ := userID(c)
 	if natsconn.Conn == nil {
+		slog.WarnContext(c.Request.Context(), "SSE requested but NATS is unavailable", "op", "nats.sse_unavailable", "userId", uid)
 		response.InternalError(c, "NATS_UNAVAILABLE", "Live updates are unavailable.")
 		return
 	}
@@ -181,7 +201,8 @@ func StreamNotifications(c *gin.Context) {
 	msgCh := make(chan *nats.Msg, 16)
 	sub, err := natsconn.Conn.ChanSubscribe("notify."+uid.String(), msgCh)
 	if err != nil {
-		response.InternalError(c, "SUBSCRIBE_FAILED", "Could not open the live stream.")
+		response.InternalErrorf(c, "SUBSCRIBE_FAILED", "Could not open the live stream.", err,
+			"op", "nats.chan_subscribe", "userId", uid)
 		return
 	}
 	defer func() { _ = sub.Unsubscribe() }()
@@ -214,7 +235,8 @@ func MarkAllRead(c *gin.Context) {
 	if err := models.DB.Model(&models.Notification{}).
 		Where("user_id = ? AND read_at IS NULL", uid).
 		Update("read_at", now).Error; err != nil {
-		response.InternalError(c, "UPDATE_FAILED", "Could not update notifications.")
+		response.InternalErrorf(c, "UPDATE_FAILED", "Could not update notifications.", err,
+			"op", "db.notifications.mark_all", "userId", uid)
 		return
 	}
 	response.OK(c, "All notifications marked read", gin.H{})

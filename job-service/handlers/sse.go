@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,6 +11,7 @@ import (
 
 	"job-service/internal/models"
 
+	"fyredocs/shared/logger"
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/queue"
 	"fyredocs/shared/response"
@@ -95,7 +95,7 @@ func SSEJobUpdates(c *gin.Context) {
 		InactiveThreshold: 1 * time.Minute,
 	})
 	if err != nil {
-		slog.Error("SSE: failed to create NATS consumer", "jobId", jobID, "error", err)
+		logger.LogErr(ctx, "nats.sse_consumer_create", err, "jobId", jobID)
 		fmt.Fprintf(c.Writer, "event: error\ndata: {\"message\":\"failed to subscribe\"}\n\n")
 		c.Writer.Flush()
 		return
@@ -136,6 +136,7 @@ func SSEJobUpdates(c *gin.Context) {
 			for msg := range msgs.Messages() {
 				var event queue.JobEvent
 				if err := json.Unmarshal(msg.Data(), &event); err != nil {
+					logger.LogWarn(ctx, "sse.unmarshal_event", err, "jobId", jobID)
 					_ = msg.Ack()
 					continue
 				}

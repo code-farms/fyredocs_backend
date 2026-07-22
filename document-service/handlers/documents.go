@@ -12,6 +12,7 @@ import (
 
 	"document-service/internal/models"
 	"document-service/internal/orgclient"
+	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 )
 
@@ -32,7 +33,8 @@ func resolveOrg(c *gin.Context, orgIDStr, minRole string) (*uuid.UUID, bool) {
 	uid, _ := userID(c)
 	role, member, err := orgclient.Membership(c.Request.Context(), orgID.String(), uid.String())
 	if err != nil {
-		response.Err(c, http.StatusBadGateway, "ORG_CHECK_FAILED", "Could not verify organization access.")
+		response.Errorf(c, http.StatusBadGateway, "ORG_CHECK_FAILED", "Could not verify organization access.", err,
+			"op", "orgclient.membership", "orgId", orgID.String(), "userId", uid.String())
 		return nil, false
 	}
 	if !member {
@@ -115,15 +117,16 @@ func ListDocuments(c *gin.Context) {
 	// The total count and the page fetch are independent reads against a remote
 	// DB; run them concurrently to collapse two sequential round-trips into one.
 	var (
-		total   int64
-		docs    []models.Document
-		listErr error
-		wg      sync.WaitGroup
+		total    int64
+		docs     []models.Document
+		listErr  error
+		countErr error
+		wg       sync.WaitGroup
 	)
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		buildQuery().Count(&total)
+		countErr = buildQuery().Count(&total).Error
 	}()
 	go func() {
 		defer wg.Done()
@@ -131,8 +134,12 @@ func ListDocuments(c *gin.Context) {
 	}()
 	wg.Wait()
 	if listErr != nil {
-		response.InternalError(c, "LIST_FAILED", "Could not load documents.")
+		response.InternalErrorf(c, "LIST_FAILED", "Could not load documents.", listErr,
+			"op", "db.documents.list", "userId", uid)
 		return
+	}
+	if countErr != nil {
+		logger.LogWarn(c.Request.Context(), "db.documents.count", countErr, "userId", uid)
 	}
 
 	response.OKWithMeta(c, "Documents retrieved", docs, &response.Meta{Page: page, Limit: limit, Total: total})
@@ -193,7 +200,8 @@ func CreateDocument(c *gin.Context) {
 		Metadata:       req.Metadata,
 	}
 	if err := models.DB.Create(&doc).Error; err != nil {
-		response.InternalError(c, "CREATE_FAILED", "Could not create document.")
+		response.InternalErrorf(c, "CREATE_FAILED", "Could not create document.", err,
+			"op", "db.documents.create", "userId", uid)
 		return
 	}
 	response.Created(c, "Document created", doc)
@@ -285,7 +293,8 @@ func UpdateDocument(c *gin.Context) {
 
 	res := scopeOwned(models.DB.Model(&models.Document{}), uid, orgID).Where("id = ?", id).Updates(updates)
 	if res.Error != nil {
-		response.InternalError(c, "UPDATE_FAILED", "Could not update document.")
+		response.InternalErrorf(c, "UPDATE_FAILED", "Could not update document.", res.Error,
+			"op", "db.documents.update", "docId", id)
 		return
 	}
 	if res.RowsAffected == 0 {
@@ -294,7 +303,9 @@ func UpdateDocument(c *gin.Context) {
 	}
 
 	var doc models.Document
-	scopeOwned(models.DB.Preload("Tags"), uid, orgID).Where("id = ?", id).First(&doc)
+	if err := scopeOwned(models.DB.Preload("Tags"), uid, orgID).Where("id = ?", id).First(&doc).Error; err != nil {
+		logger.LogWarn(c.Request.Context(), "db.documents.reload", err, "docId", id)
+	}
 	response.OK(c, "Document updated", doc)
 }
 
@@ -312,7 +323,8 @@ func DeleteDocument(c *gin.Context) {
 	}
 	res := scopeOwned(models.DB, uid, orgID).Where("id = ?", id).Delete(&models.Document{})
 	if res.Error != nil {
-		response.InternalError(c, "DELETE_FAILED", "Could not delete document.")
+		response.InternalErrorf(c, "DELETE_FAILED", "Could not delete document.", res.Error,
+			"op", "db.documents.soft_delete", "docId", id)
 		return
 	}
 	if res.RowsAffected == 0 {
@@ -338,7 +350,8 @@ func RestoreDocument(c *gin.Context) {
 		Where("id = ? AND deleted_at IS NOT NULL", id).
 		Update("deleted_at", nil)
 	if res.Error != nil {
-		response.InternalError(c, "RESTORE_FAILED", "Could not restore document.")
+		response.InternalErrorf(c, "RESTORE_FAILED", "Could not restore document.", res.Error,
+			"op", "db.documents.restore", "docId", id)
 		return
 	}
 	if res.RowsAffected == 0 {
@@ -362,14 +375,17 @@ func PurgeDocument(c *gin.Context) {
 	}
 	res := scopeOwned(models.DB.Unscoped(), uid, orgID).Where("id = ?", id).Delete(&models.Document{})
 	if res.Error != nil {
-		response.InternalError(c, "PURGE_FAILED", "Could not permanently delete document.")
+		response.InternalErrorf(c, "PURGE_FAILED", "Could not permanently delete document.", res.Error,
+			"op", "db.documents.purge", "docId", id)
 		return
 	}
 	if res.RowsAffected == 0 {
 		response.NotFound(c, "NOT_FOUND", "Document not found.")
 		return
 	}
-	models.DB.Exec("DELETE FROM document_tags WHERE document_id = ?", id)
+	if err := models.DB.Exec("DELETE FROM document_tags WHERE document_id = ?", id).Error; err != nil {
+		logger.LogWarn(c.Request.Context(), "db.document_tags.purge", err, "docId", id)
+	}
 	response.OK(c, "Document permanently deleted", gin.H{"id": id})
 }
 
@@ -411,7 +427,8 @@ func AttachTag(c *gin.Context) {
 		return
 	}
 	if err := models.DB.Model(&doc).Association("Tags").Append(&tag); err != nil {
-		response.InternalError(c, "ATTACH_FAILED", "Could not attach tag.")
+		response.InternalErrorf(c, "ATTACH_FAILED", "Could not attach tag.", err,
+			"op", "db.document_tags.attach", "docId", docID, "tagId", tagID)
 		return
 	}
 	response.OK(c, "Tag attached", gin.H{"documentId": docID, "tagId": tagID})
@@ -440,7 +457,8 @@ func DetachTag(c *gin.Context) {
 		return
 	}
 	if err := models.DB.Model(&doc).Association("Tags").Delete(&models.Tag{ID: tagID}); err != nil {
-		response.InternalError(c, "DETACH_FAILED", "Could not detach tag.")
+		response.InternalErrorf(c, "DETACH_FAILED", "Could not detach tag.", err,
+			"op", "db.document_tags.detach", "docId", docID, "tagId", tagID)
 		return
 	}
 	response.OK(c, "Tag detached", gin.H{"documentId": docID, "tagId": tagID})

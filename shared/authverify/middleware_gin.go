@@ -73,7 +73,8 @@ func GinAuthMiddleware(options GinMiddlewareOptions) gin.HandlerFunc {
 			}
 			claims, err := options.Verifier.Verify(c.Request.Context(), token)
 			if err != nil {
-				response.AbortErr(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Your session has expired. Please log in again.")
+				response.AbortErrorf(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Your session has expired. Please log in again.", err,
+					"op", "auth.verify_token")
 				return
 			}
 			SetGinAuth(c, claims.ToAuthContext())

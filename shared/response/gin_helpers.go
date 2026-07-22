@@ -1,6 +1,7 @@
 package response
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -105,7 +106,7 @@ func Forbidden(c *gin.Context, code string, message string) {
 // attrs are slog key/value pairs and are appended after the standard fields.
 func Errorf(c *gin.Context, status int, code string, message string, err error, attrs ...any) {
 	if err != nil {
-		slog.Error(message, buildLogAttrs(c, status, code, err, attrs)...)
+		slog.ErrorContext(reqContext(c), message, buildLogAttrs(c, status, code, err, attrs)...)
 	}
 	Err(c, status, code, message)
 }
@@ -118,22 +119,30 @@ func InternalErrorf(c *gin.Context, code string, message string, err error, attr
 // AbortErrorf is the c.Abort variant of Errorf for use in middleware.
 func AbortErrorf(c *gin.Context, status int, code string, message string, err error, attrs ...any) {
 	if err != nil {
-		slog.Error(message, buildLogAttrs(c, status, code, err, attrs)...)
+		slog.ErrorContext(reqContext(c), message, buildLogAttrs(c, status, code, err, attrs)...)
 	}
 	AbortErr(c, status, code, message)
 }
 
+// reqContext returns the request's context (carrying the trace span + request ID
+// for the shared contextHandler), falling back to Background when unavailable.
+func reqContext(c *gin.Context) context.Context {
+	if c != nil && c.Request != nil {
+		return c.Request.Context()
+	}
+	return context.Background()
+}
+
 func buildLogAttrs(c *gin.Context, status int, code string, err error, extra []any) []any {
+	// trace_id/span_id/request_id are added by the shared contextHandler from the
+	// ctx passed to the *Context log call.
 	attrs := []any{
-		"err", err,
+		"error", err,
 		"code", code,
 		"status", status,
 	}
 	if c != nil && c.Request != nil {
 		attrs = append(attrs, "method", c.Request.Method, "path", c.Request.URL.Path)
-	}
-	if reqID := requestIDFromContext(c); reqID != "" {
-		attrs = append(attrs, "requestId", reqID)
 	}
 	return append(attrs, extra...)
 }

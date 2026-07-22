@@ -23,7 +23,7 @@ response.AbortErrorf(c, http.StatusUnauthorized, "AUTH_UNAUTHORIZED", "Session e
     "op", "verify_token")
 ```
 
-`*Errorf` automatically attaches `method`, `path`, and `requestId` from gin context. Pass `nil` err to behave exactly like the non-`f` variant (no log emitted).
+`*Errorf` automatically attaches `method` + `path`, and logs via the request context so the shared `contextHandler` adds `request_id`/`trace_id`/`span_id`. Pass `nil` err to behave exactly like the non-`f` variant (no log emitted).
 
 ### Non-HTTP layer — `shared/logger/oplog.go`
 
@@ -36,7 +36,7 @@ return logger.LogErr(ctx, "db.processing_jobs.create", err,
 logger.LogWarn(ctx, "redis.lookup", err, "key", key) // benign / expected
 ```
 
-`LogErr` and `LogWarn` return the same `err` so they can be used inline in a `return` statement. They auto-attach `requestId` from `ctx` when present (set by `logger.GinRequestID()` middleware). Passing `nil` err is a no-op.
+`LogErr` and `LogWarn` return the same `err` so they can be used inline in a `return` statement. They log via `ctx` (the `*Context` slog variants), so the shared `contextHandler` auto-attaches `request_id` (set by `logger.GinRequestID()`) and `trace_id`/`span_id` (from the OTel span) when present. Passing `nil` err is a no-op.
 
 ## Required attrs
 
@@ -44,11 +44,19 @@ Every error log line must include:
 
 | Attr | Source | Notes |
 |---|---|---|
-| `err` | the raw error | always |
+| `error` | the raw error | always |
 | `op` | a stable identifier for the failing operation | e.g. `"create_job_dir"`, `"db.users.create"`, `"redis.upload_chunk_lua"`, `"libreoffice.convert"` |
-| `requestId` | gin context / context.Context | populated automatically by helpers |
+| `request_id` | context | injected automatically by the shared `contextHandler` for any `*Context` log |
+| `trace_id` / `span_id` | OpenTelemetry span in context | injected automatically by the `contextHandler` — ties the log to its Tempo trace |
 
 Plus any local identifiers that help reproduce the failure: `jobId`, `userId`, `uploadId`, `tool`, `path`, `subject`.
+
+`op` is dot-namespaced by subsystem so logs group cleanly in Loki. Conventions in use:
+- `db.<table>.<action>` — database ops (e.g. `db.documents.create`, `db.memberships.update_role`).
+- `s3.<action>` / `redis.<action>` / `nats.<action>` — external stores/broker.
+- Tool-exec on the worker path: `ghostscript.{compress,repair,pdfa}`, `libreoffice.convert`, `unoconvert.convert`, `pdftoppm.render`, `pdftohtml.convert`, `pdftotext.convert`, `tesseract.ocr_page`.
+- Cross-service clients: `orgclient.membership`, `notify.post`. Gateway: `gateway.proxy`.
+- Worker/async lifecycle: `worker.process_panic`, `export.generate`, `apisampler.panic`.
 
 ## Where logs end up
 
@@ -56,21 +64,29 @@ Each service initialises its own `slog.Default` via `logger.Init("<service>", LO
 
 ```json
 {"time":"...","level":"ERROR","service":"job-service","msg":"Something went wrong. Please try again.",
- "err":"dial tcp 127.0.0.1:5432: connection refused","code":"SERVER_ERROR","status":500,
- "method":"POST","path":"/api/convert-to-pdf/word-to-pdf","requestId":"81eb81ef-...",
+ "error":"dial tcp 127.0.0.1:5432: connection refused","code":"SERVER_ERROR","status":500,
+ "method":"POST","path":"/api/convert-to-pdf/word-to-pdf",
+ "request_id":"81eb81ef-...","trace_id":"4bf92f...","span_id":"00f067...",
  "op":"db.processing_jobs.transaction","jobId":"...","tool":"word-to-pdf"}
 ```
 
+Timestamps are UTC RFC3339; sensitive keys (`password`, `token`, `authorization`,
+`secret`, …) are auto-redacted to `[REDACTED]` by the shared logger.
+
 ## Correlating a user-visible failure to logs
 
-The standard API response envelope includes `meta.requestId`. Take that value and grep:
+The standard API response envelope includes `meta.requestId`, and the gateway
+propagates the same `request_id` + trace downstream, so one request is a single
+thread across every service. In **Grafana → Explore → Loki**:
 
-```sh
-# job-service stdout
-grep '"requestId":"81eb81ef-491a-4bd3-96b0-7eb8b26d1712"' /var/log/job-service.log
+```logql
+{service="job-service"} | json | request_id = "81eb81ef-491a-4bd3-96b0-7eb8b26d1712"
 ```
 
-The matching `slog.Error` line will name the exact `op` that failed.
+Drop the `service` label to see the same request across **all** services. The
+matching line names the exact `op` that failed, and its `trace_id` derived-field
+links straight to the full **Tempo** trace (and back). Fallback for a single host
+without the observability stack running: `docker logs <container> | grep <request_id>`.
 
 ## When NOT to log
 

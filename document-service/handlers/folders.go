@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"document-service/internal/models"
+	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 )
 
@@ -25,7 +26,7 @@ func ListFolders(c *gin.Context) {
 	}
 	var folders []models.Folder
 	if err := q.Order("name ASC").Find(&folders).Error; err != nil {
-		response.InternalError(c, "LIST_FAILED", "Could not load folders.")
+		response.InternalErrorf(c, "LIST_FAILED", "Could not load folders.", err, "op", "db.folders.list", "userId", uid)
 		return
 	}
 	response.OK(c, "Folders retrieved", folders)
@@ -64,7 +65,7 @@ func CreateFolder(c *gin.Context) {
 	}
 	folder := models.Folder{UserID: uid, OrganizationID: orgID, Name: strings.TrimSpace(req.Name), ParentID: pid}
 	if err := models.DB.Create(&folder).Error; err != nil {
-		response.InternalError(c, "CREATE_FAILED", "Could not create folder.")
+		response.InternalErrorf(c, "CREATE_FAILED", "Could not create folder.", err, "op", "db.folders.create", "userId", uid)
 		return
 	}
 	response.Created(c, "Folder created", folder)
@@ -109,7 +110,7 @@ func UpdateFolder(c *gin.Context) {
 	}
 	res := scopeOwned(models.DB.Model(&models.Folder{}), uid, orgID).Where("id = ?", id).Updates(updates)
 	if res.Error != nil {
-		response.InternalError(c, "UPDATE_FAILED", "Could not update folder.")
+		response.InternalErrorf(c, "UPDATE_FAILED", "Could not update folder.", res.Error, "op", "db.folders.update", "folderId", id)
 		return
 	}
 	if res.RowsAffected == 0 {
@@ -133,13 +134,15 @@ func DeleteFolder(c *gin.Context) {
 	}
 	res := scopeOwned(models.DB, uid, orgID).Where("id = ?", id).Delete(&models.Folder{})
 	if res.Error != nil {
-		response.InternalError(c, "DELETE_FAILED", "Could not delete folder.")
+		response.InternalErrorf(c, "DELETE_FAILED", "Could not delete folder.", res.Error, "op", "db.folders.delete", "folderId", id)
 		return
 	}
 	if res.RowsAffected == 0 {
 		response.NotFound(c, "NOT_FOUND", "Folder not found.")
 		return
 	}
-	scopeOwned(models.DB.Model(&models.Document{}), uid, orgID).Where("folder_id = ?", id).Update("folder_id", nil)
+	if err := scopeOwned(models.DB.Model(&models.Document{}), uid, orgID).Where("folder_id = ?", id).Update("folder_id", nil).Error; err != nil {
+		logger.LogWarn(c.Request.Context(), "db.documents.reparent_to_root", err, "folderId", id)
+	}
 	response.OK(c, "Folder deleted", gin.H{"id": id})
 }

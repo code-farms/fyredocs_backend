@@ -91,7 +91,7 @@ func handleJobEvent(msg jetstream.Msg) {
 	}
 
 	// If the job was started in an org workspace, file the document there.
-	orgID := handlers.WorkspaceForJob(models.DB, jobID, uid)
+	orgID := handlers.WorkspaceForJob(context.Background(), models.DB, jobID, uid)
 
 	name := documentName(event.OutputPath, event.ToolType)
 	meta, _ := json.Marshal(map[string]any{"jobId": event.JobID, "toolType": event.ToolType})
