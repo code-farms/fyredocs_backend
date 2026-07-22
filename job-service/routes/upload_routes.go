@@ -96,6 +96,9 @@ func SetupRouter(r *gin.Engine) {
 		optimizePdf.GET("/:tool/:id/download", handlers.DownloadJobFile)
 
 		api.GET("/jobs/history", authverify.RequireAuthenticatedGin(), handlers.GetJobHistory)
+		// Super-admin only (enforced in the handler via X-User-Role): re-dispatch
+		// dead-lettered worker jobs from JOBS_DLQ.
+		api.POST("/jobs/dlq/redrive", authverify.RequireAuthenticatedGin(), handlers.RedriveDLQ)
 		api.GET("/jobs/:id/events", handlers.SSEJobUpdates)
 	}
 

@@ -172,6 +172,14 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 				defer func() {
 					if r := recover(); r != nil {
 						logger.Error("worker panic recovered", "error", fmt.Sprintf("panic: %v", r), "op", "worker.process_panic")
+						var p JobPayload
+						if json.Unmarshal(m.Data(), &p) == nil && p.JobID != "" {
+							const failMsg = "Processing failed unexpectedly. Please try again."
+							updateJobStatusString(cfg.DB, p.JobID, "failed", 0, failMsg)
+							if jid, e := uuid.Parse(p.JobID); e == nil {
+								publishStatusEvent(cfg.JS, jid, p.ToolType, "failed", 0, failMsg)
+							}
+						}
 						_ = m.Term()
 					}
 				}()

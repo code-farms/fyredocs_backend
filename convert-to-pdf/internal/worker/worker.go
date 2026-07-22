@@ -22,7 +22,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/redis/go-redis/v9"
-	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
 	"convert-to-pdf/internal/models"
@@ -286,6 +285,16 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 				defer func() {
 					if r := recover(); r != nil {
 						logger.Error("worker panic recovered", "error", fmt.Sprintf("panic: %v", r), "op", "worker.process_panic")
+						// Move the job out of `processing` so the user isn't left polling
+						// a job that will never complete; then Term the poison message.
+						var p JobPayload
+						if json.Unmarshal(m.Data(), &p) == nil && p.JobID != "" {
+							const failMsg = "Processing failed unexpectedly. Please try again."
+							updateJobStatusString(cfg.DB, p.JobID, "failed", 0, failMsg)
+							if jid, e := uuid.Parse(p.JobID); e == nil {
+								publishStatusEvent(cfg.JS, jid, p.ToolType, "failed", 0, failMsg)
+							}
+						}
 						_ = m.Term()
 					}
 				}()
@@ -414,6 +423,12 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 		return
 	}
 
+	// Bound total processing time so a hung external tool (LibreOffice/Ghostscript)
+	// frees the worker slot instead of holding it until AckWait — mirrors the
+	// 10-minute job context the other workers already use.
+	jobCtx, cancelJob := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancelJob()
+
 	var result *ProcessResult
 	var procErr error
 
@@ -430,12 +445,12 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 			updateJobStatus(cfg.DB, jobID, "processing", pct, "")
 			publishStatusEvent(cfg.JS, jobID, payload.ToolType, "processing", pct, "")
 		}
-		result, procErr = cfg.Process(ctx, jobID, payload.ToolType, localInputs, options, outDir, onProgress)
+		result, procErr = cfg.Process(jobCtx, jobID, payload.ToolType, localInputs, options, outDir, onProgress)
 	} else {
 		// Time-based estimation for office conversions and single-pass operations.
 		estimated := estimateConversionTime(payload.ToolType, localInputs)
 		reporter := startProgressReporter(cfg.DB, cfg.JS, jobID, payload.ToolType, 20, 90, estimated)
-		result, procErr = cfg.Process(ctx, jobID, payload.ToolType, localInputs, options, outDir, nil)
+		result, procErr = cfg.Process(jobCtx, jobID, payload.ToolType, localInputs, options, outDir, nil)
 		reporter.stop()
 	}
 
@@ -446,7 +461,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 
 	// Persist the output to the outputs bucket; the scratch copy is deleted
 	// when this function returns.
-	outKey, outSize, err := storeOutput(ctx, cfg.Storage, payload.JobID, result.OutputPath)
+	outKey, outSize, err := storeOutput(jobCtx, cfg.Storage, payload.JobID, result.OutputPath)
 	if err != nil {
 		logger.Error("failed to upload output", "jobId", payload.JobID, "error", err)
 		// Upload failures are network-ish: retry via the recoverable path.
@@ -456,7 +471,9 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 
 	if err := recordOutput(cfg.DB, jobID, outKey, outSize); err != nil {
 		logger.Error("failed to record output", "jobId", payload.JobID, "error", err)
-		handleFailure(cfg, msg, payload, err, logger)
+		// The conversion already succeeded and the output is uploaded — a transient
+		// DB error here should retry, not discard completed work.
+		handleFailure(cfg, msg, payload, markRecoverable(err), logger)
 		return
 	}
 
@@ -623,24 +640,19 @@ func mergeMetadata(db *gorm.DB, jobID uuid.UUID, meta map[string]interface{}, lo
 	if meta == nil {
 		return
 	}
-	var job models.ProcessingJob
-	if err := db.First(&job, "id = ?", jobID).Error; err != nil {
-		logger.Error("failed to load job for metadata merge", "jobId", jobID, "error", err)
+	data, err := json.Marshal(meta)
+	if err != nil {
+		logger.Error("failed to marshal metadata", "jobId", jobID, "error", err)
 		return
 	}
-	existing := map[string]interface{}{}
-	if len(job.Metadata) > 0 {
-		if err := json.Unmarshal(job.Metadata, &existing); err != nil {
-			logger.Error("failed to unmarshal existing metadata", "jobId", jobID, "error", err)
-		}
-	}
-	for key, value := range meta {
-		existing[key] = value
-	}
-	if data, err := json.Marshal(existing); err == nil {
-		if err := db.Model(&models.ProcessingJob{}).Where("id = ?", jobID).Update("metadata", datatypes.JSON(data)).Error; err != nil {
-			logger.Error("failed to update metadata", "jobId", jobID, "error", err)
-		}
+	// Single atomic UPDATE using the PostgreSQL JSONB merge operator (||) instead
+	// of SELECT-modify-UPDATE, which races with concurrent metadata writes (a
+	// lost update). COALESCE handles NULL existing metadata.
+	if result := db.Exec(
+		`UPDATE processing_jobs SET metadata = COALESCE(metadata, '{}'::jsonb) || ?::jsonb, updated_at = NOW() WHERE id = ?`,
+		string(data), jobID,
+	); result.Error != nil {
+		logger.Error("failed to update metadata", "jobId", jobID, "error", result.Error)
 	}
 }
 

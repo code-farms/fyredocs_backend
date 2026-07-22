@@ -1,6 +1,7 @@
 package authverify
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -107,7 +108,11 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 				claims, err := options.Verifier.Verify(r.Context(), token)
 				if err != nil {
 					slog.WarnContext(r.Context(), "token verification failed", "error", err, "op", "auth.verify_token", "path", r.URL.Path, "method", r.Method)
-					WriteError(w, http.StatusUnauthorized, ErrCodeUnauthorized, "Invalid or expired token")
+					code, msg := ErrCodeUnauthorized, "Your session is invalid. Please log in again."
+					if errors.Is(err, ErrTokenExpired) {
+						code, msg = ErrCodeTokenExpired, "Your session has expired. Please refresh or log in again."
+					}
+					WriteError(w, http.StatusUnauthorized, code, msg)
 					return
 				}
 				authCtx := claims.ToAuthContext()

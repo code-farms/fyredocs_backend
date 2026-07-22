@@ -1,6 +1,7 @@
 package authverify
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -73,8 +74,11 @@ func GinAuthMiddleware(options GinMiddlewareOptions) gin.HandlerFunc {
 			}
 			claims, err := options.Verifier.Verify(c.Request.Context(), token)
 			if err != nil {
-				response.AbortErrorf(c, http.StatusUnauthorized, string(ErrCodeUnauthorized), "Your session has expired. Please log in again.", err,
-					"op", "auth.verify_token")
+				code, msg := ErrCodeUnauthorized, "Your session is invalid. Please log in again."
+				if errors.Is(err, ErrTokenExpired) {
+					code, msg = ErrCodeTokenExpired, "Your session has expired. Please refresh or log in again."
+				}
+				response.AbortErrorf(c, http.StatusUnauthorized, string(code), msg, err, "op", "auth.verify_token")
 				return
 			}
 			SetGinAuth(c, claims.ToAuthContext())

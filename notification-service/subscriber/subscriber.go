@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
@@ -16,6 +17,27 @@ import (
 
 	"notification-service/internal/models"
 )
+
+// maxDeliver bounds redelivery; eventBackoff paces retries so a failing
+// dependency (e.g. Postgres down) is retried with backoff instead of a hot loop.
+const maxDeliver = 5
+
+var eventBackoff = []time.Duration{time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second}
+
+// nakOrDLQ backs off a retry until maxDeliver is hit, then parks the message in
+// the DLQ and Terminates it so it stops redelivering (no poison-message loop).
+func nakOrDLQ(msg jetstream.Msg, service string, cause error) {
+	if meta, err := msg.Metadata(); err == nil && meta.NumDelivered >= maxDeliver {
+		if natsconn.JS != nil {
+			_, _ = natsconn.JS.Publish(context.Background(), "jobs.dlq."+service, msg.Data())
+		}
+		slog.Error("event dropped to DLQ after max retries",
+			"op", "subscriber.dlq", "service", service, "error", cause, "deliveries", meta.NumDelivered)
+		_ = msg.Term()
+		return
+	}
+	_ = msg.Nak()
+}
 
 // Subscribers holds the running NATS consumers so they can be stopped on
 // shutdown.
@@ -32,6 +54,9 @@ func Start(ctx context.Context) (*Subscribers, error) {
 		FilterSubject: "jobs.events.>",
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		DeliverPolicy: jetstream.DeliverNewPolicy,
+		AckWait:       30 * time.Second,
+		MaxDeliver:    maxDeliver,
+		BackOff:       eventBackoff,
 	})
 	if err != nil {
 		return nil, err
@@ -110,7 +135,7 @@ func handleJobEvent(msg jetstream.Msg) {
 	}
 	if err := models.DB.Create(&notif).Error; err != nil {
 		slog.Error("notification: create failed", "jobId", event.JobID, "error", err)
-		_ = msg.Nak()
+		nakOrDLQ(msg, "notification", err)
 		return
 	}
 

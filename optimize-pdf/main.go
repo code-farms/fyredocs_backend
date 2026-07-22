@@ -20,6 +20,7 @@ import (
 	"fyredocs/shared/metrics"
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/redisstore"
+	"fyredocs/shared/response"
 	"fyredocs/shared/storage"
 	"fyredocs/shared/telemetry"
 
@@ -83,7 +84,7 @@ func main() {
 	r.Use(metrics.GinMetricsMiddleware())
 	r.Use(logger.GinRequestID())
 	r.Use(logger.GinRequestLogger())
-	r.Use(gin.Recovery())
+	r.Use(response.GinRecovery())
 	r.GET("/metrics", metrics.MetricsHandler())
 	if err := r.SetTrustedProxies(config.TrustedProxies()); err != nil {
 		slog.Error("failed to set trusted proxies", "error", err)

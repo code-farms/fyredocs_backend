@@ -183,7 +183,7 @@ func StreamNotifications(c *gin.Context) {
 	uid, _ := userID(c)
 	if natsconn.Conn == nil {
 		slog.WarnContext(c.Request.Context(), "SSE requested but NATS is unavailable", "op", "nats.sse_unavailable", "userId", uid)
-		response.InternalError(c, "NATS_UNAVAILABLE", "Live updates are unavailable.")
+		response.Err(c, http.StatusServiceUnavailable, response.CodeServiceUnavailable, "Live updates are temporarily unavailable.")
 		return
 	}
 

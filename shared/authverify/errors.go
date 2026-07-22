@@ -12,6 +12,10 @@ type ErrorCode string
 const (
 	ErrCodeUnauthorized ErrorCode = "AUTH_UNAUTHORIZED"
 	ErrCodeForbidden    ErrorCode = "AUTH_FORBIDDEN"
+	// ErrCodeTokenExpired distinguishes a valid-but-expired token from an
+	// otherwise-invalid one so the client can silently refresh instead of
+	// forcing a re-login.
+	ErrCodeTokenExpired ErrorCode = "AUTH_TOKEN_EXPIRED"
 )
 
 // WriteError writes a standardized error response to an http.ResponseWriter.

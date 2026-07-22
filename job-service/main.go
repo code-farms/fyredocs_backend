@@ -20,6 +20,7 @@ import (
 	"fyredocs/shared/metrics"
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/redisstore"
+	"fyredocs/shared/response"
 	"fyredocs/shared/storage"
 	"fyredocs/shared/telemetry"
 
@@ -104,7 +105,8 @@ func main() {
 		slog.Warn("Token denylist disabled")
 	}
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(response.GinRecovery())
 	r.Use(telemetry.GinTraceMiddleware("job-service"))
 	r.Use(metrics.GinMetricsMiddleware())
 	r.Use(logger.GinRequestID())

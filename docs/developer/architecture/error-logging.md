@@ -4,6 +4,17 @@ Every backend service follows a single rule: at every `if err != nil { ... }` bl
 
 This document defines the convention, the helper functions, and how to correlate user-visible failures to log lines.
 
+## Error-handling contract (SaaS-grade)
+
+Companion rules to the logging convention above:
+
+- **Envelope + codes.** All errors return the standard `{success:false,message,error:{code,details}}`. `code` comes from the central registry `shared/response/codes.go` (e.g. `CodeInvalidInput`, `CodeUnauthorized="AUTH_UNAUTHORIZED"`, `CodeTokenExpired="AUTH_TOKEN_EXPIRED"`, `CodeForbidden`, `CodeNotFound`, `CodeServerError`, `CodeUpstreamUnavailable`, `CodeServiceUnavailable`) — prefer a constant over a new literal.
+- **No internal-detail leak.** The client gets a generic `message`; the real error/stack goes to the server log only. Never put `err.Error()`, DB driver text, or a stack into the response.
+- **Panic recovery.** Every Gin service installs `response.GinRecovery()`; the api-gateway wraps its chain in `response.HTTPRecovery`. A panic becomes a logged stack + a clean 500 envelope — never a dropped connection or leaked stack.
+- **HTTP status discipline.** validation→400, auth→401 (`AUTH_TOKEN_EXPIRED` when expired so the SPA can silently refresh), forbidden→403, missing→404, conflict→409, too-large→413, rate-limit→429, upstream unreachable→502 (`CodeUpstreamUnavailable`), dependency down→503 (`CodeServiceUnavailable`), unexpected→500.
+- **Resilience.** Outbound HTTP clients set timeouts; servers set `ApplyServerTimeouts`; DB carries a server-side `statement_timeout`; the gateway proxy has a 3s dial timeout. A flaky internal dependency is guarded by `shared/circuitbreaker` (fail fast when open) — e.g. document-service→user-service membership checks.
+- **Async / jobs.** Workers use bounded retry (`MaxDeliver`+`BackOff`) → DLQ on exhaustion, a per-job timeout, and a panic-recover that moves the job to `failed` (never stuck in `processing`). Event consumers (notification/analytics/document) use the same bounded-retry+DLQ pattern (no hot-loop on a DB outage). Dead-lettered worker jobs can be re-dispatched by a super-admin via `POST /api/jobs/dlq/redrive` (idempotent — redriven messages are removed from the DLQ).
+
 ## Helpers
 
 Two helper packages, both in `shared/`:

@@ -16,6 +16,7 @@ import (
 	"fyredocs/shared/config"
 	"fyredocs/shared/logger"
 	"fyredocs/shared/metrics"
+	"fyredocs/shared/response"
 	"fyredocs/shared/telemetry"
 
 	"user-service/handlers"
@@ -34,7 +35,7 @@ func main() {
 	models.Migrate()
 
 	r := gin.New()
-	r.Use(gin.Recovery())
+	r.Use(response.GinRecovery())
 	r.Use(telemetry.GinTraceMiddleware("user-service"))
 	r.Use(metrics.GinMetricsMiddleware())
 	r.Use(logger.GinRequestID())

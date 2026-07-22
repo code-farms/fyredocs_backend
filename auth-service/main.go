@@ -21,6 +21,7 @@ import (
 	"fyredocs/shared/logger"
 	"fyredocs/shared/metrics"
 	"fyredocs/shared/natsconn"
+	"fyredocs/shared/response"
 	"fyredocs/shared/telemetry"
 
 	"auth-service/internal/email"
@@ -81,7 +82,8 @@ func main() {
 		slog.Warn("Token denylist disabled - logout will not revoke access tokens")
 	}
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(response.GinRecovery())
 	r.Use(telemetry.GinTraceMiddleware("auth-service"))
 	r.Use(metrics.GinMetricsMiddleware())
 	r.Use(logger.GinRequestID())

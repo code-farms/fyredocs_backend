@@ -7,8 +7,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -24,6 +24,7 @@ import (
 	"fyredocs/shared/config"
 	"fyredocs/shared/logger"
 	"fyredocs/shared/metrics"
+	"fyredocs/shared/response"
 	"fyredocs/shared/telemetry"
 
 	"go.opentelemetry.io/otel"
@@ -182,10 +183,11 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if err := redisClient.Ping(ctx).Err(); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			resp, _ := json.Marshal(map[string]string{"status": "unhealthy", "redis": err.Error()})
+			// Log the real cause; don't echo redis dial detail (host:port) to the probe.
+			slog.ErrorContext(ctx, "healthz: redis ping failed", "error", err, "op", "healthz.redis")
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(resp)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"unhealthy","redis":"unreachable"}`))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -235,10 +237,12 @@ func main() {
 		allowCredentials: credentialsEnabled,
 	})
 
-	handler := telemetry.HTTPTraceMiddleware("api-gateway")(
-		metrics.HTTPMetricsMiddleware(
-			logger.HTTPRequestID(
-				withSecurityHeaders(root),
+	handler := response.HTTPRecovery(
+		telemetry.HTTPTraceMiddleware("api-gateway")(
+			metrics.HTTPMetricsMiddleware(
+				logger.HTTPRequestID(
+					withSecurityHeaders(root),
+				),
 			),
 		),
 	)
@@ -275,6 +279,12 @@ func main() {
 
 // proxyTransport is shared across all reverse proxies with sensible timeouts.
 var proxyTransport = &http.Transport{
+	// Bound TCP connect so a black-holed upstream fails fast (~3s) instead of
+	// pinning a proxy goroutine on the OS SYN-retry default (tens of seconds+).
+	DialContext: (&net.Dialer{
+		Timeout:   3 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
 	ResponseHeaderTimeout: 5 * time.Minute, // allow long PDF conversions
 	IdleConnTimeout:       90 * time.Second,
 	MaxIdleConnsPerHost:   20,
@@ -337,7 +347,8 @@ func newProxy(cfg routeConfig) http.Handler {
 		slog.ErrorContext(r.Context(), "upstream proxy error",
 			"error", err, "op", "gateway.proxy",
 			"prefix", cfg.prefix, "target", cfg.targetURL, "path", r.URL.Path)
-		w.WriteHeader(http.StatusBadGateway)
+		response.WriteErr(w, http.StatusBadGateway, response.CodeUpstreamUnavailable,
+			"The service is temporarily unavailable. Please try again.")
 	}
 
 	return proxy

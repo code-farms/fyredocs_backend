@@ -18,6 +18,7 @@ import (
 	"fyredocs/shared/logger"
 	"fyredocs/shared/metrics"
 	"fyredocs/shared/natsconn"
+	"fyredocs/shared/response"
 	"fyredocs/shared/telemetry"
 
 	"document-service/handlers"
@@ -52,7 +53,7 @@ func main() {
 	}
 
 	r := gin.New()
-	r.Use(gin.Recovery())
+	r.Use(response.GinRecovery())
 	r.Use(telemetry.GinTraceMiddleware("document-service"))
 	r.Use(metrics.GinMetricsMiddleware())
 	r.Use(logger.GinRequestID())
