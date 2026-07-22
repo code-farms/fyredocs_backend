@@ -57,6 +57,28 @@ BASE_URL=...                       ./run.sh optimize-pdf vps40 -- -e JOB_RATE=40
 
 Outputs a JSON summary + an HTML dashboard under `scripts/k6/results/`.
 
+By default each scenario's `setup()` signs up a fresh pool of users on the
+**`free`** plan (50 MB / 10 files). Every bundled fixture is ≤38 MB, so this is
+enough for the whole suite — including `upload-heavy`.
+
+### Pro-plan users (optional — for headroom / >50 MB files)
+`PUT /auth/plan` is admin-only and only changes the caller's own plan, so k6
+**cannot self-upgrade** users. To run as `pro` (500 MB / 50 files), pre-seed the
+pool at the DB level, then point k6 at it:
+
+```bash
+cd scripts/k6
+BASE_URL=https://app.yourdomain.com \
+AUTH_DATABASE_URL='postgres://user:pass@host:5432/auth?sslmode=disable' \
+./seed-pro-users.sh                      # signs up + promotes k6pool+1..N to pro
+
+# then log in that pool (no signup, no self-upgrade):
+USER_EMAIL_PREFIX=k6pool USER_POOL_SIZE=10 USER_PASSWORD='LoadTest!23456' \
+BASE_URL=... ./run.sh upload-heavy
+```
+
+`AUTH_DATABASE_URL` is the auth-service's `DATABASE_URL` DSN. Requires `psql`.
+
 ### Scenarios
 | Scenario | What it does |
 |---|---|
@@ -72,7 +94,8 @@ Outputs a JSON summary + an HTML dashboard under `scripts/k6/results/`.
 ### Useful env knobs (`-e KEY=val`)
 `BASE_URL`, `PROFILE` (`vps40`|`laptop`), `JOB_RATE`, `BROWSE_RATE`, `DURATION`,
 `UPLOAD_MODE` (`multipart`|`presigned`), `USER_POOL_SIZE`, `USER_EMAIL`/`USER_PASSWORD`
-(reuse fixed creds), `DOWNLOAD_RATIO`, `JOB_TIMEOUT_MS`, `TEST_PLAN`.
+(reuse fixed creds), `USER_EMAILS`/`USER_EMAIL_PREFIX` + `SEED_EMAIL_DOMAIN` (log in a
+pre-seeded pool — see Pro-plan users above), `DOWNLOAD_RATIO`, `JOB_TIMEOUT_MS`, `TEST_PLAN`.
 
 ## 5. Finding the capacity ceiling
 

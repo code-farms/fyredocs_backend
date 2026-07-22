@@ -3,7 +3,7 @@
 // the auth rate limits (login 5/min, signup 3/min per IP) must be raised or this
 // just measures the limiter. Each iteration creates real DB rows on signup.
 import { check } from 'k6';
-import { postJSON, envelope } from '../lib/http.js';
+import { postJSON } from '../lib/http.js';
 import { PASSWORD } from '../config.js';
 import { uid } from '../lib/util.js';
 import { PROFILE, THRESHOLDS } from '../config.js';
@@ -47,9 +47,10 @@ export default function (data) {
     const li = postJSON('/auth/login', { email, password: PASSWORD });
     check(li, { 'login 200': (x) => x.status === 200 });
     if (roll < 0.55 && li.status === 200) {
-      const token = (li.cookies.access_token && li.cookies.access_token[0].value) ||
-        ((envelope(li).data || {}).accessToken);
-      const rf = postJSON('/auth/refresh', {}, token);
+      // Refresh is COOKIE-driven: auth-service reads the HttpOnly `refresh_token`
+      // cookie (path /auth), not a body/bearer token. The VU cookie jar carries
+      // it from the login above, so no token needs to be passed here.
+      const rf = postJSON('/auth/refresh', {});
       check(rf, { 'refresh 2xx': (x) => x.status === 200 });
     }
   }

@@ -7,8 +7,13 @@
 // ---------------------------------------------------------------------------
 export const BASE_URL = (__ENV.BASE_URL || 'http://localhost:8080').replace(/\/$/, '');
 
-// Plan the provisioned test users are upgraded to (pro = highest file-size /
-// per-job limits). Override only if /auth/plan rejects pro in your env.
+// Plan the provisioned test users should be on. NOTE: the backend hardened
+// PUT /auth/plan to admin/super-admin only, and it only changes the *caller's*
+// own plan — a freshly signed-up load user (role "user") cannot self-upgrade.
+// So the plan is set at the DB level by seed-pro-users.sh, NOT by k6. This
+// value is only used for the best-effort self-upgrade attempt (a no-op / 403
+// for non-admin users). All current fixtures (<=38MB) fit the default `free`
+// plan (50MB/10 files); `pro` (500MB/50 files) is headroom.
 export const TEST_PLAN = __ENV.TEST_PLAN || 'pro';
 
 // How many users setup() provisions and VUs round-robin across. In capacity
@@ -18,6 +23,22 @@ export const USER_POOL_SIZE = Number(__ENV.USER_POOL_SIZE || 10);
 export const FIXED_EMAIL = __ENV.USER_EMAIL || '';
 export const FIXED_PASSWORD = __ENV.USER_PASSWORD || '';
 export const PASSWORD = __ENV.PASSWORD || 'LoadTest!23456';
+
+// Pre-seeded user pool (opt-in). When set, setup() logs in these existing users
+// instead of signing up fresh ones, and skips the plan self-upgrade — use this
+// with seed-pro-users.sh to run the whole suite as `pro` users. Provide either a
+// comma list of emails (USER_EMAILS) or a prefix (USER_EMAIL_PREFIX) that maps to
+// `${prefix}+1..USER_POOL_SIZE@${SEED_EMAIL_DOMAIN}`. Empty -> dynamic signup.
+export const SEED_EMAIL_DOMAIN = __ENV.SEED_EMAIL_DOMAIN || 'loadtest.fyredocs.local';
+export const SEEDED_EMAILS = (function seededEmails() {
+  const list = (__ENV.USER_EMAILS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (list.length) return list;
+  const prefix = (__ENV.USER_EMAIL_PREFIX || '').trim();
+  if (!prefix) return [];
+  const out = [];
+  for (let i = 1; i <= Math.max(1, USER_POOL_SIZE); i++) out.push(`${prefix}+${i}@${SEED_EMAIL_DOMAIN}`);
+  return out;
+})();
 
 // Upload mode for job scenarios: 'presigned' (init -> PUT parts -> complete, the
 // SPA's path — DEFAULT) or 'multipart' (single direct request). NOTE: multipart

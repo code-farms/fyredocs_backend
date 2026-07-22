@@ -13,6 +13,9 @@ import {
 } from '../config.js';
 
 const TERMINAL = { completed: true, failed: true };
+// Backend job lifecycle: queued -> processing -> completed|failed (job.go).
+// queue_wait is measured as the time to LEAVE the queue (first non-queued status),
+// so fast jobs that jump queued->completed between polls still record it.
 
 // Create a job for a tool definition. Returns {ok, jobId, group, tool, t0}.
 export function createJob(toolDef, token, mode, sizeName) {
@@ -59,13 +62,15 @@ export function createJob(toolDef, token, mode, sizeName) {
 export function pollUntilDone(job, token) {
   const tags = { tool: job.tool };
   const deadline = Date.now() + JOB_TIMEOUT_MS;
-  let sawProcessing = false;
+  let leftQueue = false;
   while (Date.now() < deadline) {
     const res = get(`/api/${job.group}/${job.tool}/${job.jobId}`, token, { kind: 'api', tool: job.tool });
     const data = (envelope(res).data) || {};
     const status = String(data.status || '').toLowerCase();
-    if (!sawProcessing && status === 'processing') {
-      sawProcessing = true;
+    // Record queue_wait the first time the job leaves 'queued' (processing OR a
+    // terminal status seen directly — fast jobs may skip an observed 'processing').
+    if (!leftQueue && status && status !== 'queued') {
+      leftQueue = true;
       queueWait.add(Date.now() - job.t0, tags);
     }
     if (TERMINAL[status]) {

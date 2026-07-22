@@ -1,7 +1,11 @@
 // Upload-bandwidth test — forces the PRESIGNED flow with MEDIUM/LARGE files
 // (init -> PUT parts -> complete), then a cheap compress job. Stresses the
 // gateway object-proxy + MinIO + the 800 Mbit/s port. Watch upload_bytes and
-// http_req_duration{kind:storage}. Provisioned users are PRO (large file cap).
+// http_req_duration{kind:storage}.
+// PLAN NOTE: the largest fixture is ~38MB, which fits the default `free` plan
+// (50MB/10 files), so this runs fine on signed-up users. To exercise the `pro`
+// cap (500MB) for headroom, pre-seed pro users with seed-pro-users.sh and pass
+// USER_EMAIL_PREFIX/USER_POOL_SIZE — k6 will log in that pool instead of signing up.
 import { provisionUsers, pickToken } from '../lib/auth.js';
 import { runJob } from '../lib/jobs.js';
 import { randItem } from '../lib/util.js';
