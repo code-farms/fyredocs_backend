@@ -8,7 +8,11 @@ The Go services are instrumented for observability out of the box:
   `OTEL_EXPORTER_OTLP_ENDPOINT` (`http://otel-collector:4318` in compose).
 - **Metrics** — `shared/metrics` registers Prometheus collectors
   (`http_request_duration_seconds`, `jobs_processed_total`, `jobs_failed_total`)
-  and every service serves `GET /metrics`.
+  and every service serves `GET /metrics`. `http_request_duration_seconds` is
+  recorded by the HTTP/Gin middleware; `jobs_processed_total` (label `status`) and
+  `jobs_failed_total` (label `reason`), both keyed by `tool_type`, are emitted per
+  job outcome from `shared/queue.PublishJobEvent` — the single choke point every
+  worker's terminal `JobCompleted`/`JobFailed` event flows through.
 
 This document describes the **backing stack** that receives and visualizes that
 telemetry. It is **opt-in**: nothing here runs unless you explicitly start the
@@ -42,8 +46,10 @@ The **services → collector** hop is OTLP/HTTP and is fixed by the service code
 
 ## Starting it
 
-The stack is behind the compose profile `observability`, so a plain
-`docker compose up` / `deploy.sh` never starts it. With the core stack running:
+The stack is behind the compose profile `observability`. `deploy.sh` activates
+that profile by default (`COMPOSE_PROFILES=observability`), so a normal deploy
+already starts it — opt out with `COMPOSE_PROFILES= ./deployment/deploy.sh`. To
+start it standalone against an already-running core stack:
 
 ```bash
 docker compose -f deployment/docker-compose.yml --env-file .env --profile observability up -d

@@ -357,7 +357,11 @@ if [ ${#SERVICES_TO_DEPLOY[@]} -gt 0 ]; then
         STEP_START=$SECONDS
         # `compose up --build` uses the Dockerfile's GO_BUILD_PARALLELISM default (6);
         # to change it, rebuild the base with GO_BUILD_PARALLELISM=N build-base-image.sh.
-        docker compose -f "$SVC_FILE" up -d --build "$SVC"
+        # --force-recreate: `up` decides recreation from the service config-hash, not
+        # the image content, so a rebuilt-but-same-config service would otherwise be
+        # left "up-to-date" (old container, new image unused). Force it so the fresh
+        # image always goes live on a single-service redeploy.
+        docker compose -f "$SVC_FILE" up -d --build --force-recreate "$SVC"
         print_success "$SVC built + started (took $(( SECONDS - STEP_START ))s)"
 
         CID=$(docker compose -f "$SVC_FILE" ps -q "$SVC")
@@ -395,9 +399,22 @@ print_step "PDF Processing Configuration"
 print_success "Using free open-source tools (pdfcpu, LibreOffice, Poppler)"
 print_success "Using Go Workspace caching for ultra-fast builds"
 
-# 1. Stop existing containers
+# Compose context — MUST be exported before the `down` below, or that command
+# runs from the repo root with no compose file discovered and silently no-ops
+# (2>/dev/null || true), leaving every old container in place.
+export DOCKER_BUILDKIT=1
+export COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+export COMPOSE_ENV_FILES="$ROOT_DIR/.env"
+# Observability (Grafana/Prometheus/Tempo/otel-collector) ships with every deploy:
+# activating its compose profile here means `docker compose down`/`up -d`/`ps`
+# below pick it up automatically. Opt out with:  COMPOSE_PROFILES= ./deployment/deploy.sh
+export COMPOSE_PROFILES="${COMPOSE_PROFILES:-observability}"
+
+# 1. Stop existing containers — full teardown so every service is recreated from
+# its freshly built image on `up` (no stale "up-to-date" containers). Named
+# volumes (postgres_data, grafana_data, ...) persist, so data survives.
 print_step "Stopping existing containers..."
-docker compose down --remove-orphans 2>/dev/null || true
+docker compose down --remove-orphans
 print_success "Stopped existing containers"
 
 # 2. Sequential Build Stage (CPU-Safe Mode)
@@ -416,10 +433,6 @@ GO_SERVICES=(
   "user-service"
   "notification-service"
 )
-
-export DOCKER_BUILDKIT=1
-export COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
-export COMPOSE_ENV_FILES="$ROOT_DIR/.env"
 
 # Every service builds FROM fyredocs-go-builder (+ fyredocs-base). Build them once
 # up front; the warm Go cache they carry is what makes the per-service builds fast.
@@ -560,19 +573,19 @@ echo "  📦 MinIO (S3):            internal (minio:9000) — console http://127
 echo "  📨 NATS:                  internal only (nats:4222)"
 echo "  🔴 Redis:                 internal only (redis:6379)"
 echo "  🗄️  PostgreSQL:            $DB_LABEL"
-echo "  📈 Observability:         opt-in — 'docker compose --profile observability up -d'"
+echo "  📈 Observability:         started with this deploy (super-admin: $EDGE_URL/grafana)"
 echo "                            → Grafana http://127.0.0.1:3000, Prometheus http://127.0.0.1:9090"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🔧 Useful Commands:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Deploy one service:    ./deployment/deploy.sh <service>   (e.g. auth-service)"
-echo "  Start observability:   docker compose -f deployment/docker-compose.yml --env-file .env --profile observability up -d"
+echo "  Disable observability: COMPOSE_PROFILES= ./deployment/deploy.sh"
 echo "  Compose files layout:  docs/developer/architecture/compose-files.md"
 echo "  View logs:             docker compose -f deployment/docker-compose.yml --env-file .env logs -f"
 echo "  View specific service: docker compose -f deployment/docker-compose.yml --env-file .env logs -f api-gateway"
 echo "  Restart services:      docker compose -f deployment/docker-compose.yml --env-file .env restart"
-echo "  Stop all:              docker compose -f deployment/docker-compose.yml --env-file .env down"
+echo "  Stop all:              docker compose -f deployment/docker-compose.yml --env-file .env --profile observability down"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🔐 Security Info:"

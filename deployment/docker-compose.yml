@@ -1057,10 +1057,13 @@ services:
       - fyredocs_net
 
   # ==================== OBSERVABILITY ====================
-  # Opt-in backing stack for the tracing/metrics the services already emit.
-  # NOT started by a plain `docker compose up` — every service below carries
-  # profiles: ["observability"]. Start it with:
+  # Backing stack for the tracing/metrics the services already emit. Every
+  # service below carries profiles: ["observability"], so a PLAIN
+  # `docker compose up` skips them — but deployment/deploy.sh activates the
+  # profile by default (COMPOSE_PROFILES=observability), so a normal deploy
+  # brings them up. To start standalone / opt back in manually:
   #   docker compose --profile observability up -d
+  # (and to opt OUT of a deploy: COMPOSE_PROFILES= ./deployment/deploy.sh)
   # When it is down, services' OTLP endpoint probe fails and tracing
   # self-disables cleanly (shared/telemetry probeEndpoint).
   #

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"fyredocs/shared/metrics"
 )
 
 // JobEvent represents an event in the PDF processing pipeline.
@@ -28,12 +30,30 @@ type JobEvent struct {
 
 // PublishJobEvent marshals and publishes a JobEvent to the given NATS JetStream subject.
 func PublishJobEvent(ctx context.Context, js jetstream.JetStream, subject string, event JobEvent) error {
+	// Every worker routes its terminal transitions through here, so this is the
+	// single choke point where the jobs_processed_total / jobs_failed_total
+	// counters (shared/metrics) are emitted — one per job outcome, keyed by tool.
+	recordTerminalJobMetric(event)
 	data, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
 	_, err = js.Publish(ctx, subject, data)
 	return err
+}
+
+// recordTerminalJobMetric increments the job outcome counters for terminal job
+// events. Non-terminal events (JobQueued/JobProgress) and dispatch events are
+// ignored. The `reason` label is a fixed low-cardinality value on purpose —
+// free-form failure messages would explode Prometheus series cardinality, and
+// the dashboards only aggregate by tool_type.
+func recordTerminalJobMetric(event JobEvent) {
+	switch event.EventType {
+	case "JobCompleted":
+		metrics.JobsProcessed.WithLabelValues(event.ToolType, "completed").Inc()
+	case "JobFailed":
+		metrics.JobsFailed.WithLabelValues(event.ToolType, "error").Inc()
+	}
 }
 
 // SubjectForDispatch returns the NATS subject for dispatching jobs to a service.

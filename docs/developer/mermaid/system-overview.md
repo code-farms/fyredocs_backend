@@ -111,12 +111,14 @@ graph TB
     DOC -.->|POST /internal/notifications| NOT
 ```
 
-## Observability (opt-in `observability` profile)
+## Observability (`observability` profile — on by default in `deploy.sh`)
 
 Every service already emits OpenTelemetry traces (`shared/telemetry`) and
 Prometheus metrics at `/metrics` (`shared/metrics`). The backing stack below is
-**not** started by a plain `docker compose up` — bring it up with
-`docker compose --profile observability up -d`. When it is down, the services'
+skipped by a plain `docker compose up`, but `deploy.sh` activates the
+`observability` profile by default so a normal deploy brings it up (opt out with
+`COMPOSE_PROFILES= ./deployment/deploy.sh`; start standalone with
+`docker compose --profile observability up -d`). When it is down, the services'
 OTLP endpoint probe fails and tracing self-disables cleanly.
 
 ```mermaid

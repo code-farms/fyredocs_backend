@@ -91,11 +91,22 @@ export function pollUntilDone(job, token) {
   return { status: 'timeout' };
 }
 
-// Follow the download (302 -> presigned). Exercises the gateway object proxy.
+// Download in two steps so the app bearer token NEVER reaches MinIO. The gateway
+// returns a 302 to a presigned (SigV4) object URL; if k6 auto-follows it with the
+// Authorization header still attached, MinIO rejects with 400 "request has
+// multiple authentication types" (SigV4 query params + bearer header). So we fetch
+// the 302 from the gateway (auth required, kind:api), then GET the presigned URL
+// PLAIN (kind:storage) — mirroring how a browser actually fetches the object.
 export function downloadResult(job, token) {
-  const res = get(`/api/${job.group}/${job.tool}/${job.jobId}/download`, token, { kind: 'storage', tool: job.tool });
-  check(res, { [`download ${job.tool}: 2xx`]: (r) => r.status >= 200 && r.status < 300 });
-  return res;
+  const redir = http.get(url(`/api/${job.group}/${job.tool}/${job.jobId}/download`), {
+    headers: authHeaders(token), redirects: 0, tags: { kind: 'api', tool: job.tool },
+  });
+  const location = redir.headers.Location || redir.headers.location;
+  check(redir, { [`download ${job.tool}: 302`]: (r) => r.status === 302 && !!location });
+  if (!location) return redir;
+  const obj = http.get(location, { tags: { kind: 'storage', tool: job.tool } });
+  check(obj, { [`download ${job.tool}: 2xx`]: (r) => r.status >= 200 && r.status < 300 });
+  return obj;
 }
 
 // One full realistic job: create -> wait -> sometimes download.

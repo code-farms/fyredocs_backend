@@ -6,7 +6,7 @@ All compose files live in `deployment/` and share the same project name (`fyredo
 
 | File | Role | When to use |
 |------|------|-------------|
-| `docker-compose.yml` | **Canonical stack** — all 11 services + infra (db, redis, nats, minio, caddy) + backups, plus two opt-in profiles: `observability` (otel-collector, tempo, prometheus, grafana) and `notifications` (notification-service — off by default). The single source of truth for every service's config. | Full deploys (`deployment/deploy.sh` uses it). |
+| `docker-compose.yml` | **Canonical stack** — all 11 services + infra (db, redis, nats, minio, caddy) + backups, plus two profiles: `observability` (otel-collector, tempo, prometheus, grafana — **on by default via `deploy.sh`**) and `notifications` (notification-service — off by default). The single source of truth for every service's config. | Full deploys (`deployment/deploy.sh` uses it). |
 | `docker-compose.essentials.yml` | **Infra only** — db (5432), redis (6379), nats (4222), minio (9000, console 9001), minio-init. Ports published to the host. Creates `fyredocs_net`. | Local dev where services run on the host via `go run`, or as the dependency provider for per-service files. |
 | `docker-compose-<service>.yml` × 11 | **One service each** — extends the service's definition from `docker-compose.yml`. | Build/redeploy a single service against already-running infra. |
 
@@ -52,17 +52,21 @@ deployment\deploy.bat auth-service         # Windows
 
 Equivalent Makefile shorthand against the canonical file: `make up SVC=auth-service`.
 
-## Observability profile (opt-in)
+## Observability profile (on by default in `deploy.sh`)
 
-The canonical file carries an optional monitoring stack behind the compose
-profile `observability`: `otel-collector`, `tempo`, `prometheus`, `grafana`.
-Because they declare `profiles: ["observability"]`, a plain `docker compose up`
-(and `deploy.sh`) never starts them — services keep emitting telemetry, and when
-the stack is down their OTLP endpoint probe fails so tracing self-disables
-cleanly.
+The canonical file carries the monitoring stack behind the compose profile
+`observability`: `otel-collector`, `tempo`, `prometheus`, `grafana`. They declare
+`profiles: ["observability"]`, so a **plain** `docker compose up` skips them — but
+`deploy.sh` activates the profile by default (`COMPOSE_PROFILES=observability`), so
+a normal deploy brings the monitoring stack up with everything else. When it is
+down, services keep emitting telemetry and their OTLP endpoint probe fails so
+tracing self-disables cleanly.
 
 ```bash
-# start the monitoring stack alongside a running core stack
+# a normal deploy already includes it; opt OUT with:
+COMPOSE_PROFILES= ./deployment/deploy.sh
+
+# start the monitoring stack standalone against an already-running core stack:
 docker compose -f deployment/docker-compose.yml --env-file .env --profile observability up -d
 ```
 

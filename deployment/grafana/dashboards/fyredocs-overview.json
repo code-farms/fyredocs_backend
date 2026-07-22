@@ -309,7 +309,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (instance) (rate(http_request_duration_seconds_count{status=~\"5..\"}[5m]))",
+          "expr": "sum by (instance) (rate(http_request_duration_seconds_count{status=~\"5..\"}[5m])) or vector(0)",
           "legendFormat": "{{instance}}"
         }
       ]
