@@ -22,7 +22,7 @@ func ReliabilityMetrics(c *gin.Context) {
 		Failed    int64 `json:"failed"`
 	}
 	var jobRate jobRateResult
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT
 			COALESCE(SUM(CASE WHEN event_type = 'job.completed' THEN 1 ELSE 0 END), 0) as completed,
 			COALESCE(SUM(CASE WHEN event_type = 'job.failed' THEN 1 ELSE 0 END), 0) as failed
@@ -44,7 +44,7 @@ func ReliabilityMetrics(c *gin.Context) {
 		Total    int64  `json:"total"`
 	}
 	var errorTrend []errorRateRow
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT DATE(created_at) as date,
 			SUM(CASE WHEN event_type = 'job.failed' THEN 1 ELSE 0 END) as failures,
 			COUNT(*) as total
@@ -62,7 +62,7 @@ func ReliabilityMetrics(c *gin.Context) {
 		P95Seconds float64 `json:"p95Seconds"`
 	}
 	var processingTime processingTimeResult
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT
 			COALESCE(AVG(EXTRACT(EPOCH FROM (completed.created_at - created.created_at))), 0) as avg_seconds,
 			COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed.created_at - created.created_at))), 0) as p50_seconds,
@@ -84,7 +84,7 @@ func ReliabilityMetrics(c *gin.Context) {
 		Failed    int64  `json:"failed"`
 	}
 	var toolErrors []toolErrorRow
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT tool_type,
 			SUM(CASE WHEN event_type = 'job.completed' THEN 1 ELSE 0 END) as completed,
 			SUM(CASE WHEN event_type = 'job.failed' THEN 1 ELSE 0 END) as failed
@@ -103,7 +103,7 @@ func ReliabilityMetrics(c *gin.Context) {
 		P99  float64 `json:"p99"`
 	}
 	var latencyTrend []latencyTrendRow
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT DATE(created.created_at) as date,
 			COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed.created_at - created.created_at))), 0) as p50,
 			COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed.created_at - created.created_at))), 0) as p95,
@@ -127,7 +127,7 @@ func ReliabilityMetrics(c *gin.Context) {
 		Count    int64  `json:"count"`
 	}
 	var failureCategories []failureCategoryRow
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT DATE(created_at) as date,
 			CASE substring(metadata->>'failureReason' FROM '^\[([A-Z_]+)\]')
 				WHEN 'TIMEOUT'           THEN 'timeout'
@@ -152,7 +152,7 @@ func ReliabilityMetrics(c *gin.Context) {
 		Hits     int64  `json:"hits"`
 	}
 	var limitHits []limitHitRow
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select("DATE(created_at) as date, plan_name, COUNT(*) as hits").
 		Where("event_type = ? AND created_at >= ? AND created_at < ?", "plan.limit_hit", since, now).
 		Group("DATE(created_at), plan_name").

@@ -34,7 +34,7 @@ func APITrends(c *gin.Context) {
 	var avgAcc float64
 	var sampledSince *string
 
-	if models.DB != nil {
+	if rdb(c) != nil {
 		type bucketRow struct {
 			Time         time.Time
 			Requests     int64
@@ -67,7 +67,7 @@ func APITrends(c *gin.Context) {
 			GROUP BY 1
 			ORDER BY 1 ASC
 		`, resolution)
-		if err := models.DB.Raw(bucketQuery, since, now).Scan(&rows).Error; err != nil {
+		if err := rdb(c).Raw(bucketQuery, since, now).Scan(&rows).Error; err != nil {
 			slog.Warn("api-trends bucket query failed", "error", err)
 		}
 
@@ -101,7 +101,7 @@ func APITrends(c *gin.Context) {
 
 		// Earliest sample overall drives the UI's "collecting since" hint.
 		var minAt *time.Time
-		models.DB.Model(&models.APIMetricSample{}).Select("MIN(sampled_at)").Scan(&minAt)
+		rdb(c).Model(&models.APIMetricSample{}).Select("MIN(sampled_at)").Scan(&minAt)
 		if minAt != nil && !minAt.IsZero() {
 			s := minAt.UTC().Format(time.RFC3339)
 			sampledSince = &s
@@ -119,7 +119,7 @@ func APITrends(c *gin.Context) {
 
 	// Previous equal-length window for delta comparison.
 	prev := gin.H{"requests": int64(0), "errors": int64(0), "errorRate": 0.0, "avgMs": 0.0}
-	if models.DB != nil {
+	if rdb(c) != nil {
 		var pv struct {
 			Requests     int64
 			ClientErrors int64
@@ -128,7 +128,7 @@ func APITrends(c *gin.Context) {
 			AvgMs        float64
 		}
 		prevSince := since.AddDate(0, 0, -days)
-		models.DB.Raw(`
+		rdb(c).Raw(`
 			SELECT COALESCE(SUM(requests), 0) as requests,
 				COALESCE(SUM(client_errors), 0) as client_errors,
 				COALESCE(SUM(server_errors), 0) as server_errors,

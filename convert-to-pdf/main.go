@@ -104,7 +104,8 @@ func main() {
 		hctx, hcancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer hcancel()
 		if err := redisstore.Client.Ping(hctx).Err(); err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "redis": err.Error()})
+			slog.ErrorContext(hctx, "healthz: redis ping failed", "error", err, "op", "healthz.redis")
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "redis": "unreachable"})
 			return
 		}
 		if natsconn.Conn == nil || !natsconn.Conn.IsConnected() {

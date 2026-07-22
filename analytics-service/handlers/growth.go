@@ -22,7 +22,7 @@ func GrowthMetrics(c *gin.Context) {
 		DAU  int64  `json:"dau"`
 	}
 	var dauTrend []dauRow
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select("DATE(created_at) as date, COUNT(DISTINCT user_id) as dau").
 		Where("user_id IS NOT NULL AND is_guest = false AND created_at >= ? AND created_at < ?", since, now).
 		Group("DATE(created_at)").
@@ -32,21 +32,21 @@ func GrowthMetrics(c *gin.Context) {
 	// Current DAU (today)
 	today := now.Truncate(24 * time.Hour)
 	var dau int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("user_id IS NOT NULL AND is_guest = false AND created_at >= ? AND created_at < ?", today, today.Add(24*time.Hour)).
 		Distinct("user_id").
 		Count(&dau)
 
 	// WAU (last 7 days)
 	var wau int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("user_id IS NOT NULL AND is_guest = false AND created_at >= ?", now.AddDate(0, 0, -7)).
 		Distinct("user_id").
 		Count(&wau)
 
 	// MAU (last 30 days)
 	var mau int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("user_id IS NOT NULL AND is_guest = false AND created_at >= ?", now.AddDate(0, 0, -30)).
 		Distinct("user_id").
 		Count(&mau)
@@ -68,7 +68,7 @@ func GrowthMetrics(c *gin.Context) {
 		Activated    int64 `json:"activated"`
 	}
 	var activation activationResult
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT
 			COUNT(DISTINCT s.user_id) as total_signups,
 			COUNT(DISTINCT j.user_id) as activated
@@ -96,7 +96,7 @@ func GrowthMetrics(c *gin.Context) {
 		D30        int64  `json:"d30"`
 	}
 	var cohorts []cohortRow
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		WITH cohorts AS (
 			SELECT user_id, DATE(MIN(created_at)) as signup_date
 			FROM analytics_events
@@ -129,7 +129,7 @@ func GrowthMetrics(c *gin.Context) {
 		CompletedJob int64 `json:"completedJob"`
 	}
 	var funnel funnelResult
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT
 			COUNT(DISTINCT CASE WHEN event_type = 'user.signup' THEN user_id END) as signed_up,
 			COUNT(DISTINCT CASE WHEN event_type = 'job.created' THEN user_id END) as created_job,
@@ -139,7 +139,7 @@ func GrowthMetrics(c *gin.Context) {
 	`, since, now).Scan(&funnel)
 
 	var repeatUsers int64
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT COUNT(*) FROM (
 			SELECT user_id FROM analytics_events
 			WHERE event_type = 'job.completed' AND user_id IS NOT NULL

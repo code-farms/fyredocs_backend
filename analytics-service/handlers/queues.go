@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
-	"analytics-service/internal/models"
 	"analytics-service/internal/natsmon"
 	"fyredocs/shared/response"
 )
@@ -33,7 +33,7 @@ func QueueStatus(c *gin.Context) {
 		"dispatchConsumers": dispatchConsumers,
 		"dlq":               dlq,
 		"analyticsLag":      analyticsLag,
-		"throughput":        queueThroughput(time.Now().UTC()),
+		"throughput":        queueThroughput(rdb(c), time.Now().UTC()),
 	})
 }
 
@@ -99,9 +99,9 @@ func buildQueueStatus(j *natsmon.JSZ, err error) (streams []gin.H, dispatchConsu
 // analytics_events. `queued` is always 0: NATS queue depth is only a live
 // snapshot (see analyticsLag/dlq), not persisted over time. Returns an empty
 // (non-nil) slice when the DB is unavailable.
-func queueThroughput(now time.Time) []gin.H {
+func queueThroughput(db *gorm.DB, now time.Time) []gin.H {
 	out := []gin.H{}
-	if models.DB == nil {
+	if db == nil {
 		return out
 	}
 
@@ -111,7 +111,7 @@ func queueThroughput(now time.Time) []gin.H {
 		Failed    int64  `json:"failed"`
 	}
 	var rows []throughputRow
-	models.DB.Raw(`
+	db.Raw(`
 		SELECT DATE_TRUNC('hour', created_at) as time,
 			COUNT(*) as processed,
 			COUNT(*) FILTER (WHERE event_type = 'job.failed') as failed

@@ -20,45 +20,45 @@ func Overview(c *gin.Context) {
 	}
 
 	var signups int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("event_type = ? AND created_at >= ? AND created_at < ?", "user.signup", today, tomorrow).
 		Count(&signups)
 
 	var logins int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("event_type = ? AND created_at >= ? AND created_at < ?", "user.login", today, tomorrow).
 		Count(&logins)
 
 	var jobsCreated int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("event_type = ? AND created_at >= ? AND created_at < ?", "job.created", today, tomorrow).
 		Count(&jobsCreated)
 
 	var jobsCompleted int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("event_type = ? AND created_at >= ? AND created_at < ?", "job.completed", today, tomorrow).
 		Count(&jobsCompleted)
 
 	var jobsFailed int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("event_type = ? AND created_at >= ? AND created_at < ?", "job.failed", today, tomorrow).
 		Count(&jobsFailed)
 
 	var planLimitHits int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("event_type = ? AND created_at >= ? AND created_at < ?", "plan.limit_hit", today, tomorrow).
 		Count(&planLimitHits)
 
 	// DAU: distinct non-guest user IDs across all events today
 	var dau int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("created_at >= ? AND created_at < ? AND user_id IS NOT NULL AND is_guest = false", today, tomorrow).
 		Distinct("user_id").
 		Count(&dau)
 
 	// Guest sessions today
 	var guestSessions int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("created_at >= ? AND created_at < ? AND is_guest = true", today, tomorrow).
 		Count(&guestSessions)
 
@@ -99,7 +99,7 @@ func Daily(c *gin.Context) {
 	}
 
 	var rows []dailyRow
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select("DATE(created_at) as date, event_type, COUNT(*) as count").
 		Where("created_at >= ? AND created_at < ?", fromDate, toDate).
 		Group("DATE(created_at), event_type").
@@ -126,7 +126,7 @@ func ToolUsage(c *gin.Context) {
 	}
 
 	var rows []toolRow
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select(`tool_type,
 			COUNT(*) as count,
 			SUM(CASE WHEN event_type = 'job.completed' THEN 1 ELSE 0 END) as completed,
@@ -154,7 +154,7 @@ func UserGrowth(c *gin.Context) {
 	}
 
 	var rows []growthRow
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select(`DATE(created_at) as date,
 			SUM(CASE WHEN event_type = 'user.signup' THEN 1 ELSE 0 END) as signups,
 			COUNT(DISTINCT CASE WHEN user_id IS NOT NULL AND is_guest = false THEN user_id END) as dau`).
@@ -182,7 +182,7 @@ func PlanDistribution(c *gin.Context) {
 	}
 
 	var rows []planRow
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select(`plan_name,
 			COUNT(DISTINCT CASE WHEN user_id IS NOT NULL THEN user_id END) as users,
 			SUM(CASE WHEN event_type IN ('job.created','job.completed','job.failed') THEN 1 ELSE 0 END) as jobs,
@@ -207,7 +207,7 @@ func Realtime(c *gin.Context) {
 	}
 
 	var rows []realtimeRow
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select("event_type, COUNT(*) as count").
 		Where("created_at >= ?", oneHourAgo).
 		Group("event_type").
@@ -248,7 +248,7 @@ func GetEvents(c *gin.Context) {
 
 	eventType := c.Query("eventType")
 
-	query := models.DB.Model(&models.AnalyticsEvent{})
+	query := rdb(c).Model(&models.AnalyticsEvent{})
 	if eventType != "" {
 		query = query.Where("event_type = ?", eventType)
 	}
@@ -279,7 +279,7 @@ func ReadyCheck(c *gin.Context) {
 	checks := gin.H{}
 	ready := true
 
-	if err := models.DB.Exec("SELECT 1").Error; err != nil {
+	if err := rdb(c).Exec("SELECT 1").Error; err != nil {
 		checks["postgres"] = err.Error()
 		ready = false
 	} else {

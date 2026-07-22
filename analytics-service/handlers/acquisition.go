@@ -5,7 +5,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"analytics-service/internal/models"
 	"fyredocs/shared/response"
 )
 
@@ -36,7 +35,7 @@ func AcquisitionMetrics(c *gin.Context) {
 		Signups int64  `json:"signups"`
 	}
 	var daily []dailyRow
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT DATE(created_at) as date, `+channelCaseSQL+` as channel, COUNT(*) as signups
 		FROM analytics_events
 		WHERE event_type = 'user.signup' AND created_at >= ? AND created_at < ?
@@ -75,7 +74,7 @@ func AcquisitionMetrics(c *gin.Context) {
 		Signups int64  `json:"signups"`
 	}
 	var prevChannels []prevRow
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT `+channelCaseSQL+` as channel, COUNT(*) as signups
 		FROM analytics_events
 		WHERE event_type = 'user.signup' AND created_at >= ? AND created_at < ?
@@ -89,7 +88,7 @@ func AcquisitionMetrics(c *gin.Context) {
 		Signups  int64  `json:"signups"`
 	}
 	var topReferrers []referrerRow
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT metadata->>'referrer' as referrer, COUNT(*) as signups
 		FROM analytics_events
 		WHERE event_type = 'user.signup' AND created_at >= ? AND created_at < ?

@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"api-gateway/internal/plancache"
 	"api-gateway/internal/ratelimit"
 	"fyredocs/shared/authverify"
+	"fyredocs/shared/circuitbreaker"
 	"fyredocs/shared/config"
 	"fyredocs/shared/logger"
 	"fyredocs/shared/metrics"
@@ -351,7 +353,46 @@ func newProxy(cfg routeConfig) http.Handler {
 			"The service is temporarily unavailable. Please try again.")
 	}
 
-	return proxy
+	// A per-upstream circuit breaker: once an upstream has failed repeatedly, fail
+	// fast with 503 instead of every request paying the dial/response timeout. It
+	// records outcomes by response status (streaming-safe — only the status line is
+	// observed, the body still streams through).
+	breaker := circuitbreaker.NewTwoStep("upstream:" + cfg.prefix)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		done, err := breaker.Allow()
+		if err != nil {
+			slog.WarnContext(r.Context(), "upstream circuit open — failing fast",
+				"op", "gateway.circuit_open", "prefix", cfg.prefix)
+			response.WriteErr(w, http.StatusServiceUnavailable, response.CodeServiceUnavailable,
+				"The service is temporarily unavailable. Please try again.")
+			return
+		}
+		sr := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		proxy.ServeHTTP(sr, r)
+		if sr.status >= 500 {
+			done(fmt.Errorf("upstream status %d", sr.status))
+		} else {
+			done(nil)
+		}
+	})
+}
+
+// statusRecorder captures the response status for the circuit breaker without
+// buffering the body, so streamed responses (SSE, downloads) still flow.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func joinPath(basePath, extraPath string) string {

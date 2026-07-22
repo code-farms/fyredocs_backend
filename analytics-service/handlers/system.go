@@ -20,7 +20,7 @@ func SystemHealth(c *gin.Context) {
 		Count int64  `json:"count"`
 	}
 	var ingestionRate []ingestionRow
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT DATE_TRUNC('hour', created_at) as hour, COUNT(*) as count
 		FROM analytics_events
 		WHERE created_at >= ?
@@ -30,18 +30,18 @@ func SystemHealth(c *gin.Context) {
 
 	// Total events last 24h and last hour
 	var eventsLast24h int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("created_at >= ?", now.Add(-24*time.Hour)).
 		Count(&eventsLast24h)
 
 	var eventsLastHour int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("created_at >= ?", now.Add(-1*time.Hour)).
 		Count(&eventsLastHour)
 
 	// Active users right now (last 5 minutes)
 	var activeUsersNow int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("user_id IS NOT NULL AND is_guest = false AND created_at >= ?", now.Add(-5*time.Minute)).
 		Distinct("user_id").
 		Count(&activeUsersNow)
@@ -52,7 +52,7 @@ func SystemHealth(c *gin.Context) {
 		MaxLagSeconds float64 `json:"maxLagSeconds"`
 	}
 	var lag lagResult
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT
 			COALESCE(AVG(EXTRACT(EPOCH FROM (persisted_at - created_at))), 0) as avg_lag_seconds,
 			COALESCE(MAX(EXTRACT(EPOCH FROM (persisted_at - created_at))), 0) as max_lag_seconds
@@ -66,7 +66,7 @@ func SystemHealth(c *gin.Context) {
 		Count     int64  `json:"count"`
 	}
 	var eventsByType []eventTypeRow
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select("event_type, COUNT(*) as count").
 		Where("created_at >= ?", now.Add(-1*time.Hour)).
 		Group("event_type").
@@ -75,7 +75,7 @@ func SystemHealth(c *gin.Context) {
 
 	// Total events in database
 	var totalEvents int64
-	models.DB.Model(&models.AnalyticsEvent{}).Count(&totalEvents)
+	rdb(c).Model(&models.AnalyticsEvent{}).Count(&totalEvents)
 
 	response.OK(c, "System health metrics retrieved", gin.H{
 		"timestamp":      now.Format(time.RFC3339),

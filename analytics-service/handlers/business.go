@@ -22,7 +22,7 @@ func BusinessMetrics(c *gin.Context) {
 		Signups int64  `json:"signups"`
 	}
 	var signups []signupRow
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select("DATE(created_at) as date, COUNT(*) as signups").
 		Where("event_type = ? AND created_at >= ? AND created_at < ?", "user.signup", since, periodEnd).
 		Group("DATE(created_at)").
@@ -41,7 +41,7 @@ func BusinessMetrics(c *gin.Context) {
 		Users    int64  `json:"users"`
 	}
 	var planDist []planTimeRow
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select("DATE(created_at) as date, plan_name, COUNT(DISTINCT user_id) as users").
 		Where("created_at >= ? AND created_at < ? AND plan_name != '' AND user_id IS NOT NULL", since, periodEnd).
 		Group("DATE(created_at), plan_name").
@@ -56,7 +56,7 @@ func BusinessMetrics(c *gin.Context) {
 		Count   int64  `json:"count"`
 	}
 	var planChanges []planChangeRow
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select("DATE(created_at) as date, metadata->>'oldPlan' as old_plan, metadata->>'newPlan' as new_plan, COUNT(*) as count").
 		Where("event_type = ? AND created_at >= ? AND created_at < ?", "plan.changed", since, periodEnd).
 		Group("DATE(created_at), metadata->>'oldPlan', metadata->>'newPlan'").
@@ -66,10 +66,10 @@ func BusinessMetrics(c *gin.Context) {
 	// Conversion rate (free → paid)
 	var totalChanges int64
 	var freeUpgrades int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("event_type = ? AND created_at >= ? AND created_at < ?", "plan.changed", since, periodEnd).
 		Count(&totalChanges)
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("event_type = ? AND created_at >= ? AND created_at < ? AND metadata->>'oldPlan' = ?", "plan.changed", since, periodEnd, "free").
 		Count(&freeUpgrades)
 
@@ -83,7 +83,7 @@ func BusinessMetrics(c *gin.Context) {
 	previousStart := since.AddDate(0, 0, -inactiveDays)
 
 	var churnedUsers int64
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT COUNT(DISTINCT prev.user_id)
 		FROM analytics_events prev
 		WHERE prev.user_id IS NOT NULL AND prev.is_guest = false
@@ -96,7 +96,7 @@ func BusinessMetrics(c *gin.Context) {
 	`, previousStart, since, since, periodEnd).Scan(&churnedUsers)
 
 	var previousActiveUsers int64
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Where("user_id IS NOT NULL AND is_guest = false AND created_at >= ? AND created_at < ?", previousStart, since).
 		Distinct("user_id").
 		Count(&previousActiveUsers)

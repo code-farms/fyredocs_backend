@@ -128,6 +128,25 @@ func CreateJobFromTool(c *gin.Context) {
 	originalName := ""
 	optionsRaw := ""
 
+	// Objects streamed directly to storage in the multipart branch live at
+	// uploads/{jobID}/... and belong only to this request. If the job is never
+	// queued (a DB/publish failure below), delete them so a failed create doesn't
+	// leak storage. (Presigned uploads are intentionally preserved for retry and
+	// reaped by the stale-multipart sweep — they are NOT tracked here.)
+	var directUploadKeys []string
+	jobQueued := false
+	defer func() {
+		if jobQueued || len(directUploadKeys) == 0 || objStore == nil {
+			return
+		}
+		ctx := context.Background()
+		for _, key := range directUploadKeys {
+			if err := objStore.RemoveObject(ctx, objStore.BucketUploads(), key); err != nil {
+				logger.LogWarn(ctx, "s3.cleanup_direct_upload", err, "key", key, "jobId", jobID)
+			}
+		}
+	}()
+
 	if strings.Contains(c.GetHeader("Content-Type"), "application/json") {
 		var uploadReq UploadJobRequest
 		if err := c.ShouldBindJSON(&uploadReq); err != nil {
@@ -281,6 +300,7 @@ func CreateJobFromTool(c *gin.Context) {
 			}
 			totalSize += file.Size
 			inputPaths = append(inputPaths, key)
+			directUploadKeys = append(directUploadKeys, key)
 			fileMetas = append(fileMetas, models.FileMetadata{
 				ID:           uuid.New(),
 				JobID:        jobID,
@@ -372,6 +392,9 @@ func CreateJobFromTool(c *gin.Context) {
 			"op", "nats.publish_job_event", "subject", subject, "tool", toolType, "jobId", job.ID)
 		return
 	}
+	// Job committed and dispatched — keep the direct-upload objects (the worker
+	// will consume them); the deferred cleanup is now a no-op.
+	jobQueued = true
 
 	// Free the upload slot only after the job is fully committed and queued.
 	// On any failure above this line, the upload state is preserved so the

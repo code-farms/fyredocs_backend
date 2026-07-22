@@ -4,8 +4,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
-	"analytics-service/internal/models"
 	"analytics-service/internal/pricing"
 	"fyredocs/shared/response"
 )
@@ -43,7 +43,7 @@ func ExecutiveOverview(c *gin.Context) {
 		JobsFailed    int64  `json:"jobsFailed"`
 	}
 	var rows []dailyRow
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT DATE(created_at) as date,
 			COUNT(*) FILTER (WHERE event_type = 'user.signup') as signups,
 			COUNT(DISTINCT user_id) FILTER (WHERE user_id IS NOT NULL AND is_guest = false) as dau,
@@ -88,12 +88,12 @@ func ExecutiveOverview(c *gin.Context) {
 	}
 
 	// Distinct active users per period (distinct counts can't be summed by day).
-	activeCurrent := distinctActiveUsers(since, now)
-	activePrevious := distinctActiveUsers(prevStart, since)
+	activeCurrent := distinctActiveUsers(rdb(c), since, now)
+	activePrevious := distinctActiveUsers(rdb(c), prevStart, since)
 
 	// Cumulative total users (distinct signup users) at each boundary.
-	totalCurrent := distinctSignupUsers(now)
-	totalPrevious := distinctSignupUsers(since)
+	totalCurrent := distinctSignupUsers(rdb(c), now)
+	totalPrevious := distinctSignupUsers(rdb(c), since)
 	totalSpark := make([]sparkPoint, 0, len(signupSpark))
 	running := float64(totalPrevious)
 	for _, p := range signupSpark {
@@ -105,8 +105,8 @@ func ExecutiveOverview(c *gin.Context) {
 	successPrevious := ratio(prevCompleted, prevCompleted+prevFailed)
 
 	// Estimated revenue (MRR) now vs at the start of the period.
-	mrrCurrent := estimateMRR(planCountsAt(now))
-	mrrPrevious := estimateMRR(planCountsAt(since))
+	mrrCurrent := estimateMRR(planCountsAt(rdb(c), now))
+	mrrPrevious := estimateMRR(planCountsAt(rdb(c), since))
 
 	// Active servers — live health scrape (current snapshot only).
 	ctx := c.Request.Context()
@@ -145,9 +145,9 @@ func ExecutiveOverview(c *gin.Context) {
 	})
 }
 
-func distinctActiveUsers(from, to time.Time) int64 {
+func distinctActiveUsers(db *gorm.DB, from, to time.Time) int64 {
 	var count int64
-	models.DB.Raw(`
+	db.Raw(`
 		SELECT COUNT(DISTINCT user_id) FROM analytics_events
 		WHERE user_id IS NOT NULL AND is_guest = false
 			AND created_at >= ? AND created_at < ?
@@ -155,9 +155,9 @@ func distinctActiveUsers(from, to time.Time) int64 {
 	return count
 }
 
-func distinctSignupUsers(before time.Time) int64 {
+func distinctSignupUsers(db *gorm.DB, before time.Time) int64 {
 	var count int64
-	models.DB.Raw(`
+	db.Raw(`
 		SELECT COUNT(DISTINCT user_id) FROM analytics_events
 		WHERE event_type = 'user.signup' AND user_id IS NOT NULL AND created_at < ?
 	`, before).Scan(&count)

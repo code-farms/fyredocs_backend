@@ -6,14 +6,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"fyredocs/shared/circuitbreaker"
 	"fyredocs/shared/logger"
 )
+
+// breaker fails fast when notification-service is down so best-effort notifies
+// don't each block on the full HTTP timeout.
+var breaker = circuitbreaker.New[*http.Response]("notification-service.notify")
 
 func baseURL() string {
 	if v := strings.TrimSpace(os.Getenv("NOTIFICATION_SERVICE_URL")); v != "" {
@@ -46,7 +52,20 @@ func Notify(ctx context.Context, userID, ntype, title, body, link, sourceID stri
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := httpClient.Do(req)
+	// Breaker: once notification-service is repeatedly failing, skip the POST and
+	// fail fast instead of every caller waiting the full 4s timeout (best-effort,
+	// so a skipped notification is acceptable).
+	resp, err := breaker.Execute(func() (*http.Response, error) {
+		r, derr := httpClient.Do(req)
+		if derr != nil {
+			return nil, derr
+		}
+		if r.StatusCode >= 500 {
+			r.Body.Close()
+			return nil, fmt.Errorf("notify status %d", r.StatusCode)
+		}
+		return r, nil
+	})
 	if err != nil {
 		logger.LogWarn(ctx, "notify.post", err, "userId", userID, "type", ntype)
 		return

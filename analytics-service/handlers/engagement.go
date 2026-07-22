@@ -23,7 +23,7 @@ func EngagementMetrics(c *gin.Context) {
 		Count    int64  `json:"count"`
 	}
 	var toolTrends []toolTrendRow
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select("DATE(created_at) as date, tool_type, COUNT(*) as count").
 		Where("tool_type != '' AND created_at >= ? AND created_at < ?", since, now).
 		Group("DATE(created_at), tool_type").
@@ -36,7 +36,7 @@ func EngagementMetrics(c *gin.Context) {
 		Median  float64 `json:"median"`
 	}
 	var jobsPerUser jobsPerUserResult
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT
 			COALESCE(AVG(job_count), 0) as average,
 			COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY job_count), 0) as median
@@ -55,7 +55,7 @@ func EngagementMetrics(c *gin.Context) {
 		Count  int64  `json:"count"`
 	}
 	var fileSizeDist []fileSizeBucket
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT
 			CASE
 				WHEN file_size < 1048576 THEN 'under_1mb'
@@ -78,7 +78,7 @@ func EngagementMetrics(c *gin.Context) {
 		UniqueRegistered int64 `json:"uniqueRegistered"`
 	}
 	var usage usageBreakdown
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT
 			COALESCE(SUM(CASE WHEN is_guest = true THEN 1 ELSE 0 END), 0) as guest_events,
 			COALESCE(SUM(CASE WHEN is_guest = false AND user_id IS NOT NULL THEN 1 ELSE 0 END), 0) as registered_events,
@@ -99,7 +99,7 @@ func EngagementMetrics(c *gin.Context) {
 		JobCount int64  `json:"jobCount"`
 	}
 	var powerUsers []powerUser
-	models.DB.Model(&models.AnalyticsEvent{}).
+	rdb(c).Model(&models.AnalyticsEvent{}).
 		Select("user_id, COUNT(*) as job_count").
 		Where("event_type IN ('job.created','job.completed') AND user_id IS NOT NULL AND created_at >= ? AND created_at < ?", since, now).
 		Group("user_id").

@@ -4,8 +4,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
-	"analytics-service/internal/models"
 	"analytics-service/internal/pricing"
 	"fyredocs/shared/response"
 )
@@ -18,9 +18,9 @@ type planCountRow struct {
 
 // planCountsAt returns the active-user-per-plan distribution as of `cutoff`,
 // taking each user's most recent known plan from the event stream.
-func planCountsAt(cutoff time.Time) []planCountRow {
+func planCountsAt(db *gorm.DB, cutoff time.Time) []planCountRow {
 	var rows []planCountRow
-	models.DB.Raw(`
+	db.Raw(`
 		SELECT plan_name, COUNT(*) as users FROM (
 			SELECT DISTINCT ON (user_id) user_id, plan_name
 			FROM analytics_events
@@ -52,9 +52,9 @@ func RevenueMetrics(c *gin.Context) {
 	prices := pricing.Prices()
 
 	// Current distribution + MRR.
-	current := planCountsAt(now)
+	current := planCountsAt(rdb(c), now)
 	mrr := estimateMRR(current)
-	previousMrr := estimateMRR(planCountsAt(since))
+	previousMrr := estimateMRR(planCountsAt(rdb(c), since))
 	byPlan := make([]gin.H, 0, len(current))
 	for _, r := range current {
 		price := pricing.PriceOf(r.PlanName)
@@ -73,7 +73,7 @@ func RevenueMetrics(c *gin.Context) {
 		Users    int64  `json:"users"`
 	}
 	var trendRows []trendRow
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		WITH days AS (
 			SELECT generate_series(?::date, ?::date, interval '1 day')::date AS day
 		)
@@ -111,7 +111,7 @@ func RevenueMetrics(c *gin.Context) {
 		Count   int64  `json:"count"`
 	}
 	var changeRows []changeRow
-	models.DB.Raw(`
+	rdb(c).Raw(`
 		SELECT DATE(created_at) as date,
 			metadata->>'oldPlan' as old_plan,
 			metadata->>'newPlan' as new_plan,

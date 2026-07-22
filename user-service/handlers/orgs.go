@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
@@ -190,7 +191,12 @@ func AddMember(c *gin.Context) {
 		return
 	}
 	m := models.Membership{OrganizationID: orgID, UserID: targetID, Role: newRole}
-	if err := models.DB.Create(&m).Error; err != nil {
+	// Upsert on (org, user): a concurrent double-add updates the role instead of
+	// racing to a unique-violation 500 (idempotent add).
+	if err := models.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "organization_id"}, {Name: "user_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"role"}),
+	}).Create(&m).Error; err != nil {
 		response.InternalErrorf(c, "ADD_FAILED", "Could not add member.", err,
 			"op", "db.memberships.create", "orgId", orgID, "targetUserId", targetID)
 		return

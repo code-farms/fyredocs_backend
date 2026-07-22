@@ -1820,6 +1820,53 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/jobs/dlq/redrive:
+    post:
+      tags: [Jobs]
+      summary: Re-dispatch dead-lettered jobs (super-admin)
+      description: |
+        Reads dead-lettered worker jobs from the JOBS_DLQ stream and re-dispatches
+        them to their owning worker service, removing each from the DLQ so a re-run
+        does not process it twice (idempotent). Only worker-service DLQ entries are
+        redriven; event-consumer DLQ entries are left in place. Requires the
+        `super-admin` role (enforced via the gateway-injected X-User-Role).
+      operationId: redriveDLQ
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of DLQ messages to process (1–500).
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 500
+      responses:
+        "200":
+          description: Redrive complete
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          redriven: { type: integer, description: jobs re-dispatched }
+                          skipped: { type: integer, description: non-worker DLQ entries left in place }
+                          failed: { type: integer, description: entries that could not be republished }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/InternalError"
+
   # ==========================================================================
   # Jobs (SSE real-time updates)
   # ==========================================================================
@@ -3303,8 +3350,27 @@ components:
                   error:
                     $ref: "#/components/schemas/APIError"
                     example:
-                      code: UNAUTHORIZED
+                      code: AUTH_UNAUTHORIZED
                       details: Unauthorized
+    Forbidden:
+      description: Authenticated but not permitted (insufficient role)
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/APIResponse"
+              - type: object
+                properties:
+                  success:
+                    example: false
+                  error:
+                    $ref: "#/components/schemas/APIError"
+                    example:
+                      code: AUTH_FORBIDDEN
+                      details: Forbidden
 
     NotFound:
       description: Resource not found

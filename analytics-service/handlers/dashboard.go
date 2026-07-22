@@ -104,7 +104,7 @@ func adminDashboard(c *gin.Context, days int) gin.H {
 
 	countEvents := func(eventType string, from, to time.Time) int64 {
 		var n int64
-		models.DB.Model(&models.AnalyticsEvent{}).
+		rdb(c).Model(&models.AnalyticsEvent{}).
 			Where("event_type = ? AND created_at >= ? AND created_at < ?", eventType, from, to).
 			Count(&n)
 		return n
@@ -140,22 +140,22 @@ func adminDashboard(c *gin.Context, days int) gin.H {
 		func() { jobsCompleted = countEvents("job.completed", today, tomorrow) },
 		func() { jobsFailed = countEvents("job.failed", today, tomorrow) },
 		func() {
-			models.DB.Model(&models.AnalyticsEvent{}).
+			rdb(c).Model(&models.AnalyticsEvent{}).
 				Where("created_at >= ? AND created_at < ? AND user_id IS NOT NULL AND is_guest = false", today, tomorrow).
 				Distinct("user_id").Count(&dau)
 		},
 		func() {
-			models.DB.Model(&models.AnalyticsEvent{}).
+			rdb(c).Model(&models.AnalyticsEvent{}).
 				Where("created_at >= ? AND created_at < ? AND is_guest = true", today, tomorrow).
 				Count(&guestSessions)
 		},
 		func() {
-			models.DB.Model(&models.AnalyticsEvent{}).
+			rdb(c).Model(&models.AnalyticsEvent{}).
 				Where("created_at >= ? AND user_id IS NOT NULL AND is_guest = false", since).
 				Distinct("user_id").Count(&totalUsers)
 		},
 		func() {
-			models.DB.Model(&models.AnalyticsEvent{}).
+			rdb(c).Model(&models.AnalyticsEvent{}).
 				Select(`tool_type,
 				COUNT(*) as count,
 				SUM(CASE WHEN event_type = 'job.completed' THEN 1 ELSE 0 END) as completed,
@@ -164,7 +164,7 @@ func adminDashboard(c *gin.Context, days int) gin.H {
 				Group("tool_type").Order("count DESC").Limit(10).Scan(&byTool)
 		},
 		func() {
-			models.DB.Model(&models.AnalyticsEvent{}).
+			rdb(c).Model(&models.AnalyticsEvent{}).
 				Select(`plan_name,
 				COUNT(DISTINCT CASE WHEN user_id IS NOT NULL THEN user_id END) as users,
 				SUM(CASE WHEN event_type IN ('job.created','job.completed','job.failed') THEN 1 ELSE 0 END) as jobs`).
@@ -201,7 +201,7 @@ func adminDashboard(c *gin.Context, days int) gin.H {
 // dominates each query; running N of them concurrently collapses N sequential
 // round-trips into roughly one. Callers must ensure each fn writes only its own
 // distinct variables (no shared mutable state) — gorm's root *DB is safe for
-// concurrent use, so each fn building a fresh statement off models.DB is fine.
+// concurrent use, so each fn building a fresh statement off rdb(c) is fine.
 func parallelQueries(fns ...func()) {
 	var wg sync.WaitGroup
 	wg.Add(len(fns))
@@ -228,7 +228,7 @@ func userDashboard(c *gin.Context, userIDStr string, days int) gin.H {
 
 	countOwned := func(eventType string) int64 {
 		var n int64
-		models.DB.Model(&models.AnalyticsEvent{}).
+		rdb(c).Model(&models.AnalyticsEvent{}).
 			Where("user_id = ? AND event_type = ?", userID, eventType).
 			Count(&n)
 		return n
@@ -263,12 +263,12 @@ func userDashboard(c *gin.Context, userIDStr string, days int) gin.H {
 		func() { completed = countOwned("job.completed") },
 		func() { failed = countOwned("job.failed") },
 		func() {
-			models.DB.Model(&models.AnalyticsEvent{}).
+			rdb(c).Model(&models.AnalyticsEvent{}).
 				Where("user_id = ?", userID).
 				Select("COALESCE(SUM(file_size), 0)").Scan(&bytesProcessed)
 		},
 		func() {
-			models.DB.Model(&models.AnalyticsEvent{}).
+			rdb(c).Model(&models.AnalyticsEvent{}).
 				Select(`tool_type,
 				COUNT(*) as count,
 				SUM(CASE WHEN event_type = 'job.completed' THEN 1 ELSE 0 END) as completed,
@@ -277,7 +277,7 @@ func userDashboard(c *gin.Context, userIDStr string, days int) gin.H {
 				Group("tool_type").Order("count DESC").Scan(&byTool)
 		},
 		func() {
-			models.DB.Model(&models.AnalyticsEvent{}).
+			rdb(c).Model(&models.AnalyticsEvent{}).
 				Select("DATE(created_at) as date, COUNT(*) as count").
 				Where("user_id = ? AND created_at >= ?", userID, since).
 				Group("DATE(created_at)").Order("date ASC").Scan(&recentActivity)
@@ -288,7 +288,7 @@ func userDashboard(c *gin.Context, userIDStr string, days int) gin.H {
 			plan = strings.TrimSpace(c.GetHeader("X-User-Plan"))
 			if plan == "" {
 				var latest models.AnalyticsEvent
-				if err := models.DB.
+				if err := rdb(c).
 					Where("user_id = ? AND plan_name != ''", userID).
 					Order("created_at DESC").First(&latest).Error; err == nil {
 					plan = latest.PlanName
@@ -297,7 +297,7 @@ func userDashboard(c *gin.Context, userIDStr string, days int) gin.H {
 		},
 		func() {
 			var earliest models.AnalyticsEvent
-			if err := models.DB.
+			if err := rdb(c).
 				Where("user_id = ?", userID).
 				Order("created_at ASC").First(&earliest).Error; err == nil {
 				memberSince = &earliest.CreatedAt
