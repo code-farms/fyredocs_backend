@@ -1,21 +1,37 @@
 # Alertmanager routing for the fyredocs stack.
 #
-# Delivery is via a single generic webhook whose URL comes from the environment
-# (ALERTMANAGER_WEBHOOK_URL, expanded by --config.expand-env). Point it at a
-# Slack/PagerDuty/webhook bridge. If unset, alerts still group and show in the
-# Alertmanager UI (loopback :9093) but are not delivered anywhere.
+# Delivery uses a Slack-formatted receiver, which works with BOTH Slack and
+# Discord (Discord accepts Slack payloads at the "/slack" suffix of a webhook
+# URL). The endpoint comes from ALERTMANAGER_WEBHOOK_URL, expanded by
+# --config.expand-env:
+#   Discord : https://discord.com/api/webhooks/<id>/<token>/slack   (note /slack)
+#   Slack   : https://hooks.slack.com/services/XXX/YYY/ZZZ
+#
+# This service only runs under the "alerting" compose profile, so it is not
+# started unless you opt in AND set the URL — an empty URL is an invalid config
+# and Alertmanager would refuse to start. Without it, Prometheus still evaluates
+# the alert rules and shows them at :9090; it just can't deliver.
 global:
   resolve_timeout: 5m
 
 route:
-  receiver: default-webhook
+  receiver: default-notify
   group_by: ['alertname', 'job']
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 4h
 
 receivers:
-  - name: default-webhook
-    webhook_configs:
-      - url: '${ALERTMANAGER_WEBHOOK_URL}'
+  - name: default-notify
+    slack_configs:
+      # api_url is the Discord (…/slack) or Slack incoming-webhook URL.
+      - api_url: '${ALERTMANAGER_WEBHOOK_URL}'
+        # channel is required by Alertmanager's schema; Discord ignores it.
+        channel: '#alerts'
         send_resolved: true
+        title: '[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] fyredocs — {{ .CommonLabels.alertname }}'
+        text: >-
+          {{ range .Alerts }}*{{ .Labels.alertname }}* ({{ .Labels.severity }}){{ if .Labels.job }} — `{{ .Labels.job }}`{{ end }}
+          {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          {{ end }}
