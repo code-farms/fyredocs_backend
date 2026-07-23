@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -17,9 +18,37 @@ import (
 
 	"document-service/internal/models"
 	"document-service/internal/notifyclient"
+	"fyredocs/shared/config"
 	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 )
+
+// Export generation is bounded: a semaphore caps how many exports render
+// concurrently (each does a full library scan + in-memory artifact build), and
+// exportDocs caps rows. Without this a burst of export requests spawns unbounded
+// goroutines that each buffer a large artifact in memory → OOM/DoS.
+var (
+	exportSemOnce sync.Once
+	exportSem     chan struct{}
+)
+
+func acquireExportSlot(ctx context.Context) bool {
+	exportSemOnce.Do(func() {
+		n := config.GetEnvInt("EXPORT_MAX_CONCURRENCY", 4)
+		if n < 1 {
+			n = 1
+		}
+		exportSem = make(chan struct{}, n)
+	})
+	select {
+	case exportSem <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func releaseExportSlot() { <-exportSem }
 
 type exportFilters struct {
 	Status   string `json:"status,omitempty"`
@@ -130,6 +159,19 @@ func generateExport(id uuid.UUID) {
 		}
 	}()
 
+	// Bound concurrent export work. Wait up to EXPORT_QUEUE_WAIT for a slot; if
+	// the queue stays saturated, fail the export with a retryable message rather
+	// than piling up goroutines that each buffer a large artifact.
+	waitCtx, cancel := context.WithTimeout(ctx, config.GetEnvDuration("EXPORT_QUEUE_WAIT", 30*time.Second))
+	defer cancel()
+	if !acquireExportSlot(waitCtx) {
+		logger.LogWarn(ctx, "export.queue_saturated", fmt.Errorf("no export slot available"), "exportId", id)
+		models.DB.Model(&models.Export{}).Where("id = ?", id).
+			Updates(map[string]any{"status": models.ExportFailed, "error": "export queue is busy, please retry"})
+		return
+	}
+	defer releaseExportSlot()
+
 	var exp models.Export
 	if err := models.DB.First(&exp, "id = ?", id).Error; err != nil {
 		logger.LogErr(ctx, "db.exports.load", err, "exportId", id)
@@ -204,8 +246,14 @@ func exportDocs(exp models.Export) ([]models.Document, error) {
 			q = q.Joins("JOIN document_tags dt ON dt.document_id = documents.id").Where("dt.tag_id = ?", tid)
 		}
 	}
+	// Cap rows so a huge library can't be buffered into memory (the artifact is
+	// built fully in RAM and stored on the export row).
+	maxRows := config.GetEnvInt("EXPORT_MAX_ROWS", 50000)
+	if maxRows < 1 {
+		maxRows = 50000
+	}
 	var docs []models.Document
-	err := q.Order("documents.created_at DESC").Find(&docs).Error
+	err := q.Order("documents.created_at DESC").Limit(maxRows).Find(&docs).Error
 	return docs, err
 }
 

@@ -529,6 +529,15 @@ func extractAccessToken(c *gin.Context) (string, bool) {
 		}
 	}
 
+	// The SPA authenticates via an HttpOnly cookie, not a bearer header, so the
+	// cookie is the primary source on the logout path. Without this read, logout
+	// never reaches denyAccessToken and the token is never revoked.
+	if cookie, err := c.Cookie(config.GetEnv("AUTH_ACCESS_COOKIE", "access_token")); err == nil {
+		if token := strings.TrimSpace(cookie); token != "" {
+			return token, true
+		}
+	}
+
 	return "", false
 }
 

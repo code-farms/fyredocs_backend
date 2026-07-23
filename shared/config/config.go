@@ -21,6 +21,14 @@ func LoadConfig() {
 		slog.Info("No .env file found, relying on environment variables")
 	}
 	normalizeEnv()
+
+	// Fail fast on an insecure production configuration (no-op outside
+	// production). Every service calls LoadConfig first, so this guards the
+	// whole fleet from one place instead of relying on a per-service call.
+	if err := EnforceProductionSecurity(); err != nil {
+		slog.Error("refusing to start with insecure production configuration", "error", err)
+		os.Exit(1)
+	}
 }
 
 func normalizeEnv() {
@@ -120,12 +128,14 @@ func ValidateJWTSecret() error {
 		return fmt.Errorf("JWT_HS256_SECRET environment variable is required but not set")
 	}
 
-	if len(secret) < 32 {
-		return fmt.Errorf("JWT_HS256_SECRET must be at least 32 characters (256 bits), got %d characters", len(secret))
+	if len(secret) < 64 {
+		return fmt.Errorf("JWT_HS256_SECRET must be at least 64 characters (e.g. `openssl rand -hex 32`), got %d characters", len(secret))
 	}
 
 	dangerousSecrets := []string{
 		"4de0ea7311594deb860f03e5da60ac903fc4b4099bfe499a82e0fed013af32ca791ac065ea5e4d8aaade24a760e6dc58",
+		// Former committed dev default (was in .env and config_test.go); permanently rejected.
+		"aT9kLmW3xQr7vBn5yHs2jFp8cUe6dGi4",
 		"change-me",
 		"secret",
 		"password",
@@ -137,6 +147,47 @@ func ValidateJWTSecret() error {
 	}
 
 	slog.Info("JWT secret validation passed")
+	return nil
+}
+
+// EnforceProductionSecurity fails fast when the process is running in
+// production (ENVIRONMENT or APP_ENV == "production") with insecure settings
+// that would otherwise be silently accepted: non-Secure auth cookies, an
+// unencrypted database connection, or a plain-HTTP public origin. Outside
+// production it is a no-op. Each service calls this once at startup so a
+// misconfigured prod deploy crashes loudly instead of serving cleartext
+// sessions.
+func EnforceProductionSecurity() error {
+	env := strings.ToLower(strings.TrimSpace(GetEnv("ENVIRONMENT", GetEnv("APP_ENV", ""))))
+	if env != "production" && env != "prod" {
+		return nil
+	}
+
+	var problems []string
+
+	if !GetEnvBool("AUTH_COOKIE_SECURE", false) {
+		problems = append(problems, "AUTH_COOKIE_SECURE must be true in production (auth cookies would otherwise be sent over plain HTTP)")
+	}
+
+	dsn := strings.ToLower(os.Getenv("DATABASE_URL"))
+	if strings.Contains(dsn, "sslmode=disable") {
+		problems = append(problems, "DATABASE_URL uses sslmode=disable in production (use sslmode=require or verify-full)")
+	}
+
+	for _, key := range []string{"PUBLIC_ORIGIN", "APP_BASE_URL"} {
+		v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+		if v == "" {
+			continue
+		}
+		if strings.HasPrefix(v, "http://") && !strings.Contains(v, "localhost") && !strings.Contains(v, "127.0.0.1") {
+			problems = append(problems, key+" is a plain-HTTP origin in production (use https://)")
+		}
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("insecure production configuration:\n  - %s", strings.Join(problems, "\n  - "))
+	}
+	slog.Info("production security checks passed")
 	return nil
 }
 

@@ -76,7 +76,8 @@ All `/api/*` traffic is proxied to **job-service**. Workers are not exposed publ
 | `/api/notifications/*` | `NOTIFICATION_SERVICE_URL` | In-app notification feed + SSE bell |
 | `/admin/*` | `ANALYTICS_SERVICE_URL` | Admin / analytics dashboards (super-admin only, enforced by the service) |
 | `/api/dashboard` | `ANALYTICS_SERVICE_URL` | Unified role-aware dashboard summary; the service filters by `X-User-Role` (admin/super-admin → system KPIs, user → personal KPIs, guest → 403) |
-| `/healthz` | api-gateway (local) | Liveness — pings Redis |
+| `/healthz` | api-gateway (local) | Liveness — static `200 {"status":"ok"}`, no dependency checks |
+| `/readyz` | api-gateway (local) | Readiness — pings Redis (503 if unreachable) |
 | `/metrics` | api-gateway (local) | Prometheus metrics (internal network only — Caddy does not route it publicly) |
 
 Presigned object-storage traffic (`/uploads/*`, `/outputs/*`) and the SPA are handled at the Caddy edge and never reach the gateway (see [Object Storage](../architecture/object-storage.md)).
@@ -314,8 +315,12 @@ api-gateway:
 
 The API Gateway exposes two health endpoints:
 
-- `/healthz` = **liveness** (is the process alive?)
+- `/healthz` = **liveness** (is the process alive?) — a static `200`, **no dependency checks**
 - `/readyz` = **readiness** (can it serve traffic? checks all dependencies)
+
+Splitting the two matters: the gateway previously pinged Redis inside `/healthz`, so a
+transient Redis blip could flip liveness and trigger a container restart cascade. That
+Redis check now lives only in `/readyz`; liveness never depends on anything external.
 
 ### Liveness: `/healthz`
 
@@ -323,7 +328,7 @@ The API Gateway exposes two health endpoints:
 GET /healthz
 ```
 
-**Response**: `OK` (200)
+**Response**: `200 {"status":"ok"}` — always, as long as the process is running.
 
 ### Readiness: `/readyz`
 
@@ -583,13 +588,18 @@ sequenceDiagram
     participant GW as API Gateway :8080
     participant R as Redis
 
+    Note over LB,GW: Liveness — no dependency checks
     LB->>GW: GET /healthz
+    GW-->>LB: 200 {"status": "ok"}
+
+    Note over LB,R: Readiness — dependency checks
+    LB->>GW: GET /readyz
     GW->>R: PING (with 2s timeout)
     alt Redis healthy
         R-->>GW: PONG
-        GW-->>LB: 200 {"status": "healthy"}
+        GW-->>LB: 200 {"status": "ready", "checks": {"redis": "ok"}}
     else Redis unreachable
-        GW-->>LB: 503 {"status": "unhealthy", "redis": "error message"}
+        GW-->>LB: 503 {"status": "not ready", "checks": {"redis": "error message"}}
     end
 ```
 
@@ -602,7 +612,7 @@ sequenceDiagram
 | `401 Unauthorized` | 401 | Invalid, expired, or revoked JWT token |
 | `401 Unauthorized` | 401 | Missing authentication on protected route |
 | `502 Bad Gateway` | 502 | Backend service unreachable |
-| `503 Service Unavailable` | 503 | Health check failed (Redis down) |
+| `503 Service Unavailable` | 503 | Readiness check failed (`/readyz`, Redis down) — liveness `/healthz` is unaffected |
 | `204 No Content` | 204 | CORS preflight response |
 
 ### Authentication Bypass Paths

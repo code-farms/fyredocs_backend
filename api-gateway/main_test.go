@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
 	"testing"
 )
 
@@ -185,10 +184,19 @@ func TestWithCORSNonMatchingOrigin(t *testing.T) {
 }
 
 func TestNewProxyStreamsResponses(t *testing.T) {
-	// Verify the proxy is configured to flush immediately (no buffering),
-	// which is critical for file download performance.
+	// newProxy now returns a circuit-breaker-wrapped http.HandlerFunc (not a
+	// bare *httputil.ReverseProxy), so we assert behavior end-to-end rather than
+	// the concrete type: a flushing backend response must be proxied through
+	// intact. The underlying proxy keeps FlushInterval = -1 for immediate
+	// streaming (critical for file downloads).
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Backend", "hit")
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("chunk-1"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("chunk-2"))
 	}))
 	defer backend.Close()
 
@@ -198,13 +206,18 @@ func TestNewProxyStreamsResponses(t *testing.T) {
 		targetBasePath: "",
 	})
 
-	// newProxy returns an *httputil.ReverseProxy wrapped as http.Handler.
-	proxy, ok := handler.(*httputil.ReverseProxy)
-	if !ok {
-		t.Fatal("newProxy did not return *httputil.ReverseProxy")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/test/thing", nil)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if proxy.FlushInterval != -1 {
-		t.Errorf("proxy.FlushInterval = %v, want -1 (immediate flush for streaming)", proxy.FlushInterval)
+	if got := rec.Header().Get("X-Backend"); got != "hit" {
+		t.Errorf("backend header not proxied: X-Backend = %q", got)
+	}
+	if got := rec.Body.String(); got != "chunk-1chunk-2" {
+		t.Errorf("body = %q, want %q (both flushed chunks proxied)", got, "chunk-1chunk-2")
 	}
 }
 

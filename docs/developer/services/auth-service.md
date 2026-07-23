@@ -17,7 +17,7 @@ The Auth Service is a dedicated microservice responsible for user signup, login,
 2. **User Login** — Authenticate users and issue an access + refresh JWT pair as HTTP-only cookies, store the session row in `user_sessions`.
 3. **Refresh-token Rotation** — Issue a new access token from a valid refresh cookie and update the session row with the new access-token hash. (No refresh-token replay: each refresh re-uses the original refresh row.)
 4. **User Profile** — `GET /auth/me`, `GET /auth/profile` return the authenticated user, role, and plan.
-5. **Logout** — Revoke the access token via the Redis denylist, delete the session row, clear cookies, and delete the plan cache.
+5. **Logout** — Revoke the access token via the Redis denylist, delete the session row, clear cookies, and delete the plan cache. The access token is read from the HttpOnly `access_token` **cookie** as well as the `Authorization` header, so cookie-based SPA logout revokes the token (not only Bearer-header API clients).
 6. **Plan Management** — `PUT /auth/plan` updates the user's `plan_name`, refreshes the Redis plan cache, and publishes `plan.changed` to NATS.
 7. **Plans Listing** — `GET /auth/plans` returns all selectable subscription plans.
 8. **Internal Admin** — `/internal/users/:id/plan`, `/internal/users/:id/revoke-sessions`, `/internal/sessions/:id` for service-to-service calls.
@@ -558,6 +558,24 @@ The middleware checks for authentication tokens in this order:
 | `user_sessions` table | Refresh-token rotation, server-side session control, admin revocation |
 | bcrypt Password Hashing | Database breach |
 | Rate Limiting | Brute force attacks |
+
+### Access-Token Revocation (denylist)
+
+Three flows add an access token to the Redis denylist (`denylist:jwt:<token-hash>`,
+TTL = the token's remaining lifetime), so the gateway rejects it on the next request —
+immediately and **cross-service**, without waiting for the 8h access-token expiry:
+
+- **Logout** — reads the access token from the `access_token` cookie or the
+  `Authorization` header, hashes it, and denylists that hash (plus deletes the session row).
+- **Password reset** — `ResetPassword` denylists the `access_token_hash` of every active
+  session row it revokes.
+- **Admin session revocation** — `/internal/users/:id/revoke-sessions` and
+  `/internal/sessions/:id` denylist each revoked session's `access_token_hash`.
+
+Password-reset and admin revocation denylist the **stored** `access_token_hash` directly
+(the hash already persisted on the `user_sessions` row) — they do not re-hash it. A prior
+double-hash meant the denylist key never matched the gateway's lookup, so revoked tokens
+survived until expiry; the entries now match and revocation takes effect on the next request.
 
 ### Rate Limits
 

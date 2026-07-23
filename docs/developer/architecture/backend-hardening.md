@@ -344,6 +344,40 @@ fixed; the rest are tracked as a ranked backlog (see production-readiness.md §5
 
 ---
 
+### 3.21 Config Security Hardening `High`
+
+**Finding:** Two config weaknesses shipped by default. (a) `JWT_HS256_SECRET` only had to be
+32 characters, and the repo's former committed default secret was still accepted — a token
+signed with a widely-known value would validate everywhere. (b) Nothing stopped a production
+deploy from booting with insecure transport settings (`AUTH_COOKIE_SECURE=false`, a
+`sslmode=disable` database URL, or a plain-`http://` public origin), silently downgrading
+cookie, DB, and browser security.
+
+**Why:** Secrets and transport posture must be enforced by the process at startup, not left to
+an operator remembering to flip flags. Fail-fast on misconfiguration is safer than running
+degraded.
+
+**What changed:**
+- **JWT secret minimum length raised to 64 characters.** The former committed default secret
+  is now **permanently rejected**. Every service that validates JWTs checks this at startup and
+  refuses to boot on a short/known-bad secret.
+- **New `EnforceProductionSecurity` startup guard** (in `shared/config`, called from
+  `LoadConfig`). When `ENVIRONMENT` / `APP_ENV` is `production`, the service **refuses to start**
+  if any of the following is true:
+  - `AUTH_COOKIE_SECURE` is not `true`,
+  - `DATABASE_URL` contains `sslmode=disable`,
+  - `PUBLIC_ORIGIN` / `APP_BASE_URL` is a plain `http://` URL.
+
+  Outside production the guard is inert (local dev keeps `sslmode=disable`, HTTP, and
+  `AUTH_COOKIE_SECURE=false` working).
+
+**New / relevant env vars:** `ENVIRONMENT` (or `APP_ENV`) = `production` activates the guard;
+`AUTH_COOKIE_SECURE`, `DATABASE_URL`, `PUBLIC_ORIGIN` / `APP_BASE_URL` are the values it checks.
+
+**Files:** `shared/config/` (`config.go`, `EnforceProductionSecurity`).
+
+---
+
 ## 4. Planned Changes (Not Yet Implemented)
 
 ### 4.1 Database Migrations Tool
@@ -476,3 +510,5 @@ Benefits: failed dispatch doesn't lose uploads, same file can be processed with 
 | Low | Unused import cleanup | Done (3.17) |
 | Low | CORS wildcard warning | Done (3.18) |
 | Low | Routing test fix | Done (3.19) |
+| Critical/High | Security audit remediation | Done (3.20) |
+| High | Config security (JWT secret + production guard) | Done (3.21) |

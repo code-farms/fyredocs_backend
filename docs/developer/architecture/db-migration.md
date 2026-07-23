@@ -76,6 +76,14 @@ move data and can miss those extra objects. So the migration path is always
 **dump → restore**. After restore, services boot and their AutoMigrate is an
 idempotent no-op against the already-correct schema.
 
+> **Single migrator per shared table.** Where two services share a physical table,
+> exactly one of them owns the schema. In particular, **only job-service** runs
+> `AutoMigrate` on `processing_jobs` / `file_metadata`; the four PDF workers
+> (convert-to-pdf, convert-from-pdf, organize-pdf, optimize-pdf) **no longer
+> AutoMigrate** those tables — they only read/update `ProcessingJob` and write their
+> own output `FileMetadata` rows. This removes concurrent DDL races on those tables at
+> stack start (the workers can only ever run against jobs job-service already created).
+
 ### 2. Connection-pool budget — raise `max_connections` (or add PgBouncer) *before* Server-2
 
 Default per-service pools sum to **~275 potential connections** against the

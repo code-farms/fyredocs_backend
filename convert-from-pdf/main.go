@@ -35,7 +35,8 @@ func main() {
 	shutdownTracer := telemetry.Init("convert-from-pdf")
 	defer shutdownTracer(context.Background())
 	models.Connect()
-	models.Migrate()
+	// Shared tables (processing_jobs, file_metadata) are migrated only by
+	// job-service, their schema owner — see models/database.go.
 	redisstore.Connect()
 
 	store, err := storage.NewFromEnv()
@@ -103,19 +104,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Liveness: is the process up? Must NOT check dependencies — a Redis/NATS
+	// blip must not flip the container unhealthy and trigger a restart cascade.
+	// Dependency health lives in /readyz below.
 	r.GET("/healthz", func(c *gin.Context) {
-		hctx, hcancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer hcancel()
-		if err := redisstore.Client.Ping(hctx).Err(); err != nil {
-			slog.ErrorContext(hctx, "healthz: redis ping failed", "error", err, "op", "healthz.redis")
-			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "redis": "unreachable"})
-			return
-		}
-		if natsconn.Conn == nil || !natsconn.Conn.IsConnected() {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "nats": "disconnected"})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
 	// Readiness probe: reports 503 unless Redis, NATS, and Postgres are all reachable.

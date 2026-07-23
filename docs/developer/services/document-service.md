@@ -50,6 +50,11 @@ All `/api/*` routes require auth (`X-User-ID`) and are scoped to that user. Reac
 
 **Exports** are generated asynchronously (v1: in-process; an `EXPORTS` NATS work-queue is the scale follow-up). The CSV/JSON artifact bytes are stored on the `exports` row (`exports` table: id, user_id, organization_id?, format, status `queued|processing|ready|failed`, file_name, content, document_count, filters, completed_at). Binary/ZIP exports to object storage are a follow-up.
 
+**Export limits (bounded generation).** Async export generation is capped so a burst of large exports can't exhaust memory or DB:
+- A **semaphore** caps concurrent export generation at `EXPORT_MAX_CONCURRENCY` (default `4`).
+- An export waits up to `EXPORT_QUEUE_WAIT` (default `30s`) for a slot; if none frees up it fails with a **retryable** message (the client can re-queue).
+- The document query backing an export is capped at `EXPORT_MAX_ROWS` (default `50000`) rows.
+
 ## DB Schema (own Postgres)
 - **documents**: id (uuid v7), user_id, organization_id?, folder_id?, name, file_type, mime_type, file_size, storage_path, thumbnail_path, status (`uploaded|processing|ready|failed`), source_job_id? (links a doc finalized from a completed job), extracted_content, metadata (jsonb), uploaded_at?, processed_at?, created_at, updated_at, deleted_at (soft delete). Plus a generated `search_vector tsvector` over name+extracted_content with a GIN index. Indexes: `(user_id, created_at)`, `(user_id, status, created_at)`, GIN on `search_vector`, and a **partial unique index on `(user_id, source_job_id)`** that makes finalize idempotent.
 - **folders**: id, user_id, parent_id? (self-ref tree), name, created_at, updated_at, deleted_at.
@@ -60,6 +65,8 @@ All `/api/*` routes require auth (`X-User-ID`) and are scoped to that user. Reac
 
 Search: `search_vector @@ websearch_to_tsquery('english', q)` (pluggable behind the same API to Meilisearch/OpenSearch later).
 
+**Boot-critical index.** The idempotency UNIQUE index `idx_doc_user_source_job` on `documents` (partial: `WHERE source_job_id IS NOT NULL`) is what makes the finalize subscriber safe against duplicate job-completion events. If it cannot be created at startup the service **fails to start** (`os.Exit`) rather than logging a warning and continuing — running without it would silently allow duplicate documents per job. The other, purely-performance indexes remain best-effort (a warning, boot continues).
+
 ## Environment Variables
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -68,6 +75,9 @@ Search: `search_vector @@ websearch_to_tsquery('english', q)` (pluggable behind 
 | NATS_URL | nats://nats:4222 | NATS for the finalize subscriber |
 | USER_SERVICE_URL | http://user-service:8090 | Membership/RBAC checks for org-scoped requests |
 | NOTIFICATION_SERVICE_URL | http://notification-service:8091 | Raises an `export.ready` notification when an export completes |
+| EXPORT_MAX_CONCURRENCY | 4 | Max concurrent async export generations (semaphore) |
+| EXPORT_QUEUE_WAIT | 30s | How long an export waits for a semaphore slot before failing with a retryable message |
+| EXPORT_MAX_ROWS | 50000 | Max document rows an export query returns |
 | TRUSTED_PROXIES | — | Trusted proxy CIDRs |
 | OTEL_EXPORTER_OTLP_ENDPOINT | — | OpenTelemetry collector |
 

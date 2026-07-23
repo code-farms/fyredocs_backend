@@ -179,22 +179,31 @@ func main() {
 
 	mux.Handle("/metrics", metrics.HTTPMetricsHandler())
 
-	// Deep health check: the gateway is only healthy if Redis (auth, denylist,
-	// rate limiting) is reachable, so report unhealthy when the ping fails.
+	// Liveness: is the process up? This must NOT check dependencies — a Redis
+	// blip should not make the container "unhealthy" and trigger a restart
+	// cascade. Dependency health is reported by /readyz below.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	// Readiness: the gateway can only serve traffic if Redis (auth, denylist,
+	// rate limiting) is reachable, so report not-ready when the ping fails.
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if err := redisClient.Ping(ctx).Err(); err != nil {
 			// Log the real cause; don't echo redis dial detail (host:port) to the probe.
-			slog.ErrorContext(ctx, "healthz: redis ping failed", "error", err, "op", "healthz.redis")
+			slog.ErrorContext(ctx, "readyz: redis ping failed", "error", err, "op", "readyz.redis")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"status":"unhealthy","redis":"unreachable"}`))
+			_, _ = w.Write([]byte(`{"status":"unready","redis":"unreachable"}`))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"healthy"}`))
+		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	})
 
 	// Warn about insecure CORS configuration
@@ -300,7 +309,16 @@ var proxyTransport = &http.Transport{
 // the same limit.
 func registerServiceRoutes(mux *http.ServeMux, routes []routeConfig) {
 	for _, cfg := range routes {
-		handler := withMaxBodySize(newProxy(cfg), 1<<20) // 1 MiB
+		proxy := withMaxBodySize(newProxy(cfg), 1<<20) // 1 MiB
+		// Record a low-cardinality route label (the fixed prefix, e.g.
+		// "/api/jobs") for Prometheus. Without this the HTTP metrics middleware
+		// would label by the raw path — which carries per-resource UUIDs — and
+		// blow up series cardinality until Prometheus OOMs.
+		prefix := cfg.prefix
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			metrics.SetRouteLabel(r, prefix)
+			proxy.ServeHTTP(w, r)
+		})
 		mux.Handle(cfg.prefix, handler)
 		mux.Handle(cfg.prefix+"/", handler)
 	}

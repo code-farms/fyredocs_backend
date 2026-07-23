@@ -4,6 +4,7 @@
 package metrics
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -55,14 +56,39 @@ func MetricsHandler() gin.HandlerFunc {
 	}
 }
 
+type routeLabelKey struct{}
+
+// routeLabel is a mutable per-request holder the metrics middleware seeds and a
+// downstream handler fills in with a low-cardinality route template.
+type routeLabel struct{ value string }
+
+// SetRouteLabel records the low-cardinality route label (e.g. "/api/jobs") for
+// the current request so HTTPMetricsMiddleware uses it instead of the raw path.
+// Safe to call when no holder is present (no-op). This is how the api-gateway
+// avoids exploding Prometheus cardinality with per-resource UUID paths.
+func SetRouteLabel(r *http.Request, label string) {
+	if rl, ok := r.Context().Value(routeLabelKey{}).(*routeLabel); ok {
+		rl.value = label
+	}
+}
+
 // HTTPMetricsMiddleware records request duration and status for net/http handlers.
+// It labels by a downstream-provided route template (see SetRouteLabel), falling
+// back to "other" for unmatched paths — never the raw request path, which for the
+// gateway carries per-resource UUIDs and would blow up label cardinality.
 func HTTPMetricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rl := &routeLabel{}
+		r = r.WithContext(context.WithValue(r.Context(), routeLabelKey{}, rl))
 		start := time.Now()
 		sw := &httpStatusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
 		duration := time.Since(start).Seconds()
-		RequestDuration.WithLabelValues(r.Method, r.URL.Path, strconv.Itoa(sw.status)).Observe(duration)
+		label := rl.value
+		if label == "" {
+			label = "other"
+		}
+		RequestDuration.WithLabelValues(r.Method, label, strconv.Itoa(sw.status)).Observe(duration)
 	})
 }
 

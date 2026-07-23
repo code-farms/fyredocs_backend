@@ -73,9 +73,14 @@ Usage: deployment/deploy.sh [options] [service ...]
                          the running stack is untouched.
   --dry-run, --print-budget
                          Show the resource budget for this host and exit.
+  --rollback=<sha>       Roll the whole stack back to a previously-built image
+                         tag (fyredocs-<svc>:<sha>) without rebuilding. List
+                         available tags with:  docker images 'fyredocs-*'
   -h, --help             Show this help.
 
 See docs/developer/architecture/compose-files.md for the compose files layout.
+Every full deploy tags each service image as fyredocs-<svc>:<git-sha> and keeps
+the most recent IMAGE_TAG_RETAIN (default 5) so you can roll back.
 USAGE
 }
 
@@ -83,15 +88,87 @@ USAGE
 # host (RESOURCE_BUDGET_PCT%, default 70), then exit without building anything.
 # Bare arguments are service names for a single-service deploy.
 DRY_RUN=0
+ROLLBACK_SHA=""
 SERVICES_TO_DEPLOY=()
 for arg in "$@"; do
     case "$arg" in
         --dry-run|--print-budget) DRY_RUN=1 ;;
+        --rollback=*) ROLLBACK_SHA="${arg#*=}" ;;
         -h|--help) usage; exit 0 ;;
         -*) print_error "Unknown option: $arg"; usage; exit 1 ;;
         *) SERVICES_TO_DEPLOY+=("$arg") ;;
     esac
 done
+
+# The Docker Compose project name (compose file `name:`) — built service images
+# are auto-tagged <project>-<service>:latest. We add :<git-sha> tags for rollback.
+COMPOSE_PROJECT="fyredocs"
+GO_SERVICES=(
+  "api-gateway" "analytics-service" "auth-service" "job-service"
+  "convert-from-pdf" "convert-to-pdf" "organize-pdf" "optimize-pdf"
+  "document-service" "user-service" "notification-service"
+)
+# Short git SHA of the tree being deployed (falls back to a timestamp-free label
+# when not in a git checkout — Date.now-style values would break reproducibility).
+GIT_SHA="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo "untagged")"
+IMAGE_TAG_RETAIN="${IMAGE_TAG_RETAIN:-5}"
+
+# tag_built_images tags each freshly built service image as fyredocs-<svc>:<sha>
+# so a specific build can be rolled back to. The moving :latest tag keeps
+# pointing at the newest build.
+tag_built_images() {
+    [ "$GIT_SHA" = "untagged" ] && { print_warning "Not a git checkout — skipping image SHA tagging"; return 0; }
+    for svc in "${GO_SERVICES[@]}"; do
+        local id
+        id="$(docker compose images -q "$svc" 2>/dev/null || true)"
+        [ -n "$id" ] || continue
+        docker tag "$id" "${COMPOSE_PROJECT}-${svc}:${GIT_SHA}" 2>/dev/null || true
+    done
+    print_success "Tagged service images @ ${GIT_SHA}"
+}
+
+# prune_old_image_tags keeps only the newest IMAGE_TAG_RETAIN SHA tags per
+# service so retained rollback images don't grow without bound.
+prune_old_image_tags() {
+    for svc in "${GO_SERVICES[@]}"; do
+        # Newest-first by created time; skip :latest; drop everything past the keep count.
+        docker images "${COMPOSE_PROJECT}-${svc}" --format '{{.Tag}} {{.CreatedAt}}' 2>/dev/null \
+            | grep -v '^latest ' \
+            | sort -rk2 \
+            | awk 'NR>'"$IMAGE_TAG_RETAIN"' {print $1}' \
+            | while read -r tag; do
+                [ -n "$tag" ] && docker rmi "${COMPOSE_PROJECT}-${svc}:${tag}" 2>/dev/null || true
+              done
+    done
+}
+
+# do_rollback retags a previously-built :<sha> image back onto :latest for every
+# service and recreates the stack from those images WITHOUT rebuilding.
+do_rollback() {
+    local sha="$1"
+    print_step "Rolling back to image tag: ${sha}"
+    local missing=0
+    for svc in "${GO_SERVICES[@]}"; do
+        if ! docker image inspect "${COMPOSE_PROJECT}-${svc}:${sha}" >/dev/null 2>&1; then
+            print_error "Missing image ${COMPOSE_PROJECT}-${svc}:${sha}"
+            missing=1
+        fi
+    done
+    if [ "$missing" -ne 0 ]; then
+        print_error "Rollback aborted — not all services have a ${sha} image. Available:"
+        docker images "${COMPOSE_PROJECT}-*" | grep -v ':latest' || true
+        exit 1
+    fi
+    for svc in "${GO_SERVICES[@]}"; do
+        docker tag "${COMPOSE_PROJECT}-${svc}:${sha}" "${COMPOSE_PROJECT}-${svc}:latest"
+    done
+    export DOCKER_BUILDKIT=1
+    export COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+    export COMPOSE_ENV_FILES="$ROOT_DIR/.env"
+    export COMPOSE_PROFILES="${COMPOSE_PROFILES:-observability}"
+    docker compose up -d --force-recreate --no-build "${GO_SERVICES[@]}"
+    print_success "Rolled back to ${sha}"
+}
 
 # ---------------------------------------------------------------------------
 # compute_resource_budget
@@ -287,6 +364,13 @@ else
     print_warning "No .env file found — using server environment variables"
 fi
 
+# Rollback path: retag a previous build and recreate the stack, no rebuild.
+# Runs after .env is loaded (compose needs it to interpolate the full file).
+if [ -n "$ROLLBACK_SHA" ]; then
+    do_rollback "$ROLLBACK_SHA"
+    exit 0
+fi
+
 # Compute and apply the 70% RAM/CPU budget for THIS host (exports per-service
 # *_MEM_LIMIT / *_CPU_LIMIT and derived worker pools; exported env wins over
 # the COMPOSE_ENV_FILES values during ${VAR} substitution).
@@ -418,21 +502,9 @@ docker compose down --remove-orphans
 print_success "Stopped existing containers"
 
 # 2. Sequential Build Stage (CPU-Safe Mode)
+# (GO_SERVICES is defined once near the top so the image-tag/rollback helpers can
+# see it too.)
 print_step "Building Go Services sequentially..."
-
-GO_SERVICES=(
-  "api-gateway"
-  "analytics-service"
-  "auth-service"
-  "job-service"
-  "convert-from-pdf"
-  "convert-to-pdf"
-  "organize-pdf"
-  "optimize-pdf"
-  "document-service"
-  "user-service"
-  "notification-service"
-)
 
 # Every service builds FROM fyredocs-go-builder (+ fyredocs-base). Build them once
 # up front; the warm Go cache they carry is what makes the per-service builds fast.
@@ -447,6 +519,11 @@ for SERVICE in "${GO_SERVICES[@]}"; do
     STEP_DURATION=$(( SECONDS - STEP_START ))
     print_success "$SERVICE build complete (took ${STEP_DURATION}s)"
 done
+
+# Tag each freshly built image as fyredocs-<svc>:<git-sha> so this exact build can
+# be rolled back to (deploy.sh --rollback=<sha>), then prune old tags to a bound.
+tag_built_images
+prune_old_image_tags
 
 # 3. Start all services
 print_step "Starting all services in detached mode..."
@@ -519,6 +596,9 @@ done
 # NOTE: keep this as `docker image prune -f` (dangling images only). Do NOT change it
 # to `docker builder prune` or `docker system prune -a` — those wipe the BuildKit build
 # cache and the fyredocs-go-builder image, reintroducing the ~20-min cold Go compile.
+# Previous builds are NOT lost to this prune: each deploy SHA-tags its images
+# (fyredocs-<svc>:<sha>), so they keep a tag and survive; rollback targets remain
+# available (bounded by IMAGE_TAG_RETAIN, pruned above).
 print_step "Optimizing Disk Space"
 docker image prune -f
 print_success "Removed unused image layers"

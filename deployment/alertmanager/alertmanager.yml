@@ -1,0 +1,21 @@
+# Alertmanager routing for the fyredocs stack.
+#
+# Delivery is via a single generic webhook whose URL comes from the environment
+# (ALERTMANAGER_WEBHOOK_URL, expanded by --config.expand-env). Point it at a
+# Slack/PagerDuty/webhook bridge. If unset, alerts still group and show in the
+# Alertmanager UI (loopback :9093) but are not delivered anywhere.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: default-webhook
+  group_by: ['alertname', 'job']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: default-webhook
+    webhook_configs:
+      - url: '${ALERTMANAGER_WEBHOOK_URL}'
+        send_resolved: true

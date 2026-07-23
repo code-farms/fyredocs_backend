@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -14,18 +15,46 @@ import (
 	"user-service/internal/models"
 )
 
+// pageParams reads page/limit query params with a sane default (25) and hard
+// cap (100), returning the resolved page, limit, and SQL offset. Prevents
+// unbounded list responses (a large org/membership set as one payload).
+func pageParams(c *gin.Context) (page, limit, offset int) {
+	page = 1
+	if v, err := strconv.Atoi(c.Query("page")); err == nil && v > 0 {
+		page = v
+	}
+	limit = 25
+	if v, err := strconv.Atoi(c.Query("limit")); err == nil && v > 0 {
+		limit = v
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	return page, limit, (page - 1) * limit
+}
+
 // ListOrganizations returns the organizations the caller belongs to, each with
 // the caller's role.
 func ListOrganizations(c *gin.Context) {
 	uid, _ := userID(c)
-	var memberships []models.Membership
-	if err := models.DB.Where("user_id = ?", uid).Find(&memberships).Error; err != nil {
+	page, limit, offset := pageParams(c)
+
+	var total int64
+	if err := models.DB.Model(&models.Membership{}).Where("user_id = ?", uid).Count(&total).Error; err != nil {
 		response.InternalErrorf(c, "LIST_FAILED", "Could not load organizations.", err,
-			"op", "db.memberships.list", "userId", uid)
+			"op", "db.memberships.count", "userId", uid)
 		return
 	}
-	if len(memberships) == 0 {
-		response.OK(c, "Organizations retrieved", []any{})
+	if total == 0 {
+		response.OKWithMeta(c, "Organizations retrieved", []any{}, &response.Meta{Page: page, Limit: limit, Total: 0})
+		return
+	}
+
+	var memberships []models.Membership
+	if err := models.DB.Where("user_id = ?", uid).Order("created_at ASC").
+		Limit(limit).Offset(offset).Find(&memberships).Error; err != nil {
+		response.InternalErrorf(c, "LIST_FAILED", "Could not load organizations.", err,
+			"op", "db.memberships.list", "userId", uid)
 		return
 	}
 	roleByOrg := make(map[uuid.UUID]string, len(memberships))
@@ -35,8 +64,10 @@ func ListOrganizations(c *gin.Context) {
 		ids = append(ids, m.OrganizationID)
 	}
 	var orgs []models.Organization
-	if err := models.DB.Where("id IN ?", ids).Order("created_at ASC").Find(&orgs).Error; err != nil {
-		logger.LogWarn(c.Request.Context(), "db.orgs.list_by_ids", err, "userId", uid)
+	if len(ids) > 0 {
+		if err := models.DB.Where("id IN ?", ids).Order("created_at ASC").Find(&orgs).Error; err != nil {
+			logger.LogWarn(c.Request.Context(), "db.orgs.list_by_ids", err, "userId", uid)
+		}
 	}
 
 	out := make([]gin.H, 0, len(orgs))
@@ -46,7 +77,7 @@ func ListOrganizations(c *gin.Context) {
 			"planName": o.PlanName, "createdAt": o.CreatedAt, "role": roleByOrg[o.ID],
 		})
 	}
-	response.OK(c, "Organizations retrieved", out)
+	response.OKWithMeta(c, "Organizations retrieved", out, &response.Meta{Page: page, Limit: limit, Total: total})
 }
 
 type createOrgReq struct {
@@ -132,11 +163,17 @@ func ListMembers(c *gin.Context) {
 	if !ok {
 		return
 	}
+	page, limit, offset := pageParams(c)
+	var total int64
+	if err := models.DB.Model(&models.Membership{}).Where("organization_id = ?", orgID).Count(&total).Error; err != nil {
+		logger.LogWarn(c.Request.Context(), "db.memberships.count", err, "orgId", orgID)
+	}
 	var members []models.Membership
-	if err := models.DB.Where("organization_id = ?", orgID).Order("created_at ASC").Find(&members).Error; err != nil {
+	if err := models.DB.Where("organization_id = ?", orgID).Order("created_at ASC").
+		Limit(limit).Offset(offset).Find(&members).Error; err != nil {
 		logger.LogWarn(c.Request.Context(), "db.memberships.list", err, "orgId", orgID)
 	}
-	response.OK(c, "Members retrieved", members)
+	response.OKWithMeta(c, "Members retrieved", members, &response.Meta{Page: page, Limit: limit, Total: total})
 }
 
 type addMemberReq struct {

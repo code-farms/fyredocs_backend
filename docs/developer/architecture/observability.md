@@ -14,6 +14,13 @@ The Go services are instrumented for observability out of the box:
   job outcome from `shared/queue.PublishJobEvent` — the single choke point every
   worker's terminal `JobCompleted`/`JobFailed` event flows through.
 
+  **Low-cardinality route labels.** The api-gateway labels
+  `http_request_duration_seconds` by the **route template** (e.g. `/api/jobs`), not
+  the raw request path. Raw paths carry per-resource UUIDs
+  (`/api/jobs/018f…/download`) and would explode Prometheus cardinality — one time
+  series per resource id. Requests that match no known route template are bucketed
+  under the label `other`.
+
 This document describes the **backing stack** that receives and visualizes that
 telemetry. It is **opt-in**: nothing here runs unless you explicitly start the
 `observability` compose profile.
@@ -24,14 +31,15 @@ telemetry. It is **opt-in**: nothing here runs unless you explicitly start the
 |-----------|-------|------|-------|
 | `otel-collector` | `otel/opentelemetry-collector-contrib` | Single OTLP ingestion point; batches spans and forwards to Tempo | `4318` (OTLP/HTTP, internal), `4317` (OTLP/gRPC, internal), `8888` (self-metrics) |
 | `tempo` | `grafana/tempo` | Trace storage & query backend | `4317` (OTLP/gRPC in), `3200` (HTTP API) |
-| `prometheus` | `prom/prometheus` | Scrapes every service's `/metrics` + the collector | `9090` (loopback-only UI) |
+| `prometheus` | `prom/prometheus` | Scrapes every service's `/metrics` + the collector; evaluates alert rules and forwards firing alerts to Alertmanager | `9090` (loopback-only UI) |
+| `alertmanager` | `prom/alertmanager` | Receives firing alerts from Prometheus and delivers them via a generic webhook | `9093` (loopback-only) |
 | `loki` | `grafana/loki` | Log storage & query backend (filesystem, ~7-day retention) | `3100` (loopback-only API) |
 | `alloy` | `grafana/alloy` | Log shipper — tails every container's stdout (Docker socket) and pushes to Loki | `12345` (internal UI) |
 | `grafana` | `grafana/grafana` | Dashboards + trace explorer + log explorer, over Prometheus / Tempo / Loki | `3000` (loopback-only UI) |
 
-All are internal to `fyredocs_net`. Only the Grafana, Prometheus, and Loki
-endpoints publish a host port, all bound to `127.0.0.1` (operator-only, like the
-MinIO console) — never public.
+All are internal to `fyredocs_net`. Only the Grafana, Prometheus, Loki, and
+Alertmanager endpoints publish a host port, all bound to `127.0.0.1` (operator-only,
+like the MinIO console) — never public.
 
 ## Data flow
 
@@ -130,7 +138,9 @@ Config lives under `deployment/`, mounted read-only into each container
 |------|---------|
 | `otel-collector/config.yaml` | OTLP receivers (4318/4317), batch processor, OTLP exporter to `tempo:4317`, self-metrics on `:8888` |
 | `tempo/tempo.yaml` | OTLP/gRPC receiver, local trace storage, HTTP API `:3200` |
-| `prometheus/prometheus.yml` | Scrape jobs: all 11 services (by service DNS + port) + `otel-collector:8888` |
+| `prometheus/prometheus.yml` | Scrape jobs: all 11 services (by service DNS + port) + `otel-collector:8888`; `rule_files` glob + `alerting.alertmanagers` → `alertmanager:9093` |
+| `prometheus/rules/*.yml` | Alert rule definitions loaded by Prometheus (see Alerting below) |
+| `alertmanager/alertmanager.yml` | Alertmanager routing: a single generic webhook receiver at `ALERTMANAGER_WEBHOOK_URL` |
 | `loki/loki-config.yaml` | Single-binary Loki: filesystem storage, 7-day retention, compaction |
 | `alloy/config.alloy` | Alloy: Docker service discovery → tail container stdout → relabel (`service`/`container`) → push to `loki:3100` |
 | `grafana/provisioning/datasources/datasources.yaml` | Prometheus (default) + Tempo + Loki datasources, with trace↔log correlation (`tracesToLogsV2`, `trace_id` `derivedField`) |
@@ -140,6 +150,45 @@ Config lives under `deployment/`, mounted read-only into each container
 > **Note:** `prometheus.yml` hardcodes the api-gateway target as
 > `api-gateway:8080`. It is coupled to `${API_GATEWAY_PORT:-8080}` in
 > `docker-compose.yml` — keep them in sync if the gateway port changes.
+
+## Alerting
+
+Prometheus does more than scrape and store — it **evaluates alert rules** and forwards
+firing alerts to a dedicated **Alertmanager** service.
+
+```
+prometheus (evaluates rules/*.yml) --firing alerts--> alertmanager :9093 --webhook--> ALERTMANAGER_WEBHOOK_URL
+```
+
+- **Rules** — Prometheus loads alert rules from `deployment/prometheus/rules/*.yml`
+  (globbed via `rule_files` in `prometheus.yml`).
+- **Alertmanager** — a new compose service (`prom/alertmanager`, config
+  `deployment/alertmanager/alertmanager.yml`) bound to `127.0.0.1:9093` (loopback-only,
+  like the other observability UIs), started with the `observability` profile.
+- **Delivery** — Alertmanager delivers through a **single generic webhook** whose URL is the
+  env var **`ALERTMANAGER_WEBHOOK_URL`**. Point it at Slack, PagerDuty, or a small bridge
+  service. **When it is unset, alerts still fire and are visible in the Prometheus /
+  Alertmanager UIs but are not delivered anywhere** — wire the webhook to actually get paged.
+
+### Shipped alert rules
+
+| Alert | Fires when |
+|-------|------------|
+| `ServiceDown` | a scrape target's `up == 0` |
+| `ObservabilityCollectorDown` | the otel-collector target is down |
+| `HighServerErrorRate` | >5% of responses are 5xx over 5m |
+| `HighRequestLatencyP95` | request p95 latency > 2s over 10m |
+| `HighJobFailureRate` | job failure rate is elevated (from `jobs_failed_total` / `jobs_processed_total`) |
+
+### Wiring the webhook
+
+```bash
+# in .env (or the deploy environment)
+ALERTMANAGER_WEBHOOK_URL=https://hooks.slack.com/services/…   # or a PagerDuty/bridge endpoint
+```
+
+Redeploy (or restart `alertmanager`) so it picks up the value. Leave it unset in dev — alerts
+remain inspectable in the UI without spamming a channel.
 
 ## Relation to the in-app analytics dashboard
 
@@ -155,6 +204,7 @@ All optional; defaults shown.
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `GRAFANA_ADMIN_PASSWORD` | `admin` | Grafana admin password |
+| `ALERTMANAGER_WEBHOOK_URL` | `""` (unset) | Generic webhook Alertmanager posts firing alerts to (Slack/PagerDuty/bridge). Unset = alerts visible in the UI but not delivered. |
 | `OTEL_COLLECTOR_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `256M` / `0.5` / `64M` | collector resources |
 | `TEMPO_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `512M` / `0.5` / `128M` | Tempo resources |
 | `PROMETHEUS_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `512M` / `0.5` / `128M` | Prometheus resources |

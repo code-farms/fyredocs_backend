@@ -114,6 +114,24 @@ func TestExtractAccessToken(t *testing.T) {
 		}
 	})
 
+	// Regression for the logout revocation bug: the SPA sends the access token
+	// only as an HttpOnly cookie (no bearer header, no context value), so
+	// extractAccessToken must read the cookie or logout never revokes anything.
+	t.Run("from access_token cookie", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+		c.Request.AddCookie(&http.Cookie{Name: "access_token", Value: "cookie-token"})
+
+		token, ok := extractAccessToken(c)
+		if !ok {
+			t.Fatal("expected ok=true for access_token cookie")
+		}
+		if token != "cookie-token" {
+			t.Errorf("expected 'cookie-token', got %q", token)
+		}
+	})
+
 	t.Run("no token", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)

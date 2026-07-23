@@ -38,7 +38,7 @@ func (ae *AuthEndpoints) RevokeUserSessions(c *gin.Context) {
 		for _, s := range sessions {
 			remaining := time.Until(s.AccessExpiresAt)
 			if remaining > 0 {
-				if err := ae.Denylist.DenyToken(ctx, s.AccessTokenHash, remaining); err != nil {
+				if err := ae.Denylist.DenyTokenHash(ctx, s.AccessTokenHash, remaining); err != nil {
 					slog.Warn("failed to deny token in redis", "error", err, "sessionId", s.ID)
 				}
 			}
@@ -79,7 +79,7 @@ func (ae *AuthEndpoints) RevokeSession(c *gin.Context) {
 		remaining := time.Until(session.AccessExpiresAt)
 		if remaining > 0 {
 			ctx := c.Request.Context()
-			if err := ae.Denylist.DenyToken(ctx, session.AccessTokenHash, remaining); err != nil {
+			if err := ae.Denylist.DenyTokenHash(ctx, session.AccessTokenHash, remaining); err != nil {
 				slog.Warn("failed to deny token in redis", "error", err, "sessionId", session.ID)
 			}
 		}

@@ -27,7 +27,9 @@ Health: `GET /healthz`, `GET /readyz`. All `/api/notifications/*` require `X-Use
 | POST | `/internal/notifications` | **Mesh-only** (not gateway-proxied): other services raise a notification. Body: `userId`, `title`, `type?`, `body?`, `link?`, `sourceId?` (idempotency). Used by document-service for `export.ready`. |
 
 ## DB Schema (own Postgres)
-- **notifications**: id (uuid v7), user_id, type (`job.completed`|`job.failed`|…), title, body, link, source_job_id?, read_at?, created_at. Index `(user_id, created_at DESC)`; partial unique `(user_id, source_job_id)` for idempotency.
+- **notifications**: id (uuid v7), user_id, type (`job.completed`|`job.failed`|…), title, body, link, source_job_id?, read_at?, created_at. Index `(user_id, created_at DESC)`; partial unique `(user_id, source_job_id)` (`idx_notif_user_source`) for idempotency.
+
+**Boot-critical index.** The idempotency UNIQUE index `idx_notif_user_source` on `notifications` is what keeps the subscriber from creating duplicate notifications when a job-completion event is redelivered. If it cannot be created at startup the service **fails to start** (`os.Exit`) instead of warning and continuing; other performance indexes remain best-effort.
 
 ## Environment Variables
 | Variable | Default | Description |

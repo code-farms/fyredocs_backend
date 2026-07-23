@@ -48,13 +48,28 @@ func Migrate() {
 	// Full-text search: a generated tsvector column over name + extracted content,
 	// plus a GIN index. Managed outside AutoMigrate so GORM doesn't fight the
 	// generated column. Idempotent.
+	// Boot-critical: the finalize idempotency UNIQUE index is the durable
+	// backstop against the event-consumer count-then-create race creating
+	// duplicate documents for one job. If it can't be created, the dedup
+	// guarantee is silently absent — fail fast rather than start "healthy".
+	criticalStmts := []string{
+		// Idempotency for finalize: one document per (user, source job).
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_user_source_job ON documents (user_id, source_job_id) WHERE source_job_id IS NOT NULL`,
+	}
+	for _, s := range criticalStmts {
+		if err := DB.Exec(s).Error; err != nil {
+			slog.Error("boot-critical index creation failed", "error", err, "statement", s)
+			os.Exit(1)
+		}
+	}
+
+	// Best-effort: performance indexes and the full-text search column. A
+	// failure here degrades performance but not correctness, so warn and go on.
 	stmts := []string{
 		`ALTER TABLE documents ADD COLUMN IF NOT EXISTS search_vector tsvector
 			GENERATED ALWAYS AS (to_tsvector('english', coalesce(name,'') || ' ' || coalesce(extracted_content,''))) STORED`,
 		`CREATE INDEX IF NOT EXISTS idx_doc_search ON documents USING GIN (search_vector)`,
 		`CREATE INDEX IF NOT EXISTS idx_doc_user_status_created ON documents (user_id, status, created_at DESC)`,
-		// Idempotency for finalize: one document per (user, source job).
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_user_source_job ON documents (user_id, source_job_id) WHERE source_job_id IS NOT NULL`,
 		// Tag uniqueness is per scope: personal (user) vs organization. Drop the
 		// old global (user_id, name) index in favour of two partial indexes.
 		`DROP INDEX IF EXISTS idx_tag_user_name`,

@@ -107,6 +107,8 @@ DB updates and `jobs.events.<jobId>.processing` events are emitted from the repo
 
 This worker writes to `processing_jobs` and `file_metadata` (the same tables owned by job-service — each microservice has its own GORM connection but the underlying schema is shared via Postgres). Updates are scoped to status, progress, failure reason, completion timestamp, and inserting `output` rows in `file_metadata`.
 
+> **Migration ownership:** this worker does **not** run GORM `AutoMigrate` on these shared tables. **job-service is the sole migrator/owner** of `processing_jobs` and `file_metadata`. The worker only reads/updates `ProcessingJob` and writes its own output `FileMetadata` rows — the tables are guaranteed to exist because the worker only ever processes jobs that job-service (already migrated) dispatched.
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -162,7 +164,7 @@ Pure-Go PDF library used for `image-to-pdf` / `img-to-pdf`. No external runtime 
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /healthz` | Liveness — pings Redis + checks NATS connection |
+| `GET /healthz` | Liveness — static `200 {"status":"ok"}`, **no dependency checks** (a dependency blip must not flip liveness and trigger a restart cascade) |
 | `GET /readyz` | Readiness — Redis + NATS + Postgres + unoserver (informational) |
 | `GET /metrics` | Prometheus metrics |
 
@@ -245,16 +247,21 @@ sequenceDiagram
     participant R as Redis
     participant N as NATS
 
+    Note over LB,W: Liveness — no dependency checks
     LB->>W: GET /healthz
+    W-->>LB: 200 {"status":"ok"}
+
+    Note over LB,N: Readiness — dependency checks
+    LB->>W: GET /readyz
     W->>R: PING (2s timeout)
     alt Redis unhealthy
-        W-->>LB: 503 {"status":"unhealthy","redis":"<err>"}
+        W-->>LB: 503 {"status":"not ready","checks":{"redis":"<err>"}}
     else
         W->>N: Conn.IsConnected()
         alt NATS disconnected
-            W-->>LB: 503 {"status":"unhealthy","nats":"disconnected"}
+            W-->>LB: 503 {"status":"not ready","checks":{"nats":"disconnected"}}
         else
-            W-->>LB: 200 {"status":"healthy"}
+            W-->>LB: 200 {"status":"ready"}
         end
     end
 ```

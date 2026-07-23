@@ -338,22 +338,29 @@ sequenceDiagram
     participant R as Redis
     participant N as NATS
 
+    Note over LB,W: Liveness — no dependency checks
     LB->>W: GET /healthz
+    W-->>LB: 200 {"status": "ok"}
+
+    Note over LB,N: Readiness — dependency checks
+    LB->>W: GET /readyz
     W->>R: PING (2s timeout)
     alt Redis unhealthy
-        W-->>LB: 503 {"status": "unhealthy", "redis": "error"}
+        W-->>LB: 503 {"status": "not ready", "checks": {"redis": "error"}}
     end
     W->>N: Check connection status
     alt NATS disconnected
-        W-->>LB: 503 {"status": "unhealthy", "nats": "disconnected"}
+        W-->>LB: 503 {"status": "not ready", "checks": {"nats": "disconnected"}}
     else All healthy
-        W-->>LB: 200 {"status": "healthy"}
+        W-->>LB: 200 {"status": "ready"}
     end
 ```
 
 ### Readiness Probe
 
-`/readyz` -- Readiness check (PostgreSQL + Redis + NATS), returns 200/503 with individual check results. Unlike `/healthz` (liveness), `/readyz` verifies all dependencies are connected.
+`/healthz` is a pure **liveness** probe: a static `200 {"status":"ok"}` with **no dependency checks**, so a transient Redis/NATS/Postgres blip can never flip liveness and trigger a restart cascade. `/readyz` is the **readiness** check (PostgreSQL + Redis + NATS), returning 200/503 with individual check results — it verifies all dependencies are connected.
+
+> **Migration ownership:** this worker does **not** run GORM `AutoMigrate` on the shared `processing_jobs` / `file_metadata` tables. **job-service is the sole migrator/owner** of those tables. The worker only reads/updates `ProcessingJob` and writes its own output `FileMetadata` rows — the tables are guaranteed to exist because the worker only ever processes jobs that job-service (already migrated) dispatched.
 
 ## Error Flows
 

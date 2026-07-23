@@ -222,6 +222,10 @@ func (m *mockDenylist) DenyToken(_ context.Context, _ string, _ time.Duration) e
 	return nil
 }
 
+func (m *mockDenylist) DenyTokenHash(_ context.Context, _ string, _ time.Duration) error {
+	return nil
+}
+
 func TestParseCommaList(t *testing.T) {
 	tests := []struct {
 		input string

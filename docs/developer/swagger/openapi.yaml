@@ -2649,7 +2649,13 @@ paths:
       summary: List organizations the caller belongs to
       operationId: listOrganizations
       security: [{ BearerAuth: [] }, { CookieAuth: [] }]
-      responses: { "200": { description: "Orgs, each with the caller's role" } }
+      parameters:
+        - *pageQuery
+        - *limitQuery
+      responses:
+        "200":
+          description: "Paginated orgs (data[] each with the caller's role + meta{page,limit,total})"
+          content: { application/json: { schema: { $ref: "#/components/schemas/APIResponse" } } }
     post:
       tags: [Organizations]
       summary: Create an organization (caller becomes owner)
@@ -2679,7 +2685,13 @@ paths:
       summary: List members
       operationId: listMembers
       security: [{ BearerAuth: [] }, { CookieAuth: [] }]
-      responses: { "200": { description: Members } }
+      parameters:
+        - *pageQuery
+        - *limitQuery
+      responses:
+        "200":
+          description: "Paginated members (data[] + meta{page,limit,total})"
+          content: { application/json: { schema: { $ref: "#/components/schemas/APIResponse" } } }
     post:
       tags: [Organizations]
       summary: Add or update a member (admin+)

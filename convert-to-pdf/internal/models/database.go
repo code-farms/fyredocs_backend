@@ -1,8 +1,6 @@
 package models
 
 import (
-	"log/slog"
-	"os"
 	"time"
 
 	"gorm.io/gorm"
@@ -35,14 +33,9 @@ func Connect(pool ...PoolConfig) {
 	DB = database.MustConnectFromEnv(servicePoolBase(), pool...)
 }
 
-// Migrate auto-migrates this service's owned tables and fail-fasts on error.
-func Migrate() {
-	if err := DB.AutoMigrate(
-		&ProcessingJob{},
-		&FileMetadata{},
-	); err != nil {
-		slog.Error("Database migration failed", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("Database migration completed")
-}
+// NOTE: This worker does NOT migrate processing_jobs / file_metadata. Those
+// tables are owned and migrated solely by job-service (the schema owner) to
+// avoid multiple services running concurrent, divergent AutoMigrate on the same
+// tables. This worker only reads/updates ProcessingJob and writes its own
+// FileMetadata output rows; the tables are guaranteed to exist because a worker
+// only processes jobs that job-service (already migrated) has dispatched.

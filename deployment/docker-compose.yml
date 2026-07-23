@@ -1031,8 +1031,10 @@ services:
       RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
       RCLONE_CONFIG_SRC_REGION: ${S3_REGION:-us-east-1}
       # Which MinIO buckets to mirror (space-separated; empty = DB-only backup).
-      # Outputs only by default — uploads are ephemeral (2-day expiry).
-      BACKUP_FILES_BUCKETS: ${BACKUP_FILES_BUCKETS:-outputs}
+      # Both by default so in-flight user inputs survive a host loss. Retention is
+      # DB-driven via job-service cleanup (no MinIO lifecycle rule); set to
+      # "outputs" to skip uploads.
+      BACKUP_FILES_BUCKETS: ${BACKUP_FILES_BUCKETS:-outputs uploads}
       BACKUP_FILES_PREFIX: ${BACKUP_FILES_PREFIX:-minio/}
     # Env-driven so deploy.sh folds this sidecar into the 80% budget too; the
     # fallbacks equal the previous hardcoded values (backward compatible).
@@ -1199,6 +1201,7 @@ services:
       - "--storage.tsdb.retention.time=15d"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
@@ -1209,6 +1212,39 @@ services:
           cpus: "${PROMETHEUS_CPU_LIMIT:-0.5}"
         reservations:
           memory: ${PROMETHEUS_MEM_RESERVATION:-128M}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - fyredocs_net
+
+  # Routes firing Prometheus alerts to a generic webhook (ALERTMANAGER_WEBHOOK_URL).
+  # Config uses --config.expand-env so the URL is injected from the environment.
+  # Console loopback-only for operators — never public.
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    profiles: ["observability"]
+    restart: always
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--config.expand-env=true"
+      - "--storage.path=/alertmanager"
+    environment:
+      ALERTMANAGER_WEBHOOK_URL: ${ALERTMANAGER_WEBHOOK_URL:-}
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    deploy:
+      resources:
+        limits:
+          memory: ${ALERTMANAGER_MEM_LIMIT:-128M}
+          cpus: "${ALERTMANAGER_CPU_LIMIT:-0.25}"
+        reservations:
+          memory: ${ALERTMANAGER_MEM_RESERVATION:-32M}
     logging:
       driver: "json-file"
       options:
@@ -1282,6 +1318,7 @@ volumes:
   caddy_config:
   tempo_data:
   prometheus_data:
+  alertmanager_data:
   grafana_data:
   loki_data:
   alloy_data:

@@ -119,14 +119,74 @@ func TestValidateJWTSecret(t *testing.T) {
 	if err := ValidateJWTSecret(); err == nil {
 		t.Error("expected error for short secret")
 	}
+	// A 32-char secret is now too short (minimum is 64).
+	t.Setenv("JWT_HS256_SECRET", "aT9kLmW3xQr7vBn5yHs2jFp8cUe6dGi4")
+	if err := ValidateJWTSecret(); err == nil {
+		t.Error("expected error for 32-char secret (former committed default, now rejected)")
+	}
 	t.Setenv("JWT_HS256_SECRET", "change-me")
 	if err := ValidateJWTSecret(); err == nil {
 		t.Error("expected error for dangerous secret")
 	}
-	t.Setenv("JWT_HS256_SECRET", "aT9kLmW3xQr7vBn5yHs2jFp8cUe6dGi4")
+	// Valid: a 64-char throwaway that is not any known/committed value.
+	t.Setenv("JWT_HS256_SECRET", "0f9c1e7a4b2d6f8093a5c7e1b3d5f7092a4c6e8f0b1d3f5a7c9e1b3d5f7a9c1e")
 	if err := ValidateJWTSecret(); err != nil {
 		t.Errorf("unexpected error for valid secret: %v", err)
 	}
+}
+
+func TestEnforceProductionSecurity(t *testing.T) {
+	secure := func(t *testing.T) {
+		t.Setenv("AUTH_COOKIE_SECURE", "true")
+		t.Setenv("DATABASE_URL", "postgres://u:p@db:5432/app?sslmode=require")
+		t.Setenv("PUBLIC_ORIGIN", "https://app.example.com")
+		t.Setenv("APP_BASE_URL", "https://app.example.com")
+	}
+
+	t.Run("non-production is a no-op even when insecure", func(t *testing.T) {
+		t.Setenv("ENVIRONMENT", "")
+		t.Setenv("APP_ENV", "")
+		t.Setenv("AUTH_COOKIE_SECURE", "false")
+		t.Setenv("DATABASE_URL", "postgres://u:p@db/app?sslmode=disable")
+		if err := EnforceProductionSecurity(); err != nil {
+			t.Errorf("expected no error outside production, got %v", err)
+		}
+	})
+
+	t.Run("production + secure passes", func(t *testing.T) {
+		t.Setenv("ENVIRONMENT", "production")
+		secure(t)
+		if err := EnforceProductionSecurity(); err != nil {
+			t.Errorf("expected no error for secure prod config, got %v", err)
+		}
+	})
+
+	t.Run("production + insecure cookie fails", func(t *testing.T) {
+		t.Setenv("ENVIRONMENT", "production")
+		secure(t)
+		t.Setenv("AUTH_COOKIE_SECURE", "false")
+		if err := EnforceProductionSecurity(); err == nil {
+			t.Error("expected error for AUTH_COOKIE_SECURE=false in production")
+		}
+	})
+
+	t.Run("production + sslmode=disable fails", func(t *testing.T) {
+		t.Setenv("ENVIRONMENT", "prod")
+		secure(t)
+		t.Setenv("DATABASE_URL", "postgres://u:p@db/app?sslmode=disable")
+		if err := EnforceProductionSecurity(); err == nil {
+			t.Error("expected error for sslmode=disable in production")
+		}
+	})
+
+	t.Run("production + plain-http origin fails", func(t *testing.T) {
+		t.Setenv("ENVIRONMENT", "production")
+		secure(t)
+		t.Setenv("PUBLIC_ORIGIN", "http://app.example.com")
+		if err := EnforceProductionSecurity(); err == nil {
+			t.Error("expected error for plain-http PUBLIC_ORIGIN in production")
+		}
+	})
 }
 
 func TestNormalizeEnvStripsQuotes(t *testing.T) {

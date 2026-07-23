@@ -182,7 +182,7 @@ func (ae *AuthEndpoints) ResetPassword(c *gin.Context) {
 		for _, s := range revokedSessions {
 			remaining := time.Until(s.AccessExpiresAt)
 			if remaining > 0 {
-				if err := ae.Denylist.DenyToken(ctx, s.AccessTokenHash, remaining); err != nil {
+				if err := ae.Denylist.DenyTokenHash(ctx, s.AccessTokenHash, remaining); err != nil {
 					slog.Warn("password_reset.deny_token_failed", "error", err, "sessionId", s.ID)
 				}
 			}

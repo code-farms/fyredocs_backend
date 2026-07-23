@@ -73,6 +73,11 @@ func (s *RedisGuestStore) ValidateGuestToken(ctx context.Context, token string) 
 type TokenDenylist interface {
 	IsTokenDenied(ctx context.Context, token string) (bool, error)
 	DenyToken(ctx context.Context, token string, ttl time.Duration) error
+	// DenyTokenHash revokes a token given its precomputed SHA-256 hex hash
+	// (the same value IsTokenDenied derives from a raw token). Callers that
+	// only hold the stored hash — session-row revocation, password reset —
+	// must use this so the stored key matches the verifier's raw-token lookup.
+	DenyTokenHash(ctx context.Context, tokenHash string, ttl time.Duration) error
 }
 
 // RedisTokenDenylist is the Redis-backed TokenDenylist implementation. Tokens
@@ -119,6 +124,22 @@ func (d *RedisTokenDenylist) DenyToken(ctx context.Context, token string, ttl ti
 		return nil
 	}
 	key := d.key(token)
+	if ttl <= 0 {
+		ttl = 8 * time.Hour
+	}
+	return d.client.Set(ctx, key, "1", ttl).Err()
+}
+
+// DenyTokenHash revokes a token by its precomputed SHA-256 hex hash. It stores
+// the hash verbatim under keyPrefix:<hash> — WITHOUT re-hashing — so the key
+// matches what IsTokenDenied derives from the raw token (which hashes once).
+// Passing an already-hashed value to DenyToken would double-hash it and the
+// entry would never be found.
+func (d *RedisTokenDenylist) DenyTokenHash(ctx context.Context, tokenHash string, ttl time.Duration) error {
+	if d == nil || d.client == nil || tokenHash == "" {
+		return nil
+	}
+	key := fmt.Sprintf("%s:%s", d.keyPrefix, tokenHash)
 	if ttl <= 0 {
 		ttl = 8 * time.Hour
 	}

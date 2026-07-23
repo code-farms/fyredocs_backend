@@ -4561,16 +4561,26 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/orgs",
+              "raw": "{{base_url}}/api/orgs?page=1&limit=25",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "api",
                 "orgs"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "25"
+                }
               ]
             },
-            "description": "List orgs the caller belongs to, each with the caller's role."
+            "description": "List orgs the caller belongs to, each with the caller's role. Paged: page (default 1), limit (default 25, max 100); returns meta{page,limit,total}."
           },
           "response": []
         },
@@ -4633,7 +4643,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/orgs/{{org_id}}/members",
+              "raw": "{{base_url}}/api/orgs/{{org_id}}/members?page=1&limit=25",
               "host": [
                 "{{base_url}}"
               ],
@@ -4642,9 +4652,19 @@
                 "orgs",
                 "{{org_id}}",
                 "members"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "25"
+                }
               ]
             },
-            "description": "List members of the org."
+            "description": "List members of the org. Paged: page (default 1), limit (default 25, max 100); returns meta{page,limit,total}."
           },
           "response": []
         },

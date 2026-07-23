@@ -43,10 +43,24 @@ func Migrate() {
 		slog.Error("Database migration failed", "error", err)
 		os.Exit(1)
 	}
-	stmts := []string{
-		`CREATE INDEX IF NOT EXISTS idx_notif_user_created ON notifications (user_id, created_at DESC)`,
+	// Boot-critical: the idempotency UNIQUE index is the durable backstop
+	// against the subscriber's count-then-create race creating duplicate
+	// notifications for one job. Fail fast if it can't be created rather than
+	// starting "healthy" with the dedup guarantee silently missing.
+	criticalStmts := []string{
 		// One notification per (user, source job) keeps the subscriber idempotent.
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_notif_user_source ON notifications (user_id, source_job_id) WHERE source_job_id IS NOT NULL`,
+	}
+	for _, s := range criticalStmts {
+		if err := DB.Exec(s).Error; err != nil {
+			slog.Error("boot-critical index creation failed", "error", err, "statement", s)
+			os.Exit(1)
+		}
+	}
+
+	// Best-effort: query-performance indexes only.
+	stmts := []string{
+		`CREATE INDEX IF NOT EXISTS idx_notif_user_created ON notifications (user_id, created_at DESC)`,
 		// Unread-badge count: user_id = ? AND read_at IS NULL.
 		`CREATE INDEX IF NOT EXISTS idx_notif_user_unread ON notifications (user_id) WHERE read_at IS NULL`,
 	}

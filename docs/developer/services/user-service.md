@@ -30,15 +30,17 @@ All `/api/orgs/*` require auth (`X-User-ID`); reached through the gateway at the
 
 | Method | Path | Description | Min role |
 |--------|------|-------------|----------|
-| GET | `/api/orgs` | List orgs the caller belongs to (each with the caller's `role`). | member |
+| GET | `/api/orgs` | List orgs the caller belongs to (each with the caller's `role`). Paged: `page` (default 1), `limit` (default 25, max 100). | member |
 | POST | `/api/orgs` | Create an org; caller becomes `owner`. Body: `name`. | any auth |
 | GET | `/api/orgs/:id` | Get an org the caller belongs to (+ caller's role). | member |
-| GET | `/api/orgs/:id/members` | List members. | member |
+| GET | `/api/orgs/:id/members` | List members. Paged: `page` (default 1), `limit` (default 25, max 100). | member |
 | POST | `/api/orgs/:id/members` | Add or update a member. Body: `userId`, `role` (admin/editor/viewer). | admin |
 | PATCH | `/api/orgs/:id/members/:userId` | Change a member's role (not the owner). Body: `role`. | admin |
 | DELETE | `/api/orgs/:id/members/:userId` | Remove a member (never the owner). | admin |
 
 Non-members get `404` on org-scoped reads (existence is not leaked); insufficient role gets `403`.
+
+**Pagination.** The two list endpoints (`GET /api/orgs`, `GET /api/orgs/:id/members`) accept `page` (default 1) and `limit` (default 25, max 100) query params and return the standard envelope with a `meta` object `{page, limit, total}`. (Previously they returned the full unbounded list with no `meta`.)
 
 ## DB Schema (own Postgres)
 - **organizations**: id (uuid v7), name, slug (unique), owner_user_id, plan_name (default `free`), created_at, updated_at.

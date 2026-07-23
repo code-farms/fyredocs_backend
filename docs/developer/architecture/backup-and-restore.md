@@ -92,10 +92,15 @@ The DB dump covers all database records; the file **bytes** live in MinIO. The
 same `db-backup` sidecar also mirrors MinIO buckets offsite each cycle, driven by
 `BACKUP_FILES_BUCKETS` (space-separated; empty = DB-only):
 
-- **`outputs` only** by default — the converted results, which is also
-  what `documents` reference (document-service sets `StoragePath = OutputPath`).
-- **`uploads` is deliberately excluded** — raw inputs that auto-expire
-  in 2 days (bucket lifecycle rule); backing them up is wasted space.
+- **`outputs uploads`** by default — the converted results (which `documents`
+  reference; document-service sets `StoragePath = OutputPath`) **and** the raw
+  user inputs, so a job whose input is still in flight when the host is lost can
+  be recovered/retried. Set `BACKUP_FILES_BUCKETS=outputs` to skip uploads.
+- **Retention is DB-driven, not a bucket lifecycle rule.** `minio-init` clears
+  any object-expiry lifecycle on the buckets; input/output objects are deleted by
+  job-service's in-process cleanup loop per plan TTL. (An earlier version of this
+  doc claimed uploads "auto-expire in 2 days via a bucket lifecycle rule" — that
+  is not the case.)
 
 It uses `rclone sync src:<bucket> dest:<bucket>/<BACKUP_FILES_PREFIX><bucket>/`
 (default prefix `minio/`), where `src` is the local MinIO (app S3 creds). **Sync
@@ -177,10 +182,34 @@ so restores/downloads cost nothing. Cost would only appear if the database grows
 so large that `BACKUP_RETAIN × dump size` exceeds 10 GB — mitigate by lowering
 `BACKUP_RETAIN` or using a lifecycle rule (below).
 
-## Longer retention & stronger RPO
+## Deploy rollback (application images)
 
-- For retention beyond `BACKUP_RETAIN` hourly dumps, add a **bucket lifecycle
-  rule** (e.g. keep dailies for 30 days) rather than growing `BACKUP_RETAIN`.
-- Hourly logical dumps give an **RPO of up to one hour**. If near-zero data loss
-  is needed later, upgrade to continuous **WAL archiving / PITR** (pgBackRest or
-  WAL-G → object storage) or a streaming physical replica on another host.
+Separate from data backup: every full `deploy.sh` run tags each built service
+image as `fyredocs-<svc>:<git-sha>` and keeps the most recent `IMAGE_TAG_RETAIN`
+(default 5). Because the images stay tagged, `docker image prune -f` never
+deletes a previous build, so you can roll the application back without rebuilding:
+
+```bash
+docker images 'fyredocs-*'            # list retained SHA tags
+deployment/deploy.sh --rollback=<sha> # retag <sha> → :latest and recreate the stack
+```
+
+This rolls back **code**, not data. A rollback does not undo schema migrations
+that a newer version applied (GORM AutoMigrate is additive — it does not drop
+columns — so a rollback is generally safe, but verify per change).
+
+## Known limitations & stronger RPO/DR (follow-ups)
+
+- **RPO ≈ 1 hour.** Hourly logical dumps only. For near-zero data loss, add
+  continuous **WAL archiving / PITR** (pgBackRest or WAL-G → object storage) or a
+  streaming physical replica on a second host. *(Not yet configured.)*
+- **Single on-host Postgres volume + single MinIO** are the durability SPOFs;
+  the offsite pg_dump + `outputs`/`uploads` mirror is the only copy that survives
+  a host loss. Do not `docker compose down -v` (destroys the volumes).
+- **No image registry yet.** Rollback images are local to the host. If the host
+  itself is lost, images must be rebuilt from source — push SHA-tagged images to
+  a registry (GHCR/ECR/R2) to make host-independent rollback/redeploy possible.
+- For retention beyond `BACKUP_RETAIN` hourly dumps, keep dailies via an
+  offsite-bucket policy rather than growing `BACKUP_RETAIN`.
+- The Windows `deploy.bat` twin does not yet mirror the SHA-tagging/rollback
+  logic; use `deploy.sh` where rollback matters.
