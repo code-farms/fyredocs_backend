@@ -10,7 +10,9 @@
 #   profile  : vps40 (default) | laptop
 #
 # Env:
-#   BASE_URL   target gateway origin (default http://localhost:8080)
+#   BASE_URL   target origin (default http://localhost = the Caddy edge; the
+#              docker deploy publishes only :80/:443. For services run on the
+#              host via `go run`, use BASE_URL=http://localhost:8080).
 #   PROFILE    overrides the positional profile
 # Examples:
 #   BASE_URL=https://app.example.com ./run.sh smoke
@@ -42,7 +44,7 @@ if [ ! -d "$DIR/fixtures/out" ]; then
   echo "fixtures missing — generating..."; bash "$DIR/fixtures/generate.sh" all
 fi
 
-BASE_URL="${BASE_URL:-http://localhost:8080}"
+BASE_URL="${BASE_URL:-http://localhost}"
 mkdir -p "$DIR/results"
 TS="$(date +%Y%m%d-%H%M%S)"
 JSON="$DIR/results/${SCENARIO}-${TS}.json"

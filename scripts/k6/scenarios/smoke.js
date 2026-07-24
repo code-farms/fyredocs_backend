@@ -6,7 +6,8 @@ import { check, sleep } from 'k6';
 import { provisionUsers, pickToken, whoami } from '../lib/auth.js';
 import { get } from '../lib/http.js';
 import { runJob } from '../lib/jobs.js';
-import { TOOL_MATRIX } from '../config.js';
+import { hasFixture } from '../lib/files.js';
+import { TOOL_MATRIX, TEST_NOTIFICATIONS } from '../config.js';
 
 export const options = {
   scenarios: { smoke: { executor: 'per-vu-iterations', vus: 1, iterations: 1, maxDuration: '20m' } },
@@ -23,16 +24,23 @@ export default function (data) {
   // auth sanity
   check(whoami(token), { '/auth/me 200': (r) => r.status === 200 });
 
-  // every read endpoint
+  // every read endpoint (/api/notifications only when TEST_NOTIFICATIONS=true —
+  // the service is profile-gated and down by default).
   for (const path of [
-    '/api/documents?page=1&limit=10', '/api/notifications', '/api/jobs/history',
+    '/api/documents?page=1&limit=10',
+    ...(TEST_NOTIFICATIONS ? ['/api/notifications'] : []),
+    '/api/jobs/history',
     '/api/dashboard', '/api/orgs',
   ]) {
     check(get(path, token), { [`read ${path} 2xx`]: (r) => r.status >= 200 && r.status < 300 });
   }
 
-  // one job per tool, end-to-end
+  // one job per tool, end-to-end (skip tools whose fixture wasn't generated).
   for (const toolDef of TOOL_MATRIX) {
+    if (!hasFixture(toolDef.fixture)) {
+      console.warn(`SMOKE SKIP ${toolDef.tool}: no '${toolDef.fixture}' fixture — run fixtures/generate.sh`);
+      continue;
+    }
     const r = runJob(toolDef, token);
     check(r, {
       [`${toolDef.tool}: completed`]: (x) => x.ok === true,

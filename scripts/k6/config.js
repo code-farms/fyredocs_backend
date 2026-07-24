@@ -5,7 +5,10 @@
 // ---------------------------------------------------------------------------
 // Target
 // ---------------------------------------------------------------------------
-export const BASE_URL = (__ENV.BASE_URL || 'http://localhost:8080').replace(/\/$/, '');
+// Default targets the Caddy edge (the docker-compose deploy publishes only
+// :80/:443; the api-gateway :8080 is internal-only). For the "services on host
+// via go run" workflow, override with BASE_URL=http://localhost:8080.
+export const BASE_URL = (__ENV.BASE_URL || 'http://localhost').replace(/\/$/, '');
 
 // Plan the provisioned test users should be on. NOTE: the backend hardened
 // PUT /auth/plan to admin/super-admin only, and it only changes the *caller's*
@@ -15,6 +18,12 @@ export const BASE_URL = (__ENV.BASE_URL || 'http://localhost:8080').replace(/\/$
 // for non-admin users). All current fixtures (<=38MB) fit the default `free`
 // plan (50MB/10 files); `pro` (500MB/50 files) is headroom.
 export const TEST_PLAN = __ENV.TEST_PLAN || 'pro';
+
+// notification-service is behind the `notifications` compose profile and is NOT
+// started by the default deploy — so /api/notifications 502s and inflates the
+// failure rate. Off by default; set TEST_NOTIFICATIONS=true only when you've
+// started that profile (COMPOSE_PROFILES=observability,notifications).
+export const TEST_NOTIFICATIONS = (__ENV.TEST_NOTIFICATIONS || 'false') === 'true';
 
 // How many users setup() provisions and VUs round-robin across. In capacity
 // mode signup/login limits are raised, so a pool is cheap and avoids per-IP /
@@ -83,19 +92,36 @@ export const TOOL_MATRIX = [
   { tool: 'split-pdf',    group: 'organize-pdf', fixture: 'pdf', options: { mode: 'range', range: '1-3,5' }, weight: 10 },
   { tool: 'rotate-pdf',   group: 'organize-pdf', fixture: 'pdf', options: { rotation: 90, applyToPages: 'all' }, weight: 4 },
   { tool: 'remove-pages', group: 'organize-pdf', fixture: 'pdf', options: { pages: '2,4' }, weight: 3 },
+  { tool: 'extract-pages',group: 'organize-pdf', fixture: 'pdf', options: { pages: '1-2' }, weight: 3 },
   { tool: 'watermark-pdf',group: 'organize-pdf', fixture: 'pdf', options: { type: 'text', text: 'DRAFT', position: 'diagonal', opacity: 30, fontSize: 48 }, weight: 4 },
   { tool: 'add-page-numbers', group: 'organize-pdf', fixture: 'pdf', options: { position: 'bc', format: '{n} of {total}' }, weight: 2 },
+  { tool: 'protect-pdf',  group: 'organize-pdf', fixture: 'pdf', options: { password: 'LoadTest!23' }, weight: 3 },
 
   // convert-to-pdf (heavy: LibreOffice via unoserver)
   { tool: 'word-to-pdf',  group: 'convert-to-pdf', fixture: 'docx', options: {}, weight: 15 },
   { tool: 'excel-to-pdf', group: 'convert-to-pdf', fixture: 'xlsx', options: {}, weight: 4 },
   { tool: 'ppt-to-pdf',   group: 'convert-to-pdf', fixture: 'pptx', options: {}, weight: 3 },
   { tool: 'image-to-pdf', group: 'convert-to-pdf', fixture: 'image', options: {}, multi: 2, weight: 6 },
+  { tool: 'html-to-pdf',  group: 'convert-to-pdf', fixture: 'html', options: {}, weight: 4 },
+  { tool: 'word-to-odt',  group: 'convert-to-pdf', fixture: 'docx', options: {}, weight: 2 },
+  // ODF → PDF need odt/ods/odp fixtures (generated via LibreOffice — see
+  // fixtures/generate.sh). Kept here; the smoke run drops any whose fixture is missing.
+  { tool: 'odt-to-pdf',   group: 'convert-to-pdf', fixture: 'odt', options: {}, weight: 2 },
+  { tool: 'ods-to-pdf',   group: 'convert-to-pdf', fixture: 'ods', options: {}, weight: 2 },
+  { tool: 'odp-to-pdf',   group: 'convert-to-pdf', fixture: 'odp', options: {}, weight: 2 },
 
   // convert-from-pdf (pdf2docx / LibreOffice / poppler)
   { tool: 'pdf-to-word',  group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 10 },
   { tool: 'pdf-to-text',  group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 5 },
   { tool: 'pdf-to-image', group: 'convert-from-pdf', fixture: 'pdf', options: { outputExt: '.jpg' }, weight: 3 },
+  { tool: 'pdf-to-excel', group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 3 },
+  { tool: 'pdf-to-html',  group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 3 },
+  { tool: 'pdf-to-powerpoint', group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 2 },
+  { tool: 'pdf-to-pdfa',  group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 3 },
+  { tool: 'pdf-to-odt',   group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 2 },
+
+  // Deferred (need special inputs): unlock-pdf (encrypted PDF fixture),
+  // scan-to-pdf (per-page scanner payload). Add once fixtures/options exist.
 ];
 
 // Per-group view (for the per-tool scenarios).

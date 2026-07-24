@@ -15,6 +15,9 @@ const META = {
   pptx:          { ext: 'pptx', contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
   image:         { ext: 'png',  contentType: 'image/png' },
   html:          { ext: 'html', contentType: 'text/html' },
+  odt:           { ext: 'odt',  contentType: 'application/vnd.oasis.opendocument.text' },
+  ods:           { ext: 'ods',  contentType: 'application/vnd.oasis.opendocument.spreadsheet' },
+  odp:           { ext: 'odp',  contentType: 'application/vnd.oasis.opendocument.presentation' },
 };
 
 const SIZES = ['small', 'medium', 'large'];
@@ -33,6 +36,14 @@ for (const [cat, meta] of Object.entries(META)) {
       // fixture not generated for this (category,size) — leave absent
     }
   }
+}
+
+// hasFixture reports whether any size exists for a category. Scenarios use it to
+// skip tools whose fixtures weren't generated (e.g. odt/ods/odp need LibreOffice)
+// instead of failing the run.
+export function hasFixture(category) {
+  const c = registry[category];
+  return !!c && SIZES.some((s) => c[s]);
 }
 
 // Pick a file for a category. If sizeName omitted, weighted-pick a size class

@@ -16,8 +16,13 @@ latency/queue blow up.
 - **k6** on the machine that generates load — ideally a *separate* box from the
   server (so the load generator isn't competing for the VPS's CPU).
   `brew install k6` (macOS) · [other installers](https://grafana.com/docs/k6/latest/set-up/install-k6/).
-- **python3** to generate fixtures (stdlib only — no LibreOffice/gs/ImageMagick).
-- The Fyredocs stack running and reachable at a gateway origin (`BASE_URL`).
+- **python3** to generate fixtures (stdlib only). ODF fixtures (odt/ods/odp) are
+  derived via LibreOffice in the `fyredocs-base` image — optional; those tools are
+  skipped if it's absent.
+- The Fyredocs stack running and reachable via `BASE_URL`. **Default is
+  `http://localhost`** (the Caddy edge — the docker deploy publishes only :80/:443;
+  the api-gateway :8080 is internal-only). For services run on the host via
+  `go run`, pass `BASE_URL=http://localhost:8080`.
 
 ## 2. Capacity mode (do this first — important)
 
@@ -42,9 +47,10 @@ bash scripts/k6/fixtures/generate.sh          # all categories, sizes small/medi
 ```
 
 Synthetic but valid: `pdf`, `scanned-pdf` (image-only, for OCR), `docx`, `xlsx`,
-`pptx`, `image` (png), `html`. To test with **your own representative files**,
-drop them at `fixtures/out/<category>/{small,medium,large}.<ext>` — the suite uses
-whatever is present.
+`pptx`, `image` (png), `html`, and `odt`/`ods`/`odp` (via LibreOffice if the
+`fyredocs-base` image is present — see below). To test with **your own
+representative files**, drop them at `fixtures/out/<category>/{small,medium,large}.<ext>`
+— the suite uses whatever is present and skips tools whose fixture is missing.
 
 ## 4. Run
 
@@ -95,7 +101,17 @@ BASE_URL=... ./run.sh upload-heavy
 `BASE_URL`, `PROFILE` (`vps40`|`laptop`), `JOB_RATE`, `BROWSE_RATE`, `DURATION`,
 `UPLOAD_MODE` (`multipart`|`presigned`), `USER_POOL_SIZE`, `USER_EMAIL`/`USER_PASSWORD`
 (reuse fixed creds), `USER_EMAILS`/`USER_EMAIL_PREFIX` + `SEED_EMAIL_DOMAIN` (log in a
-pre-seeded pool — see Pro-plan users above), `DOWNLOAD_RATIO`, `JOB_TIMEOUT_MS`, `TEST_PLAN`.
+pre-seeded pool — see Pro-plan users above), `DOWNLOAD_RATIO`, `JOB_TIMEOUT_MS`, `TEST_PLAN`,
+`TEST_NOTIFICATIONS` (default `false` — `/api/notifications` is only hit when `true`,
+since notification-service is behind the `notifications` compose profile and is down by
+default; enable both together).
+
+### Tool coverage
+`config.js` `TOOL_MATRIX` exercises the tools verified against
+`job-service/internal/routing/routing.go`. Tools whose fixture wasn't generated
+(e.g. `odt/ods/odp-to-pdf` without LibreOffice) are auto-skipped. Not yet covered:
+`unlock-pdf` (needs an encrypted-PDF fixture), `scan-to-pdf` (per-page scanner
+payload), and the stub tools `sign-pdf`/`edit-pdf`.
 
 ## 5. Finding the capacity ceiling
 
