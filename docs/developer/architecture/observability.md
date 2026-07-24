@@ -100,10 +100,14 @@ restart (or redeploy) the services and they log
 
 ## In-app embedding (admin Observability tab)
 
-The `fyredocs-overview` dashboard is embedded in the frontend admin area under
-**Admin → Observability** (`/admin/observability`, super-admin only). The SPA
-renders an `<iframe>` pointing at `/grafana/d/fyredocs-overview/...?kiosk`,
-served same-origin through the Caddy edge.
+The admin **Observability** tab (`/admin/observability`, super-admin only) embeds
+Grafana same-origin via an `<iframe>` served through the Caddy edge, with a
+**Metrics / Logs toggle**:
+- **Metrics** → the `fyredocs-overview` dashboard (`/grafana/d/fyredocs-overview/...?kiosk`).
+- **Logs** → the `fyredocs-logs` dashboard (`/grafana/d/fyredocs-logs/...?kiosk`) — the
+  centralized Loki logs view (service dropdown + free-text search), so admins can read
+  and search logs without leaving the app. An "Open … in Grafana" link opens the active
+  dashboard full-screen in a new tab.
 
 Wiring:
 
@@ -144,7 +148,8 @@ Config lives under `deployment/`, mounted read-only into each container
 | `alloy/config.alloy` | Alloy: Docker service discovery → tail container stdout → relabel (`service`/`container`) → push to `loki:3100` |
 | `grafana/provisioning/datasources/datasources.yaml` | Prometheus (default) + Tempo + Loki datasources, with trace↔log correlation (`tracesToLogsV2`, `trace_id` `derivedField`) |
 | `grafana/provisioning/dashboards/dashboards.yaml` | Dashboard file provider |
-| `grafana/dashboards/fyredocs-overview.json` | Overview dashboard: a KPI stat header (request rate, error %, p95 latency, jobs/1h) over grouped rows of by-service timeseries (request rate, p95 latency, 5xx error rate, jobs processed/failed) with value-table legends |
+| `grafana/dashboards/fyredocs-overview.json` | Overview (Metrics) dashboard: a KPI stat header (request rate, error %, p95 latency, jobs/1h) over grouped rows of by-service timeseries (request rate, p95 latency, 5xx error rate, jobs processed/failed) with value-table legends |
+| `grafana/dashboards/fyredocs-logs.json` | Logs dashboard (Loki, uid `fyredocs-logs`): a logs panel with a `service` dropdown (`label_values(service)`) + free-text `search` variable — the centralized-logs view embedded in the admin Observability tab |
 
 > **Note:** `prometheus.yml` hardcodes the api-gateway target as
 > `api-gateway:8080`. It is coupled to `${API_GATEWAY_PORT:-8080}` in
