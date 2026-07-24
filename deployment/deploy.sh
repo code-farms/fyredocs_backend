@@ -118,13 +118,17 @@ IMAGE_TAG_RETAIN="${IMAGE_TAG_RETAIN:-5}"
 # pointing at the newest build.
 tag_built_images() {
     [ "$GIT_SHA" = "untagged" ] && { print_warning "Not a git checkout — skipping image SHA tagging"; return 0; }
+    # Tag the just-built image (compose names it <project>-<svc>:latest) with the
+    # git SHA. We reference the known :latest name directly rather than
+    # `docker compose images -q`, which is empty before `up` (no containers yet).
+    local tagged=0
     for svc in "${GO_SERVICES[@]}"; do
-        local id
-        id="$(docker compose images -q "$svc" 2>/dev/null || true)"
-        [ -n "$id" ] || continue
-        docker tag "$id" "${COMPOSE_PROJECT}-${svc}:${GIT_SHA}" 2>/dev/null || true
+        docker image inspect "${COMPOSE_PROJECT}-${svc}:latest" >/dev/null 2>&1 || continue
+        if docker tag "${COMPOSE_PROJECT}-${svc}:latest" "${COMPOSE_PROJECT}-${svc}:${GIT_SHA}" 2>/dev/null; then
+            tagged=$((tagged + 1))
+        fi
     done
-    print_success "Tagged service images @ ${GIT_SHA}"
+    print_success "Tagged ${tagged} service images @ ${GIT_SHA}"
 }
 
 # prune_old_image_tags keeps only the newest IMAGE_TAG_RETAIN SHA tags per
