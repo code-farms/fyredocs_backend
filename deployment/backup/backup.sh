@@ -28,15 +28,41 @@ BACKUP_FILES_REGISTERED_ONLY="${BACKUP_FILES_REGISTERED_ONLY:-false}"
 BACKUP_MIN_USERS="${BACKUP_MIN_USERS:-1}"
 BACKUP_MAX_DELETE="${BACKUP_MAX_DELETE:-}"
 BACKUP_ALERT_WEBHOOK_URL="${BACKUP_ALERT_WEBHOOK_URL:-}"
+# Brand the Discord backup embed to match the monitoring alerts (shared/discord).
+ENVIRONMENT="${ENVIRONMENT:-}"
+DISCORD_ALERT_ICON_URL="${DISCORD_ALERT_ICON_URL:-}"
 
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [db-backup] $*"; }
 
-# alert logs an ALERT line and, when a webhook is configured, POSTs a small JSON
-# message (Slack/Discord/Mattermost/healthchecks-style). Never fails the cycle.
+# alert logs an ALERT line and, when a webhook is configured, POSTs to it. For a
+# native Discord webhook it sends the same executive-style embed the monitoring
+# alerts use (orange card, brand author/footer, timestamp); for a Slack-compat
+# endpoint (URL ends in /slack) it falls back to {"text":...}. Never fails the cycle.
 alert() {
 	log "ALERT: $1"
 	[ -n "$BACKUP_ALERT_WEBHOOK_URL" ] || return 0
-	body="{\"text\":\"[fyredocs db-backup] $1\"}"
+	# JSON-escape the message (backslash, quote; collapse newlines to spaces).
+	esc=$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n\r' '  ')
+	case "$BACKUP_ALERT_WEBHOOK_URL" in
+		*/slack)
+			body="{\"text\":\"[fyredocs db-backup] $esc\"}"
+			;;
+		*)
+			ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+			footer="Fyredocs"
+			[ -n "$ENVIRONMENT" ] && footer="Fyredocs • $ENVIRONMENT"
+			author="{\"name\":\"Fyredocs Backups\""
+			foot="{\"text\":\"$footer\""
+			if [ -n "$DISCORD_ALERT_ICON_URL" ]; then
+				author="$author,\"icon_url\":\"$DISCORD_ALERT_ICON_URL\""
+				foot="$foot,\"icon_url\":\"$DISCORD_ALERT_ICON_URL\""
+			fi
+			author="$author}"
+			foot="$foot}"
+			# color 15241517 = 0xE8912D (orange) — backup alerts are warnings.
+			body="{\"embeds\":[{\"title\":\"💾  Backup Alert\",\"description\":\"$esc\",\"color\":15241517,\"author\":$author,\"footer\":$foot,\"timestamp\":\"$ts\"}]}"
+			;;
+	esac
 	curl -m 10 -sS -X POST -H 'Content-Type: application/json' -d "$body" \
 		"$BACKUP_ALERT_WEBHOOK_URL" >/dev/null 2>&1 || log "webhook POST failed"
 }

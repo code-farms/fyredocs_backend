@@ -837,6 +837,14 @@ services:
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+
+      # Discord alert delivery (shared/discord receiver mounted here). Without
+      # DISCORD_WEBHOOK_URL the client is a no-op. The rest style the embeds.
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      DISCORD_ALERT_REPEAT: ${DISCORD_ALERT_REPEAT:-4h}
+      DISCORD_ALERT_ICON_URL: ${DISCORD_ALERT_ICON_URL:-}
+      DISCORD_DASHBOARD_URL: ${DISCORD_DASHBOARD_URL:-}
+      ENVIRONMENT: ${ENVIRONMENT:-}
     healthcheck:
       test: ["CMD", "./healthcheck", "http://localhost:8087/healthz"]
       interval: 10s
@@ -1022,6 +1030,9 @@ services:
       BACKUP_MIN_USERS: ${BACKUP_MIN_USERS:-1}
       BACKUP_MAX_DELETE: ${BACKUP_MAX_DELETE:-}
       BACKUP_ALERT_WEBHOOK_URL: ${BACKUP_ALERT_WEBHOOK_URL:-}
+      # Brand the Discord backup embed to match the monitoring alerts.
+      ENVIRONMENT: ${ENVIRONMENT:-}
+      DISCORD_ALERT_ICON_URL: ${DISCORD_ALERT_ICON_URL:-}
       # rclone remote "src" = local MinIO, for mirroring file buckets offsite.
       # Reuses the app's scoped MinIO creds (they can list+read the buckets).
       RCLONE_CONFIG_SRC_TYPE: s3

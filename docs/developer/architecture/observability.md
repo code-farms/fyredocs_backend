@@ -181,10 +181,19 @@ prometheus (evaluates rules/*.yml)
   on a state change (firing↔resolved) or after `DISCORD_ALERT_REPEAT` (default 4h) —
   the small slice of Alertmanager behaviour we still need. (We give up Alertmanager's
   richer routing/silencing/inhibition; acceptable for a single Discord channel.)
-- **Delivery** — native Discord embeds (color-coded: critical=red, warning=orange,
-  resolved=green). Set `DISCORD_WEBHOOK_URL` to a **plain** Discord channel webhook —
-  **no `/slack` suffix**. Unset → the receiver still 200s and no-ops (nothing delivered);
-  rules stay visible in the Prometheus UI (`:9090`).
+- **Delivery** — an **executive rich-card embed**: brand author (+ logo), severity-colored
+  side bar (critical=red, warning=orange, resolved=green), clickable title (→ Grafana),
+  a humanized alert name, inline **Status / Severity / Service** fields, a **Details**
+  block, and a footer `Fyredocs • <env>` with a timestamp. Built once in `shared/discord`
+  (`embedFor`) so every notification looks identical. Set `DISCORD_WEBHOOK_URL` to a
+  **plain** Discord channel webhook — **no `/slack` suffix**. Unset → the receiver still
+  200s and no-ops (rules stay visible in the Prometheus UI, `:9090`).
+- **Branding env** (optional): `DISCORD_ALERT_ICON_URL` (logo; public HTTPS only),
+  `DISCORD_DASHBOARD_URL` (clickable-title link), `ENVIRONMENT` (footer badge). The
+  **db-backup** sidecar reuses the same style for its alerts (`backup.sh`) — use a plain
+  `BACKUP_ALERT_WEBHOOK_URL` for the rich card, or a `/slack` URL for a plain-text fallback.
+  All these env vars must be present in the container (`docker-compose.yml` passes them to
+  analytics-service and db-backup).
 
 ### Shipped alert rules
 
@@ -240,6 +249,9 @@ All optional; defaults shown.
 | `GRAFANA_ADMIN_PASSWORD` | `admin` | Grafana admin password |
 | `DISCORD_WEBHOOK_URL` | `""` (unset) | Plain Discord channel webhook the analytics-service alert receiver posts native embeds to (no `/slack` suffix). Unset = alerts received but not delivered (rules still visible in Prometheus). |
 | `DISCORD_ALERT_REPEAT` | `4h` | Re-notify interval for a still-firing alert (dedup, like Alertmanager's `repeat_interval`). |
+| `DISCORD_ALERT_ICON_URL` | `""` | Logo shown in the embed author/footer. Public HTTPS only (Discord fetches it server-side); omitted on localhost. |
+| `DISCORD_DASHBOARD_URL` | `""` | Makes the embed title clickable → your Grafana view. Falls back to the alert's Prometheus `generatorURL`. |
+| `ENVIRONMENT` | `""` | Footer badge (`Fyredocs • production`) on every embed; also drives the production security guard. |
 | `OPS_METRICS_INTERVAL` | `20s` | How often analytics-service samples `dependency_up` + `nats_dlq_pending_messages`. |
 | `OTEL_COLLECTOR_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `256M` / `0.5` / `64M` | collector resources |
 | `TEMPO_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `512M` / `0.5` / `128M` | Tempo resources |

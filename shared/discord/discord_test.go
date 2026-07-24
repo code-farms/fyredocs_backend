@@ -74,18 +74,95 @@ func TestThrottle(t *testing.T) {
 	}
 }
 
-func TestEmbedForColors(t *testing.T) {
-	crit := embedFor(Alert{Labels: map[string]string{"alertname": "ServiceDown", "severity": "critical"}}, false)
-	if crit.Color != colorCritical || !strings.Contains(crit.Title, "FIRING") {
-		t.Errorf("critical firing embed wrong: %+v", crit)
+func TestHumanizeAlertName(t *testing.T) {
+	cases := map[string]string{
+		"ServiceDown":           "Service Down",
+		"HighServerErrorRate":   "High Server Error Rate",
+		"DBPoolNearExhaustion":  "DB Pool Near Exhaustion",
+		"DLQBacklog":            "DLQ Backlog",
+		"HighRequestLatencyP95": "High Request Latency P95",
+		"":                      "Alert",
 	}
-	res := embedFor(Alert{Labels: map[string]string{"alertname": "ServiceDown", "severity": "critical"}}, true)
-	if res.Color != colorResolved || !strings.Contains(res.Title, "RESOLVED") {
-		t.Errorf("resolved embed wrong: %+v", res)
+	for in, want := range cases {
+		if got := humanizeAlertName(in); got != want {
+			t.Errorf("humanizeAlertName(%q) = %q, want %q", in, got, want)
+		}
 	}
-	warn := embedFor(Alert{Labels: map[string]string{"alertname": "Slow", "severity": "warning"}}, false)
-	if warn.Color != colorWarning {
-		t.Errorf("warning color wrong: %+v", warn)
+}
+
+func fieldValue(e Embed, name string) (string, bool) {
+	for _, f := range e.Fields {
+		if f.Name == name {
+			return f.Value, true
+		}
+	}
+	return "", false
+}
+
+func TestEmbedForExecutiveCard(t *testing.T) {
+	c := &Client{
+		iconURL:      "https://fyredocs.com/logo.png",
+		dashboardURL: "https://fyredocs.com/grafana",
+		environment:  "production",
+	}
+	a := Alert{
+		Labels:      map[string]string{"alertname": "ServiceDown", "severity": "critical", "job": "auth-service", "instance": "auth-service:8086"},
+		Annotations: map[string]string{"summary": "auth-service is down", "description": "cannot scrape for 1m"},
+		StartsAt:    time.Unix(1_700_000_000, 0),
+	}
+
+	// Firing critical.
+	e := c.embedFor(a, false)
+	if e.Color != colorCritical {
+		t.Errorf("firing critical color = %d, want %d", e.Color, colorCritical)
+	}
+	if e.Title != "🔴 Service Down" {
+		t.Errorf("title = %q, want %q", e.Title, "🔴 Service Down")
+	}
+	if v, ok := fieldValue(e, "Since"); !ok || !strings.HasPrefix(v, "<t:") {
+		t.Errorf("Since field = %q, want a Discord relative timestamp", v)
+	}
+	if e.Author == nil || e.Author.Name != "Fyredocs Monitoring" || e.Author.IconURL != "https://fyredocs.com/logo.png" {
+		t.Errorf("author wrong: %+v", e.Author)
+	}
+	if e.Footer == nil || e.Footer.Text != "Fyredocs • production" {
+		t.Errorf("footer wrong: %+v", e.Footer)
+	}
+	if e.URL != "https://fyredocs.com/grafana" {
+		t.Errorf("title URL = %q, want dashboard link", e.URL)
+	}
+	if e.Timestamp == "" {
+		t.Error("expected a timestamp")
+	}
+	if v, ok := fieldValue(e, "Status"); !ok || !strings.Contains(v, "Firing") {
+		t.Errorf("Status field = %q", v)
+	}
+	if v, ok := fieldValue(e, "Severity"); !ok || v != "Critical" {
+		t.Errorf("Severity field = %q, want Critical", v)
+	}
+	if v, ok := fieldValue(e, "Service"); !ok || !strings.Contains(v, "auth-service") {
+		t.Errorf("Service field = %q", v)
+	}
+	if _, ok := fieldValue(e, "Details"); !ok {
+		t.Error("expected a Details field from the description annotation")
+	}
+
+	// Resolved → green + Resolved status.
+	r := c.embedFor(a, true)
+	if r.Color != colorResolved {
+		t.Errorf("resolved color = %d, want %d", r.Color, colorResolved)
+	}
+	if v, _ := fieldValue(r, "Status"); !strings.Contains(v, "Resolved") {
+		t.Errorf("resolved Status = %q", v)
+	}
+	if _, ok := fieldValue(r, "Cleared"); !ok {
+		t.Error("resolved embed should have a 'Cleared' relative-time field")
+	}
+
+	// Warning → orange.
+	w := c.embedFor(Alert{Labels: map[string]string{"alertname": "Slow", "severity": "warning"}}, false)
+	if w.Color != colorWarning {
+		t.Errorf("warning color = %d, want %d", w.Color, colorWarning)
 	}
 }
 
