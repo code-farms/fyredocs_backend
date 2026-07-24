@@ -1220,41 +1220,9 @@ services:
     networks:
       - fyredocs_net
 
-  # Routes firing Prometheus alerts to a Slack/Discord webhook (ALERTMANAGER_WEBHOOK_URL;
-  # Discord needs the "/slack" suffix). Config uses --config.expand-env so the URL is
-  # injected from the environment. Console loopback-only for operators — never public.
-  # Opt-in via the "alerting" profile: it requires a valid URL (an empty one is an
-  # invalid Alertmanager config), so it is NOT started by the default observability
-  # profile. Enable with: COMPOSE_PROFILES=observability,alerting
-  alertmanager:
-    image: prom/alertmanager:v0.27.0
-    profiles: ["alerting"]
-    restart: always
-    command:
-      - "--config.file=/etc/alertmanager/alertmanager.yml"
-      - "--config.expand-env=true"
-      - "--storage.path=/alertmanager"
-    environment:
-      ALERTMANAGER_WEBHOOK_URL: ${ALERTMANAGER_WEBHOOK_URL:-}
-    volumes:
-      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-      - alertmanager_data:/alertmanager
-    ports:
-      - "127.0.0.1:9093:9093"
-    deploy:
-      resources:
-        limits:
-          memory: ${ALERTMANAGER_MEM_LIMIT:-128M}
-          cpus: "${ALERTMANAGER_CPU_LIMIT:-0.25}"
-        reservations:
-          memory: ${ALERTMANAGER_MEM_RESERVATION:-32M}
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    networks:
-      - fyredocs_net
+  # NOTE: no standalone Alertmanager container. Prometheus posts firing alerts
+  # directly to analytics-service's built-in receiver (shared/discord), which
+  # forwards them to Discord (DISCORD_WEBHOOK_URL). See prometheus.yml `alerting`.
 
   # Dashboards + trace explorer. Datasources (Prometheus, Tempo) and the
   # fyredocs-overview dashboard are auto-provisioned from ./grafana.
@@ -1321,7 +1289,6 @@ volumes:
   caddy_config:
   tempo_data:
   prometheus_data:
-  alertmanager_data:
   grafana_data:
   loki_data:
   alloy_data:

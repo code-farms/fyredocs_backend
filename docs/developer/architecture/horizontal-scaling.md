@@ -41,7 +41,8 @@ tier — at ~12 req/s average / ~60–80 req/s peak the Go services are bored
 > nothing scrapes the `/metrics` endpoints (only analytics-service's in-process
 > sampler pulls the gateway's `/metrics` once a minute). **You cannot operate a
 > multi-instance, multi-host system blind.** Standing up
-> Prometheus + Alertmanager + Grafana (production-readiness.md §9, Phase 2) is a
+> Prometheus + Grafana with Discord alert delivery via analytics-service
+> (production-readiness.md §9, Phase 2) is a
 > prerequisite for everything below, not an afterthought. Alert on the six
 > signals in the table above.
 
@@ -324,7 +325,7 @@ Options, simplest first:
 
 - [ ] **Stage 0 (vertical):** bigger box + `RESOURCE_BUDGET_PCT`; raise
       `WORKER_CONCURRENCY`/`UNOSERVER_INSTANCES`/`OCR_MAX_WORKERS`; **fix Postgres
-      pool budget or add pgbouncer**; stand up Prometheus/Grafana/Alertmanager.
+      pool budget or add pgbouncer**; stand up Prometheus/Grafana (alerts deliver to Discord via analytics-service — no Alertmanager container).
 - [ ] **Stage 1 (scale stateless, same host):** `--scale` gateway/services;
       replace `outputFileCache` with LRU; lock the auth/analytics periodic tasks.
 - [ ] **Stage 2 (second host for workers):** private network + auth/TLS on infra;

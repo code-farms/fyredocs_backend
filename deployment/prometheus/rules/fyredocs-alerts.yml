@@ -67,3 +67,43 @@ groups:
         annotations:
           summary: "Elevated job failure rate"
           description: "Jobs are failing at >0.2/s (10m avg) across the pipeline — check the DLQ and worker logs."
+
+      # Dead-lettered jobs are piling up in JOBS_DLQ (metric from analytics-service).
+      - alert: DLQBacklog
+        expr: nats_dlq_pending_messages > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dead-letter queue backlog ({{ $value }} messages)"
+          description: "JOBS_DLQ has held dead-lettered jobs for over 5 minutes. Investigate worker failures and redrive via POST /api/jobs/dlq/redrive."
+
+  - name: dependencies
+    rules:
+      # A backing dependency (redis/nats/postgres) is unreachable from
+      # analytics-service (metric from the ops-metrics poller).
+      - alert: DependencyDown
+        expr: dependency_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dependency {{ $labels.dependency }} is unreachable"
+          description: "analytics-service cannot reach {{ $labels.dependency }} for over 2 minutes."
+
+  - name: database
+    rules:
+      # A service's connection pool is running out of headroom (in-use vs max).
+      - alert: DBPoolNearExhaustion
+        expr: |
+          (
+            db_pool_in_use_connections
+            /
+            db_pool_max_open_connections
+          ) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB pool near exhaustion on {{ $labels.instance }}"
+          description: "{{ $labels.instance }} has used >90% of its DB connection pool for 5 minutes — requests may start queueing/timing out."

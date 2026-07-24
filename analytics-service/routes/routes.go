@@ -17,6 +17,14 @@ func SetupRouter(r *gin.Engine) {
 	r.GET("/healthz", handlers.HealthCheck)
 	r.GET("/readyz", handlers.ReadyCheck)
 
+	// Internal alert receiver: Prometheus POSTs firing/resolved alerts here
+	// (Alertmanager v2 API) and shared/discord forwards them to Discord — this
+	// replaces the standalone Alertmanager container. Unauthenticated on purpose:
+	// Prometheus can't send the gateway's X-User-Role header, so it sits OUTSIDE
+	// the adminAuth group; it is internal-only (Caddy never routes /internal).
+	// The path matches prometheus.yml's alerting path_prefix (/internal/alerts).
+	r.POST("/internal/alerts/api/v2/alerts", handlers.AlertReceiver())
+
 	// Unified, role-aware dashboard for every authenticated user. Role is
 	// enforced inside the handler (admin/super-admin vs regular user), so this
 	// sits outside the super-admin-only /admin group.

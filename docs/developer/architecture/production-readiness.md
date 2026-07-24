@@ -332,7 +332,7 @@ Lean and modern: gin, gorm, go-redis v9, nats.go (current jetstream API — not 
 | No TLS / no edge | Put Caddy/Traefik (or Cloudflare) in front; HSTS; offload SPA + static — ✅ fixed: Caddy edge added (TLS via `PUBLIC_DOMAIN`, serves SPA, routes object bytes; gateway internal-only) | S |
 | Refresh-token rotation | Rotate on every `/auth/refresh`, store new hash, deny reuse (delete session on reuse detection) | M |
 | `analytics_events` growth | Monthly partitions (native Postgres) + nightly aggregate→`daily_metrics`→prune >90d in cleanup-worker | M |
-| No alerting | Deploy Prometheus+Alertmanager+Grafana (compose services); alert on p99, 5xx rate, JetStream depth, DLQ >0, pg connections, disk | M |
+| Alerting | Prometheus rules → analytics-service's built-in Discord receiver (`shared/discord`, no Alertmanager container); shipped rules cover target-down, 5xx rate, p95 latency, job-failure rate. Extend with JetStream/DLQ depth, pg connections, disk | M |
 | Rate-limit/denylist fail-open | Config flag to fail-closed for auth denylist; at minimum alert on Redis errors | S |
 | `sslmode=disable` default | Default to `require` outside dev profile | S |
 | Session store failures warn-only (`auth.go:327-329`) | Make `StoreSession` failure abort login (it's one insert) | S |
@@ -360,7 +360,7 @@ Remove `cleanup-worker.exe` and `files/` from tree; move Postman file to `/postm
 
 **Phase 1 — Immediate (weeks 1–2):** CI pipeline (build/vet/test/image push) · fix `ChangePlan` authorization · pool budget or pgbouncer · mandatory pg backups + restore drill · `StoreSession` fail-hard · `NakWithDelay` · `file_metadata.path` index · remove stray artifacts/secrets from tree · TLS edge proxy.
 
-**Phase 2 — Before 100K req/day (weeks 3–5):** Prometheus + Alertmanager + Grafana with the 6 alerts above · golang-migrate cutover · stuck-job reconciliation sweep · raise worker concurrency to CPU-matched values and load-test with the existing k6 scripts · refresh-token rotation · analytics partitioning + retention · `/api/v1`.
+**Phase 2 — Before 100K req/day (weeks 3–5):** Prometheus + Grafana with the alerts above (delivery via analytics-service's Discord receiver, no Alertmanager container) · golang-migrate cutover · stuck-job reconciliation sweep · raise worker concurrency to CPU-matched values and load-test with the existing k6 scripts · refresh-token rotation · analytics partitioning + retention · `/api/v1`.
 
 **Phase 3 — Before 500K req/day (weeks 6–9):** Second host for workers (compose per host targeting shared NATS, or adopt Nomad/k3s) · Redis Sentinel or managed Redis · NATS 3-node cluster (JetStream R3 for JOBS_DISPATCH) · MinIO replication or migrate to R2/S3 · SSE consumer refactor · LRU cache fix · zero-downtime rolling deploys · integration test suite in CI.
 

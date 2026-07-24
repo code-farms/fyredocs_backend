@@ -31,14 +31,13 @@ telemetry. It is **opt-in**: nothing here runs unless you explicitly start the
 |-----------|-------|------|-------|
 | `otel-collector` | `otel/opentelemetry-collector-contrib` | Single OTLP ingestion point; batches spans and forwards to Tempo | `4318` (OTLP/HTTP, internal), `4317` (OTLP/gRPC, internal), `8888` (self-metrics) |
 | `tempo` | `grafana/tempo` | Trace storage & query backend | `4317` (OTLP/gRPC in), `3200` (HTTP API) |
-| `prometheus` | `prom/prometheus` | Scrapes every service's `/metrics` + the collector; evaluates alert rules and forwards firing alerts to Alertmanager | `9090` (loopback-only UI) |
-| `alertmanager` | `prom/alertmanager` | Receives firing alerts from Prometheus and delivers them via a Slack-formatted webhook (Slack or Discord); opt-in `alerting` profile | `9093` (loopback-only) |
+| `prometheus` | `prom/prometheus` | Scrapes every service's `/metrics` + the collector; evaluates alert rules and POSTs firing alerts to analytics-service's built-in receiver | `9090` (loopback-only UI) |
 | `loki` | `grafana/loki` | Log storage & query backend (filesystem, ~7-day retention) | `3100` (loopback-only API) |
 | `alloy` | `grafana/alloy` | Log shipper — tails every container's stdout (Docker socket) and pushes to Loki | `12345` (internal UI) |
 | `grafana` | `grafana/grafana` | Dashboards + trace explorer + log explorer, over Prometheus / Tempo / Loki | `3000` (loopback-only UI) |
 
-All are internal to `fyredocs_net`. Only the Grafana, Prometheus, Loki, and
-Alertmanager endpoints publish a host port, all bound to `127.0.0.1` (operator-only,
+All are internal to `fyredocs_net`. Only the Grafana, Prometheus, and Loki
+endpoints publish a host port, all bound to `127.0.0.1` (operator-only,
 like the MinIO console) — never public.
 
 ## Data flow
@@ -138,9 +137,9 @@ Config lives under `deployment/`, mounted read-only into each container
 |------|---------|
 | `otel-collector/config.yaml` | OTLP receivers (4318/4317), batch processor, OTLP exporter to `tempo:4317`, self-metrics on `:8888` |
 | `tempo/tempo.yaml` | OTLP/gRPC receiver, local trace storage, HTTP API `:3200` |
-| `prometheus/prometheus.yml` | Scrape jobs: all 11 services (by service DNS + port) + `otel-collector:8888`; `rule_files` glob + `alerting.alertmanagers` → `alertmanager:9093` |
+| `prometheus/prometheus.yml` | Scrape jobs: all 11 services (by service DNS + port) + `otel-collector:8888`; `rule_files` glob + `alerting.alertmanagers` → `analytics-service:8087` (path_prefix `/internal/alerts`) |
 | `prometheus/rules/*.yml` | Alert rule definitions loaded by Prometheus (see Alerting below) |
-| `alertmanager/alertmanager.yml` | Alertmanager routing: a Slack-formatted receiver (`slack_configs`) at `ALERTMANAGER_WEBHOOK_URL` — works for Slack and Discord (`/slack` suffix) |
+| _(alert delivery)_ | No Alertmanager container. `shared/discord` — mounted in analytics-service at `POST /internal/alerts/api/v2/alerts` — receives Prometheus alerts and forwards them to `DISCORD_WEBHOOK_URL` as native Discord embeds |
 | `loki/loki-config.yaml` | Single-binary Loki: filesystem storage, 7-day retention, compaction |
 | `alloy/config.alloy` | Alloy: Docker service discovery → tail container stdout → relabel (`service`/`container`) → push to `loki:3100` |
 | `grafana/provisioning/datasources/datasources.yaml` | Prometheus (default) + Tempo + Loki datasources, with trace↔log correlation (`tracesToLogsV2`, `trace_id` `derivedField`) |
@@ -153,28 +152,34 @@ Config lives under `deployment/`, mounted read-only into each container
 
 ## Alerting
 
-Prometheus does more than scrape and store — it **evaluates alert rules** and forwards
-firing alerts to a dedicated **Alertmanager** service.
+Prometheus does more than scrape and store — it **evaluates alert rules** and posts
+firing/resolved alerts straight to a **built-in receiver inside analytics-service**
+(the `shared/discord` package), which forwards them to a Discord channel. There is
+**no standalone Alertmanager container** — one fewer image to run.
 
 ```
-prometheus (evaluates rules/*.yml) --firing alerts--> alertmanager :9093 --slack/discord--> ALERTMANAGER_WEBHOOK_URL
+prometheus (evaluates rules/*.yml)
+   --POST /internal/alerts/api/v2/alerts--> analytics-service (shared/discord)
+   --native embed--> DISCORD_WEBHOOK_URL
 ```
 
 - **Rules** — Prometheus loads alert rules from `deployment/prometheus/rules/*.yml`
   (globbed via `rule_files` in `prometheus.yml`).
-- **Alertmanager** — a compose service (`prom/alertmanager`, config
-  `deployment/alertmanager/alertmanager.yml`) bound to `127.0.0.1:9093` (loopback-only,
-  like the other observability UIs). It runs under its own **`alerting`** profile
-  (not `observability`), because it **requires** `ALERTMANAGER_WEBHOOK_URL` — an empty
-  URL is an invalid config and Alertmanager would refuse to start. Enable delivery with
-  `COMPOSE_PROFILES=observability,alerting`. When it is not running, Prometheus still
-  evaluates the rules and shows them at `:9090`; it just can't deliver.
-- **Delivery** — Alertmanager uses a **Slack-formatted receiver** (`slack_configs`),
-  which works for **both Slack and Discord**. The endpoint is the env var
-  **`ALERTMANAGER_WEBHOOK_URL`**:
-  - **Discord** — a channel webhook URL with **`/slack` appended**:
-    `https://discord.com/api/webhooks/<id>/<token>/slack`
-  - **Slack** — the incoming-webhook URL: `https://hooks.slack.com/services/…`
+- **Receiver** — `shared/discord` exposes a handler mounted in analytics-service at
+  `POST /internal/alerts/api/v2/alerts` (unauthenticated, internal-only — Caddy never
+  routes `/internal`). It speaks the Alertmanager v2 API, so Prometheus's
+  `alerting.alertmanagers` just targets `analytics-service:8087` with
+  `path_prefix: /internal/alerts`. analytics-service is always running, so no profile
+  gating is needed.
+- **Dedup/throttle** — because Prometheus re-POSTs firing alerts every evaluation
+  interval, the receiver keeps an in-memory per-alert fingerprint and re-notifies only
+  on a state change (firing↔resolved) or after `DISCORD_ALERT_REPEAT` (default 4h) —
+  the small slice of Alertmanager behaviour we still need. (We give up Alertmanager's
+  richer routing/silencing/inhibition; acceptable for a single Discord channel.)
+- **Delivery** — native Discord embeds (color-coded: critical=red, warning=orange,
+  resolved=green). Set `DISCORD_WEBHOOK_URL` to a **plain** Discord channel webhook —
+  **no `/slack` suffix**. Unset → the receiver still 200s and no-ops (nothing delivered);
+  rules stay visible in the Prometheus UI (`:9090`).
 
 ### Shipped alert rules
 
@@ -185,25 +190,34 @@ prometheus (evaluates rules/*.yml) --firing alerts--> alertmanager :9093 --slack
 | `HighServerErrorRate` | >5% of responses are 5xx over 5m |
 | `HighRequestLatencyP95` | request p95 latency > 2s over 10m |
 | `HighJobFailureRate` | job failure rate is elevated (from `jobs_failed_total` / `jobs_processed_total`) |
+| `DLQBacklog` | `nats_dlq_pending_messages > 0` for 5m — dead-lettered jobs piling up |
+| `DependencyDown` | `dependency_up == 0` for 2m — Redis/NATS/Postgres unreachable from analytics-service |
+| `DBPoolNearExhaustion` | a service's `db_pool_in_use / db_pool_max_open > 0.9` for 5m |
 
-### Wiring the webhook (Discord example)
+### Metrics feeding the rules (where the data comes from)
+
+| Metric | Source |
+|--------|--------|
+| `up` | Prometheus itself — did the `/metrics` scrape of each target succeed |
+| `http_request_duration_seconds` (count/buckets) | `shared/metrics` HTTP + Gin middleware on every service (RED: rate/errors/latency) |
+| `jobs_processed_total` / `jobs_failed_total` | `shared/metrics` counters, incremented by workers via `shared/queue` on job events |
+| `db_pool_{open,in_use,max_open}_connections`, `db_pool_wait_count_total` | `shared/database` — a collector reading each service's `sql.DB.Stats()` at scrape time (all DB services expose it; labelled by scrape `instance`) |
+| `dependency_up{dependency}` , `nats_dlq_pending_messages` | analytics-service ops-metrics poller (`internal/opsmetrics`) — pings Redis/Postgres and reads JOBS_DLQ `State.Msgs` every `OPS_METRICS_INTERVAL` (20s) |
+
+### Wiring the Discord webhook
 
 1. Discord → Server Settings → Integrations → Webhooks → **New Webhook** → copy the URL.
-2. In `.env`, append **`/slack`** to that URL:
+2. In `.env` (plain URL, no suffix):
 
    ```bash
-   ALERTMANAGER_WEBHOOK_URL=https://discord.com/api/webhooks/<id>/<token>/slack
+   DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/<id>/<token>
+   # optional: DISCORD_ALERT_REPEAT=4h
    ```
 
-   (For Slack instead, use the incoming-webhook URL verbatim — no suffix.)
-3. Deploy with the alerting profile enabled:
+3. Deploy with the observability profile (default): `./deployment/deploy.sh`.
 
-   ```bash
-   COMPOSE_PROFILES=observability,alerting ./deployment/deploy.sh
-   ```
-
-Leave it unset in dev and omit the `alerting` profile — alerts remain inspectable in the
-Prometheus UI without starting Alertmanager or spamming a channel.
+Leave `DISCORD_WEBHOOK_URL` unset in dev — alerts remain inspectable in the Prometheus
+UI without pinging a channel.
 
 ## Relation to the in-app analytics dashboard
 
@@ -219,7 +233,9 @@ All optional; defaults shown.
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `GRAFANA_ADMIN_PASSWORD` | `admin` | Grafana admin password |
-| `ALERTMANAGER_WEBHOOK_URL` | `""` (unset) | Slack/Discord webhook Alertmanager posts firing alerts to (Discord needs the `/slack` suffix). Required when the `alerting` profile is on; unset = don't enable the profile (rules still visible in Prometheus). |
+| `DISCORD_WEBHOOK_URL` | `""` (unset) | Plain Discord channel webhook the analytics-service alert receiver posts native embeds to (no `/slack` suffix). Unset = alerts received but not delivered (rules still visible in Prometheus). |
+| `DISCORD_ALERT_REPEAT` | `4h` | Re-notify interval for a still-firing alert (dedup, like Alertmanager's `repeat_interval`). |
+| `OPS_METRICS_INTERVAL` | `20s` | How often analytics-service samples `dependency_up` + `nats_dlq_pending_messages`. |
 | `OTEL_COLLECTOR_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `256M` / `0.5` / `64M` | collector resources |
 | `TEMPO_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `512M` / `0.5` / `128M` | Tempo resources |
 | `PROMETHEUS_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `512M` / `0.5` / `128M` | Prometheus resources |

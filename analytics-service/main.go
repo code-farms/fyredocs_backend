@@ -25,6 +25,7 @@ import (
 	"analytics-service/handlers"
 	"analytics-service/internal/apisampler"
 	"analytics-service/internal/models"
+	"analytics-service/internal/opsmetrics"
 	"analytics-service/routes"
 	"analytics-service/subscriber"
 )
@@ -72,6 +73,12 @@ func main() {
 	samplerCtx, stopSampler := context.WithCancel(context.Background())
 	defer stopSampler()
 	apisampler.Start(samplerCtx, models.DB)
+
+	// Ops-health poller: exposes dependency_up{redis,nats,postgres} and
+	// nats_dlq_pending_messages on /metrics for the Prometheus alert rules.
+	opsCtx, stopOps := context.WithCancel(context.Background())
+	defer stopOps()
+	opsmetrics.Start(opsCtx, models.DB)
 
 	r := gin.New()
 	r.Use(response.GinRecovery())

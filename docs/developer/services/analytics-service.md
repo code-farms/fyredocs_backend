@@ -26,6 +26,11 @@ Events are persisted to the `analytics_events` PostgreSQL table for querying.
 ### Subscriber Lifecycle
 `subscriber.Start` returns a `*Subscribers` handle that owns the JetStream `ConsumeContext` for both subscriptions. On SIGTERM the service calls `srv.Shutdown(ctx)` to drain in-flight HTTP requests, then `subs.Stop()` to halt the dispatcher goroutines, and finally lets the deferred `natsconn.Close()` drain the NATS connection. This ordering prevents events from being dispatched into DB writes after the connection has begun draining.
 
+### Alert receiver & ops-metrics poller
+Two observability responsibilities live here so no standalone Alertmanager/exporter container is needed:
+- **Alert receiver** — `POST /internal/alerts/api/v2/alerts` (`shared/discord`) accepts Prometheus's Alertmanager-v2 alert POSTs and forwards them to Discord (`DISCORD_WEBHOOK_URL`). Internal-only, unauthenticated (Prometheus can't send `X-User-Role`; Caddy never routes `/internal`).
+- **Ops-metrics poller** — `internal/opsmetrics` runs a background ticker (`OPS_METRICS_INTERVAL`, default 20s, cancelled on shutdown) that pings Redis/Postgres and reads the JOBS_DLQ backlog, exposing `dependency_up{dependency=redis|nats|postgres}` and `nats_dlq_pending_messages` on `/metrics`. Prometheus's `DependencyDown` and `DLQBacklog` rules fire on these. (DB connection-pool gauges come from `shared/database` on every DB service — see observability.md.)
+
 ### Event Types
 | Event Type | Source | Description |
 |-----------|--------|-------------|

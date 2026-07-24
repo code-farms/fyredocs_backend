@@ -88,6 +88,9 @@ func ConnectFromEnv(base PoolConfig, overrides ...PoolConfig) (*gorm.DB, error) 
 	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
 	sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
 
+	// Expose pool stats on /metrics so Prometheus can alert on pool exhaustion.
+	registerPoolMetrics(sqlDB)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := sqlDB.PingContext(ctx); err != nil {
