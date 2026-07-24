@@ -103,25 +103,23 @@ export const TOOL_MATRIX = [
   { tool: 'ppt-to-pdf',   group: 'convert-to-pdf', fixture: 'pptx', options: {}, weight: 3 },
   { tool: 'image-to-pdf', group: 'convert-to-pdf', fixture: 'image', options: {}, multi: 2, weight: 6 },
   { tool: 'html-to-pdf',  group: 'convert-to-pdf', fixture: 'html', options: {}, weight: 4 },
-  { tool: 'word-to-odt',  group: 'convert-to-pdf', fixture: 'docx', options: {}, weight: 2 },
-  // ODF → PDF need odt/ods/odp fixtures (generated via LibreOffice — see
-  // fixtures/generate.sh). Kept here; the smoke run drops any whose fixture is missing.
-  { tool: 'odt-to-pdf',   group: 'convert-to-pdf', fixture: 'odt', options: {}, weight: 2 },
-  { tool: 'ods-to-pdf',   group: 'convert-to-pdf', fixture: 'ods', options: {}, weight: 2 },
-  { tool: 'odp-to-pdf',   group: 'convert-to-pdf', fixture: 'odp', options: {}, weight: 2 },
 
   // convert-from-pdf (pdf2docx / LibreOffice / poppler)
   { tool: 'pdf-to-word',  group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 10 },
   { tool: 'pdf-to-text',  group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 5 },
   { tool: 'pdf-to-image', group: 'convert-from-pdf', fixture: 'pdf', options: { outputExt: '.jpg' }, weight: 3 },
-  { tool: 'pdf-to-excel', group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 3 },
   { tool: 'pdf-to-html',  group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 3 },
   { tool: 'pdf-to-powerpoint', group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 2 },
   { tool: 'pdf-to-pdfa',  group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 3 },
   { tool: 'pdf-to-odt',   group: 'convert-from-pdf', fixture: 'pdf', options: {}, weight: 2 },
 
-  // Deferred (need special inputs): unlock-pdf (encrypted PDF fixture),
-  // scan-to-pdf (per-page scanner payload). Add once fixtures/options exist.
+  // Excluded — verified failing against the current backend (smoke prune):
+  //   word-to-odt, odt-to-pdf, ods-to-pdf, odp-to-pdf → convert-to-pdf worker
+  //     returns "operation isn't supported" (ODF input/output not implemented,
+  //     though routing.go advertises them).
+  //   pdf-to-excel → convert-from-pdf "failed to rename output file" (never completes).
+  // Also deferred (need special inputs): unlock-pdf (encrypted-PDF fixture),
+  //   scan-to-pdf (per-page scanner payload).
 ];
 
 // Per-group view (for the per-tool scenarios).

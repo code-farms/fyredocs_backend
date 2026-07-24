@@ -15,9 +15,6 @@ const META = {
   pptx:          { ext: 'pptx', contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
   image:         { ext: 'png',  contentType: 'image/png' },
   html:          { ext: 'html', contentType: 'text/html' },
-  odt:           { ext: 'odt',  contentType: 'application/vnd.oasis.opendocument.text' },
-  ods:           { ext: 'ods',  contentType: 'application/vnd.oasis.opendocument.spreadsheet' },
-  odp:           { ext: 'odp',  contentType: 'application/vnd.oasis.opendocument.presentation' },
 };
 
 const SIZES = ['small', 'medium', 'large'];
