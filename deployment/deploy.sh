@@ -130,15 +130,21 @@ tag_built_images() {
 # prune_old_image_tags keeps only the newest IMAGE_TAG_RETAIN SHA tags per
 # service so retained rollback images don't grow without bound.
 prune_old_image_tags() {
+    # Nothing SHA-tagged (non-git checkout) → nothing to prune.
+    [ "$GIT_SHA" = "untagged" ] && return 0
     for svc in "${GO_SERVICES[@]}"; do
-        # Newest-first by created time; skip :latest; drop everything past the keep count.
-        docker images "${COMPOSE_PROJECT}-${svc}" --format '{{.Tag}} {{.CreatedAt}}' 2>/dev/null \
+        # Newest-first by created time; skip :latest; drop everything past the keep
+        # count. Captured with `|| true` so a `grep` no-match (only :latest present)
+        # can't return non-zero and trip `set -e`/`pipefail`, aborting the deploy.
+        local tags
+        tags="$(docker images "${COMPOSE_PROJECT}-${svc}" --format '{{.Tag}} {{.CreatedAt}}' 2>/dev/null \
             | grep -v '^latest ' \
             | sort -rk2 \
-            | awk 'NR>'"$IMAGE_TAG_RETAIN"' {print $1}' \
-            | while read -r tag; do
-                [ -n "$tag" ] && docker rmi "${COMPOSE_PROJECT}-${svc}:${tag}" 2>/dev/null || true
-              done
+            | awk 'NR>'"$IMAGE_TAG_RETAIN"' {print $1}')" || true
+        [ -n "$tags" ] || continue
+        while read -r tag; do
+            [ -n "$tag" ] && docker rmi "${COMPOSE_PROJECT}-${svc}:${tag}" 2>/dev/null || true
+        done <<< "$tags"
     done
 }
 
