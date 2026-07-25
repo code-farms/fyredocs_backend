@@ -25,7 +25,7 @@ func TestProcessFileUnsupportedTool(t *testing.T) {
 }
 
 func TestProcessFileRecognizesODFTools(t *testing.T) {
-	tools := []string{"pdf-to-odt", "pdf-to-ods", "pdf-to-odp"}
+	tools := []string{"pdf-to-odt", "pdf-to-ods", "pdf-to-odp", "pdf-to-excel", "pdf-to-xlsx"}
 	for _, tool := range tools {
 		t.Run(tool, func(t *testing.T) {
 			_, err := ProcessFile(context.Background(), uuid.New(), tool, []string{"/nonexistent.pdf"}, nil, t.TempDir(), nil)

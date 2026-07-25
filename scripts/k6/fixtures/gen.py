@@ -4,7 +4,7 @@
 No LibreOffice / Ghostscript / ImageMagick needed — OOXML is zip+XML, PDFs and
 PNGs are assembled from raw bytes. Output: fixtures/out/<category>/<size>.<ext>
 
-Categories: pdf, scanned-pdf, docx, xlsx, pptx, image(png), html
+Categories: pdf, scanned-pdf, docx, xlsx, pptx, odt, ods, odp, image(png), html
 Sizes:      small (~0.8MB), medium (~8MB), large (~40MB)
 
 These are good enough to exercise every tool's pipeline under load. If a server
@@ -356,6 +356,30 @@ def html(pad_to=0):
             f"<body><h1>Fyredocs</h1>{body}{pad}</body></html>").encode("utf-8")
 
 
+# --------------------------------------------------------------------------
+# ODF (odt / ods / odp). Unlike OOXML, LibreOffice's ODF importer rejects
+# hand-rolled minimal packages ("source file could not be loaded"), and padding
+# a valid ODF zip with a filler entry also breaks loading. So we ship real,
+# known-good templates produced once by LibreOffice (see odf_base.py) and decode
+# them here. They are small (~9-13 KB) and not size-differentiated — only the
+# 'small' size is generated for ODF; pickFile() falls back to it for medium/large.
+# --------------------------------------------------------------------------
+import base64
+from odf_base import ODT_B64, ODS_B64, ODP_B64
+
+
+def odt(pad_to=0):
+    return base64.b64decode(ODT_B64)
+
+
+def ods(pad_to=0):
+    return base64.b64decode(ODS_B64)
+
+
+def odp(pad_to=0):
+    return base64.b64decode(ODP_B64)
+
+
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else "all"
     print(f"Generating fixtures -> {OUT}")
@@ -376,6 +400,14 @@ def main():
             write("xlsx", size, "xlsx", xlsx(pad_to=target))
         if only in ("all", "pptx"):
             write("pptx", size, "pptx", pptx(pad_to=target))
+        # ODF templates are fixed real files (not size-scaled) — emit 'small' only.
+        if size == "small":
+            if only in ("all", "odt"):
+                write("odt", size, "odt", odt())
+            if only in ("all", "ods"):
+                write("ods", size, "ods", ods())
+            if only in ("all", "odp"):
+                write("odp", size, "odp", odp())
         if only in ("all", "image"):
             w, h = png_dims[size]
             write("image", size, "png", png_bytes(w, h, gray=False, noisy=True))

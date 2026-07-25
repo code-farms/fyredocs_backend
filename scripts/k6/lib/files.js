@@ -13,6 +13,9 @@ const META = {
   docx:          { ext: 'docx', contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
   xlsx:          { ext: 'xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
   pptx:          { ext: 'pptx', contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
+  odt:           { ext: 'odt',  contentType: 'application/vnd.oasis.opendocument.text' },
+  ods:           { ext: 'ods',  contentType: 'application/vnd.oasis.opendocument.spreadsheet' },
+  odp:           { ext: 'odp',  contentType: 'application/vnd.oasis.opendocument.presentation' },
   image:         { ext: 'png',  contentType: 'image/png' },
   html:          { ext: 'html', contentType: 'text/html' },
 };

@@ -7,7 +7,7 @@ The Convert From PDF service converts PDF files to other formats including image
 **Port**: 8082 (internal, not exposed through API Gateway)
 **Type**: Background Worker + REST API
 **Framework**: Gin (Go)
-**Processing**: pdf2docx (Python; for `pdf-to-word`/`pdf-to-docx`), LibreOffice (Writer/Calc/Impress for `pdf-to-xlsx`/`pdf-to-odt`/`pdf-to-ods`/`pdf-to-odp` and the `pdf-to-word` fallback), Ghostscript (`pdf-to-pdfa`), Poppler (`pdftotext`, `pdftohtml`, `pdftoppm` for image/text/html conversions)
+**Processing**: pdf2docx (Python; for `pdf-to-word`/`pdf-to-docx`), pdfplumber + openpyxl (real table extraction for `pdf-to-excel`/`pdf-to-xlsx`, and the intermediate `.xlsx` for `pdf-to-ods`), LibreOffice (Writer for `pdf-to-odt` and the `pdf-to-word` fallback; Calc `xlsx→ods` for `pdf-to-ods`; Impress `pptx→odp` for `pdf-to-odp`), Ghostscript (`pdf-to-pdfa`), Poppler (`pdftotext`, `pdftohtml`, `pdftoppm` for image/text/html/ppt/odp conversions)
 
 ## Responsibilities
 
@@ -38,12 +38,14 @@ convert-from-pdf worker
   ├─ Run processing.ProcessFile() on local files, output to <scratch>/out:
   │     ├─ pdf-to-image      → pdftoppm (Poppler) → single PNG or ZIP
   │     ├─ pdf-to-word/docx  → pdf2docx (primary) → LibreOffice writer_pdf_import (fallback)
-  │     ├─ pdf-to-excel/xlsx → LibreOffice Calc (writer_pdf_import → xlsx)
+  │     ├─ pdf-to-excel/xlsx → pdfplumber+openpyxl (scripts/pdf_to_xlsx.py): tables→sheets, text fallback
   │     ├─ pdf-to-ppt/pptx   → image-based: rasterize all pages in one pdftoppm call → embed as one slide per image
   │     ├─ pdf-to-html       → pdftohtml → ZIP (HTML + images)
   │     ├─ pdf-to-text/txt   → pdftotext
   │     ├─ pdf-to-pdfa       → Ghostscript (PDF/A-2b)
-  │     └─ pdf-to-odt/ods/odp → LibreOffice writer_pdf_import → odt/ods/odp
+  │     ├─ pdf-to-odt        → LibreOffice writer_pdf_import → odt
+  │     ├─ pdf-to-ods        → pdfplumber xlsx → LibreOffice xlsx→ods
+  │     └─ pdf-to-odp        → image-slide pptx → LibreOffice pptx→odp
   ├─ Upload output: <scratch>/out/<file> → S3 outputs bucket jobs/<jobId>/<file>
   │  (upload failure → recoverable, NAK + backoff)
   ├─ DB → status='completed', progress=100; INSERT file_metadata
@@ -68,8 +70,8 @@ Inputs and outputs live in S3-compatible object storage (MinIO in compose), not 
 | `pdf-to-img` | .pdf | .png (single page) or .zip (multi-page PNGs) | pdftoppm (Poppler) | ✅ Alias |
 | `pdf-to-word` | .pdf | .docx | pdf2docx (primary) → LibreOffice Writer (fallback) | ✅ Implemented |
 | `pdf-to-docx` | .pdf | .docx | pdf2docx (primary) → LibreOffice Writer (fallback) | ✅ Alias |
-| `pdf-to-excel` | .pdf | .xlsx | LibreOffice Calc | ✅ Implemented |
-| `pdf-to-xlsx` | .pdf | .xlsx | LibreOffice Calc | ✅ Alias |
+| `pdf-to-excel` | .pdf | .xlsx | pdfplumber + openpyxl (tables→sheets, text fallback) | ✅ Implemented |
+| `pdf-to-xlsx` | .pdf | .xlsx | pdfplumber + openpyxl (alias of `pdf-to-excel`) | ✅ Alias |
 | `pdf-to-ppt` | .pdf | .pptx | image-based: pdftoppm → embed each page as a slide image | ✅ Implemented |
 | `pdf-to-powerpoint` | .pdf | .pptx | image-based (alias of `pdf-to-ppt`) | ✅ Alias |
 | `pdf-to-pptx` | .pdf | .pptx | image-based (alias of `pdf-to-ppt`) | ✅ Alias |
@@ -77,9 +79,9 @@ Inputs and outputs live in S3-compatible object storage (MinIO in compose), not 
 | `pdf-to-text` | .pdf | .txt | pdftotext (Poppler) | ✅ Implemented |
 | `pdf-to-txt` | .pdf | .txt | pdftotext (Poppler) | ✅ Alias |
 | `pdf-to-pdfa` | .pdf | .pdf (PDF/A-2b) | Ghostscript | ✅ Implemented |
-| `pdf-to-odt` | .pdf | .odt | LibreOffice Writer | ✅ Implemented |
-| `pdf-to-ods` | .pdf | .ods | LibreOffice Calc | ✅ Implemented |
-| `pdf-to-odp` | .pdf | .odp | LibreOffice Impress | ✅ Implemented |
+| `pdf-to-odt` | .pdf | .odt | LibreOffice Writer (writer_pdf_import) | ✅ Implemented |
+| `pdf-to-ods` | .pdf | .ods | pdfplumber xlsx → LibreOffice xlsx→ods | ✅ Implemented |
+| `pdf-to-odp` | .pdf | .odp | image-slide pptx → LibreOffice pptx→odp | ✅ Implemented |
 
 ## API Endpoints
 
@@ -223,13 +225,13 @@ Converts PDF to Microsoft Excel (.xlsx).
 
 **Input**: `.pdf`
 **Output**: `.xlsx`
-**Implementation**: LibreOffice Calc
+**Implementation**: real table extraction via **pdfplumber + openpyxl** (`scripts/pdf_to_xlsx.py`). For each page, detected tables (`extract_tables()`) become one worksheet each; pages with no detected table fall back to a text dump (one row per line). The script always writes a valid, non-empty `.xlsx`. LibreOffice's `writer_pdf_import` cannot emit a spreadsheet (it imports the PDF as a Writer document), so the previous LibreOffice-Calc path never produced output and failed with a misleading "failed to rename output file" — that path was replaced.
 
-**Best For**: PDFs containing tables or structured data
+**Best For**: PDFs containing ruled tables or structured tabular data
 
 **Limitations**:
-- Works best with simple table structures
-- Complex layouts may require manual cleanup
+- PDF→spreadsheet is inherently lossy. Real tables are recovered when the PDF has detectable table structure; non-tabular pages degrade to a readable text dump rather than reconstructed cells.
+- Cell types are strings (no formula/number-format recovery); complex or borderless layouts may need manual cleanup.
 
 **Example**:
 ```bash
@@ -375,9 +377,11 @@ Converts PDF to LibreOffice Calc (.ods) format.
 
 **Input**: `.pdf`
 **Output**: `.ods`
-**Implementation**: LibreOffice Calc
+**Implementation**: extract to `.xlsx` first (pdfplumber + openpyxl, same as `pdf-to-excel`), then LibreOffice converts spreadsheet→spreadsheet (`xlsx`→`ods`) — a conversion Calc supports. The direct PDF→ODS path via `writer_pdf_import` cannot emit a spreadsheet and was replaced.
 
-**Best For**: PDFs containing tables or structured data for editing in LibreOffice Calc
+**Best For**: PDFs containing ruled tables or structured data for editing in LibreOffice Calc
+
+**Limitations**: same as `pdf-to-excel` (lossy; text-dump fallback for non-tabular pages).
 
 **Example**:
 ```bash
@@ -393,9 +397,9 @@ Converts PDF to LibreOffice Impress (.odp) format.
 
 **Input**: `.pdf`
 **Output**: `.odp`
-**Implementation**: LibreOffice Impress
+**Implementation**: build the image-slide `.pptx` first (`pdftoppm` rasterizes each page → one image per slide, same as `pdf-to-ppt`), then LibreOffice converts presentation→presentation (`pptx`→`odp`) — a conversion Impress supports. The direct PDF→ODP path via `writer_pdf_import` cannot emit a presentation and was replaced.
 
-**Behavior**: Each PDF page is converted to an Impress slide
+**Behavior**: Each PDF page becomes one Impress slide as an embedded image (not selectable/editable text — same trade-off as `pdf-to-ppt`).
 
 **Example**:
 ```bash

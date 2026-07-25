@@ -30,7 +30,9 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir pdf2docx==0.5.8
+# pdf2docx: PDF→DOCX. pdfplumber+openpyxl: PDF→XLSX table extraction
+# (scripts/pdf_to_xlsx.py). All pure-Python (no Java/opencv beyond pdf2docx's).
+RUN pip3 install --no-cache-dir pdf2docx==0.5.8 pdfplumber==0.11.4 openpyxl==3.1.5
 
 RUN useradd -m -u 10001 appuser
 
@@ -40,9 +42,10 @@ WORKDIR /app
 RUN mkdir -p uploads outputs && \
     chown -R appuser:appuser /app
 
-# 4. Copy the binary from builder
+# 4. Copy the binary + the PDF→XLSX helper script from builder context
 COPY --from=builder /app/bin/convert-from-pdf .
-RUN chown appuser:appuser convert-from-pdf
+COPY convert-from-pdf/scripts/ /app/scripts/
+RUN chown -R appuser:appuser convert-from-pdf /app/scripts
 
 USER appuser
 
