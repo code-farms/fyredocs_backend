@@ -81,6 +81,10 @@ func main() {
 			"excel-to-pdf": true,
 			"html-to-pdf":  true,
 			"image-to-pdf": true, "img-to-pdf": true,
+			// ODF: routing.go + processing already support these; the allowlist
+			// just hadn't been updated (they'd fail with "operation not supported").
+			"odt-to-pdf": true, "ods-to-pdf": true, "odp-to-pdf": true,
+			"word-to-odt": true, "excel-to-ods": true, "powerpoint-to-odp": true,
 		},
 		Process:     processFunc,
 		JS:          natsconn.JS,

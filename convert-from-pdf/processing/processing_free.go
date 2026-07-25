@@ -108,16 +108,18 @@ func pdfToOffice(ctx context.Context, inputPath string, outputPath string, outpu
 	baseName := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
 	convertedFile := filepath.Join(outputDir, baseName+"."+outputFormat)
 
+	// Verify LibreOffice actually produced the file BEFORE renaming. Some
+	// conversions (e.g. importing a PDF as a Writer doc then exporting to a
+	// spreadsheet format) silently produce nothing; renaming first would surface
+	// a misleading "failed to rename" instead of the real cause.
+	if info, statErr := os.Stat(convertedFile); statErr != nil || info.Size() == 0 {
+		return fmt.Errorf("LibreOffice produced no output for %s conversion", outputFormat)
+	}
+
 	if convertedFile != outputPath {
 		if err := os.Rename(convertedFile, outputPath); err != nil {
 			return fmt.Errorf("failed to rename output file: %w", err)
 		}
-	}
-
-	// Validate that LibreOffice actually produced output.
-	info, statErr := os.Stat(outputPath)
-	if statErr != nil || info.Size() == 0 {
-		return fmt.Errorf("LibreOffice produced no output for %s conversion", outputFormat)
 	}
 
 	slog.Info("PDF to office conversion completed", "format", outputFormat, "output", outputPath)
@@ -167,11 +169,97 @@ func pdfToPptImages(ctx context.Context, inputPath string, outputPath string, on
 }
 
 // pdfToOfficeTicking wraps pdfToOffice with synthetic progress ticking for
-// conversion tools that call a single long-running subprocess (xlsx, odt, etc.).
+// conversion tools that call a single long-running subprocess (odt, etc.).
 func pdfToOfficeTicking(ctx context.Context, inputPath string, outputPath string, outputFormat string, onProgress ProgressFunc) error {
 	return runWithProgressTicking(ctx, onProgress, func(ctx context.Context) error {
 		return pdfToOffice(ctx, inputPath, outputPath, outputFormat)
 	})
+}
+
+// pdfToXlsxScript is the path to the pdfplumber/openpyxl helper (see Dockerfile).
+func pdfToXlsxScript() string {
+	if p := os.Getenv("PDF_TO_XLSX_SCRIPT"); p != "" {
+		return p
+	}
+	return "/app/scripts/pdf_to_xlsx.py"
+}
+
+// pdfToXlsx converts a PDF to XLSX via pdfplumber table extraction (with a text
+// fallback for non-tabular pages). LibreOffice's writer_pdf_import cannot export
+// a spreadsheet, so a real extractor is used instead.
+func pdfToXlsx(ctx context.Context, inputPath string, outputPath string) error {
+	slog.Info("converting PDF to XLSX via pdfplumber", "input", inputPath)
+	cmd := exec.CommandContext(ctx, "python3", pdfToXlsxScript(), inputPath, outputPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		slog.ErrorContext(ctx, "pdf_to_xlsx failed", "error", err, "op", "pdf_to_xlsx", "output", string(output))
+		return fmt.Errorf("PDF to XLSX conversion failed: %w", err)
+	}
+	if info, statErr := os.Stat(outputPath); statErr != nil || info.Size() == 0 {
+		return fmt.Errorf("PDF to XLSX conversion produced no output")
+	}
+	return nil
+}
+
+func pdfToXlsxTicking(ctx context.Context, inputPath string, outputPath string, onProgress ProgressFunc) error {
+	return runWithProgressTicking(ctx, onProgress, func(ctx context.Context) error {
+		return pdfToXlsx(ctx, inputPath, outputPath)
+	})
+}
+
+// pdfToOds builds an XLSX first (real extraction) then converts it to ODS with
+// LibreOffice — a spreadsheet→spreadsheet conversion Calc supports (unlike the
+// broken PDF→ODS-via-Writer path).
+func pdfToOds(ctx context.Context, inputPath string, outputPath string) error {
+	outputDir := filepath.Dir(outputPath)
+	tmpXlsx := filepath.Join(outputDir, "pdf2ods_"+strings.TrimSuffix(filepath.Base(outputPath), filepath.Ext(outputPath))+".xlsx")
+	if err := pdfToXlsx(ctx, inputPath, tmpXlsx); err != nil {
+		return err
+	}
+	defer os.Remove(tmpXlsx)
+	return officeConvertTo(ctx, tmpXlsx, outputPath, "ods")
+}
+
+func pdfToOdsTicking(ctx context.Context, inputPath string, outputPath string, onProgress ProgressFunc) error {
+	return runWithProgressTicking(ctx, onProgress, func(ctx context.Context) error {
+		return pdfToOds(ctx, inputPath, outputPath)
+	})
+}
+
+// pdfToOdp builds the image-slide PPTX (works for any PDF) then converts it to
+// ODP with LibreOffice — an Impress→Impress conversion (unlike the broken
+// PDF→ODP-via-Writer path).
+func pdfToOdp(ctx context.Context, inputPath string, outputPath string, onProgress ProgressFunc) error {
+	outputDir := filepath.Dir(outputPath)
+	tmpPptx := filepath.Join(outputDir, "pdf2odp_"+strings.TrimSuffix(filepath.Base(outputPath), filepath.Ext(outputPath))+".pptx")
+	if err := pdfToPptImages(ctx, inputPath, tmpPptx, onProgress); err != nil {
+		return err
+	}
+	defer os.Remove(tmpPptx)
+	return officeConvertTo(ctx, tmpPptx, outputPath, "odp")
+}
+
+// officeConvertTo runs a plain LibreOffice --convert-to for same-family
+// conversions (e.g. xlsx→ods, pptx→odp), then renames to the requested output.
+func officeConvertTo(ctx context.Context, inputPath string, outputPath string, outputFormat string) error {
+	outputDir := filepath.Dir(outputPath)
+	cmd := exec.CommandContext(ctx, "libreoffice", "--headless",
+		"--convert-to", outputFormat, "--outdir", outputDir, inputPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		slog.ErrorContext(ctx, "libreoffice convert failed", "error", err, "op", "libreoffice.convert", "format", outputFormat, "output", string(output))
+		return fmt.Errorf("conversion to %s failed: %w", outputFormat, err)
+	}
+	baseName := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
+	convertedFile := filepath.Join(outputDir, baseName+"."+outputFormat)
+	if info, statErr := os.Stat(convertedFile); statErr != nil || info.Size() == 0 {
+		return fmt.Errorf("LibreOffice produced no output for %s conversion", outputFormat)
+	}
+	if convertedFile != outputPath {
+		if err := os.Rename(convertedFile, outputPath); err != nil {
+			return fmt.Errorf("failed to rename output file: %w", err)
+		}
+	}
+	return nil
 }
 
 // runWithProgressTicking runs convert in a goroutine while emitting synthetic

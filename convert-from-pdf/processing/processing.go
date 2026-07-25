@@ -59,7 +59,9 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		}
 	case "pdf-to-excel", "pdf-to-xlsx":
 		outputPath = filepath.Join(outputDir, outputFileName+".xlsx")
-		err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "xlsx", onProgress)
+		// Real table extraction (pdfplumber). LibreOffice's writer_pdf_import
+		// imports a PDF as a Writer doc, which cannot export a spreadsheet.
+		err = pdfToXlsxTicking(ctx, inputPaths[0], outputPath, onProgress)
 	case "pdf-to-ppt", "pdf-to-powerpoint", "pdf-to-pptx":
 		outputPath = filepath.Join(outputDir, outputFileName+".pptx")
 		err = pdfToPptImages(ctx, inputPaths[0], outputPath, onProgress)
@@ -74,10 +76,14 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "odt", onProgress)
 	case "pdf-to-ods":
 		outputPath = filepath.Join(outputDir, outputFileName+".ods")
-		err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "ods", onProgress)
+		// Extract to XLSX first, then Calc converts spreadsheet→spreadsheet.
+		// (Direct PDF→ODS via writer_pdf_import can't emit a spreadsheet.)
+		err = pdfToOdsTicking(ctx, inputPaths[0], outputPath, onProgress)
 	case "pdf-to-odp":
 		outputPath = filepath.Join(outputDir, outputFileName+".odp")
-		err = pdfToOfficeTicking(ctx, inputPaths[0], outputPath, "odp", onProgress)
+		// Build the image-slide PPTX, then Impress converts presentation→ODP.
+		// (Direct PDF→ODP via writer_pdf_import can't emit a presentation.)
+		err = pdfToOdp(ctx, inputPaths[0], outputPath, onProgress)
 	default:
 		err = fmt.Errorf("unsupported tool type: %s", toolType)
 	}

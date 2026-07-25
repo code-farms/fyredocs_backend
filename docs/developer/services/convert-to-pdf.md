@@ -63,6 +63,14 @@ The worker's `AllowedTools` whitelist (in `main.go`) is the authoritative source
 | `ppt-to-pdf` | `powerpoint-to-pdf` | `.ppt`, `.pptx` | `.pdf` | LibreOffice Impress |
 | `html-to-pdf` | — | `.html`, `.htm` | `.pdf` | LibreOffice Writer |
 | `image-to-pdf` | `img-to-pdf` | `.jpg`, `.png`, `.gif`, `.webp`, `.bmp` | `.pdf` | pdfcpu (one image per page) |
+| `odt-to-pdf` | — | `.odt` | `.pdf` | LibreOffice Writer (unoconvert + fallback) |
+| `ods-to-pdf` | — | `.ods` | `.pdf` | LibreOffice Calc |
+| `odp-to-pdf` | — | `.odp` | `.pdf` | LibreOffice Impress |
+| `word-to-odt` | — | `.doc`, `.docx` | `.odt` | LibreOffice Writer |
+| `excel-to-ods` | — | `.xls`, `.xlsx` | `.ods` | LibreOffice Calc |
+| `powerpoint-to-odp` | — | `.ppt`, `.pptx` | `.odp` | LibreOffice Impress |
+
+> **ODF conversions** (`odt/ods/odp-to-pdf`, `word-to-odt`, `excel-to-ods`, `powerpoint-to-odp`) were added to `AllowedTools` in the 2026-07 conversion-bug fix. The routing table and processing code already supported them; the allowlist was stale, so these jobs previously failed with `[UNSUPPORTED_TOOL]` before conversion.
 
 > **Heads-up:** the worker's `AllowedTools` map is the definitive list. PDF-manipulation tools (compress / merge / split / watermark / sign / etc.) live in **organize-pdf** and **optimize-pdf**, not here. The job-service [routing](./job-service.md#toolservicemap-routinggo) table is what the gateway and clients see — keep both in sync if you add a new tool.
 

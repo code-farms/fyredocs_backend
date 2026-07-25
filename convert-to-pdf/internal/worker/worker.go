@@ -200,7 +200,8 @@ func estimateConversionTime(toolType string, inputPaths []string) time.Duration 
 // isOfficeConversion returns true for tool types that use LibreOffice.
 func isOfficeConversion(toolType string) bool {
 	switch toolType {
-	case "word-to-pdf", "excel-to-pdf", "ppt-to-pdf", "powerpoint-to-pdf", "html-to-pdf":
+	case "word-to-pdf", "excel-to-pdf", "ppt-to-pdf", "powerpoint-to-pdf", "html-to-pdf",
+		"odt-to-pdf", "ods-to-pdf", "odp-to-pdf", "word-to-odt", "excel-to-ods", "powerpoint-to-odp":
 		return true
 	}
 	return false

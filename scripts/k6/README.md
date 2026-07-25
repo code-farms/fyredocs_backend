@@ -104,14 +104,22 @@ since notification-service is behind the `notifications` compose profile and is 
 default; enable both together).
 
 ### Tool coverage
-`config.js` `TOOL_MATRIX` exercises 23 tools, each verified end-to-end by `smoke`
+`config.js` `TOOL_MATRIX` exercises 32 tools, each verified end-to-end by `smoke`
 against the live backend. Tools whose fixture is absent are auto-skipped
-(`hasFixture`). **Excluded** (verified failing on the current backend): `word-to-odt`,
-`odt/ods/odp-to-pdf` (convert-to-pdf worker returns "operation isn't supported" —
-routing.go lists them but ODF isn't implemented) and `pdf-to-excel` ("failed to
-rename output file"). **Not covered** (need special inputs): `unlock-pdf`
-(encrypted-PDF fixture), `scan-to-pdf` (per-page scanner payload); plus stubs
-`sign-pdf`/`edit-pdf`.
+(`hasFixture`). ODF conversions (`word-to-odt`, `excel-to-ods`, `powerpoint-to-odp`,
+`odt/ods/odp-to-pdf`) and `pdf-to-excel`/`pdf-to-ods`/`pdf-to-odp` are covered as
+of the 2026-07 conversion-bug fixes: the convert-to-pdf allowlist was extended for
+ODF, and `pdf-to-excel/ods` now use real table extraction (pdfplumber + openpyxl)
+while `pdf-to-odp` builds an image-slide deck then converts to ODP. **Not covered**
+(need special inputs): `unlock-pdf` (encrypted-PDF fixture), `scan-to-pdf` (per-page
+scanner payload); plus stubs `sign-pdf`/`edit-pdf`.
+
+> ODF fixtures (`odt`/`ods`/`odp`) are real, known-good templates decoded from
+> `fixtures/odf_base.py` (produced once by LibreOffice — hand-rolled minimal ODF
+> is rejected by LibreOffice's importer, and padding a valid ODF package breaks
+> it). They are `small`-size only; `pickFile` falls back to `small` for the
+> medium/large classes. To use your own, drop a file at
+> `fixtures/out/<odt|ods|odp>/small.<ext>`.
 
 ## 5. Finding the capacity ceiling
 
