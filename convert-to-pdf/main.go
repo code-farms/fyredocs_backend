@@ -73,25 +73,32 @@ func main() {
 		return &worker.ProcessResult{OutputPath: result.OutputPath, Metadata: result.Metadata}, nil
 	}
 
-	go worker.Run(ctx, worker.WorkerConfig{
-		ServiceName: "convert-to-pdf",
-		AllowedTools: map[string]bool{
-			"word-to-pdf": true,
-			"ppt-to-pdf":  true, "powerpoint-to-pdf": true,
-			"excel-to-pdf": true,
-			"html-to-pdf":  true,
-			"image-to-pdf": true, "img-to-pdf": true,
-			// ODF: routing.go + processing already support these; the allowlist
-			// just hadn't been updated (they'd fail with "operation not supported").
-			"odt-to-pdf": true, "ods-to-pdf": true, "odp-to-pdf": true,
-			"word-to-odt": true, "excel-to-ods": true, "powerpoint-to-odp": true,
-		},
-		Process:     processFunc,
-		JS:          natsconn.JS,
-		RedisClient: redisstore.Client,
-		DB:          models.DB,
-		Storage:     store,
-	})
+	// workerDone lets shutdown JOIN the worker: worker.Run drains in-flight
+	// jobs (bounded by WORKER_DRAIN_TIMEOUT) before main is allowed to exit,
+	// so a deploy never kills a PDF conversion mid-write.
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		worker.Run(ctx, worker.WorkerConfig{
+			ServiceName: "convert-to-pdf",
+			AllowedTools: map[string]bool{
+				"word-to-pdf": true,
+				"ppt-to-pdf":  true, "powerpoint-to-pdf": true,
+				"excel-to-pdf": true,
+				"html-to-pdf":  true,
+				"image-to-pdf": true, "img-to-pdf": true,
+				// ODF: routing.go + processing already support these; the allowlist
+				// just hadn't been updated (they'd fail with "operation not supported").
+				"odt-to-pdf": true, "ods-to-pdf": true, "odp-to-pdf": true,
+				"word-to-odt": true, "excel-to-ods": true, "powerpoint-to-odp": true,
+			},
+			Process:     processFunc,
+			JS:          natsconn.JS,
+			RedisClient: redisstore.Client,
+			DB:          models.DB,
+			Storage:     store,
+		})
+	}()
 
 	r := gin.New()
 	r.Use(telemetry.GinTraceMiddleware("convert-to-pdf"))
@@ -121,7 +128,10 @@ func main() {
 		defer hcancel()
 
 		if err := redisstore.Client.Ping(hctx).Err(); err != nil {
-			checks["redis"] = err.Error()
+			// Raw driver errors can leak internal host:port details; the probe
+			// body stays generic and the cause goes to logs.
+			slog.Warn("readyz dependency check failed", "dependency", "redis", "error", err)
+			checks["redis"] = "unavailable"
 			ready = false
 		} else {
 			checks["redis"] = "ok"
@@ -135,7 +145,10 @@ func main() {
 		}
 
 		if err := models.DB.Exec("SELECT 1").Error; err != nil {
-			checks["postgres"] = err.Error()
+			// Raw driver errors can leak internal host:port details; the probe
+			// body stays generic and the cause goes to logs.
+			slog.Warn("readyz dependency check failed", "dependency", "postgres", "error", err)
+			checks["postgres"] = "unavailable"
 			ready = false
 		} else {
 			checks["postgres"] = "ok"
@@ -188,6 +201,15 @@ func main() {
 
 	slog.Info("shutting down")
 	cancel()
+	// Join the worker's bounded drain (WORKER_DRAIN_TIMEOUT + margin as a
+	// safety net). Compose's stop_grace_period must exceed this or Docker
+	// SIGKILLs the process mid-drain.
+	select {
+	case <-workerDone:
+		slog.Info("worker drained")
+	case <-time.After(3 * time.Minute):
+		slog.Error("worker did not stop in time; exiting anyway")
+	}
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {

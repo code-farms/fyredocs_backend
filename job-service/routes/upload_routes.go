@@ -2,6 +2,7 @@ package routes
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -115,14 +116,20 @@ func SetupRouter(r *gin.Engine) {
 		defer hcancel()
 
 		if err := models.DB.Exec("SELECT 1").Error; err != nil {
-			checks["postgres"] = err.Error()
+			// Raw driver errors can leak internal host:port details; the probe
+			// body stays generic and the cause goes to logs.
+			slog.Warn("readyz dependency check failed", "dependency", "postgres", "error", err)
+			checks["postgres"] = "unavailable"
 			ready = false
 		} else {
 			checks["postgres"] = "ok"
 		}
 
 		if err := redisstore.Client.Ping(hctx).Err(); err != nil {
-			checks["redis"] = err.Error()
+			// Raw driver errors can leak internal host:port details; the probe
+			// body stays generic and the cause goes to logs.
+			slog.Warn("readyz dependency check failed", "dependency", "redis", "error", err)
+			checks["redis"] = "unavailable"
 			ready = false
 		} else {
 			checks["redis"] = "ok"

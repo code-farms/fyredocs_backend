@@ -55,6 +55,15 @@ All `/api/*` routes require auth (`X-User-ID`) and are scoped to that user. Reac
 - An export waits up to `EXPORT_QUEUE_WAIT` (default `30s`) for a slot; if none frees up it fails with a **retryable** message (the client can re-queue).
 - The document query backing an export is capped at `EXPORT_MAX_ROWS` (default `50000`) rows.
 
+### Schema migrations
+
+The schema is applied by **versioned SQL migrations** embedded in the binary
+(`internal/migrations/*.sql`, applied by goose at startup under a per-service
+Postgres advisory lock and recorded in `goose_db_version_document_service`). GORM
+`AutoMigrate` is no longer the authority — it remains only behind
+`DB_AUTOMIGRATE=true` for local development. A migration failure aborts startup.
+See [schema-migrations.md](../architecture/schema-migrations.md).
+
 ## DB Schema (own Postgres)
 - **documents**: id (uuid v7), user_id, organization_id?, folder_id?, name, file_type, mime_type, file_size, storage_path, thumbnail_path, status (`uploaded|processing|ready|failed`), source_job_id? (links a doc finalized from a completed job), extracted_content, metadata (jsonb), uploaded_at?, processed_at?, created_at, updated_at, deleted_at (soft delete). Plus a generated `search_vector tsvector` over name+extracted_content with a GIN index. Indexes: `(user_id, created_at)`, `(user_id, status, created_at)`, GIN on `search_vector`, and a **partial unique index on `(user_id, source_job_id)`** that makes finalize idempotent.
 - **folders**: id, user_id, parent_id? (self-ref tree), name, created_at, updated_at, deleted_at.

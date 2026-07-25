@@ -31,6 +31,26 @@ var (
 		Name: "jobs_failed_total",
 		Help: "Total number of failed jobs",
 	}, []string{"tool_type", "reason"})
+
+	// RateLimitFailOpen counts requests that bypassed rate limiting because the
+	// limiter's Redis backend was unavailable. Failing open is deliberate (a
+	// Redis blip must not take down request serving) but it means throttling is
+	// silently OFF, so it must be observable — alert on any sustained rate.
+	// Labels: service, and limiter (the specific limiter that failed open).
+	RateLimitFailOpen = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "rate_limit_fail_open_total",
+		Help: "Requests allowed without a rate-limit check because Redis was unavailable.",
+	}, []string{"service", "limiter"})
+
+	// JobDuration is end-to-end job latency: queued (dispatch) → terminal
+	// event, including retries and DLQ dwell. Observed once per terminal
+	// outcome in shared/queue.recordTerminalJobMetric. Buckets span seconds
+	// (typical) to 30 minutes (the JetStream AckWait ceiling).
+	JobDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "job_duration_seconds",
+		Help:    "End-to-end job latency from queued to terminal state.",
+		Buckets: []float64{1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1200, 1800},
+	}, []string{"tool_type", "status"})
 )
 
 // GinMetricsMiddleware records request duration and status for Prometheus.

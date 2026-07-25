@@ -583,12 +583,6 @@ func TestCreateJobResponseJSON(t *testing.T) {
 }
 
 func TestOutputFileCacheStoreAndLoad(t *testing.T) {
-	// Reset cache state for test isolation.
-	outputFileCache.Range(func(key, value any) bool {
-		outputFileCache.Delete(key)
-		return true
-	})
-
 	jobID := uuid.New()
 	entry := models.FileMetadata{
 		JobID:        jobID,
@@ -597,23 +591,28 @@ func TestOutputFileCacheStoreAndLoad(t *testing.T) {
 		Path:         "/app/outputs/processed_test.png",
 	}
 
-	// Cache miss initially.
-	if _, ok := outputFileCache.Load(jobID); ok {
+	// Cache miss initially (fresh UUID, so no cross-test interference).
+	if _, ok := outputFileCache.Get(jobID); ok {
 		t.Fatal("expected cache miss for new jobID")
 	}
 
-	// Store and retrieve.
-	outputFileCache.Store(jobID, entry)
-	cached, ok := outputFileCache.Load(jobID)
+	outputFileCache.Set(jobID, entry)
+	got, ok := outputFileCache.Get(jobID)
 	if !ok {
 		t.Fatal("expected cache hit after store")
 	}
-	got := cached.(models.FileMetadata)
 	if got.Path != entry.Path {
 		t.Errorf("cached Path = %q, want %q", got.Path, entry.Path)
 	}
 	if got.OriginalName != entry.OriginalName {
 		t.Errorf("cached OriginalName = %q, want %q", got.OriginalName, entry.OriginalName)
+	}
+
+	// Deleting a job must evict its entry, so a re-created job can never read
+	// the old output metadata (the eviction DeleteJobByID performs).
+	outputFileCache.Delete(jobID)
+	if _, ok := outputFileCache.Get(jobID); ok {
+		t.Error("expected cache miss after delete")
 	}
 }
 

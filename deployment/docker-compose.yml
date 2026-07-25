@@ -46,6 +46,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 60s
     # Limits are env-driven so deploy.sh's resource budget folds Postgres into the
     # RESOURCE_BUDGET_PCT (80%) cap like every other service. The fallbacks equal
     # the previous hardcoded values, so a plain `docker compose up` is unchanged.
@@ -56,6 +59,74 @@ services:
           cpus: "${DB_CPU_LIMIT:-1.5}"
         reservations:
           memory: ${DB_MEM_RESERVATION:-256M}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - fyredocs_net
+
+  # ==================== CONNECTION POOLER (PgBouncer) ====================
+  # Multiplexes the services' ~145 summed pool connections onto a small number
+  # of real Postgres backends, so scaling workers no longer walks toward
+  # max_connections=200 (audit M3).
+  #
+  # DARK LAUNCH: the container ships, but services only use it once
+  # DATABASE_URL is pointed at pgbouncer:6432 in .env. Reverting is that one
+  # line. See docs/developer/architecture/database.md.
+  #
+  # Transaction pooling caveats, all handled:
+  #  - Prepared statements: pgbouncer >= 1.21 tracks them (max_prepared_statements
+  #    below), so GORM/pgx's extended protocol works unchanged. If a driver ever
+  #    trips on it, append default_query_exec_mode=simple_protocol to the DSN.
+  #  - statement_timeout / idle_in_transaction_session_timeout arrive as startup
+  #    parameters and MUST be listed in ignore_startup_parameters or connections
+  #    are rejected — "ignored" means NOT APPLIED, so deploy.sh sets them
+  #    server-side as role-in-database defaults instead. Do not remove that step.
+  #  - Session advisory locks (goose migrations) are incompatible with
+  #    transaction pooling: migrations connect via DATABASE_URL_DIRECT, and so
+  #    does db-backup's pg_dump.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.2-p0
+    restart: always
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB:-fyredocs}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      LISTEN_PORT: "6432"
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      # Clients are cheap; real backends are not. 400 client slots cover the
+      # summed service pools (~145) with room for a worker scale-out.
+      MAX_CLIENT_CONN: "400"
+      DEFAULT_POOL_SIZE: "40"
+      MIN_POOL_SIZE: "5"
+      # Prepared-statement tracking (pgbouncer >= 1.21) — required for pgx's
+      # extended protocol under transaction pooling.
+      MAX_PREPARED_STATEMENTS: "500"
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits,statement_timeout,idle_in_transaction_session_timeout
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # pgbouncer's admin console answers on the pgbouncer virtual database.
+      test: ["CMD-SHELL", "PGPASSWORD=$$DB_PASSWORD psql -h 127.0.0.1 -p 6432 -U $$DB_USER -d pgbouncer -tAc 'SHOW VERSION' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: ${PGBOUNCER_MEM_LIMIT:-64M}
+          cpus: "${PGBOUNCER_CPU_LIMIT:-0.25}"
+        reservations:
+          memory: ${PGBOUNCER_MEM_RESERVATION:-16M}
     logging:
       driver: "json-file"
       options:
@@ -79,6 +150,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -105,6 +179,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -144,6 +221,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -271,6 +351,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -336,6 +419,11 @@ services:
       CORS_ALLOW_HEADERS: "Authorization,Content-Type,X-User-ID"
       CORS_ALLOW_CREDENTIALS: "true"
 
+      # Trusted proxies for client-IP resolution (rightmost-untrusted XFF).
+      # Same list the Gin services use; without it guests collapse into one
+      # shared rate-limit bucket (over-throttles, never under-throttles).
+      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     healthcheck:
@@ -345,6 +433,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -387,6 +478,9 @@ services:
     environment:
       PORT: "8086"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
+      # Migrations take a session advisory lock, which transaction-mode
+      # pooling breaks — they always connect straight to Postgres.
+      DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
@@ -400,6 +494,9 @@ services:
       JWT_CLOCK_SKEW: "60s"
       JWT_ACCESS_TTL: "8h"
       JWT_REFRESH_TTL: "168h"
+      # Grace window for concurrent refreshes before a superseded refresh
+      # token counts as reuse (theft) and revokes the session.
+      AUTH_REFRESH_ROTATE_GRACE: ${AUTH_REFRESH_ROTATE_GRACE:-30s}
 
       # Auth Cookie Settings
       AUTH_COOKIE_DOMAIN: ""
@@ -435,6 +532,9 @@ services:
       PROXY_LOGIN_TTL: ${PROXY_LOGIN_TTL:-30m}
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      # Shared secret guarding mesh-only /internal routes (fails closed when
+      # unset). Must be identical across all services. See .env.example.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
@@ -443,6 +543,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -471,9 +574,14 @@ services:
       context: ..
       dockerfile: job-service/Dockerfile
     restart: always
+    # Let the background sweep/pollers finish before SIGKILL.
+    stop_grace_period: 30s
     environment:
       PORT: "8081"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
+      # Migrations take a session advisory lock, which transaction-mode
+      # pooling breaks — they always connect straight to Postgres.
+      DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
@@ -506,6 +614,9 @@ services:
       UPLOAD_PART_SIZE_MB: "${UPLOAD_PART_SIZE_MB:-8}"
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      # Shared secret guarding mesh-only /internal routes (fails closed when
+      # unset). Must be identical across all services. See .env.example.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       GUEST_JOB_TTL: ${GUEST_JOB_TTL:-30m}
       FREE_JOB_TTL: ${FREE_JOB_TTL:-168h}
       PRO_JOB_TTL: ${PRO_JOB_TTL:-720h}
@@ -526,6 +637,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -556,6 +670,12 @@ services:
       context: ..
       dockerfile: convert-from-pdf/Dockerfile
     restart: always
+    # PID 1 reaper: LibreOffice/Ghostscript/tesseract spawn grandchildren that
+    # would otherwise accumulate as zombies over long uptimes.
+    init: true
+    # Drain window for in-flight PDF jobs on SIGTERM. MUST exceed
+    # WORKER_DRAIN_TIMEOUT below, or Docker SIGKILLs the worker mid-drain.
+    stop_grace_period: 3m
     environment:
       PORT: "8082"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
@@ -578,6 +698,8 @@ services:
       # Parallel jobs per container (pdf2docx/LibreOffice are CPU-heavy).
       # Overridable per host: on a VS-32-class box (16 cores) try 3-4.
       WORKER_CONCURRENCY: "${CONVERT_FROM_PDF_CONCURRENCY:-2}"
+      # Bounded drain on shutdown; must stay under stop_grace_period.
+      WORKER_DRAIN_TIMEOUT: ${WORKER_DRAIN_TIMEOUT:-120s}
       # Result cache: identical input+tool+options reuse a prior output. Keep at
       # or below the outputs bucket TTL. Set to 0 to disable caching.
       RESULT_CACHE_TTL_SECONDS: "${RESULT_CACHE_TTL_SECONDS:-3600}"
@@ -593,6 +715,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -621,6 +746,12 @@ services:
       context: ..
       dockerfile: convert-to-pdf/Dockerfile
     restart: always
+    # PID 1 reaper: LibreOffice/Ghostscript/tesseract spawn grandchildren that
+    # would otherwise accumulate as zombies over long uptimes.
+    init: true
+    # Drain window for in-flight PDF jobs on SIGTERM. MUST exceed
+    # WORKER_DRAIN_TIMEOUT below, or Docker SIGKILLs the worker mid-drain.
+    stop_grace_period: 3m
     environment:
       PORT: "8083"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
@@ -640,6 +771,8 @@ services:
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
       # Overridable per host: on a VS-32-class box (16 cores) try 3-4.
       WORKER_CONCURRENCY: "${CONVERT_TO_PDF_CONCURRENCY:-2}"
+      # Bounded drain on shutdown; must stay under stop_grace_period.
+      WORKER_DRAIN_TIMEOUT: ${WORKER_DRAIN_TIMEOUT:-120s}
       # unoserver (LibreOffice) daemon pool. Leave UNSET to auto-size to
       # WORKER_CONCURRENCY + 1 (one warm daemon per concurrent job plus a spare),
       # which keeps the slow cold-start LibreOffice fallback unreachable. Set
@@ -658,6 +791,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 60s
     deploy:
       # On a single box, prefer raising WORKER_CONCURRENCY + UNOSERVER_INSTANCES
       # within one replica over running multiple replicas (avoids duplicate
@@ -691,6 +827,12 @@ services:
       context: ..
       dockerfile: organize-pdf/Dockerfile
     restart: always
+    # PID 1 reaper: LibreOffice/Ghostscript/tesseract spawn grandchildren that
+    # would otherwise accumulate as zombies over long uptimes.
+    init: true
+    # Drain window for in-flight PDF jobs on SIGTERM. MUST exceed
+    # WORKER_DRAIN_TIMEOUT below, or Docker SIGKILLs the worker mid-drain.
+    stop_grace_period: 3m
     environment:
       PORT: "8084"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
@@ -708,8 +850,13 @@ services:
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
 
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      # Shared secret guarding mesh-only /internal routes (fails closed when
+      # unset). Must be identical across all services. See .env.example.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       # pdfcpu ops are pure-Go and cheap, so concurrency can run higher.
       WORKER_CONCURRENCY: "${ORGANIZE_PDF_CONCURRENCY:-4}"
+      # Bounded drain on shutdown; must stay under stop_grace_period.
+      WORKER_DRAIN_TIMEOUT: ${WORKER_DRAIN_TIMEOUT:-120s}
       # Result cache (see convert-from-pdf). 0 disables.
       RESULT_CACHE_TTL_SECONDS: "${RESULT_CACHE_TTL_SECONDS:-3600}"
 
@@ -722,6 +869,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -750,6 +900,12 @@ services:
       context: ..
       dockerfile: optimize-pdf/Dockerfile
     restart: always
+    # PID 1 reaper: LibreOffice/Ghostscript/tesseract spawn grandchildren that
+    # would otherwise accumulate as zombies over long uptimes.
+    init: true
+    # Drain window for in-flight PDF jobs on SIGTERM. MUST exceed
+    # WORKER_DRAIN_TIMEOUT below, or Docker SIGKILLs the worker mid-drain.
+    stop_grace_period: 3m
     environment:
       PORT: "8085"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
@@ -777,6 +933,8 @@ services:
 
       # Parallel jobs per container (kept low — OCR parallelizes pages internally)
       WORKER_CONCURRENCY: "${OPTIMIZE_PDF_CONCURRENCY:-2}"
+      # Bounded drain on shutdown; must stay under stop_grace_period.
+      WORKER_DRAIN_TIMEOUT: ${WORKER_DRAIN_TIMEOUT:-120s}
       # Result cache (see convert-from-pdf). 0 disables.
       RESULT_CACHE_TTL_SECONDS: "${RESULT_CACHE_TTL_SECONDS:-3600}"
 
@@ -789,6 +947,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -817,9 +978,14 @@ services:
       context: ..
       dockerfile: analytics-service/Dockerfile
     restart: always
+    # Let the background sweep/pollers finish before SIGKILL.
+    stop_grace_period: 30s
     environment:
       PORT: "8087"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
+      # Migrations take a session advisory lock, which transaction-mode
+      # pooling breaks — they always connect straight to Postgres.
+      DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
       NATS_URL: nats://nats:4222
       # NATS HTTP monitoring endpoint (`-m 8222`), internal-only. Scraped by the
       # admin NATS dashboard tab (/admin/metrics/nats).
@@ -850,6 +1016,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -881,10 +1050,16 @@ services:
     environment:
       PORT: "8089"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
+      # Migrations take a session advisory lock, which transaction-mode
+      # pooling breaks — they always connect straight to Postgres.
+      DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
       NATS_URL: nats://nats:4222
       USER_SERVICE_URL: http://user-service:8090
       NOTIFICATION_SERVICE_URL: http://notification-service:8091
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      # Shared secret guarding mesh-only /internal routes (fails closed when
+      # unset). Must be identical across all services. See .env.example.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
@@ -893,6 +1068,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -927,6 +1105,9 @@ services:
     environment:
       PORT: "8090"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
+      # Migrations take a session advisory lock, which transaction-mode
+      # pooling breaks — they always connect straight to Postgres.
+      DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
       # Observability
@@ -936,6 +1117,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -972,8 +1156,14 @@ services:
     environment:
       PORT: "8091"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
+      # Migrations take a session advisory lock, which transaction-mode
+      # pooling breaks — they always connect straight to Postgres.
+      DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
       NATS_URL: nats://nats:4222
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      # Shared secret guarding mesh-only /internal routes (fails closed when
+      # unset). Must be identical across all services. See .env.example.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
@@ -982,6 +1172,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      # Grace window before failures count: cold start (image init,
+      # migrations, LibreOffice warm-up) must not flag the container unhealthy.
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -1011,7 +1204,9 @@ services:
       dockerfile: deployment/backup/Dockerfile
     restart: always
     environment:
-      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
+      # pg_dump needs a real session (and no statement timeout), so the backup
+      # always talks to Postgres directly, never through PgBouncer.
+      DATABASE_URL: ${DATABASE_URL_DIRECT:-${DATABASE_URL:?set DATABASE_URL in deployment/.env}}
       # rclone remote "dest" — configured entirely via env (no rclone.conf).
       RCLONE_CONFIG_DEST_TYPE: s3
       RCLONE_CONFIG_DEST_PROVIDER: ${BACKUP_S3_PROVIDER:-Cloudflare}
@@ -1244,7 +1439,10 @@ services:
     profiles: ["observability"]
     restart: always
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # No default: an unset password used to fall back to "admin", making
+      # anyone with loopback/SSH-tunnel/SSRF access to :3000 a Grafana admin.
+      # Compose refuses to start the stack instead.
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env — generate one with 'openssl rand -base64 24'}"
       GF_USERS_ALLOW_SIGN_UP: "false"
       # Serve under the /grafana sub-path so the SPA can iframe it same-origin
       # through the Caddy edge (deployment/caddy/Caddyfile @grafana block).

@@ -48,9 +48,9 @@ const (
 // UploadInitRequest declares the file a client intends to upload. The size is
 // checked against the plan limit before any presigned URL is issued.
 type UploadInitRequest struct {
-	FileName    string `json:"fileName"`
-	FileSize    int64  `json:"fileSize"`
-	ContentType string `json:"contentType"`
+	FileName    string `json:"fileName" binding:"required,max=255"`
+	FileSize    int64  `json:"fileSize" binding:"required,gt=0"`
+	ContentType string `json:"contentType" binding:"omitempty,max=255"`
 }
 
 type uploadPartURL struct {
@@ -61,13 +61,13 @@ type uploadPartURL struct {
 // UploadCompleteRequest carries the ETags of the parts the client uploaded,
 // used to finalize the multipart upload.
 type UploadCompleteRequest struct {
-	Parts []UploadCompletedPart `json:"parts"`
+	Parts []UploadCompletedPart `json:"parts" binding:"required,min=1,max=1000,dive"`
 }
 
 // UploadCompletedPart is one uploaded part identified by its number and ETag.
 type UploadCompletedPart struct {
-	PartNumber int    `json:"partNumber"`
-	ETag       string `json:"etag"`
+	PartNumber int    `json:"partNumber" binding:"required,gt=0"`
+	ETag       string `json:"etag" binding:"required"`
 }
 
 // InitUpload creates an S3 multipart upload and returns presigned URLs for
@@ -75,19 +75,17 @@ type UploadCompletedPart struct {
 // URL is issued (and re-verified against the true object size on complete).
 func InitUpload(c *gin.Context) {
 	if objStore == nil {
-		response.InternalError(c, "SERVER_ERROR", "File storage is unavailable. Please try again later.")
+		response.InternalError(c, response.CodeServerError, "File storage is unavailable. Please try again later.")
 		return
 	}
 
 	var req UploadInitRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid upload request. Please try again.", err,
-			"op", "bind_upload_init")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	fileName := sanitizeFileName(req.FileName)
 	if fileName == "" || req.FileSize <= 0 {
-		response.BadRequest(c, "INVALID_INPUT", "Missing file information. Please try again.")
+		response.BadRequest(c, response.CodeInvalidInput, "Missing file information. Please try again.")
 		return
 	}
 
@@ -101,7 +99,7 @@ func InitUpload(c *gin.Context) {
 	partSize := uploadPartSize()
 	totalParts := int(math.Ceil(float64(req.FileSize) / float64(partSize)))
 	if totalParts > maxUploadParts {
-		response.BadRequest(c, "INVALID_INPUT", "File is too large to upload in one session. Please upload a smaller file.")
+		response.BadRequest(c, response.CodeInvalidInput, "File is too large to upload in one session. Please upload a smaller file.")
 		return
 	}
 
@@ -117,7 +115,7 @@ func InitUpload(c *gin.Context) {
 	ctx := c.Request.Context()
 	s3UploadID, err := objStore.CreateMultipart(ctx, bucket, key, contentType)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not start the upload. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not start the upload. Please try again.", err,
 			"op", "s3.create_multipart", "uploadId", uploadID, "key", key)
 		return
 	}
@@ -125,7 +123,7 @@ func InitUpload(c *gin.Context) {
 	parts, err := presignParts(ctx, bucket, key, s3UploadID, allPartNumbers(totalParts))
 	if err != nil {
 		_ = objStore.AbortMultipart(ctx, bucket, key, s3UploadID)
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not start the upload. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not start the upload. Please try again.", err,
 			"op", "s3.presign_parts", "uploadId", uploadID, "key", key)
 		return
 	}
@@ -149,7 +147,7 @@ func InitUpload(c *gin.Context) {
 	pipe.Expire(ctx, uploadKey, uploadTTL())
 	if _, err := pipe.Exec(ctx); err != nil {
 		_ = objStore.AbortMultipart(ctx, bucket, key, s3UploadID)
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not start the upload. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not start the upload. Please try again.", err,
 			"op", "redis.upload_init.pipeline", "uploadId", uploadID)
 		return
 	}
@@ -169,12 +167,12 @@ func InitUpload(c *gin.Context) {
 // partNumbers query parameter, all parts are re-presigned.
 func GetUploadParts(c *gin.Context) {
 	if objStore == nil {
-		response.InternalError(c, "SERVER_ERROR", "File storage is unavailable. Please try again later.")
+		response.InternalError(c, response.CodeServerError, "File storage is unavailable. Please try again later.")
 		return
 	}
 	uploadID := c.Param("uploadId")
 	if uploadID == "" {
-		response.BadRequest(c, "INVALID_INPUT", "Upload session not found. Please try again.")
+		response.BadRequest(c, response.CodeInvalidInput, "Upload session not found. Please try again.")
 		return
 	}
 
@@ -182,29 +180,29 @@ func GetUploadParts(c *gin.Context) {
 	state, err := fetchUploadState(ctx, uploadID)
 	if err != nil {
 		if err == redis.Nil {
-			response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
+			response.NotFound(c, response.CodeNotFound, "Upload session expired. Please upload your file again.")
 		} else {
-			response.InternalErrorf(c, "SERVER_ERROR", "Could not load the upload session. Please try again.", err,
+			response.InternalErrorf(c, response.CodeServerError, "Could not load the upload session. Please try again.", err,
 				"op", "redis.fetch_upload_state", "uploadId", uploadID)
 		}
 		return
 	}
 
 	if !uploadOwnerMatches(c, state) {
-		response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
+		response.NotFound(c, response.CodeNotFound, "Upload session expired. Please upload your file again.")
 		return
 	}
 
 	totalParts, _ := strconv.Atoi(state["totalParts"])
 	partNumbers, err := parsePartNumbers(c.Query("partNumbers"), totalParts)
 	if err != nil {
-		response.BadRequest(c, "INVALID_INPUT", err.Error())
+		response.BadRequest(c, response.CodeInvalidInput, err.Error())
 		return
 	}
 
 	parts, err := presignParts(ctx, state["bucket"], state["key"], state["s3UploadId"], partNumbers)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not refresh upload URLs. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not refresh upload URLs. Please try again.", err,
 			"op", "s3.presign_parts", "uploadId", uploadID)
 		return
 	}
@@ -222,19 +220,17 @@ func GetUploadParts(c *gin.Context) {
 // part ETags, then verifies the true object size against the plan limit.
 func CompleteUpload(c *gin.Context) {
 	if objStore == nil {
-		response.InternalError(c, "SERVER_ERROR", "File storage is unavailable. Please try again later.")
+		response.InternalError(c, response.CodeServerError, "File storage is unavailable. Please try again later.")
 		return
 	}
 	uploadID := c.Param("uploadId")
 	if uploadID == "" {
-		response.BadRequest(c, "INVALID_INPUT", "Upload session not found. Please try again.")
+		response.BadRequest(c, response.CodeInvalidInput, "Upload session not found. Please try again.")
 		return
 	}
 
 	var req UploadCompleteRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid completion request. Please try again.", err,
-			"op", "bind_upload_complete", "uploadId", uploadID)
+	if !response.BindJSON(c, &req) {
 		return
 	}
 
@@ -242,16 +238,16 @@ func CompleteUpload(c *gin.Context) {
 	state, err := fetchUploadState(ctx, uploadID)
 	if err != nil {
 		if err == redis.Nil {
-			response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
+			response.NotFound(c, response.CodeNotFound, "Upload session expired. Please upload your file again.")
 		} else {
-			response.InternalErrorf(c, "SERVER_ERROR", "Could not load the upload session. Please try again.", err,
+			response.InternalErrorf(c, response.CodeServerError, "Could not load the upload session. Please try again.", err,
 				"op", "redis.fetch_upload_state", "uploadId", uploadID)
 		}
 		return
 	}
 
 	if !uploadOwnerMatches(c, state) {
-		response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
+		response.NotFound(c, response.CodeNotFound, "Upload session expired. Please upload your file again.")
 		return
 	}
 
@@ -264,7 +260,7 @@ func CompleteUpload(c *gin.Context) {
 	completed := make([]storage.CompletedPart, 0, len(req.Parts))
 	for _, p := range req.Parts {
 		if p.PartNumber < 1 || p.PartNumber > totalParts || p.ETag == "" {
-			response.BadRequest(c, "INVALID_INPUT", "Invalid part list. Please restart the upload.")
+			response.BadRequest(c, response.CodeInvalidInput, "Invalid part list. Please restart the upload.")
 			return
 		}
 		completed = append(completed, storage.CompletedPart{PartNumber: p.PartNumber, ETag: p.ETag})
@@ -280,7 +276,7 @@ func CompleteUpload(c *gin.Context) {
 
 	info, err := objStore.StatObject(ctx, bucket, key)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not verify the uploaded file. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not verify the uploaded file. Please try again.", err,
 			"op", "s3.stat_after_complete", "uploadId", uploadID, "key", key)
 		return
 	}
@@ -300,7 +296,7 @@ func CompleteUpload(c *gin.Context) {
 	pipe.HSet(ctx, uploadStateKey(uploadID), "size", info.Size)
 	pipe.Expire(ctx, uploadStateKey(uploadID), uploadTTL())
 	if _, err := pipe.Exec(ctx); err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not finalize the upload. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not finalize the upload. Please try again.", err,
 			"op", "redis.upload_complete.record_size", "uploadId", uploadID)
 		return
 	}
@@ -319,25 +315,25 @@ func CompleteUpload(c *gin.Context) {
 func AbortUpload(c *gin.Context) {
 	uploadID := c.Param("uploadId")
 	if uploadID == "" {
-		response.BadRequest(c, "INVALID_INPUT", "Upload session not found. Please try again.")
+		response.BadRequest(c, response.CodeInvalidInput, "Upload session not found. Please try again.")
 		return
 	}
 
 	ctx := c.Request.Context()
 	state, err := fetchUploadState(ctx, uploadID)
 	if err == nil && !uploadOwnerMatches(c, state) {
-		response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
+		response.NotFound(c, response.CodeNotFound, "Upload session expired. Please upload your file again.")
 		return
 	}
 	if err == nil && state["s3UploadId"] != "" && objStore != nil {
 		if abortErr := objStore.AbortMultipart(ctx, state["bucket"], state["key"], state["s3UploadId"]); abortErr != nil {
-			response.InternalErrorf(c, "SERVER_ERROR", "Could not cancel the upload. Please try again.", abortErr,
+			response.InternalErrorf(c, response.CodeServerError, "Could not cancel the upload. Please try again.", abortErr,
 				"op", "s3.abort_multipart", "uploadId", uploadID, "key", state["key"])
 			return
 		}
 	}
 	if delErr := redisstore.Client.Del(ctx, uploadStateKey(uploadID), uploadChunkSetKey(uploadID)).Err(); delErr != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not cancel the upload. Please try again.", delErr,
+		response.InternalErrorf(c, response.CodeServerError, "Could not cancel the upload. Please try again.", delErr,
 			"op", "redis.upload_abort.del", "uploadId", uploadID)
 		return
 	}
@@ -348,7 +344,7 @@ func AbortUpload(c *gin.Context) {
 func GetUploadStatus(c *gin.Context) {
 	uploadID := c.Param("uploadId")
 	if uploadID == "" {
-		response.BadRequest(c, "INVALID_INPUT", "Upload session not found. Please try again.")
+		response.BadRequest(c, response.CodeInvalidInput, "Upload session not found. Please try again.")
 		return
 	}
 
@@ -356,16 +352,16 @@ func GetUploadStatus(c *gin.Context) {
 	state, err := fetchUploadState(ctx, uploadID)
 	if err != nil {
 		if err == redis.Nil {
-			response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
+			response.NotFound(c, response.CodeNotFound, "Upload session expired. Please upload your file again.")
 		} else {
-			response.InternalErrorf(c, "SERVER_ERROR", "Upload session expired. Please upload your file again.", err,
+			response.InternalErrorf(c, response.CodeServerError, "Upload session expired. Please upload your file again.", err,
 				"op", "redis.fetch_upload_state", "uploadId", uploadID)
 		}
 		return
 	}
 
 	if !uploadOwnerMatches(c, state) {
-		response.NotFound(c, "NOT_FOUND", "Upload session expired. Please upload your file again.")
+		response.NotFound(c, response.CodeNotFound, "Upload session expired. Please upload your file again.")
 		return
 	}
 

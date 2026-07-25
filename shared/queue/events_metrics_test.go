@@ -2,8 +2,11 @@ package queue
 
 import (
 	"testing"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 
 	"fyredocs/shared/metrics"
 )
@@ -33,5 +36,48 @@ func TestRecordTerminalJobMetric(t *testing.T) {
 	recordTerminalJobMetric(JobEvent{EventType: "JobQueued", ToolType: "split-pdf"})
 	if delta := testutil.ToFloat64(prog) - pbefore; delta != 0 {
 		t.Errorf("non-terminal events: jobs_processed_total delta = %v, want 0", delta)
+	}
+}
+
+func TestRecordTerminalJobMetricObservesDuration(t *testing.T) {
+	histogramCount := func(tool, status string) uint64 {
+		h, err := metrics.JobDuration.MetricVec.GetMetricWithLabelValues(tool, status)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := &dto.Metric{}
+		if err := h.(prometheus.Histogram).Write(m); err != nil {
+			t.Fatal(err)
+		}
+		return m.GetHistogram().GetSampleCount()
+	}
+
+	now := time.Now().UTC()
+
+	// Terminal event with QueuedAt → one observation.
+	before := histogramCount("ocr-pdf", "completed")
+	recordTerminalJobMetric(JobEvent{
+		EventType: "JobCompleted", ToolType: "ocr-pdf",
+		QueuedAt: now.Add(-42 * time.Second), Timestamp: now,
+	})
+	if got := histogramCount("ocr-pdf", "completed") - before; got != 1 {
+		t.Errorf("with QueuedAt: sample count delta = %d, want 1", got)
+	}
+
+	// Zero QueuedAt (legacy events) → no observation.
+	before = histogramCount("ocr-pdf", "failed")
+	recordTerminalJobMetric(JobEvent{EventType: "JobFailed", ToolType: "ocr-pdf", Timestamp: now})
+	if got := histogramCount("ocr-pdf", "failed") - before; got != 0 {
+		t.Errorf("zero QueuedAt: sample count delta = %d, want 0", got)
+	}
+
+	// Negative duration (clock skew) → skipped.
+	before = histogramCount("ocr-pdf", "completed")
+	recordTerminalJobMetric(JobEvent{
+		EventType: "JobCompleted", ToolType: "ocr-pdf",
+		QueuedAt: now.Add(time.Hour), Timestamp: now,
+	})
+	if got := histogramCount("ocr-pdf", "completed") - before; got != 0 {
+		t.Errorf("negative duration: sample count delta = %d, want 0", got)
 	}
 }

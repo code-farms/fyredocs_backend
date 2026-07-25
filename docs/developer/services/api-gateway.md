@@ -646,8 +646,12 @@ All `/api/*` routes pass through a Redis sliding-window limiter
 plan and identity:
 
 - **Key**: `apilimit:{plan}:user:{userID}` for authenticated users,
-  `apilimit:{plan}:ip:{clientIP}` for guest requests (client IP taken
-  from `X-Forwarded-For`, else `RemoteAddr`).
+  `apilimit:{plan}:ip:{clientIP}` for guest requests. The client IP is
+  resolved by `shared/clientip` using the TRUSTED_PROXIES list and the
+  rightmost-untrusted X-Forwarded-For walk — a spoofed XFF from an untrusted
+  peer is ignored, so guests cannot mint fresh buckets by rotating the header.
+  With TRUSTED_PROXIES unset the resolver falls back to `RemoteAddr` only
+  (guests collapse into one bucket: over-throttles, never under-throttles).
 - **Ceilings per window** (`RATE_LIMIT_API_WINDOW`, default `1m`):
   `RATE_LIMIT_API_GUEST` (30), `RATE_LIMIT_API_FREE` (120), `RATE_LIMIT_API_PRO` (600).
 - **Excluded**: `/auth/*` (limited by auth-service), `/metrics`, and `/healthz`.
@@ -672,3 +676,22 @@ For issues or questions:
 - Check service logs: `docker compose logs -f api-gateway`
 - Review environment variables: `docker compose exec api-gateway env`
 - Verify service connectivity: `docker compose exec api-gateway ping job-service`
+
+## API versioning
+
+Every route is registered twice: under its legacy prefix and under `/api/v1`
+(`withV1Aliases` in `main.go`). Both spellings reach the same upstream and the
+same base path — downstream services are version-unaware. A route and its alias
+**share one circuit breaker** (keyed by upstream, not by inbound prefix) but each
+has its own proxy instance, because the proxy director strips the prefix that
+matched.
+
+Legacy prefixes are flagged `deprecated`; the `Deprecation` response header is
+gated behind `API_DEPRECATION_HEADERS` (default `false`) so the mobile builds
+already in the wild — which only know the legacy paths — are not told to migrate
+to something they cannot reach. See
+[api/versioning.md](../api/versioning.md) for the removal sequence.
+
+`PublicPaths` (login/signup/refresh/plans, which must bypass token verification
+so an expired cookie cannot lock a user out) is registered for **both** spellings
+— the middleware matches paths exactly.

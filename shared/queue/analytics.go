@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -24,14 +25,25 @@ type AnalyticsEvent struct {
 	Timestamp time.Time       `json:"timestamp"`
 }
 
-// PublishAnalyticsEvent marshals and publishes an AnalyticsEvent to the analytics NATS stream.
+// PublishAnalyticsEvent marshals and publishes an AnalyticsEvent to the
+// analytics NATS stream, carrying the current W3C trace context in the
+// message headers so the analytics subscriber continues the same trace.
 func PublishAnalyticsEvent(ctx context.Context, js jetstream.JetStream, event AnalyticsEvent) error {
 	data, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
 	subject := "analytics.events." + event.EventType
-	_, err = js.Publish(ctx, subject, data)
+	ctx, span := startProducerSpan(ctx, subject)
+	defer span.End()
+	_, err = js.PublishMsg(ctx, &nats.Msg{
+		Subject: subject,
+		Data:    data,
+		Header:  InjectTraceHeader(ctx),
+	})
+	if err != nil {
+		span.RecordError(err)
+	}
 	return err
 }
 

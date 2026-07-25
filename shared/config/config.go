@@ -184,6 +184,15 @@ func EnforceProductionSecurity() error {
 		}
 	}
 
+	// The mesh-internal /internal routes are guarded by a shared secret; both
+	// the servers that verify it and the callers that send it read this var, so
+	// it is required fleet-wide. Without it the internal middleware fails
+	// closed (503s), which would silently break notifications and edge
+	// detection in prod — refuse to boot instead.
+	if GetEnv("INTERNAL_API_TOKEN", "") == "" {
+		problems = append(problems, "INTERNAL_API_TOKEN must be set in production (generate with `openssl rand -hex 32`; must be identical across all services)")
+	}
+
 	if len(problems) > 0 {
 		return fmt.Errorf("insecure production configuration:\n  - %s", strings.Join(problems, "\n  - "))
 	}

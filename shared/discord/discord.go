@@ -358,7 +358,7 @@ func AlertWebhookHandler(c *Client) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		var alerts []Alert
 		if err := ctx.ShouldBindJSON(&alerts); err != nil {
-			response.BadRequest(ctx, "INVALID_INPUT", "Invalid alert payload.")
+			response.BadRequest(ctx, response.CodeInvalidInput, "Invalid alert payload.")
 			return
 		}
 		now := time.Now()

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -104,6 +105,14 @@ func main() {
 		mailer = m
 		slog.Info("mailer initialized", "provider", "resend")
 	} else {
+		// NoopMailer prints live password-reset URLs to stdout — acceptable only
+		// on a developer machine. In production that would leak reset tokens
+		// into the log pipeline, so refuse to start instead of degrading.
+		env := strings.ToLower(config.GetEnv("ENVIRONMENT", config.GetEnv("APP_ENV", "")))
+		if env == "production" || env == "prod" {
+			slog.Error("RESEND_API_KEY is not set in production — refusing to start with NoopMailer (it would print live reset tokens to logs)")
+			os.Exit(1)
+		}
 		slog.Warn("RESEND_API_KEY not set — using NoopMailer (password reset links will be logged only)")
 		mailer = email.NoopMailer{}
 	}

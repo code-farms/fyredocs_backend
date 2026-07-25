@@ -46,13 +46,16 @@ func setDependency(name string, up bool) { dependencyUp.WithLabelValues(name).Se
 func setDLQ(n float64)                   { dlqPending.Set(n) }
 
 // Start launches the poller: it samples once immediately, then every
-// OPS_METRICS_INTERVAL (default 20s) until ctx is cancelled.
-func Start(ctx context.Context, db *gorm.DB) {
+// OPS_METRICS_INTERVAL (default 20s) until ctx is cancelled. The returned
+// channel closes once the loop has exited, so shutdown can join it.
+func Start(ctx context.Context, db *gorm.DB) <-chan struct{} {
 	interval := config.GetEnvDuration("OPS_METRICS_INTERVAL", 20*time.Second)
 	if interval <= 0 {
 		interval = 20 * time.Second
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		// Long-lived loop: recover so a panic doesn't silently kill ops metrics.
 		defer func() {
 			if r := recover(); r != nil {
@@ -72,6 +75,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 			}
 		}
 	}()
+	return done
 }
 
 // sample probes each dependency and updates the gauges.

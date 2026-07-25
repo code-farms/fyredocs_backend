@@ -30,7 +30,7 @@ var proxyLoginAllowedRoles = map[string]bool{
 }
 
 type proxyLoginRequest struct {
-	UserID string `json:"userId"`
+	UserID string `json:"userId" binding:"required,uuid"`
 }
 
 // ProxyLogin lets an admin/super-admin mint a short-lived access token for
@@ -47,25 +47,25 @@ func (ae *AuthEndpoints) ProxyLogin(c *gin.Context) {
 
 	authCtx, ok := authverify.GetGinAuth(c)
 	if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-		response.Unauthorized(c, "UNAUTHORIZED", "Your session has expired. Please log in again.")
+		response.Unauthorized(c, response.CodeUnauthorized, "Your session has expired. Please log in again.")
 		return
 	}
 
+	// Fast-path gate on the JWT's claimed role; the authoritative check runs
+	// against the database below, after the request is validated.
 	if !proxyLoginAllowedRoles[strings.TrimSpace(authCtx.Role)] {
-		response.Forbidden(c, "FORBIDDEN", "You are not allowed to impersonate users.")
+		response.Forbidden(c, response.CodeForbidden, "You are not allowed to impersonate users.")
 		return
 	}
 
 	var body proxyLoginRequest
-	if err := c.ShouldBindJSON(&body); err != nil {
-		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Please provide a target user ID.", err,
-			"op", "bind_proxy_login_request", "adminId", authCtx.UserID)
+	if !response.BindJSON(c, &body) {
 		return
 	}
 
 	targetID, err := uuid.Parse(strings.TrimSpace(body.UserID))
 	if err != nil {
-		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Please provide a valid target user ID.", err,
+		response.Errorf(c, http.StatusBadRequest, response.CodeInvalidInput, "Please provide a valid target user ID.", err,
 			"op", "parse_target_user_id", "adminId", authCtx.UserID, "targetUserId", body.UserID)
 		return
 	}
@@ -75,14 +75,41 @@ func (ae *AuthEndpoints) ProxyLogin(c *gin.Context) {
 		return
 	}
 
+	// Authoritative role check: the caller's role is re-read from the database
+	// rather than trusted from the JWT — a demoted admin keeps their old role
+	// claim until the token expires, and impersonation is too sensitive to
+	// honor a stale claim.
+	var caller models.User
+	if err := models.DB.First(&caller, "id = ?", strings.TrimSpace(authCtx.UserID)).Error; err != nil {
+		response.InternalErrorf(c, response.CodeServerError, "Proxy login failed. Please try again.", err,
+			"op", "db.users.lookup_caller", "adminId", authCtx.UserID)
+		return
+	}
+	if !proxyLoginAllowedRoles[strings.TrimSpace(caller.Role)] {
+		response.Forbidden(c, response.CodeForbidden, "You are not allowed to impersonate users.")
+		return
+	}
+
 	var target models.User
 	if err := models.DB.First(&target, "id = ?", targetID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.Err(c, http.StatusNotFound, "USER_NOT_FOUND", "The target user does not exist.")
 			return
 		}
-		response.InternalErrorf(c, "SERVER_ERROR", "Proxy login failed. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Proxy login failed. Please try again.", err,
 			"op", "db.users.lookup_target", "adminId", authCtx.UserID, "targetUserId", targetID)
+		return
+	}
+
+	// Role-rank check: impersonation requires strictly greater privilege, so an
+	// admin can never obtain a super-admin token by impersonating one (privilege
+	// escalation), and equal-rank impersonation is refused to protect peer
+	// accounts.
+	if !models.CanImpersonate(caller.Role, target.Role) {
+		slog.Warn("proxy_login.rank_denied",
+			"adminId", authCtx.UserID, "callerRole", caller.Role,
+			"targetUserId", target.ID, "targetRole", target.Role)
+		response.Forbidden(c, response.CodeForbidden, "You cannot impersonate a user with an equal or higher role.")
 		return
 	}
 
@@ -110,14 +137,14 @@ func (ae *AuthEndpoints) respondWithImpersonationToken(c *gin.Context, target mo
 
 	accessToken, jti, accessExpiresAt, err := ae.Issuer.IssueImpersonationToken(target.ID.String(), role, nil, adminID, ttl)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Proxy login failed. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Proxy login failed. Please try again.", err,
 			"op", "issue_impersonation_token", "adminId", adminID, "targetUserId", target.ID)
 		return
 	}
 
 	sessionID, err := uuid.Parse(jti)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Proxy login failed. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Proxy login failed. Please try again.", err,
 			"op", "parse_session_jti", "jti", jti, "adminId", adminID, "targetUserId", target.ID)
 		return
 	}

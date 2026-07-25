@@ -91,6 +91,15 @@ Behaviour by caller:
 | GET | `/readyz` | Readiness probe (checks PostgreSQL) |
 | GET | `/metrics` | Prometheus metrics endpoint |
 
+### Schema migrations
+
+The schema is applied by **versioned SQL migrations** embedded in the binary
+(`internal/migrations/*.sql`, applied by goose at startup under a per-service
+Postgres advisory lock and recorded in `goose_db_version_analytics_service`). GORM
+`AutoMigrate` is no longer the authority — it remains only behind
+`DB_AUTOMIGRATE=true` for local development. A migration failure aborts startup.
+See [schema-migrations.md](../architecture/schema-migrations.md).
+
 ## DB Schema
 
 ### analytics_events

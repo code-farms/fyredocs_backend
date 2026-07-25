@@ -70,7 +70,7 @@ func TestCanChangePlan(t *testing.T) {
 		"pro":         false, // a plan name is not a role
 		"admin":       true,
 		"super-admin": true,
-		"  admin  ":   true, // trimmed
+		"  admin  ":   true,  // trimmed
 		"Admin":       false, // case-sensitive: only exact roles allowed
 	}
 	for role, want := range cases {

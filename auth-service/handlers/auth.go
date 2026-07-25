@@ -29,14 +29,25 @@ import (
 	"fyredocs/shared/response"
 )
 
-// authCredentials is the inbound signup/login payload.
-type authCredentials struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	FullName string `json:"fullName"`
-	Phone    string `json:"phone"`
-	Country  string `json:"country"`
-	Image    string `json:"image"`
+// signupRequest is the inbound signup payload. Validation lives in the binding
+// tags (funneled through response.BindJSON); handlers only normalize
+// (trim/lowercase) afterwards.
+type signupRequest struct {
+	Email    string `json:"email" binding:"required,email,max=254"`
+	Password string `json:"password" binding:"required,min=8,max=128"`
+	FullName string `json:"fullName" binding:"required,max=100"`
+	Phone    string `json:"phone" binding:"omitempty,max=32"`
+	Country  string `json:"country" binding:"required,max=100"`
+	Image    string `json:"image" binding:"omitempty,max=1024"`
+}
+
+// loginRequest is the inbound login payload. Deliberately laxer than signup
+// (no email-format or min-length rules beyond presence): login must accept
+// whatever credentials an existing account might have, and reject them with
+// the uniform INVALID_CREDENTIALS response, not a validation error.
+type loginRequest struct {
+	Email    string `json:"email" binding:"required,max=254"`
+	Password string `json:"password" binding:"required,max=128"`
 }
 
 // authUser is the sanitized user representation returned to clients; it never
@@ -66,8 +77,8 @@ type AuthEndpoints struct {
 // rejects duplicate emails, hashes the password with bcrypt, persists the user,
 // emits a signup analytics event, and responds with a fresh token pair.
 func (ae *AuthEndpoints) Signup(c *gin.Context) {
-	payload, ok := parseAuthPayload(c)
-	if !ok {
+	var payload signupRequest
+	if !response.BindJSON(c, &payload) {
 		return
 	}
 
@@ -77,17 +88,10 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 	phone := strings.TrimSpace(payload.Phone)
 	image := strings.TrimSpace(payload.Image)
 
+	// Binding tags cover format/length; whitespace-only values still need the
+	// post-trim check (validator does not trim).
 	if email == "" || strings.TrimSpace(payload.Password) == "" || fullName == "" || country == "" {
-		response.Err(c, http.StatusBadRequest, "INVALID_INPUT", "Please fill in all required fields.")
-		return
-	}
-
-	if len(payload.Password) < 8 {
-		response.Err(c, http.StatusBadRequest, "WEAK_PASSWORD", "Password must be at least 8 characters")
-		return
-	}
-	if len(payload.Password) > 128 {
-		response.Err(c, http.StatusBadRequest, "INVALID_INPUT", "Password must not exceed 128 characters")
+		response.Err(c, http.StatusBadRequest, response.CodeInvalidInput, "Please fill in all required fields.")
 		return
 	}
 
@@ -96,14 +100,14 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 		response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "An account with this email already exists. Please log in instead.")
 		return
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not create your account. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not create your account. Please try again.", err,
 			"op", "db.users.lookup_existing", "email", email)
 		return
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(payload.Password), bcrypt.DefaultCost)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not create your account. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not create your account. Please try again.", err,
 			"op", "bcrypt.generate_password_hash")
 		return
 	}
@@ -121,7 +125,7 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 			response.Err(c, http.StatusConflict, "USER_ALREADY_EXISTS", "An account with this email already exists. Please log in instead.")
 			return
 		}
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not create your account. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not create your account. Please try again.", err,
 			"op", "db.users.create", "email", email)
 		return
 	}
@@ -130,12 +134,28 @@ func (ae *AuthEndpoints) Signup(c *gin.Context) {
 	ae.respondWithTokens(c, user)
 }
 
+// dummyPasswordHash is compared against when the email is not registered so
+// the unknown-email path costs the same bcrypt work as a real password check.
+// Without it, an unknown email returns in ~1ms vs ~100ms+ for a known one — a
+// timing oracle for account enumeration. Generated at startup so it always
+// matches the current bcrypt.DefaultCost.
+var dummyPasswordHash = func() []byte {
+	h, err := bcrypt.GenerateFromPassword([]byte("fyredocs-timing-equalizer"), bcrypt.DefaultCost)
+	if err != nil {
+		// bcrypt.GenerateFromPassword only fails on an invalid cost; DefaultCost
+		// is always valid, so this is unreachable in practice.
+		panic(err)
+	}
+	return h
+}()
+
 // Login authenticates a user by email and password and, on success, issues a
-// fresh token pair. All failure paths return the same generic message to avoid
-// leaking whether an email is registered (account enumeration).
+// fresh token pair. All failure paths return the same generic message AND burn
+// the same bcrypt cost, so neither the response nor its timing leaks whether an
+// email is registered (account enumeration).
 func (ae *AuthEndpoints) Login(c *gin.Context) {
-	payload, ok := parseAuthPayload(c)
-	if !ok {
+	var payload loginRequest
+	if !response.BindJSON(c, &payload) {
 		return
 	}
 
@@ -145,20 +165,19 @@ func (ae *AuthEndpoints) Login(c *gin.Context) {
 		return
 	}
 
-	if len(payload.Password) > 128 {
-		response.Unauthorized(c, "INVALID_CREDENTIALS", "Incorrect email or password. Please try again.")
-		return
-	}
-
 	var user models.User
 	if err := models.DB.Where("email = ?", email).First(&user).Error; err != nil {
-		logger.LogWarn(c.Request.Context(), "login.user_lookup", err, "email", email)
+		// Burn the same bcrypt cost as the password-mismatch path (see
+		// dummyPasswordHash). The log line deliberately omits the email — it is
+		// attacker-supplied PII on this path.
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(payload.Password))
+		logger.LogWarn(c.Request.Context(), "login.user_lookup", err)
 		response.Unauthorized(c, "INVALID_CREDENTIALS", "Incorrect email or password. Please try again.")
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(payload.Password)); err != nil {
-		logger.LogWarn(c.Request.Context(), "login.password_mismatch", err, "userId", user.ID, "email", email)
+		logger.LogWarn(c.Request.Context(), "login.password_mismatch", err, "userId", user.ID)
 		response.Unauthorized(c, "INVALID_CREDENTIALS", "Incorrect email or password. Please try again.")
 		return
 	}
@@ -167,10 +186,14 @@ func (ae *AuthEndpoints) Login(c *gin.Context) {
 	ae.respondWithTokens(c, user)
 }
 
-// Refresh rotates the access token using the refresh-token cookie. It verifies
-// the refresh token, confirms a matching active session still exists, reloads
-// the user's current plan and role, refreshes the plan cache, and updates the
-// session's access-token hash. Any failure is reported as an expired session.
+// Refresh rotates the token pair using the refresh-token cookie. Every
+// successful refresh issues a NEW refresh token and retires the presented one
+// (rotation); a replay of a retired token outside a short grace window is
+// treated as theft — the session is revoked, its access token denylisted, and
+// the cookies cleared (reuse detection). Concurrent refreshes from multiple
+// tabs are absorbed by the grace window: the loser gets a fresh access token
+// but no second rotation. All failures return the same generic 401 so the
+// endpoint leaks nothing about why a token was rejected.
 func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 	cookieName := config.GetEnv("AUTH_REFRESH_COOKIE", "refresh_token")
 	refreshToken, err := c.Cookie(cookieName)
@@ -178,40 +201,65 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 		if err != nil {
 			logger.LogWarn(c.Request.Context(), "refresh.read_cookie", err, "cookie", cookieName)
 		}
-		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
+		respondRefreshInvalid(c)
 		return
 	}
 
 	userID, err := ae.Issuer.VerifyRefreshToken(refreshToken)
 	if err != nil {
 		logger.LogWarn(c.Request.Context(), "refresh.verify_token", err)
-		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
-		return
-	}
-
-	session, err := models.FindSessionByRefreshHash(models.DB, models.HashToken(refreshToken))
-	if err != nil {
-		logger.LogWarn(c.Request.Context(), "refresh.find_session", err, "userId", userID)
-		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
+		respondRefreshInvalid(c)
 		return
 	}
 
 	parsedID, err := uuid.Parse(strings.TrimSpace(userID))
 	if err != nil {
 		logger.LogErr(c.Request.Context(), "refresh.parse_user_id", err, "userId", userID)
-		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
+		respondRefreshInvalid(c)
+		return
+	}
+
+	refreshHash := models.HashToken(refreshToken)
+	now := time.Now()
+	grace := config.GetEnvDuration("AUTH_REFRESH_ROTATE_GRACE", 30*time.Second)
+
+	session, activeMatch, prevMatch, ok := findRefreshSession(c, refreshHash, userID)
+	if !ok {
+		return
+	}
+
+	if session != nil && session.UserID != parsedID {
+		// The session row and the token's subject disagree — never proceed.
+		logger.LogErr(c.Request.Context(), "refresh.session_user_mismatch", nil,
+			"sessionUserId", session.UserID, "tokenUserId", parsedID)
+		respondRefreshInvalid(c)
+		return
+	}
+
+	var revokedAt, rotatedAt *time.Time
+	if session != nil {
+		revokedAt, rotatedAt = session.RevokedAt, session.RotatedAt
+	}
+	outcome := models.ClassifyRefresh(activeMatch, prevMatch, revokedAt, rotatedAt, now, grace)
+
+	switch outcome {
+	case models.OutcomeInvalid:
+		respondRefreshInvalid(c)
+		return
+	case models.OutcomeReuse:
+		ae.handleRefreshReuse(c, session)
 		return
 	}
 
 	var user models.User
 	if err := models.DB.First(&user, "id = ?", parsedID).Error; err != nil {
 		logger.LogWarn(c.Request.Context(), "refresh.lookup_user", err, "userId", parsedID)
-		response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
+		respondRefreshInvalid(c)
 		return
 	}
 
-	plan, ok := lookupPlan(c.Request.Context(), user.PlanName)
-	if !ok {
+	plan, planOK := lookupPlan(c.Request.Context(), user.PlanName)
+	if !planOK {
 		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
 	}
 
@@ -226,16 +274,50 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 
 	accessToken, _, accessExpiresAt, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, accessTTL)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Failed to refresh token. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Failed to refresh token. Please try again.", err,
 			"op", "issue_access_token.refresh", "userId", user.ID)
 		return
 	}
 
-	session.AccessTokenHash = models.HashToken(accessToken)
-	session.AccessExpiresAt = accessExpiresAt
-	if err := models.DB.Save(session).Error; err != nil {
-		slog.Warn("failed to update session in database", "error", err)
+	if outcome == models.OutcomeRotate {
+		// Rotation never extends the session's absolute lifetime: the new
+		// refresh expiry is capped at the original RefreshExpiresAt, so a stolen
+		// cookie cannot keep a session alive forever by refreshing.
+		refreshTTL := config.GetEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour)
+		newRefreshExpiresAt := now.Add(refreshTTL)
+		if session.RefreshExpiresAt != nil && session.RefreshExpiresAt.Before(newRefreshExpiresAt) {
+			newRefreshExpiresAt = *session.RefreshExpiresAt
+		}
+
+		newRefreshToken, _, _, err := ae.Issuer.IssueRefreshToken(user.ID.String(), newRefreshExpiresAt.Sub(now))
+		if err != nil {
+			response.InternalErrorf(c, response.CodeServerError, "Failed to refresh token. Please try again.", err,
+				"op", "issue_refresh_token.refresh", "userId", user.ID)
+			return
+		}
+
+		rotated, err := models.RotateSessionTokens(models.DB, session.ID, refreshHash,
+			models.HashToken(accessToken), accessExpiresAt,
+			models.HashToken(newRefreshToken), newRefreshExpiresAt)
+		if err != nil {
+			// Without the persisted rotation the new refresh cookie would be
+			// unusable on the next refresh — fail loudly instead of half-rotating.
+			response.InternalErrorf(c, response.CodeServerError, "Failed to refresh token. Please try again.", err,
+				"op", "rotate_session_tokens", "userId", user.ID, "sessionId", session.ID)
+			return
+		}
+		if rotated {
+			setRefreshTokenCookie(c, newRefreshToken, newRefreshExpiresAt.Sub(now))
+		} else {
+			// A concurrent refresh won the optimistic-guard race after our
+			// lookup. The winner holds the rotated pair; this response degrades
+			// to the grace behavior (fresh access token, no refresh cookie).
+			logger.LogWarn(c.Request.Context(), "refresh.rotation_race_lost", nil,
+				"sessionId", session.ID, "userId", user.ID)
+		}
 	}
+	// OutcomeGrace: the session row is left untouched and no refresh cookie is
+	// set — the winning request's cookie is authoritative.
 
 	setAccessTokenCookie(c, accessToken, accessTTL)
 
@@ -243,6 +325,69 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 		"user":            buildUserResponse(user, role, plan),
 		"accessExpiresAt": accessExpiresAt.UnixMilli(),
 	})
+}
+
+// findRefreshSession resolves the session a presented refresh-token hash
+// belongs to: first by the current hash, then by the superseded (prev) hash.
+// Returns ok=false when it has already written a response (DB failure).
+func findRefreshSession(c *gin.Context, refreshHash, userID string) (session *models.UserSession, activeMatch, prevMatch, ok bool) {
+	session, err := models.FindSessionByRefreshHash(models.DB, refreshHash)
+	switch {
+	case err == nil:
+		return session, true, false, true
+	case !errors.Is(err, gorm.ErrRecordNotFound):
+		logger.LogWarn(c.Request.Context(), "refresh.find_session", err, "userId", userID)
+		respondRefreshInvalid(c)
+		return nil, false, false, false
+	}
+
+	session, err = models.FindSessionByPrevRefreshHash(models.DB, refreshHash)
+	switch {
+	case err == nil:
+		return session, false, true, true
+	case !errors.Is(err, gorm.ErrRecordNotFound):
+		logger.LogWarn(c.Request.Context(), "refresh.find_session_prev", err, "userId", userID)
+		respondRefreshInvalid(c)
+		return nil, false, false, false
+	}
+
+	return nil, false, false, true
+}
+
+// handleRefreshReuse responds to a detected refresh-token replay: the session
+// is soft-revoked, its access token denylisted so peer services reject it
+// immediately, the plan cache dropped, and the caller's cookies cleared. The
+// response is the same generic 401 as every other failure (no oracle).
+func (ae *AuthEndpoints) handleRefreshReuse(c *gin.Context, session *models.UserSession) {
+	ctx := c.Request.Context()
+
+	slog.Warn("refresh.token_reuse_detected",
+		"userId", session.UserID, "sessionId", session.ID)
+
+	if err := models.MarkSessionRevoked(models.DB, session.ID); err != nil {
+		logger.LogWarn(ctx, "refresh.revoke_session", err, "sessionId", session.ID)
+	}
+
+	if ae.Denylist != nil {
+		ttl := time.Until(session.AccessExpiresAt)
+		if err := ae.Denylist.DenyTokenHash(ctx, session.AccessTokenHash, ttl); err != nil {
+			logger.LogWarn(ctx, "refresh.denylist_access_token", err, "sessionId", session.ID)
+		}
+	}
+
+	ae.deletePlanCache(ctx, session.UserID.String())
+
+	publishAnalyticsEvent(ctx, "user.refresh_reuse", session.UserID.String(), "")
+
+	clearAccessTokenCookie(c)
+	clearRefreshTokenCookie(c)
+	respondRefreshInvalid(c)
+}
+
+// respondRefreshInvalid is the single failure response for /auth/refresh: one
+// code, one message, regardless of cause.
+func respondRefreshInvalid(c *gin.Context) {
+	response.Unauthorized(c, "INVALID_REFRESH_TOKEN", "Your session has expired. Please log in again.")
 }
 
 // Me returns the authenticated user's profile under the "user" key.
@@ -285,7 +430,7 @@ func (ae *AuthEndpoints) Profile(c *gin.Context) {
 func (ae *AuthEndpoints) Logout(c *gin.Context) {
 	authCtx, ok := authverify.GetGinAuth(c)
 	if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-		response.Unauthorized(c, "UNAUTHORIZED", "Your session has expired. Please log in again.")
+		response.Unauthorized(c, response.CodeUnauthorized, "Your session has expired. Please log in again.")
 		return
 	}
 
@@ -327,21 +472,21 @@ func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
 
 	accessToken, jti, accessExpiresAt, err := ae.Issuer.IssueAccessToken(user.ID.String(), role, nil, accessTTL)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Login failed. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Login failed. Please try again.", err,
 			"op", "issue_access_token.login", "userId", user.ID)
 		return
 	}
 
 	refreshToken, _, refreshExpiresAt, err := ae.Issuer.IssueRefreshToken(user.ID.String(), refreshTTL)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Login failed. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Login failed. Please try again.", err,
 			"op", "issue_refresh_token.login", "userId", user.ID)
 		return
 	}
 
 	sessionID, err := uuid.Parse(jti)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Login failed. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Login failed. Please try again.", err,
 			"op", "parse_session_jti", "jti", jti, "userId", user.ID)
 		return
 	}
@@ -382,16 +527,6 @@ func (ae *AuthEndpoints) denyAccessToken(ctx context.Context, tokenStr string) e
 	return ae.Denylist.DenyToken(ctx, tokenStr, ttl)
 }
 
-func parseAuthPayload(c *gin.Context) (authCredentials, bool) {
-	var payload authCredentials
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid request. Please try again.", err,
-			"op", "bind_auth_payload")
-		return authCredentials{}, false
-	}
-	return payload, true
-}
-
 func buildUserResponse(user models.User, role string, plan models.SubscriptionPlan) authUser {
 	if strings.TrimSpace(user.Role) != "" {
 		role = user.Role
@@ -422,21 +557,21 @@ func normalizeEmail(raw string) string {
 func loadUserFromAuth(c *gin.Context) (models.User, authverify.AuthContext, bool) {
 	authCtx, ok := authverify.GetGinAuth(c)
 	if !ok || strings.TrimSpace(authCtx.UserID) == "" {
-		response.Unauthorized(c, "UNAUTHORIZED", "Your session has expired. Please log in again.")
+		response.Unauthorized(c, response.CodeUnauthorized, "Your session has expired. Please log in again.")
 		return models.User{}, authverify.AuthContext{}, false
 	}
 
 	parsedID, err := uuid.Parse(strings.TrimSpace(authCtx.UserID))
 	if err != nil {
 		logger.LogErr(c.Request.Context(), "load_user.parse_id", err, "userIdRaw", authCtx.UserID)
-		response.Unauthorized(c, "UNAUTHORIZED", "Your session has expired. Please log in again.")
+		response.Unauthorized(c, response.CodeUnauthorized, "Your session has expired. Please log in again.")
 		return models.User{}, authverify.AuthContext{}, false
 	}
 
 	var user models.User
 	if err := models.DB.First(&user, "id = ?", parsedID).Error; err != nil {
 		logger.LogWarn(c.Request.Context(), "load_user.db_lookup", err, "userId", parsedID)
-		response.Unauthorized(c, "UNAUTHORIZED", "Your session has expired. Please log in again.")
+		response.Unauthorized(c, response.CodeUnauthorized, "Your session has expired. Please log in again.")
 		return models.User{}, authverify.AuthContext{}, false
 	}
 
@@ -590,22 +725,20 @@ func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 	// Authorization: only admins/super-admins may change a plan. Without this,
 	// any authenticated user can upgrade themselves to a paid plan for free.
 	if !canChangePlan(user.Role) {
-		response.Forbidden(c, "FORBIDDEN", "You are not allowed to change plans.")
+		response.Forbidden(c, response.CodeForbidden, "You are not allowed to change plans.")
 		return
 	}
 
 	var body struct {
-		PlanName string `json:"planName" binding:"required"`
+		PlanName string `json:"planName" binding:"required,max=64"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Please provide a valid plan name.", err,
-			"op", "bind_change_plan_request", "userId", user.ID)
+	if !response.BindJSON(c, &body) {
 		return
 	}
 
 	planName := strings.TrimSpace(body.PlanName)
 	if planName == "" {
-		response.BadRequest(c, "INVALID_INPUT", "Please provide a valid plan name.")
+		response.BadRequest(c, response.CodeInvalidInput, "Please provide a valid plan name.")
 		return
 	}
 
@@ -615,7 +748,7 @@ func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 			response.BadRequest(c, "INVALID_PLAN", "The selected plan does not exist.")
 			return
 		}
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not update your plan. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not update your plan. Please try again.", err,
 			"op", "db.subscription_plans.lookup", "planName", planName, "userId", user.ID)
 		return
 	}
@@ -627,7 +760,7 @@ func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 	}
 
 	if err := models.DB.Model(&user).Update("plan_name", planName).Error; err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not update your plan. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not update your plan. Please try again.", err,
 			"op", "db.users.update_plan", "userId", user.ID, "newPlan", planName, "oldPlan", oldPlan)
 		return
 	}

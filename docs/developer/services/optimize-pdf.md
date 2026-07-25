@@ -360,7 +360,7 @@ sequenceDiagram
 
 `/healthz` is a pure **liveness** probe: a static `200 {"status":"ok"}` with **no dependency checks**, so a transient Redis/NATS/Postgres blip can never flip liveness and trigger a restart cascade. `/readyz` is the **readiness** check (PostgreSQL + Redis + NATS), returning 200/503 with individual check results — it verifies all dependencies are connected.
 
-> **Migration ownership:** this worker does **not** run GORM `AutoMigrate` on the shared `processing_jobs` / `file_metadata` tables. **job-service is the sole migrator/owner** of those tables. The worker only reads/updates `ProcessingJob` and writes its own output `FileMetadata` rows — the tables are guaranteed to exist because the worker only ever processes jobs that job-service (already migrated) dispatched.
+> **Migration ownership:** this worker owns no migrations and never applies DDL to the shared `processing_jobs` / `file_metadata` tables. **job-service is the sole migrator/owner** of those tables. The worker only reads/updates `ProcessingJob` and writes its own output `FileMetadata` rows — the tables are guaranteed to exist because the worker only ever processes jobs that job-service (already migrated) dispatched.
 
 ## Error Flows
 
@@ -392,6 +392,28 @@ Example — logged (raw): `[TIMEOUT] context deadline exceeded`; shown to the us
 | Disk full | All | status=failed | No |
 | Worker crash | All | NATS redelivery (MaxDeliver) | Yes |
 | Database failure | All | Message not acked, NATS redelivery | Yes |
+
+### Graceful shutdown (drain)
+
+On SIGTERM the worker stops fetching immediately but does **not** kill jobs
+already running: `Run` processes jobs on a context detached from the shutdown
+signal and waits up to `WORKER_DRAIN_TIMEOUT` (default `120s`) for them to
+finish. Jobs still running at the deadline are cancelled — their failure path
+naks the message, so JetStream redelivers them to another replica rather than
+leaving partial output. `main` joins the worker before exiting, and compose
+sets `stop_grace_period: 3m` on the worker services.
+
+**Invariant:** `WORKER_DRAIN_TIMEOUT` must stay below `stop_grace_period`, or
+Docker SIGKILLs the container mid-drain and the guarantee is lost.
+
+### Trace propagation
+
+Dispatch messages carry W3C trace context in their NATS headers.
+`processMessage` extracts it and opens a `SpanKindConsumer` span, so the worker
+leg appears in the same Tempo trace as the originating API request; worker logs
+use the `*Context` slog variants on that context and therefore carry
+`trace_id`. Terminal events echo `JobEvent.QueuedAt` (stamped by job-service at
+dispatch) which feeds the `job_duration_seconds` histogram.
 
 ### NATS Redelivery
 

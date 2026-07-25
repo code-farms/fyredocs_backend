@@ -12,7 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+
 	"fyredocs/shared/circuitbreaker"
+	"fyredocs/shared/logger"
 )
 
 func baseURL() string {
@@ -53,6 +57,12 @@ func Membership(ctx context.Context, orgID, userID string) (role string, member 
 		}
 		// Internal call on the trusted mesh: assert the caller's identity the same
 		// way the gateway would.
+		// Propagate the caller's trace and request ID so the internal hop stays
+		// correlated with the originating request (Grafana log↔trace jump).
+		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+		if rid := logger.RequestIDFromContext(ctx); rid != "" {
+			req.Header.Set(logger.RequestIDHeader, rid)
+		}
 		req.Header.Set("X-User-ID", userID)
 
 		resp, rerr := httpClient.Do(req)

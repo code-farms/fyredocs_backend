@@ -26,24 +26,25 @@ func ListFolders(c *gin.Context) {
 	}
 	var folders []models.Folder
 	if err := q.Order("name ASC").Find(&folders).Error; err != nil {
-		response.InternalErrorf(c, "LIST_FAILED", "Could not load folders.", err, "op", "db.folders.list", "userId", uid)
+		response.InternalErrorf(c, response.CodeServerError, "Could not load folders.", err, "op", "db.folders.list", "userId", uid)
 		return
 	}
 	response.OK(c, "Folders retrieved", folders)
 }
 
+// folderReq is shared by create and update; Name is only mandatory on create,
+// so `required` is enforced by the create handler, not the tag.
 type folderReq struct {
-	Name           string  `json:"name"`
-	ParentID       *string `json:"parentId"`
-	OrganizationID *string `json:"organizationId"`
+	Name           string  `json:"name" binding:"omitempty,max=255"`
+	ParentID       *string `json:"parentId" binding:"omitempty,uuid"`
+	OrganizationID *string `json:"organizationId" binding:"omitempty,uuid"`
 }
 
 // CreateFolder creates a folder in scope (org requires editor+).
 func CreateFolder(c *gin.Context) {
 	uid, _ := userID(c)
 	var req folderReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_BODY", "Invalid request body.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Name) == "" {
@@ -65,7 +66,7 @@ func CreateFolder(c *gin.Context) {
 	}
 	folder := models.Folder{UserID: uid, OrganizationID: orgID, Name: strings.TrimSpace(req.Name), ParentID: pid}
 	if err := models.DB.Create(&folder).Error; err != nil {
-		response.InternalErrorf(c, "CREATE_FAILED", "Could not create folder.", err, "op", "db.folders.create", "userId", uid)
+		response.InternalErrorf(c, response.CodeServerError, "Could not create folder.", err, "op", "db.folders.create", "userId", uid)
 		return
 	}
 	response.Created(c, "Folder created", folder)
@@ -76,7 +77,7 @@ func UpdateFolder(c *gin.Context) {
 	uid, _ := userID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid folder id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid folder id.")
 		return
 	}
 	orgID, ok := resolveOrg(c, c.Query("orgId"), "editor")
@@ -84,8 +85,7 @@ func UpdateFolder(c *gin.Context) {
 		return
 	}
 	var req folderReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_BODY", "Invalid request body.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	updates := map[string]any{}
@@ -110,11 +110,11 @@ func UpdateFolder(c *gin.Context) {
 	}
 	res := scopeOwned(models.DB.Model(&models.Folder{}), uid, orgID).Where("id = ?", id).Updates(updates)
 	if res.Error != nil {
-		response.InternalErrorf(c, "UPDATE_FAILED", "Could not update folder.", res.Error, "op", "db.folders.update", "folderId", id)
+		response.InternalErrorf(c, response.CodeServerError, "Could not update folder.", res.Error, "op", "db.folders.update", "folderId", id)
 		return
 	}
 	if res.RowsAffected == 0 {
-		response.NotFound(c, "NOT_FOUND", "Folder not found.")
+		response.NotFound(c, response.CodeNotFound, "Folder not found.")
 		return
 	}
 	response.OK(c, "Folder updated", gin.H{"id": id})
@@ -125,7 +125,7 @@ func DeleteFolder(c *gin.Context) {
 	uid, _ := userID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid folder id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid folder id.")
 		return
 	}
 	orgID, ok := resolveOrg(c, c.Query("orgId"), "editor")
@@ -138,7 +138,7 @@ func DeleteFolder(c *gin.Context) {
 		return
 	}
 	if res.RowsAffected == 0 {
-		response.NotFound(c, "NOT_FOUND", "Folder not found.")
+		response.NotFound(c, response.CodeNotFound, "Folder not found.")
 		return
 	}
 	if err := scopeOwned(models.DB.Model(&models.Document{}), uid, orgID).Where("folder_id = ?", id).Update("folder_id", nil).Error; err != nil {

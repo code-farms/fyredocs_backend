@@ -51,7 +51,7 @@ func buildSSEPayload(event queue.JobEvent) gin.H {
 func SSEJobUpdates(c *gin.Context) {
 	jobID := c.Param("id")
 	if jobID == "" {
-		response.BadRequest(c, "INVALID_INPUT", "job ID required")
+		response.BadRequest(c, response.CodeInvalidInput, "job ID required")
 		return
 	}
 
@@ -63,11 +63,11 @@ func SSEJobUpdates(c *gin.Context) {
 	// A missing job and a denied job both return 404 so existence isn't leaked.
 	job, err := loadJobByID(jobID)
 	if err != nil {
-		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
+		response.NotFound(c, response.CodeNotFound, "Job not found or has expired.")
 		return
 	}
 	if !authorizeJobAccess(c, job) {
-		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
+		response.NotFound(c, response.CodeNotFound, "Job not found or has expired.")
 		return
 	}
 

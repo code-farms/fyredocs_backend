@@ -6,6 +6,14 @@ info:
     optimization, and organization tools. All responses follow a unified
     envelope format (`APIResponse`) with consistent error handling.
 
+    ## Versioning
+    Every path below is served under the versioned root **`/api/v1`**
+    (`/api/v1/auth/login`, `/api/v1/jobs/{id}`, `/api/v1/admin/...`). The old
+    unversioned spellings remain live as aliases and return identical
+    responses, so existing clients keep working; they are deprecated and will
+    be removed once their traffic reaches zero. New integrations should use
+    `/api/v1`. See `docs/developer/api/versioning.md`.
+
     ## Authentication
     The API supports three authentication methods:
     - **BearerAuth** - JWT access token in the `Authorization: Bearer <token>` header (API clients).
@@ -51,8 +59,10 @@ info:
     name: Fyredocs Team
 
 servers:
+  - url: http://localhost/api/v1
+    description: Fyredocs Caddy edge — versioned root (local development)
   - url: http://localhost
-    description: Fyredocs Caddy edge (local development)
+    description: Fyredocs Caddy edge — legacy unversioned root (deprecated, still served)
 
 tags:
   - name: Health
@@ -356,21 +366,31 @@ paths:
       tags: [Authentication]
       summary: Refresh access token
       description: |
-        Issues a new short-lived `access_token` cookie from a valid `refresh_token`
-        cookie. The refresh token cookie is left unchanged — only the underlying
-        `user_sessions` row's access-token hash is rotated. Rate-limited at
-        `RATE_LIMIT_REFRESH` (default 10) per `RATE_LIMIT_WINDOW` (default 60s)
-        per IP.
+        Rotates the token pair from a valid `refresh_token` cookie: issues a new
+        `access_token` cookie AND a new `refresh_token` cookie, retiring the
+        presented refresh token. Replaying a retired refresh token outside a
+        short grace window (`AUTH_REFRESH_ROTATE_GRACE`, default 30s) is treated
+        as token theft — the session is revoked, its access token denylisted,
+        and both cookies are cleared (the response is still the generic 401).
+        Concurrent refreshes from multiple tabs are absorbed by the grace
+        window: the losing request receives a fresh access token but no new
+        refresh cookie. Rotation never extends the session's absolute lifetime.
+        Rate-limited at `RATE_LIMIT_REFRESH` (default 10) per
+        `RATE_LIMIT_WINDOW` (default 60s) per IP.
       operationId: refreshToken
       security: []  # auth comes from the refresh_token cookie itself
       responses:
         "200":
-          description: New access token issued
+          description: Token pair rotated (new access + refresh cookies)
           headers:
             Set-Cookie:
               schema:
                 type: string
                 example: "access_token=eyJhbGc...; HttpOnly; Secure; SameSite=Lax; Max-Age=28800; Path=/"
+              description: |
+                Two cookies are set on a full rotation: `access_token` (Path=/)
+                and `refresh_token` (Path=/auth). A grace-window response sets
+                only `access_token`.
           content:
             application/json:
               schema:
@@ -596,7 +616,11 @@ paths:
       summary: Proxy login (admin impersonation)
       description: |
         Lets a caller with role `admin` or `super-admin` obtain a short-lived
-        access token for another user. The issued token carries an
+        access token for another user. The caller must **strictly outrank** the
+        target (role rank `user` < `admin` < `super-admin`): admins may
+        impersonate users; super-admins may impersonate users and admins;
+        nobody may impersonate a super-admin. The caller's role is re-read from
+        the database, not trusted from the JWT. The issued token carries an
         `impersonated_by` claim, uses a short TTL (`PROXY_LOGIN_TTL`), and is
         **not** paired with a refresh token — it cannot be renewed and expires
         on its own. The access cookie is set to the target user's token and the
@@ -645,7 +669,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          description: Caller is not an admin, or proxy login is disabled
+          description: Caller is not an admin, does not strictly outrank the target (`AUTH_FORBIDDEN`), or proxy login is disabled
           content:
             application/json:
               schema:
@@ -2328,6 +2352,122 @@ paths:
               schema:
                 $ref: "#/components/schemas/APIResponse"
 
+  /admin/metrics/queues:
+    get:
+      tags: [Admin Analytics]
+      summary: Job queue status (pending, in-flight, dead-lettered)
+      description: |
+        Reports the state of the processing pipeline from the JetStream streams
+        and the job tables: queued/processing counts per tool, consumer lag, and
+        the dead-letter queue depth. Used by the admin dashboard's queue panel.
+      operationId: adminQueueStatus
+      responses:
+        "200":
+          description: Queue status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/metrics/api-trends:
+    get:
+      tags: [Admin Analytics]
+      summary: API traffic and latency trend series
+      description: |
+        Time series of request volume, latency, and error rate built from the
+        `api_metric_samples` rows the analytics sampler writes (counters alone
+        carry no history). Ranges of 2 days or less are bucketed per hour,
+        longer ranges per day.
+      operationId: adminAPITrends
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 7 }
+          description: Look-back window in days
+      responses:
+        "200":
+          description: API trend series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/metrics/executive:
+    get:
+      tags: [Admin Analytics]
+      summary: Executive overview (headline KPIs with period-over-period deltas)
+      description: |
+        Single-call summary for the admin landing page: signups, active users,
+        jobs processed, conversion, and revenue for the window, each compared
+        against the immediately preceding window of the same length.
+      operationId: adminExecutiveOverview
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 30 }
+          description: Look-back window in days
+      responses:
+        "200":
+          description: Executive overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/metrics/revenue:
+    get:
+      tags: [Admin Analytics]
+      summary: Revenue metrics (MRR, plan mix, upgrades/downgrades)
+      description: |
+        Revenue view derived from plan changes and the current plan
+        distribution: recurring revenue, plan mix, and net movement over the
+        window. Prices come from the analytics-service pricing table.
+      operationId: adminRevenueMetrics
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 30 }
+          description: Look-back window in days
+      responses:
+        "200":
+          description: Revenue metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/metrics/acquisition:
+    get:
+      tags: [Admin Analytics]
+      summary: Acquisition metrics (new users, guest→registered conversion)
+      description: |
+        New-user acquisition over the window with a period-over-period delta,
+        plus guest-to-registered conversion — how many guest sessions ended in
+        a signup.
+      operationId: adminAcquisitionMetrics
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 30 }
+          description: Look-back window in days
+      responses:
+        "200":
+          description: Acquisition metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /admin/metrics/server-performance:
     get:
       tags: [Admin Analytics]
@@ -2902,6 +3042,7 @@ components:
         email:
           type: string
           format: email
+          maxLength: 254
           example: user@example.com
         password:
           type: string
@@ -2911,13 +3052,16 @@ components:
           example: "secureP@ss123"
         fullName:
           type: string
+          maxLength: 100
           example: John Doe
         phone:
           type: string
+          maxLength: 32
           description: Optional phone number
           example: "+1234567890"
         country:
           type: string
+          maxLength: 100
           example: US
         image:
           type: string

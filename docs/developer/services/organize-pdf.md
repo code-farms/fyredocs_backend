@@ -295,7 +295,7 @@ POST /internal/v1/detect-edges
 ```
 Document edge detection for the scanner UI (`internal/httpapi/detect.go`, registered in `main.go` via `httpapi.RegisterInternalRoutes`). Only reachable on the Docker network — the public gateway never proxies here. job-service relays `POST /api/organize-pdf/detect-edges` to this endpoint.
 
-**Auth:** optional shared secret — when the `INTERNAL_API_TOKEN` env var is set, requests must carry it in the `X-Internal-Token` header (401 otherwise); the check is skipped when unset.
+**Auth:** mandatory shared secret — requests must carry `INTERNAL_API_TOKEN` in the `X-Internal-Token` header (401 otherwise). The check FAILS CLOSED: when the env var is unset every request is refused with 503, so a missing variable can never silently reopen the route. Verified by the shared `authverify.InternalTokenGin` middleware (constant-time compare).
 
 **Request:**
 ```json
@@ -322,8 +322,9 @@ Corners are normalized `0..1` against the decoded pixel grid. Detection **never 
 
 | Status | Code | Condition |
 |--------|------|-----------|
-| 400 | `INVALID_REQUEST` | Missing storage key |
-| 401 | `UNAUTHORIZED` | `INTERNAL_API_TOKEN` set and `X-Internal-Token` missing/wrong |
+| 400 | `INVALID_INPUT` | Missing storage key |
+| 401 | `AUTH_UNAUTHORIZED` | `X-Internal-Token` missing/wrong |
+| 503 | `SERVICE_UNAVAILABLE` | `INTERNAL_API_TOKEN` unset on the server (fail-closed) |
 | 404 | `OBJECT_NOT_FOUND` | Key not found in the bucket |
 | 413 | `IMAGE_TOO_LARGE` | Object larger than 30 MiB |
 | 422 | `UNDECODABLE_IMAGE` | Object is not a decodable image (or exceeds 50 MP) |
@@ -350,10 +351,10 @@ REDIS_DB="0"
 ```env
 PORT="8084"
 NATS_URL="nats://nats:4222"
-PROCESSING_TIMEOUT="5m"    # honoured via NATS AckWait (pdfcpu ops are fast)
+PROCESSING_TIMEOUT="30m"   # honoured via NATS AckWait; must exceed the 10m per-job timeout or a running job is redelivered and double-processed
 WORKER_CONCURRENCY="4"     # parallel jobs per container (semaphore-bounded goroutines)
 RESULT_CACHE_TTL_SECONDS="3600"  # result-cache entry TTL (keep <= outputs bucket TTL); 0 disables
-INTERNAL_API_TOKEN=""      # optional shared secret for /internal/v1/* — verifies X-Internal-Token when set (job-service sends the same value)
+INTERNAL_API_TOKEN=""      # REQUIRED shared secret for /internal/v1/* — X-Internal-Token is always verified; unset fails closed with 503 (job-service sends the same value)
 ```
 
 ### Object Storage (S3 / MinIO)
@@ -432,7 +433,7 @@ Caching is **best-effort**: any cache-path error (Redis down, stat/copy failure,
 | | `enhance.go` | `grayscale`, `bw` (adaptive threshold), `color-boost` enhancement modes |
 | | `resize.go` | Downscaling for the detection pipeline |
 | | `detect.go` | Document quad detection (see pipeline below) |
-| `internal/httpapi` | `detect.go` | `/internal/v1/detect-edges` handler + optional `X-Internal-Token` auth |
+| `internal/httpapi` | `detect.go` | `/internal/v1/detect-edges` handler behind `authverify.InternalTokenGin` (X-Internal-Token, fail-closed) |
 
 ### Edge Detection Pipeline (internal/imaging/detect.go)
 
@@ -447,7 +448,7 @@ API Gateway → Job Service (creates ProcessingJob in Postgres)
   ↓
 NATS JetStream (jobs.dispatch.organize-pdf) — WorkQueue
   ↓
-organize-pdf worker pull-consumer (durable=organize-pdf · MaxDeliver=4 · AckWait=5m · MaxAckPending=2×concurrency)
+organize-pdf worker pull-consumer (durable=organize-pdf · MaxDeliver=4 · AckWait=30m · MaxAckPending=2×concurrency)
   ↓
 Fetch up to WORKER_CONCURRENCY messages (default 4); jobs run in parallel semaphore-bounded goroutines
   ↓
@@ -808,7 +809,7 @@ sequenceDiagram
 
 `/healthz` is a pure **liveness** probe: a static `200 {"status":"ok"}` with **no dependency checks**, so a transient Redis/NATS/Postgres blip can never flip liveness and trigger a restart cascade. `/readyz` is the **readiness** check (PostgreSQL + Redis + NATS), returning 200/503 with individual check results — it verifies all dependencies are connected.
 
-> **Migration ownership:** this worker does **not** run GORM `AutoMigrate` on the shared `processing_jobs` / `file_metadata` tables. **job-service is the sole migrator/owner** of those tables. The worker only reads/updates `ProcessingJob` and writes its own output `FileMetadata` rows — the tables are guaranteed to exist because the worker only ever processes jobs that job-service (already migrated) dispatched.
+> **Migration ownership:** this worker owns no migrations and never applies DDL to the shared `processing_jobs` / `file_metadata` tables. **job-service is the sole migrator/owner** of those tables. The worker only reads/updates `ProcessingJob` and writes its own output `FileMetadata` rows — the tables are guaranteed to exist because the worker only ever processes jobs that job-service (already migrated) dispatched.
 
 ## Error Flows (Detailed)
 
@@ -826,6 +827,28 @@ sequenceDiagram
 | Disk full | All | status=failed | No |
 | Worker crash | All | NATS redelivery (MaxDeliver) | Yes |
 | Database failure | All | Message not acked, NATS redelivery | Yes |
+
+### Graceful shutdown (drain)
+
+On SIGTERM the worker stops fetching immediately but does **not** kill jobs
+already running: `Run` processes jobs on a context detached from the shutdown
+signal and waits up to `WORKER_DRAIN_TIMEOUT` (default `120s`) for them to
+finish. Jobs still running at the deadline are cancelled — their failure path
+naks the message, so JetStream redelivers them to another replica rather than
+leaving partial output. `main` joins the worker before exiting, and compose
+sets `stop_grace_period: 3m` on the worker services.
+
+**Invariant:** `WORKER_DRAIN_TIMEOUT` must stay below `stop_grace_period`, or
+Docker SIGKILLs the container mid-drain and the guarantee is lost.
+
+### Trace propagation
+
+Dispatch messages carry W3C trace context in their NATS headers.
+`processMessage` extracts it and opens a `SpanKindConsumer` span, so the worker
+leg appears in the same Tempo trace as the originating API request; worker logs
+use the `*Context` slog variants on that context and therefore carry
+`trace_id`. Terminal events echo `JobEvent.QueuedAt` (stamped by job-service at
+dispatch) which feeds the `job_duration_seconds` histogram.
 
 ### NATS Redelivery
 

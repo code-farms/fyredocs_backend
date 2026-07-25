@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -82,12 +83,12 @@ func Daily(c *gin.Context) {
 
 	fromDate, err := time.Parse("2006-01-02", from)
 	if err != nil {
-		response.BadRequest(c, "INVALID_INPUT", "invalid 'from' date format, use YYYY-MM-DD")
+		response.BadRequest(c, response.CodeInvalidInput, "invalid 'from' date format, use YYYY-MM-DD")
 		return
 	}
 	toDate, err := time.Parse("2006-01-02", to)
 	if err != nil {
-		response.BadRequest(c, "INVALID_INPUT", "invalid 'to' date format, use YYYY-MM-DD")
+		response.BadRequest(c, response.CodeInvalidInput, "invalid 'to' date format, use YYYY-MM-DD")
 		return
 	}
 	toDate = toDate.Add(24 * time.Hour) // inclusive end
@@ -237,13 +238,28 @@ func queryInt(c *gin.Context, key string, fallback int) int {
 	return n
 }
 
+// maxEventsPage bounds OFFSET depth on the raw-events debug list. analytics_events
+// is the most append-heavy table in the system, so unbounded paging here is the
+// easiest way to make the database do pointless work.
+const maxEventsPage = 200
+
 // GetEvents returns raw analytics events with pagination for debugging.
 func GetEvents(c *gin.Context) {
 	limit := queryInt(c, "limit", 50)
 	if limit > 200 {
 		limit = 200
 	}
+	// Deep OFFSET degrades linearly — the database still walks every skipped
+	// row — so page depth is capped instead of being effectively unbounded.
+	// Reaching this cap means the caller wants a different query (filters or a
+	// narrower window), not page 4000 of an append-only table.
 	page := queryInt(c, "page", 1)
+	if page > maxEventsPage {
+		page = maxEventsPage
+	}
+	if page < 1 {
+		page = 1
+	}
 	offset := (page - 1) * limit
 
 	eventType := c.Query("eventType")
@@ -280,7 +296,10 @@ func ReadyCheck(c *gin.Context) {
 	ready := true
 
 	if err := rdb(c).Exec("SELECT 1").Error; err != nil {
-		checks["postgres"] = err.Error()
+		// Raw driver errors can leak internal host:port details; the probe
+		// body stays generic and the cause goes to logs.
+		slog.Warn("readyz dependency check failed", "dependency", "postgres", "error", err)
+		checks["postgres"] = "unavailable"
 		ready = false
 	} else {
 		checks["postgres"] = "ok"

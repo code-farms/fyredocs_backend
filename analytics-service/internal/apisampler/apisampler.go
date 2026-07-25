@@ -55,10 +55,14 @@ func computeSampleDeltas(prev, cur promscrape.HTTPAggregate) models.APIMetricSam
 // Start launches the background sampler. It scrapes once to establish a baseline,
 // then writes a delta sample every API_SAMPLE_INTERVAL (default 60s) and prunes
 // rows older than API_METRIC_RETENTION_DAYS (default 30). Stops when ctx is done.
-func Start(ctx context.Context, db *gorm.DB) {
+// The returned channel closes once the loop has exited, so shutdown can join it
+// instead of abandoning an in-flight DB write.
+func Start(ctx context.Context, db *gorm.DB) <-chan struct{} {
+	done := make(chan struct{})
 	if db == nil {
 		slog.Warn("api metrics sampler disabled (no DB)")
-		return
+		close(done)
+		return done
 	}
 	interval := config.GetEnvDuration("API_SAMPLE_INTERVAL", time.Minute)
 	if interval <= 0 {
@@ -80,6 +84,7 @@ func Start(ctx context.Context, db *gorm.DB) {
 	}
 
 	go func() {
+		defer close(done)
 		// Long-lived background loop: a panic here would silently kill the sampler
 		// for the whole process lifetime. Recover and log so it's visible.
 		defer func() {
@@ -119,4 +124,5 @@ func Start(ctx context.Context, db *gorm.DB) {
 			}
 		}
 	}()
+	return done
 }

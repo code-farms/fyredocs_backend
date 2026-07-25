@@ -62,7 +62,7 @@ graph TB
 
         subgraph Models["internal/models (GORM)"]
             USER_MODEL["users (id, email, password_hash, plan_name, role, ...)"]
-            SESSION_MODEL["user_sessions (id=jti, user_id, access_token_hash, refresh_token_hash, expiries)"]
+            SESSION_MODEL["user_sessions (id=jti, user_id, access/refresh/prev_refresh hashes, expiries, rotated_at, revoked_at)"]
             PLAN_MODEL["subscription_plans (free · pro · anonymous)"]
             META_MODEL["auth_metadata (provider, subject)"]
         end
@@ -124,15 +124,16 @@ stateDiagram-v2
     [*] --> Issued: POST /signup or /login
     Issued --> Stored: INSERT user_sessions (id=jti, hashes)
     Stored --> Active: Set HttpOnly access_token + refresh_token cookies
-    Active --> Refreshed: POST /auth/refresh<br/>UPDATE user_sessions.access_token_hash
+    Active --> Refreshed: POST /auth/refresh<br/>rotate token pair (old refresh hash → prev_refresh_token_hash)
     Refreshed --> Active
+    Active --> Revoked: replay of a retired refresh token<br/>(reuse detected → revoked_at set, access hash denylisted)
     Active --> Denied: POST /auth/logout<br/>DELETE row + denylist:jwt:<hash>
     Active --> Expired: TTL exceeded (8h)
     Active --> Revoked: POST /internal/users/:id/revoke-sessions<br/>or DELETE /internal/sessions/:id
     Denied --> [*]
     Expired --> [*]
     Revoked --> [*]
-    Stored --> Cleaned: hourly DeleteExpiredSessions<br/>(both access & refresh expired)
+    Stored --> Cleaned: hourly DeleteExpiredSessions<br/>(both tokens expired, or revoked > 24h)
     Cleaned --> [*]
 ```
 

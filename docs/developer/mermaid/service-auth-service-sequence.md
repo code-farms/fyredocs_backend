@@ -87,16 +87,29 @@ sequenceDiagram
     AS->>AS: Read refresh cookie · reject if missing
     AS->>AS: Issuer.VerifyRefreshToken → userId
 
-    AS->>PG: FindSessionByRefreshHash(SHA256(refresh)) WHERE refresh_expires_at > NOW
-    alt not found / expired
+    AS->>PG: FindSessionByRefreshHash(SHA256(refresh))
+    alt no match on current hash
+        AS->>PG: FindSessionByPrevRefreshHash(SHA256(refresh))
+    end
+    AS->>AS: ClassifyRefresh → Rotate | Grace | Reuse | Invalid
+
+    alt Invalid — no session / expired
         AS-->>Client: 401 INVALID_REFRESH_TOKEN
-    else session valid
-        AS->>PG: SELECT users WHERE id=userId
-        AS->>PG: SELECT subscription_plans WHERE name=user.plan_name
+    else Reuse — superseded token outside grace, or revoked session
+        AS->>PG: UPDATE user_sessions SET revoked_at=NOW() WHERE id=session.id
+        AS->>Redis: SET denylist:jwt:&lt;accessHash&gt; (immediate cross-service revocation)
+        AS->>Redis: DEL user:plan:&lt;userId&gt;
+        AS-->>Client: 401 INVALID_REFRESH_TOKEN + cleared auth cookies
+    else Grace — concurrent refresh within AUTH_REFRESH_ROTATE_GRACE (30s)
+        AS->>PG: SELECT users / subscription_plans
+        AS->>AS: IssueAccessToken (new) — no second rotation, row untouched
+        AS-->>Client: 200 {user, accessExpiresAt} + Set-Cookie access_token only
+    else Rotate — presented token is the current refresh hash
+        AS->>PG: SELECT users / subscription_plans
         AS->>Redis: SET user:plan:&lt;userId&gt; EX accessTTL
-        AS->>AS: IssueAccessToken (new) — refresh hash stays
-        AS->>PG: UPDATE user_sessions SET access_token_hash=?, access_expires_at=? WHERE id=session.id
-        AS-->>Client: 200 {user, accessExpiresAt} + new Set-Cookie access_token
+        AS->>AS: IssueAccessToken + IssueRefreshToken (expiry capped at original refresh_expires_at)
+        AS->>PG: UPDATE user_sessions SET prev_refresh_token_hash=old, refresh_token_hash=new,<br/>access_token_hash=new, access_expires_at=?, refresh_expires_at=?, rotated_at=NOW()<br/>WHERE id=? AND refresh_token_hash=old AND revoked_at IS NULL
+        AS-->>Client: 200 {user, accessExpiresAt} + Set-Cookie access_token & refresh_token (both rotated)
     end
 ```
 
@@ -277,7 +290,7 @@ sequenceDiagram
     participant PG as PostgreSQL
 
     Tick->>AS: tick
-    AS->>PG: DELETE FROM user_sessions<br/>WHERE access_expires_at < NOW()<br/>AND (refresh_expires_at IS NULL OR refresh_expires_at < NOW())
+    AS->>PG: DELETE FROM user_sessions<br/>WHERE (access_expires_at < NOW()<br/>AND (refresh_expires_at IS NULL OR refresh_expires_at < NOW()))<br/>OR revoked_at < NOW() - INTERVAL '24 hours'
     PG-->>AS: rows_affected
     AS->>AS: log("cleaned up expired sessions", count)
     AS->>PG: DELETE FROM password_reset_tokens WHERE expires_at < NOW()
@@ -299,13 +312,16 @@ sequenceDiagram
     Admin->>GW: POST /auth/proxy-login {"userId"} (admin access cookie)
     GW->>GW: Verify admin token (protected route)
     GW->>AS: Proxy (auth-required)
-    AS->>AS: PROXY_LOGIN_ENABLED? role in {admin, super-admin}? not self?
+    AS->>AS: PROXY_LOGIN_ENABLED? claimed role in {admin, super-admin}? not self?
     alt disabled / not allowed / self
-        AS-->>Admin: 403 PROXY_LOGIN_DISABLED / FORBIDDEN<br/>or 400 INVALID_TARGET
+        AS-->>Admin: 403 PROXY_LOGIN_DISABLED / AUTH_FORBIDDEN<br/>or 400 INVALID_TARGET
     else
+        AS->>PG: SELECT users WHERE id=:callerId (authoritative role, not the JWT claim)
         AS->>PG: SELECT users WHERE id=:targetId
         alt target missing
             AS-->>Admin: 404 USER_NOT_FOUND
+        else caller does not strictly outrank target
+            AS-->>Admin: 403 AUTH_FORBIDDEN (CanImpersonate rank check)
         else
             AS->>AS: IssueImpersonationToken(target, impersonated_by=adminId, PROXY_LOGIN_TTL)
             AS->>PG: INSERT user_sessions (access hash only, refresh_token_hash NULL)

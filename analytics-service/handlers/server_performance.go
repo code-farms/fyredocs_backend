@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"runtime"
 	"sort"
@@ -202,9 +203,12 @@ func scrapeServiceInfo(ctx context.Context, name, baseURL string) gin.H {
 	// Check health first
 	healthy, err := promscrape.CheckHealth(ctx, baseURL)
 	if err != nil {
+		// Raw errors embed internal host:port details — log them, keep the
+		// dashboard payload generic.
+		slog.Warn("server_performance.health_check", "service", name, "error", err)
 		return gin.H{
 			"status": "unhealthy",
-			"error":  err.Error(),
+			"error":  "health check unreachable",
 		}
 	}
 	if !healthy {
@@ -217,9 +221,10 @@ func scrapeServiceInfo(ctx context.Context, name, baseURL string) gin.H {
 	// Scrape /metrics for Go runtime stats
 	families, err := promscrape.MetricFamilies(ctx, baseURL+"/metrics")
 	if err != nil {
+		slog.Warn("server_performance.scrape_metrics", "service", name, "error", err)
 		return gin.H{
 			"status": "healthy",
-			"error":  "metrics unavailable: " + err.Error(),
+			"error":  "metrics unavailable",
 		}
 	}
 

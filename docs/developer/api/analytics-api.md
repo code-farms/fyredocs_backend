@@ -51,4 +51,4 @@ All are `GET` under `/admin/metrics/`, most accept `?days=<n>`. `403 FORBIDDEN` 
 ---
 
 ## Error Codes
-`FORBIDDEN` (non-super-admin on `/admin/*`, or guest on `/api/dashboard`), plus standard validation/internal codes.
+`AUTH_FORBIDDEN` (non-super-admin on `/admin/*`, or guest on `/api/dashboard`), plus standard validation/internal codes.

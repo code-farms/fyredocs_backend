@@ -23,6 +23,7 @@ import (
 	"api-gateway/internal/ratelimit"
 	"fyredocs/shared/authverify"
 	"fyredocs/shared/circuitbreaker"
+	"fyredocs/shared/clientip"
 	"fyredocs/shared/config"
 	"fyredocs/shared/logger"
 	"fyredocs/shared/metrics"
@@ -39,6 +40,42 @@ type routeConfig struct {
 	prefix         string
 	targetBasePath string
 	targetURL      string
+	// deprecated marks a legacy unversioned prefix. Deprecated routes still
+	// work identically; they only advertise themselves as deprecated via
+	// response headers. See withV1Aliases.
+	deprecated bool
+}
+
+// apiVersionPrefix is the canonical versioned root. Every public route is
+// reachable under it; the old unversioned prefixes remain as aliases.
+const apiVersionPrefix = "/api/v1"
+
+// withV1Aliases returns routes plus a /api/v1/* alias for each one, so the API
+// gains a version namespace without breaking a single existing client (audit
+// M15). Downstream services are untouched — an alias forwards to exactly the
+// same upstream and base path as the legacy prefix it mirrors.
+//
+//	/api/jobs        → /api/v1/jobs
+//	/auth/login      → /api/v1/auth/login
+//	/admin/metrics   → /api/v1/admin/metrics
+//
+// The legacy entries are flagged deprecated (advertised via headers, still
+// fully functional). They must outlive at least one mobile app-store release
+// cycle — an Expo build in the wild cannot be force-updated — and should only
+// be removed once gateway metrics show their traffic at ~0.
+func withV1Aliases(routes []routeConfig) []routeConfig {
+	out := make([]routeConfig, 0, len(routes)*2)
+	for _, cfg := range routes {
+		legacy := cfg
+		legacy.deprecated = true
+		out = append(out, legacy)
+
+		alias := cfg
+		alias.deprecated = false
+		alias.prefix = apiVersionPrefix + strings.TrimPrefix(cfg.prefix, "/api")
+		out = append(out, alias)
+	}
+	return out
 }
 
 func main() {
@@ -175,7 +212,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	registerServiceRoutes(mux, routes)
+	registerServiceRoutes(mux, withV1Aliases(routes))
 
 	mux.Handle("/metrics", metrics.HTTPMetricsHandler())
 
@@ -218,7 +255,9 @@ func main() {
 	authMiddleware := authverify.HTTPAuthMiddleware(authverify.HTTPMiddlewareOptions{
 		Verifier:    verifier,
 		GuestStore:  guestStore,
-		PublicPaths: []string{"/auth/login", "/auth/signup", "/auth/refresh", "/auth/plans"},
+		// Both the legacy and the /api/v1 spelling: PublicPaths is an exact-match
+		// set, so a v1 login would otherwise be blocked by its own stale cookie.
+		PublicPaths: publicAuthPaths(),
 		ResolvePlan: func(r *http.Request, authCtx *authverify.AuthContext) {
 			info := plancache.GetPlanInfo(r.Context(), redisClient, authCtx.UserID)
 			authCtx.Plan = info.Plan
@@ -226,6 +265,17 @@ func main() {
 			authCtx.PlanMaxFilesPerJob = info.MaxFiles
 		},
 	})
+
+	// Trusted-proxy client-IP resolution (rightmost-untrusted XFF walk) so a
+	// spoofed X-Forwarded-For can't mint fresh guest rate-limit buckets. Uses
+	// the same TRUSTED_PROXIES list the Gin services feed SetTrustedProxies;
+	// the default (loopback only) makes Caddy untrusted, which over-throttles
+	// guests but never under-throttles — fail-safe, so a parse error is fatal.
+	ipParser, err := clientip.NewParser(config.TrustedProxies())
+	if err != nil {
+		slog.Error("invalid TRUSTED_PROXIES configuration", "error", err)
+		os.Exit(1)
+	}
 
 	// Per-plan sliding-window rate limiting on /api/* routes. Runs inside the
 	// auth middleware so the resolved AuthContext (user ID + plan) is available
@@ -236,6 +286,7 @@ func main() {
 		GuestLimit: config.GetEnvInt("RATE_LIMIT_API_GUEST", 30),
 		FreeLimit:  config.GetEnvInt("RATE_LIMIT_API_FREE", 120),
 		ProLimit:   config.GetEnvInt("RATE_LIMIT_API_PRO", 600),
+		ClientIP:   ipParser.ClientIP,
 	})
 
 	// SPA static files and presigned MinIO byte traffic are handled by the
@@ -308,15 +359,34 @@ var proxyTransport = &http.Transport{
 // at the Caddy edge — so /api/upload is JSON-only (init/complete) and gets
 // the same limit.
 func registerServiceRoutes(mux *http.ServeMux, routes []routeConfig) {
+	// Each route needs its OWN proxy — the director strips that route's prefix,
+	// so a legacy prefix and its /api/v1 alias cannot share one. The circuit
+	// BREAKER is shared per upstream instead: both prefixes reach the same
+	// service, so a failing upstream must not have to trip twice.
+	breakers := make(map[string]*circuitbreaker.TwoStep)
 	for _, cfg := range routes {
-		proxy := withMaxBodySize(newProxy(cfg), 1<<20) // 1 MiB
+		upstreamKey := cfg.targetURL + cfg.targetBasePath
+		breaker, ok := breakers[upstreamKey]
+		if !ok {
+			breaker = circuitbreaker.NewTwoStep("upstream:" + upstreamKey)
+			breakers[upstreamKey] = breaker
+		}
+		proxy := withMaxBodySize(newProxy(cfg, breaker), 1<<20) // 1 MiB
+
 		// Record a low-cardinality route label (the fixed prefix, e.g.
 		// "/api/jobs") for Prometheus. Without this the HTTP metrics middleware
 		// would label by the raw path — which carries per-resource UUIDs — and
 		// blow up series cardinality until Prometheus OOMs.
 		prefix := cfg.prefix
+		deprecated := cfg.deprecated
 		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			metrics.SetRouteLabel(r, prefix)
+			if deprecated && deprecationHeadersEnabled() {
+				// RFC 8594 / draft-deprecation-header: tell clients this
+				// unversioned path is on its way out and point at the docs.
+				w.Header().Set("Deprecation", "true")
+				w.Header().Set("Link", `</docs/developer/api/versioning>; rel="deprecation"`)
+			}
 			proxy.ServeHTTP(w, r)
 		})
 		mux.Handle(cfg.prefix, handler)
@@ -324,7 +394,28 @@ func registerServiceRoutes(mux *http.ServeMux, routes []routeConfig) {
 	}
 }
 
-func newProxy(cfg routeConfig) http.Handler {
+// publicAuthPaths lists the endpoints that must skip token verification (login,
+// signup, refresh, plan listing) under both the legacy and the versioned root.
+// They are public because an expired cookie must never be able to lock a user
+// out of logging back in.
+func publicAuthPaths() []string {
+	legacy := []string{"/auth/login", "/auth/signup", "/auth/refresh", "/auth/plans"}
+	paths := make([]string, 0, len(legacy)*2)
+	for _, p := range legacy {
+		paths = append(paths, p, apiVersionPrefix+p)
+	}
+	return paths
+}
+
+// deprecationHeadersEnabled reports whether legacy (unversioned) routes should
+// advertise themselves as deprecated. Off by default: turn it on only once both
+// first-party clients ship on /api/v1, so users of the current mobile build
+// never see a deprecation notice for the only paths their app knows.
+func deprecationHeadersEnabled() bool {
+	return config.GetEnvBool("API_DEPRECATION_HEADERS", false)
+}
+
+func newProxy(cfg routeConfig, breaker *circuitbreaker.TwoStep) http.Handler {
 	target, err := url.Parse(cfg.targetURL)
 	if err != nil {
 		slog.Error("invalid target URL", "prefix", cfg.prefix, "error", err)
@@ -371,11 +462,11 @@ func newProxy(cfg routeConfig) http.Handler {
 			"The service is temporarily unavailable. Please try again.")
 	}
 
-	// A per-upstream circuit breaker: once an upstream has failed repeatedly, fail
-	// fast with 503 instead of every request paying the dial/response timeout. It
-	// records outcomes by response status (streaming-safe — only the status line is
+	// The caller supplies a per-UPSTREAM circuit breaker (shared by a route and
+	// its /api/v1 alias): once an upstream has failed repeatedly, fail fast with
+	// 503 instead of every request paying the dial/response timeout. Outcomes are
+	// recorded by response status (streaming-safe — only the status line is
 	// observed, the body still streams through).
-	breaker := circuitbreaker.NewTwoStep("upstream:" + cfg.prefix)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		done, err := breaker.Allow()
 		if err != nil {

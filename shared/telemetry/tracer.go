@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,27 @@ import (
 
 // Tracer is the package-global tracer for creating spans, set by Init.
 var Tracer trace.Tracer
+
+// samplerFromEnv builds the trace sampler from OTEL_TRACES_SAMPLER_RATIO
+// (0.0–1.0, default 1.0 = sample everything). It is ParentBased, so a sampling
+// decision made at the edge is honored by every downstream service and NATS
+// consumer — otherwise a trace would be sampled in one hop and dropped in the
+// next, producing broken partial traces. Lower it (e.g. 0.1) once production
+// RPS makes 100% sampling expensive in Tempo storage.
+func samplerFromEnv() sdktrace.Sampler {
+	ratio := 1.0
+	if raw := strings.TrimSpace(os.Getenv("OTEL_TRACES_SAMPLER_RATIO")); raw != "" {
+		if parsed, err := strconv.ParseFloat(raw, 64); err == nil && parsed >= 0 && parsed <= 1 {
+			ratio = parsed
+		} else {
+			slog.Warn("invalid OTEL_TRACES_SAMPLER_RATIO, sampling everything", "value", raw)
+		}
+	}
+	if ratio >= 1 {
+		return sdktrace.AlwaysSample()
+	}
+	return sdktrace.ParentBased(sdktrace.TraceIDRatioBased(ratio))
+}
 
 // Init sets up the OpenTelemetry tracer provider for the given service.
 // It reads OTEL_EXPORTER_OTLP_ENDPOINT (default: http://localhost:4318) for the collector endpoint.
@@ -66,6 +88,7 @@ func Init(serviceName string) func(context.Context) error {
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(res),
+		sdktrace.WithSampler(samplerFromEnv()),
 	)
 
 	otel.SetTracerProvider(tp)

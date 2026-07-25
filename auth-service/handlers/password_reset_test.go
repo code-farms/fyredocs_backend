@@ -88,10 +88,12 @@ func TestResetPasswordValidation(t *testing.T) {
 			wantErr:  "INVALID_INPUT",
 		},
 		{
+			// min=8 binding tag; the old bespoke WEAK_PASSWORD code was folded
+			// into the canonical INVALID_INPUT with per-field details.
 			name:     "short password",
 			body:     `{"token":"some-token","newPassword":"short"}`,
 			wantCode: http.StatusBadRequest,
-			wantErr:  "WEAK_PASSWORD",
+			wantErr:  "INVALID_INPUT",
 		},
 		{
 			name:     "password too long",

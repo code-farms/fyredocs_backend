@@ -132,3 +132,43 @@ or a `127.0.0.1`-bound mapping. Run it in CI and before deploys.
 The same per-service `extends` files are how you run a subset of services (e.g.
 the conversion workers) on a **second host** pointed at shared infra. See the
 [horizontal-scaling runbook](./horizontal-scaling.md#4-stage-2--add-a-second-host-for-workers).
+
+## Full-deploy flow (`deployment/deploy.sh`)
+
+A full deploy is **build-first, swap-second** — the previous stack keeps serving
+for the whole multi-minute build, so a deploy is no longer a full outage:
+
+1. Load `.env`, activate `COMPOSE_PROFILES=observability`, compute the host
+   resource budget (`RESOURCE_BUDGET_PCT`, default 70) — the observability
+   containers are inside that budget, and the deploy refuses to enable the
+   profile on hosts below `OBSERVABILITY_MIN_HOST_MB` (default 8192).
+2. Validate required secrets (`POSTGRES_*`, `REDIS_PASSWORD`, and
+   `GRAFANA_ADMIN_PASSWORD` when observability is on).
+3. Build every Go service **sequentially, while the old stack is still up**, then
+   tag each image `fyredocs-<svc>:<git-sha>` for rollback.
+4. Swap: `docker compose up -d --remove-orphans` (creates new/changed containers,
+   removes orphans), then `docker compose up -d --force-recreate --no-build
+   <go services>` — compose does not recreate a container just because its image
+   tag now points at new content, so the app containers are forced onto the new
+   images. **Infra (caddy, db, redis, nats, minio) is never recreated**, so the
+   public edge stays up and the outage is seconds per app container.
+5. Health gate: DB reachability + `curl http://localhost/healthz` (30s). On
+   failure the script prints the rollback command and exits **without pruning**.
+6. Only past the gate: prune old SHA tags (`IMAGE_TAG_RETAIN`, default 5) and
+   dangling layers — a failed deploy never destroys its own rollback targets.
+
+`--full-restart` restores the old tear-down-first behavior (full outage) for the
+rare case where the compose topology changed too much for an in-place recreate.
+`--rollback=<sha>` retags a previous build onto `:latest` and recreates the app
+services without rebuilding. `--dry-run` prints the budget and exits.
+
+### Shutdown grace
+
+The four PDF workers set `stop_grace_period: 3m` and drain in-flight jobs for
+`WORKER_DRAIN_TIMEOUT` (default 120s) on SIGTERM; job-service and
+analytics-service use `30s` to let an in-flight sweep/poller finish. The
+invariant is `WORKER_DRAIN_TIMEOUT < stop_grace_period` — otherwise Docker
+SIGKILLs the container mid-drain. Workers also run with `init: true` so the
+LibreOffice/Ghostscript/tesseract grandchildren are reaped instead of
+accumulating as zombies. Every healthcheck has a `start_period` (30s, 60s for
+db/minio/workers) so cold starts are not flagged unhealthy.

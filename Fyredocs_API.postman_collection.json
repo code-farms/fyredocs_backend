@@ -1655,7 +1655,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/convert-to-pdf/word-to-pdf?limit=10&offset=0",
+              "raw": "{{base_url}}/api/convert-to-pdf/word-to-pdf?limit=10&page=1",
               "host": [
                 "{{base_url}}"
               ],
@@ -1670,8 +1670,8 @@
                   "value": "10"
                 },
                 {
-                  "key": "offset",
-                  "value": "0"
+                  "key": "page",
+                  "value": "1"
                 }
               ]
             },
@@ -1684,7 +1684,7 @@
                 "method": "GET",
                 "header": [],
                 "url": {
-                  "raw": "{{base_url}}/api/convert-to-pdf/word-to-pdf?limit=10&offset=0",
+                  "raw": "{{base_url}}/api/convert-to-pdf/word-to-pdf?limit=10&page=1",
                   "host": [
                     "{{base_url}}"
                   ],
@@ -1699,8 +1699,8 @@
                       "value": "10"
                     },
                     {
-                      "key": "offset",
-                      "value": "0"
+                      "key": "page",
+                      "value": "1"
                     }
                   ]
                 }
@@ -2476,7 +2476,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/convert-from-pdf/pdf-to-word?limit=10&offset=0",
+              "raw": "{{base_url}}/api/convert-from-pdf/pdf-to-word?limit=10&page=1",
               "host": [
                 "{{base_url}}"
               ],
@@ -2491,8 +2491,8 @@
                   "value": "10"
                 },
                 {
-                  "key": "offset",
-                  "value": "0"
+                  "key": "page",
+                  "value": "1"
                 }
               ]
             },
@@ -2505,7 +2505,7 @@
                 "method": "GET",
                 "header": [],
                 "url": {
-                  "raw": "{{base_url}}/api/convert-from-pdf/pdf-to-word?limit=10&offset=0",
+                  "raw": "{{base_url}}/api/convert-from-pdf/pdf-to-word?limit=10&page=1",
                   "host": [
                     "{{base_url}}"
                   ],
@@ -2520,8 +2520,8 @@
                       "value": "10"
                     },
                     {
-                      "key": "offset",
-                      "value": "0"
+                      "key": "page",
+                      "value": "1"
                     }
                   ]
                 }
@@ -3370,7 +3370,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/organize-pdf/merge-pdf?limit=10&offset=0",
+              "raw": "{{base_url}}/api/organize-pdf/merge-pdf?limit=10&page=1",
               "host": [
                 "{{base_url}}"
               ],
@@ -3385,8 +3385,8 @@
                   "value": "10"
                 },
                 {
-                  "key": "offset",
-                  "value": "0"
+                  "key": "page",
+                  "value": "1"
                 }
               ]
             },
@@ -3399,7 +3399,7 @@
                 "method": "GET",
                 "header": [],
                 "url": {
-                  "raw": "{{base_url}}/api/organize-pdf/merge-pdf?limit=10&offset=0",
+                  "raw": "{{base_url}}/api/organize-pdf/merge-pdf?limit=10&page=1",
                   "host": [
                     "{{base_url}}"
                   ],
@@ -3414,8 +3414,8 @@
                       "value": "10"
                     },
                     {
-                      "key": "offset",
-                      "value": "0"
+                      "key": "page",
+                      "value": "1"
                     }
                   ]
                 }
@@ -3871,7 +3871,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/optimize-pdf/compress-pdf?limit=10&offset=0",
+              "raw": "{{base_url}}/api/optimize-pdf/compress-pdf?limit=10&page=1",
               "host": [
                 "{{base_url}}"
               ],
@@ -3886,8 +3886,8 @@
                   "value": "10"
                 },
                 {
-                  "key": "offset",
-                  "value": "0"
+                  "key": "page",
+                  "value": "1"
                 }
               ]
             },
@@ -3900,7 +3900,7 @@
                 "method": "GET",
                 "header": [],
                 "url": {
-                  "raw": "{{base_url}}/api/optimize-pdf/compress-pdf?limit=10&offset=0",
+                  "raw": "{{base_url}}/api/optimize-pdf/compress-pdf?limit=10&page=1",
                   "host": [
                     "{{base_url}}"
                   ],
@@ -3915,8 +3915,8 @@
                       "value": "10"
                     },
                     {
-                      "key": "offset",
-                      "value": "0"
+                      "key": "page",
+                      "value": "1"
                     }
                   ]
                 }

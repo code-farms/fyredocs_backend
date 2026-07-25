@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -34,11 +33,15 @@ import (
 
 	"job-service/internal/models"
 	"job-service/internal/routing"
+	"job-service/internal/ttlcache"
 )
 
 // outputFileCache caches FileMetadata lookups for completed job downloads.
-// Entries are immutable once a job is completed, so no TTL is needed.
-var outputFileCache sync.Map // uuid.UUID -> models.FileMetadata
+// Entries are immutable once a job is completed, but the cache is still
+// bounded and TTL'd: jobs reaped by the retention sweep never pass through
+// DeleteJobByID, so a delete hook alone would leak on long-lived replicas.
+// 30m covers the hot window right after completion (presigned URLs live 5m).
+var outputFileCache = ttlcache.New[uuid.UUID, models.FileMetadata](30*time.Minute, 10_000)
 
 // allowedMIMETypes maps tool types to their expected MIME content types.
 var allowedMIMETypes = map[string][]string{
@@ -55,8 +58,8 @@ var allowedMIMETypes = map[string][]string{
 // UploadJobRequest is the job-creation payload. It accepts either a single
 // UploadID or a batch via UploadIDs, plus tool-specific Options.
 type UploadJobRequest struct {
-	UploadID  string          `json:"uploadId"`
-	UploadIDs []string        `json:"uploadIds"`
+	UploadID  string          `json:"uploadId" binding:"omitempty,uuid"`
+	UploadIDs []string        `json:"uploadIds" binding:"omitempty,max=100,dive,uuid"`
 	Options   json.RawMessage `json:"options"`
 }
 
@@ -66,17 +69,17 @@ type UploadJobRequest struct {
 func CreateJobFromTool(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
-		response.BadRequest(c, "INVALID_INPUT", err.Error())
+		response.BadRequest(c, response.CodeInvalidInput, err.Error())
 		return
 	}
 
 	if routing.ServiceForTool(toolType) == "" {
-		response.BadRequest(c, "INVALID_INPUT", "This tool is not available.")
+		response.BadRequest(c, response.CodeInvalidInput, "This tool is not available.")
 		return
 	}
 
 	if objStore == nil {
-		response.InternalError(c, "SERVER_ERROR", "File storage is unavailable. Please try again later.")
+		response.InternalError(c, response.CodeServerError, "File storage is unavailable. Please try again later.")
 		return
 	}
 
@@ -149,9 +152,7 @@ func CreateJobFromTool(c *gin.Context) {
 
 	if strings.Contains(c.GetHeader("Content-Type"), "application/json") {
 		var uploadReq UploadJobRequest
-		if err := c.ShouldBindJSON(&uploadReq); err != nil {
-			response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid request. Please try again.", err,
-				"op", "bind_job_request", "tool", toolType)
+		if !response.BindJSON(c, &uploadReq) {
 			return
 		}
 		uploadIDs := uploadReq.UploadIDs
@@ -159,7 +160,7 @@ func CreateJobFromTool(c *gin.Context) {
 			uploadIDs = []string{uploadReq.UploadID}
 		}
 		if len(uploadIDs) == 0 {
-			response.BadRequest(c, "INVALID_INPUT", "Please upload a file first.")
+			response.BadRequest(c, response.CodeInvalidInput, "Please upload a file first.")
 			return
 		}
 
@@ -198,7 +199,7 @@ func CreateJobFromTool(c *gin.Context) {
 		// the winner's consumed-upload record dedups later duplicates.
 		claimed, conflict, cerr := claimUploads(c.Request.Context(), uploadIDs)
 		if cerr != nil {
-			response.InternalErrorf(c, "SERVER_ERROR", "Something went wrong. Please try again.", cerr,
+			response.InternalErrorf(c, response.CodeServerError, "Something went wrong. Please try again.", cerr,
 				"op", "claim_uploads", "tool", toolType, "jobId", jobID)
 			return
 		}
@@ -221,7 +222,7 @@ func CreateJobFromTool(c *gin.Context) {
 		for _, uploadID := range uploadIDs {
 			consumed, err := consumeUpload(c.Request.Context(), toolType, uploadID)
 			if err != nil {
-				response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", err.Error(), err,
+				response.Errorf(c, http.StatusBadRequest, response.CodeInvalidInput, err.Error(), err,
 					"op", "consume_upload", "uploadId", uploadID, "tool", toolType, "jobId", jobID)
 				return
 			}
@@ -243,13 +244,22 @@ func CreateJobFromTool(c *gin.Context) {
 	} else {
 		form, err := c.MultipartForm()
 		if err != nil {
-			response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid file upload. Please try again.", err,
+			response.Errorf(c, http.StatusBadRequest, response.CodeInvalidInput, "Invalid file upload. Please try again.", err,
 				"op", "parse_multipart", "tool", toolType)
 			return
 		}
+		// Gin buffers oversized multipart parts to disk (MaxMultipartMemory is
+		// 50MiB); without RemoveAll those temp files linger until the OS reaps
+		// them. File bytes are copied to object storage before this returns.
+		defer func() {
+			if c.Request.MultipartForm != nil {
+				_ = c.Request.MultipartForm.RemoveAll()
+			}
+		}()
+
 		files := form.File["files"]
 		if len(files) == 0 {
-			response.BadRequest(c, "INVALID_INPUT", "Please upload a file first.")
+			response.BadRequest(c, response.CodeInvalidInput, "Please upload a file first.")
 			return
 		}
 
@@ -283,18 +293,18 @@ func CreateJobFromTool(c *gin.Context) {
 				return
 			}
 			if err := validateFileType(toolType, file.Filename); err != nil {
-				response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", err.Error(), err,
+				response.Errorf(c, http.StatusBadRequest, response.CodeInvalidInput, err.Error(), err,
 					"op", "validate_file_type", "tool", toolType, "fileName", file.Filename)
 				return
 			}
 			key, err := storeDirectUpload(c.Request.Context(), toolType, jobID.String(), file)
 			if err != nil {
 				if errors.As(err, new(invalidInputError)) {
-					response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", err.Error(), err,
+					response.Errorf(c, http.StatusBadRequest, response.CodeInvalidInput, err.Error(), err,
 						"op", "validate_mime", "tool", toolType, "fileName", file.Filename, "jobId", jobID)
 					return
 				}
-				response.InternalErrorf(c, "SERVER_ERROR", "Something went wrong. Please try again.", err,
+				response.InternalErrorf(c, response.CodeServerError, "Something went wrong. Please try again.", err,
 					"op", "store_direct_upload", "tool", toolType, "fileName", file.Filename, "jobId", jobID)
 				return
 			}
@@ -329,7 +339,7 @@ func CreateJobFromTool(c *gin.Context) {
 	}
 	metaBytes, err := json.Marshal(metaPayload)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Something went wrong. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Something went wrong. Please try again.", err,
 			"op", "marshal_job_meta", "tool", toolType, "jobId", jobID)
 		return
 	}
@@ -361,7 +371,7 @@ func CreateJobFromTool(c *gin.Context) {
 		}
 		return nil
 	}); err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Something went wrong. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Something went wrong. Please try again.", err,
 			"op", "db.processing_jobs.transaction", "tool", toolType, "jobId", jobID)
 		return
 	}
@@ -374,9 +384,10 @@ func CreateJobFromTool(c *gin.Context) {
 	// Use centralized tool-to-service mapping
 	serviceName := routing.ServiceForTool(toolType)
 	if serviceName == "" {
-		response.BadRequest(c, "INVALID_INPUT", "This tool is not available.")
+		response.BadRequest(c, response.CodeInvalidInput, "This tool is not available.")
 		return
 	}
+	dispatchedAt := time.Now().UTC()
 	event := queue.JobEvent{
 		EventType:     "JobCreated",
 		JobID:         job.ID.String(),
@@ -384,11 +395,14 @@ func CreateJobFromTool(c *gin.Context) {
 		InputPaths:    inputPaths,
 		Options:       optionsPayload(optionsRaw),
 		CorrelationID: correlationID,
-		Timestamp:     time.Now().UTC(),
+		Timestamp:     dispatchedAt,
+		// QueuedAt anchors the job_duration_seconds histogram: workers echo it
+		// on terminal events so end-to-end latency (incl. retries) is measured.
+		QueuedAt: dispatchedAt,
 	}
 	subject := queue.SubjectForDispatch(serviceName)
 	if err := queue.PublishJobEvent(c.Request.Context(), natsconn.JS, subject, event); err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Our servers are busy. Please try again in a moment.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Our servers are busy. Please try again in a moment.", err,
 			"op", "nats.publish_job_event", "subject", subject, "tool", toolType, "jobId", job.ID)
 		return
 	}
@@ -423,12 +437,16 @@ func CreateJobFromTool(c *gin.Context) {
 func GetJobsByTool(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
-		response.BadRequest(c, "INVALID_INPUT", err.Error())
+		response.BadRequest(c, response.CodeInvalidInput, err.Error())
 		return
 	}
 
 	limit := clampInt(queryInt(c, "limit", 25), 1, 100)
-	page := clampInt(queryInt(c, "page", 1), 1, 100000)
+	// Deep OFFSET degrades linearly — the database still walks every skipped
+	// row — so page depth is capped instead of being effectively unbounded.
+	// Reaching this cap means the caller wants a different query (filters or a
+	// narrower window), not page 4000 of an append-only table.
+	page := clampInt(queryInt(c, "page", 1), 1, maxListPage)
 	offset := (page - 1) * limit
 
 	userID := authUserID(c)
@@ -443,7 +461,7 @@ func GetJobsByTool(c *gin.Context) {
 			Order("created_at desc").
 			Limit(limit).Offset(offset).
 			Find(&jobs).Error; err != nil {
-			response.InternalErrorf(c, "SERVER_ERROR", "Could not load your jobs. Please try again.", err,
+			response.InternalErrorf(c, response.CodeServerError, "Could not load your jobs. Please try again.", err,
 				"op", "db.processing_jobs.list_guest", "tool", toolType, "page", page, "limit", limit)
 			return
 		}
@@ -456,7 +474,7 @@ func GetJobsByTool(c *gin.Context) {
 		Order("created_at desc").
 		Limit(limit).Offset(offset).
 		Find(&jobs).Error; err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not load your jobs. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not load your jobs. Please try again.", err,
 			"op", "db.processing_jobs.list_user", "tool", toolType, "userId", userID, "page", page, "limit", limit)
 		return
 	}
@@ -468,19 +486,19 @@ func GetJobsByTool(c *gin.Context) {
 func GetJobByID(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
-		response.BadRequest(c, "INVALID_INPUT", err.Error())
+		response.BadRequest(c, response.CodeInvalidInput, err.Error())
 		return
 	}
 	jobID := c.Param("id")
 
 	var job models.ProcessingJob
 	if err := models.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
+		response.NotFound(c, response.CodeNotFound, "Job not found or has expired.")
 		return
 	}
 
 	if !authorizeJobAccess(c, &job) {
-		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
+		response.NotFound(c, response.CodeNotFound, "Job not found or has expired.")
 		return
 	}
 
@@ -492,18 +510,18 @@ func GetJobByID(c *gin.Context) {
 func DeleteJobByID(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
-		response.BadRequest(c, "INVALID_INPUT", err.Error())
+		response.BadRequest(c, response.CodeInvalidInput, err.Error())
 		return
 	}
 	jobID := c.Param("id")
 
 	var job models.ProcessingJob
 	if err := models.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
+		response.NotFound(c, response.CodeNotFound, "Job not found or has expired.")
 		return
 	}
 	if !authorizeJobAccess(c, &job) {
-		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
+		response.NotFound(c, response.CodeNotFound, "Job not found or has expired.")
 		return
 	}
 
@@ -530,10 +548,13 @@ func DeleteJobByID(c *gin.Context) {
 	}
 
 	if err := models.DB.Delete(&job).Error; err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not delete the job. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not delete the job. Please try again.", err,
 			"op", "db.processing_jobs.delete", "jobId", job.ID, "tool", toolType)
 		return
 	}
+	// Drop the download cache entry so a re-created job can never read the
+	// deleted job's output metadata.
+	outputFileCache.Delete(job.ID)
 
 	removeGuestJob(c.Request.Context(), guestToken(c), job.ID)
 	response.NoContent(c)
@@ -544,18 +565,18 @@ func DeleteJobByID(c *gin.Context) {
 func DownloadJobFile(c *gin.Context) {
 	toolType, err := normalizeToolType(strings.TrimSpace(c.Param("tool")))
 	if err != nil {
-		response.BadRequest(c, "INVALID_INPUT", err.Error())
+		response.BadRequest(c, response.CodeInvalidInput, err.Error())
 		return
 	}
 	jobID := c.Param("id")
 
 	var job models.ProcessingJob
 	if err := models.DB.First(&job, "id = ? AND tool_type = ?", jobID, toolType).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
+		response.NotFound(c, response.CodeNotFound, "Job not found or has expired.")
 		return
 	}
 	if !authorizeJobAccess(c, &job) {
-		response.NotFound(c, "NOT_FOUND", "Job not found or has expired.")
+		response.NotFound(c, response.CodeNotFound, "Job not found or has expired.")
 		return
 	}
 	if job.Status != "completed" {
@@ -564,13 +585,13 @@ func DownloadJobFile(c *gin.Context) {
 	}
 
 	var outputFile models.FileMetadata
-	if cached, ok := outputFileCache.Load(job.ID); ok {
-		outputFile = cached.(models.FileMetadata)
+	if cached, ok := outputFileCache.Get(job.ID); ok {
+		outputFile = cached
 	} else if err := models.DB.First(&outputFile, "job_id = ? AND kind = ?", job.ID, "output").Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "This download link has expired. Please process your file again.")
+		response.NotFound(c, response.CodeNotFound, "This download link has expired. Please process your file again.")
 		return
 	} else {
-		outputFileCache.Store(job.ID, outputFile)
+		outputFileCache.Set(job.ID, outputFile)
 	}
 
 	fileName, contentType := outputFileName(job.ToolType, job.FileName, job.Metadata)
@@ -587,11 +608,11 @@ const downloadURLExpiry = 5 * time.Minute
 // yield 404.
 func redirectToOutput(c *gin.Context, key string, fileName string, contentType string) {
 	if strings.HasPrefix(key, "/") {
-		response.NotFound(c, "NOT_FOUND", "This download link has expired. Please process your file again.")
+		response.NotFound(c, response.CodeNotFound, "This download link has expired. Please process your file again.")
 		return
 	}
 	if objStore == nil {
-		response.InternalError(c, "SERVER_ERROR", "File storage is unavailable. Please try again later.")
+		response.InternalError(c, response.CodeServerError, "File storage is unavailable. Please try again later.")
 		return
 	}
 	params := url.Values{}
@@ -599,7 +620,7 @@ func redirectToOutput(c *gin.Context, key string, fileName string, contentType s
 	params.Set("response-content-type", contentType)
 	signed, err := objStore.PresignGet(c.Request.Context(), objStore.BucketOutputs(), key, downloadURLExpiry, params)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not prepare the download. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not prepare the download. Please try again.", err,
 			"op", "s3.presign_get", "key", key)
 		return
 	}
@@ -611,12 +632,16 @@ func redirectToOutput(c *gin.Context, key string, fileName string, contentType s
 func GetJobHistory(c *gin.Context) {
 	userID := authUserID(c)
 	if userID == nil {
-		response.Unauthorized(c, "UNAUTHORIZED", "Please log in to view your job history.")
+		response.Unauthorized(c, response.CodeUnauthorized, "Please log in to view your job history.")
 		return
 	}
 
 	limit := clampInt(queryInt(c, "limit", 25), 1, 100)
-	page := clampInt(queryInt(c, "page", 1), 1, 100000)
+	// Deep OFFSET degrades linearly — the database still walks every skipped
+	// row — so page depth is capped instead of being effectively unbounded.
+	// Reaching this cap means the caller wants a different query (filters or a
+	// narrower window), not page 4000 of an append-only table.
+	page := clampInt(queryInt(c, "page", 1), 1, maxListPage)
 	offset := (page - 1) * limit
 
 	var jobs []models.ProcessingJob
@@ -625,7 +650,7 @@ func GetJobHistory(c *gin.Context) {
 		Limit(limit).
 		Offset(offset).
 		Find(&jobs).Error; err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not load your job history. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not load your job history. Please try again.", err,
 			"op", "db.processing_jobs.list_history", "userId", userID, "page", page, "limit", limit)
 		return
 	}
@@ -1176,6 +1201,11 @@ func queryInt(c *gin.Context, key string, fallback int) int {
 	}
 	return parsed
 }
+
+// maxListPage bounds how deep OFFSET pagination may go on the job lists. At the
+// 100-row limit ceiling that is 20k rows skipped worst case; beyond it the scan
+// cost stops being acceptable for a request-path query.
+const maxListPage = 200
 
 func clampInt(value int, min int, max int) int {
 	if value < min {

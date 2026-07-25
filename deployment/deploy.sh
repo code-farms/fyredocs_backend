@@ -66,8 +66,10 @@ usage() {
     cat <<'USAGE'
 Usage: deployment/deploy.sh [options] [service ...]
 
-  (no args)              Full deploy: stop stack, build all services
-                         sequentially, start everything, wait for the edge.
+  (no args)              Full deploy: build all services sequentially while the
+                         old stack keeps serving, then swap onto the new images
+                         and wait for the edge. Infra (caddy/db/redis/nats/minio)
+                         is not recreated, so there is no full-stack outage.
   <service> [more...]    Rebuild + redeploy only the named service(s) via
                          deployment/docker-compose-<service>.yml. The rest of
                          the running stack is untouched.
@@ -76,6 +78,10 @@ Usage: deployment/deploy.sh [options] [service ...]
   --rollback=<sha>       Roll the whole stack back to a previously-built image
                          tag (fyredocs-<svc>:<sha>) without rebuilding. List
                          available tags with:  docker images 'fyredocs-*'
+  --full-restart         Tear the stack down before starting it (the old
+                         behavior). Causes a full outage for the restart window;
+                         only needed when the compose topology changed
+                         drastically.
   -h, --help             Show this help.
 
 See docs/developer/architecture/compose-files.md for the compose files layout.
@@ -89,11 +95,13 @@ USAGE
 # Bare arguments are service names for a single-service deploy.
 DRY_RUN=0
 ROLLBACK_SHA=""
+FULL_RESTART="${FULL_RESTART:-0}"
 SERVICES_TO_DEPLOY=()
 for arg in "$@"; do
     case "$arg" in
         --dry-run|--print-budget) DRY_RUN=1 ;;
         --rollback=*) ROLLBACK_SHA="${arg#*=}" ;;
+        --full-restart) FULL_RESTART=1 ;;
         -h|--help) usage; exit 0 ;;
         -*) print_error "Unknown option: $arg"; usage; exit 1 ;;
         *) SERVICES_TO_DEPLOY+=("$arg") ;;
@@ -175,7 +183,7 @@ do_rollback() {
     export DOCKER_BUILDKIT=1
     export COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
     export COMPOSE_ENV_FILES="$ROOT_DIR/.env"
-    export COMPOSE_PROFILES="${COMPOSE_PROFILES:-observability}"
+    export COMPOSE_PROFILES="${COMPOSE_PROFILES-observability}"
     docker compose up -d --force-recreate --no-build "${GO_SERVICES[@]}"
     print_success "Rolled back to ${sha}"
 }
@@ -194,7 +202,8 @@ do_rollback() {
 # The budget is distributed across the 16 weighted containers by
 # responsibility-based weights (see the MEMW/CPUW tables below) — this includes
 # the co-located Postgres (db) and the db-backup sidecar; only caddy is excluded
-# (it belongs to the reserved OS/edge headroom). The absolute numbers scale to the
+# (it belongs to the reserved OS/edge headroom). When the observability profile
+# is active its six containers are included too. The absolute numbers scale to the
 # budget on any host. Because a container can never exceed its own cgroup limit,
 # Σ(limits) ≤ budget guarantees the whole project stays within the cap.
 #
@@ -210,7 +219,7 @@ compute_resource_budget() {
     local NAMES=(redis nats minio api-gateway auth-service job-service \
         convert-from-pdf convert-to-pdf organize-pdf optimize-pdf \
         analytics-service document-service user-service notification-service \
-        db db-backup)
+        db db-backup pgbouncer)
     # Weights reflect each service's real responsibilities (not the old 8 GB-box
     # limits). Memory: LibreOffice/OCR workers + MinIO get the bulk; redis and
     # the light Go CRUD services stay lean. CPU: the heavy workers AND the
@@ -225,9 +234,26 @@ compute_resource_budget() {
     # sidecar. Both were previously hardcoded OUTSIDE this budget; folding them in
     # is what makes Σ(limits) ≤ budget actually hold for the full stack. (caddy is
     # deliberately excluded — it belongs to the reserved OS/edge headroom.)
-    #              redis nats minio  gw auth  job   cF  cT org opt  an doc usr ntf   db db-bk
-    local MEMW=(     8   12   34   14    7   24   48  48  24  46    6   6   6   6   26    3)
-    local CPUW=(     2    2    7   10    2    6   18  18  12  18    1   1   1   1   10    1)
+    # pgbouncer is a tiny C proxy — a few MB of RAM per pooled connection and
+    # almost no CPU — but it is on every query path, so it gets a real sliver.
+    #              redis nats minio  gw auth  job   cF  cT org opt  an doc usr ntf   db db-bk pgb
+    local MEMW=(     8   12   34   14    7   24   48  48  24  46    6   6   6   6   26    3    2)
+    local CPUW=(     2    2    7   10    2    6   18  18  12  18    1   1   1   1   10    1    2)
+    # Observability ships on by default (COMPOSE_PROFILES=observability), and
+    # its six containers are real memory — ~2.5 GB at the compose defaults. Left
+    # outside the budget they sat ON TOP of the cap and could push a small host
+    # into the OOM killer, so they are folded in here and scaled like everything
+    # else. The var names derived below (OTEL_COLLECTOR_MEM_LIMIT, TEMPO_…) are
+    # exactly the ones docker-compose.yml already interpolates.
+    case "${COMPOSE_PROFILES:-}" in
+        *observability*)
+            NAMES+=(otel-collector tempo loki alloy prometheus grafana)
+            #        otel tempo loki alloy prom graf
+            MEMW+=(     9   18   18     9   18    9)
+            CPUW+=(     2    2    2     2    3    2)
+            ;;
+    esac
+
     local MEMW_SUM=0 CPUW_SUM=0 wi
     for wi in "${!MEMW[@]}"; do
         MEMW_SUM=$(( MEMW_SUM + MEMW[wi] )); CPUW_SUM=$(( CPUW_SUM + CPUW[wi] ))
@@ -259,6 +285,21 @@ compute_resource_budget() {
     case "$PCT" in *[!0-9]*|"") PCT=70 ;; esac    # non-numeric → default
     [ "$PCT" -gt 90 ] && PCT=90
     [ "$PCT" -lt 50 ] && PCT=50
+
+    # Observability RAM floor: below this the six extra containers squeeze the
+    # app services into caps they cannot actually run in. Fail loudly instead of
+    # shipping a box that will OOM under load.
+    case "${COMPOSE_PROFILES:-}" in
+        *observability*)
+            local OBS_FLOOR="${OBSERVABILITY_MIN_HOST_MB:-8192}"
+            if [ "$MEM_TOTAL_MB" -lt "$OBS_FLOOR" ] && [ "${OBSERVABILITY_FORCE:-0}" != "1" ]; then
+                print_error "Host has ${MEM_TOTAL_MB} MB RAM; the observability profile needs at least ${OBS_FLOOR} MB."
+                print_error "Disable it:  COMPOSE_PROFILES= ./deployment/deploy.sh"
+                print_error "Or override: OBSERVABILITY_FORCE=1 (or lower OBSERVABILITY_MIN_HOST_MB)"
+                exit 1
+            fi
+            ;;
+    esac
 
     local MEM_BUDGET=$(( MEM_TOTAL_MB * PCT / 100 ))  # MB, floor
     local CPU_BUDGET_H=$(( NCPU * PCT ))              # (PCT/100) * NCPU, in hundredths
@@ -381,6 +422,12 @@ if [ -n "$ROLLBACK_SHA" ]; then
     exit 0
 fi
 
+# Observability (Grafana/Prometheus/Tempo/otel-collector) ships with every
+# deploy: activating its compose profile here means every compose command below
+# picks it up — and, critically, the budget below knows to include it. Opt out
+# with:  COMPOSE_PROFILES= ./deployment/deploy.sh
+export COMPOSE_PROFILES="${COMPOSE_PROFILES-observability}"
+
 # Compute and apply the 70% RAM/CPU budget for THIS host (exports per-service
 # *_MEM_LIMIT / *_CPU_LIMIT and derived worker pools; exported env wins over
 # the COMPOSE_ENV_FILES values during ${VAR} substitution).
@@ -401,6 +448,20 @@ if [ -z "${REDIS_PASSWORD:-}" ]; then
     print_error "REDIS_PASSWORD must be set (in .env or server environment)"
     exit 1
 fi
+
+# Grafana ships with the observability profile and its admin password has no
+# default — catch it here with a friendly message instead of a raw compose
+# interpolation error mid-deploy.
+case "${COMPOSE_PROFILES:-}" in
+    *observability*)
+        if [ -z "${GRAFANA_ADMIN_PASSWORD:-}" ]; then
+            print_error "GRAFANA_ADMIN_PASSWORD must be set when the observability profile is active."
+            print_error "Generate one:  openssl rand -base64 24    (then add it to .env)"
+            print_error "Or deploy without observability:  COMPOSE_PROFILES= ./deployment/deploy.sh"
+            exit 1
+        fi
+        ;;
+esac
 
 # Generate or load JWT secret
 JWT_SECRET_FILE=".jwt_secret"
@@ -493,25 +554,18 @@ print_step "PDF Processing Configuration"
 print_success "Using free open-source tools (pdfcpu, LibreOffice, Poppler)"
 print_success "Using Go Workspace caching for ultra-fast builds"
 
-# Compose context — MUST be exported before the `down` below, or that command
-# runs from the repo root with no compose file discovered and silently no-ops
-# (2>/dev/null || true), leaving every old container in place.
+# Compose context — MUST be exported before any compose command below, or it
+# runs from the repo root with no compose file discovered and silently no-ops,
+# leaving every old container in place.
 export DOCKER_BUILDKIT=1
 export COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 export COMPOSE_ENV_FILES="$ROOT_DIR/.env"
-# Observability (Grafana/Prometheus/Tempo/otel-collector) ships with every deploy:
-# activating its compose profile here means `docker compose down`/`up -d`/`ps`
-# below pick it up automatically. Opt out with:  COMPOSE_PROFILES= ./deployment/deploy.sh
-export COMPOSE_PROFILES="${COMPOSE_PROFILES:-observability}"
 
-# 1. Stop existing containers — full teardown so every service is recreated from
-# its freshly built image on `up` (no stale "up-to-date" containers). Named
-# volumes (postgres_data, grafana_data, ...) persist, so data survives.
-print_step "Stopping existing containers..."
-docker compose down --remove-orphans
-print_success "Stopped existing containers"
-
-# 2. Sequential Build Stage (CPU-Safe Mode)
+# 1. Sequential Build Stage (CPU-Safe Mode)
+#
+# Builds run BEFORE anything is stopped. The previous stack keeps serving —
+# including Caddy, the public edge — for the whole multi-minute build, so a
+# deploy is no longer a full outage. The swap happens in step 3.
 # (GO_SERVICES is defined once near the top so the image-tag/rollback helpers can
 # see it too.)
 print_step "Building Go Services sequentially..."
@@ -531,13 +585,34 @@ for SERVICE in "${GO_SERVICES[@]}"; do
 done
 
 # Tag each freshly built image as fyredocs-<svc>:<git-sha> so this exact build can
-# be rolled back to (deploy.sh --rollback=<sha>), then prune old tags to a bound.
+# be rolled back to (deploy.sh --rollback=<sha>). Old tags are pruned only AFTER
+# the health gate below, so a failed deploy never destroys its rollback targets.
 tag_built_images
-prune_old_image_tags
 
-# 3. Start all services
+# 2. Swap onto the new images.
+#
+# --full-restart restores the old behavior (tear the stack down first) for the
+# rare case where the compose topology changed so drastically that an in-place
+# recreate is not enough.
+if [ "${FULL_RESTART:-0}" = "1" ]; then
+    print_step "Stopping existing containers (--full-restart)..."
+    docker compose down --remove-orphans
+    print_success "Stopped existing containers"
+fi
+
+# 3. Start/refresh all services.
+#
+# First pass: create anything new, apply changed env/limits to infra, and remove
+# orphans (the cleanup the old `down --remove-orphans` used to do).
 print_step "Starting all services in detached mode..."
-docker compose up -d
+docker compose up -d --remove-orphans
+
+# Second pass: compose does NOT recreate a container just because its image tag
+# now points at new content, so the app services are force-recreated onto the
+# freshly built images. Infra (caddy, db, redis, nats, minio) is deliberately
+# NOT in this list — it keeps running, so the edge never goes down and the
+# outage is a few seconds per app container instead of the whole build window.
+docker compose up -d --force-recreate --no-build "${GO_SERVICES[@]}"
 print_success "All services are running!"
 
 # 4. Wait for services to be healthy
@@ -579,8 +654,44 @@ db_check() {
     fi
     return 1
 }
+# Server-side query guards. The services put statement_timeout /
+# idle_in_transaction_session_timeout in their DSN, but PgBouncer's transaction
+# pooling cannot honor per-client startup parameters (it lists them in
+# ignore_startup_parameters, and "ignored" means NOT APPLIED). Setting them as
+# role-in-database defaults keeps the guard in force through the pooler, and
+# through a direct connection, without touching the app.
+#
+# Migrations (goose) and pg_dump explicitly clear statement_timeout on their own
+# sessions, so long index builds and backups are unaffected.
+apply_db_session_defaults() {
+    [ -n "${DATABASE_URL:-}" ] || return 0
+    [ -n "${POSTGRES_USER:-}" ] || return 0
+    local db="${POSTGRES_DB:-fyredocs}"
+    local sql="ALTER ROLE \"${POSTGRES_USER}\" IN DATABASE \"${db}\" SET statement_timeout = '${DB_STATEMENT_TIMEOUT:-15s}';
+               ALTER ROLE \"${POSTGRES_USER}\" IN DATABASE \"${db}\" SET idle_in_transaction_session_timeout = '${DB_IDLE_TX_TIMEOUT:-30s}';"
+    local direct="${DATABASE_URL_DIRECT:-$DATABASE_URL}"
+
+    if command -v psql &> /dev/null; then
+        PGCONNECT_TIMEOUT=5 psql "$direct" -v ON_ERROR_STOP=1 -c "$sql" &> /dev/null && return 0
+    fi
+    if command -v docker &> /dev/null; then
+        local net args
+        net=$(docker network ls --format '{{.Name}}' | grep -E '(^|_)fyredocs_net$' | head -1)
+        args=(run --rm -e PGCONNECT_TIMEOUT=5)
+        [ -n "$net" ] && args+=(--network "$net")
+        args+=(postgres:16-alpine psql "$direct" -v ON_ERROR_STOP=1 -c "$sql")
+        docker "${args[@]}" &> /dev/null && return 0
+    fi
+    return 1
+}
+
 if db_check; then
     print_success "Database reachable!"
+    if apply_db_session_defaults; then
+        print_success "Applied server-side statement/idle timeouts"
+    else
+        print_warning "Could not apply server-side statement/idle timeouts — if you run through PgBouncer, queries have no timeout guard until this succeeds"
+    fi
 elif [ -z "${DATABASE_URL:-}" ]; then
     print_warning "DATABASE_URL not set — skipping connectivity check"
 else
@@ -596,6 +707,9 @@ for i in {1..30}; do
     if [ $i -eq 30 ]; then
         print_error "Edge failed to start within 30s!"
         docker compose logs caddy api-gateway | tail -30
+        echo ""
+        print_warning "Roll back to the previous build with:  ./deployment/deploy.sh --rollback=<previous-sha>"
+        print_warning "List available rollback targets:       docker images 'fyredocs-*' --format '{{.Repository}}:{{.Tag}}'"
         exit 1
     fi
     echo -n "."
@@ -609,7 +723,10 @@ done
 # Previous builds are NOT lost to this prune: each deploy SHA-tags its images
 # (fyredocs-<svc>:<sha>), so they keep a tag and survive; rollback targets remain
 # available (bounded by IMAGE_TAG_RETAIN, pruned above).
+# Pruning happens only past the health gate: until the new stack is verified
+# healthy, every previous SHA tag must stay intact as a rollback target.
 print_step "Optimizing Disk Space"
+prune_old_image_tags
 docker image prune -f
 print_success "Removed unused image layers"
 

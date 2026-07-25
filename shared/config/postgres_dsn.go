@@ -23,6 +23,15 @@ import (
 // even there.) TCP keepalives, if needed for a remote DB, belong in the pgx
 // pool/dialer config, not the DSN.
 //
+// POOLER CAVEAT: these are startup parameters, and PgBouncer's transaction
+// pooling cannot apply per-client startup parameters — it must list them in
+// ignore_startup_parameters or reject the connection outright, and "ignored"
+// means NOT APPLIED. When traffic goes through the pooler the guard therefore
+// comes from role-in-database defaults instead (deploy.sh's
+// apply_db_session_defaults); these DSN values still apply on direct
+// connections and in local development. Keep both in sync — see
+// docs/developer/architecture/database.md.
+//
 // The function is DSN-shape aware: it accepts both URI form
 // (postgres://user:pass@host/db?sslmode=...) and key=value form
 // (host=... dbname=... sslmode=...). For unrecognised shapes it returns dsn

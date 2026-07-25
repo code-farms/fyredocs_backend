@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
+	"fyredocs/shared/metrics"
 	"fyredocs/shared/response"
 )
 
@@ -86,7 +87,10 @@ func NewRateLimiter(config RateLimitConfig) *RateLimiter {
 func (rl *RateLimiter) RateLimitByIP() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if rl.client == nil {
-			slog.Warn("rate limiter Redis unavailable, allowing request")
+			// Fail open (a Redis outage must not lock users out) but make it
+			// visible: with no limiter, throttling is silently OFF.
+			metrics.RateLimitFailOpen.WithLabelValues("job-service", rl.keyPrefix).Inc()
+			slog.Warn("rate limiter Redis unavailable, allowing request", "limiter", rl.keyPrefix)
 			c.Next()
 			return
 		}
@@ -95,7 +99,8 @@ func (rl *RateLimiter) RateLimitByIP() gin.HandlerFunc {
 
 		allowed, remaining, resetTime, err := rl.checkLimit(c.Request.Context(), clientIP)
 		if err != nil {
-			slog.Error("rate limit check failed", "ip", clientIP, "error", err)
+			metrics.RateLimitFailOpen.WithLabelValues("job-service", rl.keyPrefix).Inc()
+			slog.Error("rate limit check failed", "ip", clientIP, "limiter", rl.keyPrefix, "error", err)
 			c.Next()
 			return
 		}

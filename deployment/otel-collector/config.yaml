@@ -19,6 +19,14 @@ receivers:
         endpoint: 0.0.0.0:4317
 
 processors:
+  # memory_limiter must run FIRST in the pipeline: it sheds load (refuses new
+  # spans) before the collector's heap can reach the container limit and get
+  # OOM-killed. Percentages are read from the cgroup limit, so this tracks the
+  # deploy-time-computed OTEL_COLLECTOR_MEM_LIMIT automatically.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 25
   batch: {}
 
 exporters:
@@ -28,6 +36,9 @@ exporters:
     endpoint: tempo:4317
     tls:
       insecure: true
+    # sending_queue and retry_on_failure are enabled by default; they buffer
+    # and retry when Tempo is briefly unavailable so a restart does not drop
+    # every in-flight trace.
 
 service:
   # Expose the collector's own metrics for Prometheus to scrape (:8888/metrics).
@@ -42,5 +53,5 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [memory_limiter, batch]
       exporters: [otlp/tempo]
