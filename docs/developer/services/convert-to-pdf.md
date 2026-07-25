@@ -115,7 +115,7 @@ DB updates and `jobs.events.<jobId>.processing` events are emitted from the repo
 
 This worker writes to `processing_jobs` and `file_metadata` (the same tables owned by job-service — each microservice has its own GORM connection but the underlying schema is shared via Postgres). Updates are scoped to status, progress, failure reason, completion timestamp, and inserting `output` rows in `file_metadata`.
 
-> **Migration ownership:** this worker does **not** run GORM `AutoMigrate` on these shared tables. **job-service is the sole migrator/owner** of `processing_jobs` and `file_metadata`. The worker only reads/updates `ProcessingJob` and writes its own output `FileMetadata` rows — the tables are guaranteed to exist because the worker only ever processes jobs that job-service (already migrated) dispatched.
+> **Migration ownership:** this worker owns no migrations and never applies DDL to these shared tables. **job-service is the sole migrator/owner** of `processing_jobs` and `file_metadata`. The worker only reads/updates `ProcessingJob` and writes its own output `FileMetadata` rows — the tables are guaranteed to exist because the worker only ever processes jobs that job-service (already migrated) dispatched.
 
 ## Environment Variables
 
@@ -388,3 +388,25 @@ scratch area. See `internal/worker/tmpfs.go`.
 - Test unoserver: `docker compose exec convert-to-pdf python -m unoserver.client --help`
 - Inspect jobs: query `processing_jobs` in PostgreSQL
 - DLQ inspection: `nats consumer info JOBS_DLQ ...`
+
+### Graceful shutdown (drain)
+
+On SIGTERM the worker stops fetching immediately but does **not** kill jobs
+already running: `Run` processes jobs on a context detached from the shutdown
+signal and waits up to `WORKER_DRAIN_TIMEOUT` (default `120s`) for them to
+finish. Jobs still running at the deadline are cancelled — their failure path
+naks the message, so JetStream redelivers them to another replica rather than
+leaving partial output. `main` joins the worker before exiting, and compose
+sets `stop_grace_period: 3m` on the worker services.
+
+**Invariant:** `WORKER_DRAIN_TIMEOUT` must stay below `stop_grace_period`, or
+Docker SIGKILLs the container mid-drain and the guarantee is lost.
+
+### Trace propagation
+
+Dispatch messages carry W3C trace context in their NATS headers.
+`processMessage` extracts it and opens a `SpanKindConsumer` span, so the worker
+leg appears in the same Tempo trace as the originating API request; worker logs
+use the `*Context` slog variants on that context and therefore carry
+`trace_id`. Terminal events echo `JobEvent.QueuedAt` (stamped by job-service at
+dispatch) which feeds the `job_duration_seconds` histogram.

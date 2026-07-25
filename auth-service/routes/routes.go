@@ -2,6 +2,7 @@ package routes
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -94,8 +95,10 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 		protectedAuth.POST("/proxy-login", proxyLoginLimiter.RateLimitByIP(), authEndpoints.ProxyLogin)
 	}
 
-	// Internal service-to-service API (not exposed via gateway)
-	internal := r.Group("/internal")
+	// Internal service-to-service API (not exposed via gateway). Guarded by the
+	// INTERNAL_API_TOKEN shared secret; the middleware fails closed (503) when
+	// the token is unset so network isolation is never the only defense.
+	internal := r.Group("/internal", authverify.InternalTokenGin(config.GetEnv("INTERNAL_API_TOKEN", "")))
 	{
 		internal.GET("/users/:id/plan", handlers.GetUserPlan)
 		internal.POST("/users/:id/revoke-sessions", authEndpoints.RevokeUserSessions)
@@ -115,14 +118,20 @@ func SetupRouter(r *gin.Engine, issuer *token.Issuer, denylist authverify.TokenD
 		defer hcancel()
 
 		if err := models.DB.Exec("SELECT 1").Error; err != nil {
-			checks["postgres"] = err.Error()
+			// Raw driver errors can leak internal host:port details; the probe
+			// body stays generic and the cause goes to logs.
+			slog.Warn("readyz dependency check failed", "dependency", "postgres", "error", err)
+			checks["postgres"] = "unavailable"
 			ready = false
 		} else {
 			checks["postgres"] = "ok"
 		}
 
 		if err := redisClient.Ping(hctx).Err(); err != nil {
-			checks["redis"] = err.Error()
+			// Raw driver errors can leak internal host:port details; the probe
+			// body stays generic and the cause goes to logs.
+			slog.Warn("readyz dependency check failed", "dependency", "redis", "error", err)
+			checks["redis"] = "unavailable"
 			ready = false
 		} else {
 			checks["redis"] = "ok"

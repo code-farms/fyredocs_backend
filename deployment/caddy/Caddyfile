@@ -93,6 +93,11 @@
 			X-Frame-Options "DENY"
 			X-Content-Type-Options "nosniff"
 			Referrer-Policy "strict-origin-when-cross-origin"
+			# HSTS: browsers ignore it over plain HTTP, so this is inert for the
+			# local :80 setup and takes effect only behind the automatic TLS a
+			# PUBLIC_DOMAIN deploy gets. Deliberately no `preload` — that is a
+			# one-way, hard-to-undo commitment; add it once the domain is final.
+			Strict-Transport-Security "max-age=31536000; includeSubDomains"
 			# CSP: the SPA is self-contained — same-origin APIs, presigned URLs, and
 			# the same-origin Grafana embed (default-src 'self' permits that iframe).
 			# style-src allows 'unsafe-inline' for Tailwind/Radix inline styles, the
@@ -104,7 +109,12 @@
 			# run ad networks, set CSP_AD_DOMAINS in .env to their space-separated
 			# hosts (and usually 'unsafe-inline'); it is appended to script/img/
 			# connect/frame-src. See docs/developer/architecture/caddy-edge.md.
-			Content-Security-Policy "default-src 'self'; script-src 'self' {$CSP_AD_DOMAINS}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: {$CSP_AD_DOMAINS}; font-src 'self' data:; connect-src 'self' {$CSP_AD_DOMAINS}; frame-src 'self' {$CSP_AD_DOMAINS}; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+			# plausible.io is allowlisted in script-src (the analytics snippet in
+			# index.html) and connect-src (its event beacon). Without both, the
+			# script and every pageview are blocked SILENTLY — no console error
+			# the user would notice, just zero analytics. Inter is bundled with
+			# the app, so fonts stay same-origin.
+			Content-Security-Policy "default-src 'self'; script-src 'self' https://plausible.io {$CSP_AD_DOMAINS}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: {$CSP_AD_DOMAINS}; font-src 'self' data:; connect-src 'self' https://plausible.io {$CSP_AD_DOMAINS}; frame-src 'self' {$CSP_AD_DOMAINS}; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		}
 		@assets path /assets/*
 		header @assets Cache-Control "public, max-age=31536000, immutable"

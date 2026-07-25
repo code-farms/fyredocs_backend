@@ -51,11 +51,11 @@ func Dashboard(c *gin.Context) {
 	userID := strings.TrimSpace(c.GetHeader("X-User-ID"))
 
 	if userID == "" {
-		response.Err(c, http.StatusUnauthorized, "UNAUTHORIZED", "Please log in to view your dashboard.")
+		response.Err(c, http.StatusUnauthorized, response.CodeUnauthorized, "Please log in to view your dashboard.")
 		return
 	}
 	if role == "guest" {
-		response.Err(c, http.StatusForbidden, "FORBIDDEN", "Guests do not have a dashboard.")
+		response.Err(c, http.StatusForbidden, response.CodeForbidden, "Guests do not have a dashboard.")
 		return
 	}
 
@@ -219,7 +219,7 @@ func parallelQueries(fns ...func()) {
 func userDashboard(c *gin.Context, userIDStr string, days int) gin.H {
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		response.Err(c, http.StatusUnauthorized, "UNAUTHORIZED", "Please log in to view your dashboard.")
+		response.Err(c, http.StatusUnauthorized, response.CodeUnauthorized, "Please log in to view your dashboard.")
 		return nil
 	}
 

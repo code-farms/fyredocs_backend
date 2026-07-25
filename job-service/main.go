@@ -87,9 +87,16 @@ func main() {
 	// beyond a single replica.
 	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
 	defer cleanupCancel()
+	// cleanupDone lets shutdown JOIN the loop so an in-flight sweep finishes
+	// its DB/object deletes instead of being abandoned mid-transaction.
+	cleanupDone := make(chan struct{})
 	if config.GetEnvBool("CLEANUP_ENABLED", true) {
-		go runCleanupLoop(cleanupCtx, objStore)
+		go func() {
+			defer close(cleanupDone)
+			runCleanupLoop(cleanupCtx, objStore)
+		}()
 	} else {
+		close(cleanupDone)
 		slog.Warn("cleanup loop disabled (CLEANUP_ENABLED=false)")
 	}
 
@@ -147,6 +154,12 @@ func main() {
 	<-quit
 	slog.Info("shutting down server...")
 	cleanupCancel()
+	// Join the cleanup loop (bounded) so an in-flight sweep can finish.
+	select {
+	case <-cleanupDone:
+	case <-time.After(30 * time.Second):
+		slog.Warn("cleanup loop did not stop in time")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 	"fyredocs/shared/storage"
@@ -30,8 +31,8 @@ type ObjectGetter interface {
 }
 
 type detectRequest struct {
-	Bucket string `json:"bucket"`
-	Key    string `json:"key"`
+	Bucket string `json:"bucket" binding:"omitempty,max=63"`
+	Key    string `json:"key" binding:"required,max=1024"`
 }
 
 type detectResponse struct {
@@ -41,27 +42,23 @@ type detectResponse struct {
 	Height     int          `json:"height"`
 }
 
-// RegisterInternalRoutes mounts the /internal/v1 group. When internalToken is
-// non-empty, requests must carry it in X-Internal-Token.
+// RegisterInternalRoutes mounts the /internal/v1 group behind the shared
+// INTERNAL_API_TOKEN middleware. Requests must carry the secret in
+// X-Internal-Token; an empty token fails closed (503) rather than skipping the
+// check, so a missing env var can never silently reopen the route.
 func RegisterInternalRoutes(r *gin.Engine, store ObjectGetter, internalToken string) {
-	internal := r.Group("/internal/v1")
-	if internalToken != "" {
-		internal.Use(func(c *gin.Context) {
-			if c.GetHeader("X-Internal-Token") != internalToken {
-				response.AbortErr(c, http.StatusUnauthorized, "UNAUTHORIZED", "Invalid internal token.")
-				return
-			}
-			c.Next()
-		})
-	}
+	internal := r.Group("/internal/v1", authverify.InternalTokenGin(internalToken))
 	internal.POST("/detect-edges", detectEdgesHandler(store))
 }
 
 func detectEdgesHandler(store ObjectGetter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req detectRequest
-		if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Key) == "" {
-			response.BadRequest(c, "INVALID_REQUEST", "A storage key is required.")
+		if !response.BindJSON(c, &req) {
+			return
+		}
+		if strings.TrimSpace(req.Key) == "" {
+			response.BadRequest(c, response.CodeInvalidInput, "A storage key is required.")
 			return
 		}
 

@@ -46,7 +46,7 @@ func doDetectRequest(t *testing.T, body string) *httptest.ResponseRecorder {
 func TestDetectEdgesHappyPathRelaysUpstream(t *testing.T) {
 	_, client := withMiniRedis(t)
 	fs := withFakeStore(t)
-	seedUploadObject(t, client, fs, "up-1", "photo.png", detectTestPNG(t))
+	seedUploadObject(t, client, fs, "11111111-1111-4111-8111-111111111111", "photo.png", detectTestPNG(t))
 
 	var gotKey string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -61,11 +61,11 @@ func TestDetectEdgesHappyPathRelaysUpstream(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("ORGANIZE_PDF_URL", upstream.URL)
 
-	w := doDetectRequest(t, `{"uploadId":"up-1"}`)
+	w := doDetectRequest(t, `{"uploadId":"11111111-1111-4111-8111-111111111111"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
-	if gotKey != "uploads/up-1/photo.png" {
+	if gotKey != "uploads/11111111-1111-4111-8111-111111111111/photo.png" {
 		t.Errorf("upstream key = %q", gotKey)
 	}
 
@@ -84,7 +84,7 @@ func TestDetectEdgesHappyPathRelaysUpstream(t *testing.T) {
 	}
 
 	// Critically: the upload state must survive (peek, not consume).
-	state, err := client.HGetAll(context.Background(), "upload:up-1").Result()
+	state, err := client.HGetAll(context.Background(), "upload:11111111-1111-4111-8111-111111111111").Result()
 	if err != nil || len(state) == 0 {
 		t.Error("upload state must NOT be deleted by detect-edges")
 	}
@@ -104,7 +104,7 @@ func TestDetectEdgesMissingUploadID(t *testing.T) {
 func TestDetectEdgesUnknownUpload(t *testing.T) {
 	withMiniRedis(t)
 	withFakeStore(t)
-	if w := doDetectRequest(t, `{"uploadId":"ghost"}`); w.Code != http.StatusBadRequest {
+	if w := doDetectRequest(t, `{"uploadId":"99999999-9999-4999-8999-999999999999"}`); w.Code != http.StatusBadRequest {
 		t.Errorf("status %d, want 400", w.Code)
 	}
 }
@@ -114,9 +114,9 @@ func TestDetectEdgesRejectsPDF(t *testing.T) {
 	fs := withFakeStore(t)
 	// A PDF upload must be rejected — either by the image-only MIME sniff in
 	// consumeUpload or by detect-edges' own extension guard. Both are 400.
-	seedUploadObject(t, client, fs, "up-pdf", "doc.pdf", []byte("%PDF-1.4 fake pdf content"))
+	seedUploadObject(t, client, fs, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "doc.pdf", []byte("%PDF-1.4 fake pdf content"))
 
-	w := doDetectRequest(t, `{"uploadId":"up-pdf"}`)
+	w := doDetectRequest(t, `{"uploadId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status %d, want 400: %s", w.Code, w.Body.String())
 	}
@@ -125,14 +125,14 @@ func TestDetectEdgesRejectsPDF(t *testing.T) {
 func TestDetectEdgesUpstreamDown(t *testing.T) {
 	_, client := withMiniRedis(t)
 	fs := withFakeStore(t)
-	seedUploadObject(t, client, fs, "up-2", "photo.png", detectTestPNG(t))
+	seedUploadObject(t, client, fs, "22222222-2222-4222-8222-222222222222", "photo.png", detectTestPNG(t))
 
 	// Point at a closed server.
 	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	dead.Close()
 	t.Setenv("ORGANIZE_PDF_URL", dead.URL)
 
-	w := doDetectRequest(t, `{"uploadId":"up-2"}`)
+	w := doDetectRequest(t, `{"uploadId":"22222222-2222-4222-8222-222222222222"}`)
 	if w.Code != http.StatusBadGateway {
 		t.Errorf("status %d, want 502: %s", w.Code, w.Body.String())
 	}
@@ -141,7 +141,7 @@ func TestDetectEdgesUpstreamDown(t *testing.T) {
 func TestDetectEdgesUpstream5xx(t *testing.T) {
 	_, client := withMiniRedis(t)
 	fs := withFakeStore(t)
-	seedUploadObject(t, client, fs, "up-3", "photo.png", detectTestPNG(t))
+	seedUploadObject(t, client, fs, "33333333-3333-4333-8333-333333333333", "photo.png", detectTestPNG(t))
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -149,7 +149,7 @@ func TestDetectEdgesUpstream5xx(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("ORGANIZE_PDF_URL", upstream.URL)
 
-	w := doDetectRequest(t, `{"uploadId":"up-3"}`)
+	w := doDetectRequest(t, `{"uploadId":"33333333-3333-4333-8333-333333333333"}`)
 	if w.Code != http.StatusBadGateway {
 		t.Errorf("status %d, want 502", w.Code)
 	}
@@ -158,7 +158,7 @@ func TestDetectEdgesUpstream5xx(t *testing.T) {
 func TestDetectEdgesUpstream4xxRelaysAs422(t *testing.T) {
 	_, client := withMiniRedis(t)
 	fs := withFakeStore(t)
-	seedUploadObject(t, client, fs, "up-4", "photo.png", detectTestPNG(t))
+	seedUploadObject(t, client, fs, "44444444-4444-4444-8444-444444444444", "photo.png", detectTestPNG(t))
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -168,7 +168,7 @@ func TestDetectEdgesUpstream4xxRelaysAs422(t *testing.T) {
 	defer upstream.Close()
 	t.Setenv("ORGANIZE_PDF_URL", upstream.URL)
 
-	w := doDetectRequest(t, `{"uploadId":"up-4"}`)
+	w := doDetectRequest(t, `{"uploadId":"44444444-4444-4444-8444-444444444444"}`)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("status %d, want 422", w.Code)
 	}

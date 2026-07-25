@@ -13,6 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+
 	"fyredocs/shared/circuitbreaker"
 	"fyredocs/shared/logger"
 )
@@ -51,7 +54,18 @@ func Notify(ctx context.Context, userID, ntype, title, body, link, sourceID stri
 		logger.LogWarn(ctx, "notify.build_request", err, "userId", userID, "type", ntype)
 		return
 	}
+	// Propagate the caller's trace and request ID so the internal hop stays
+	// correlated with the originating request (Grafana log↔trace jump).
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+	if rid := logger.RequestIDFromContext(ctx); rid != "" {
+		req.Header.Set(logger.RequestIDHeader, rid)
+	}
 	req.Header.Set("Content-Type", "application/json")
+	// /internal routes require the mesh-wide shared secret; without it the
+	// server rejects the call (401, or 503 when unconfigured server-side).
+	if tok := strings.TrimSpace(os.Getenv("INTERNAL_API_TOKEN")); tok != "" {
+		req.Header.Set("X-Internal-Token", tok)
+	}
 	// Breaker: once notification-service is repeatedly failing, skip the POST and
 	// fail fast instead of every caller waiting the full 4s timeout (best-effort,
 	// so a skipped notification is acceptable).

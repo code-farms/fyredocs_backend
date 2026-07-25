@@ -63,15 +63,18 @@ func TestIdentity(t *testing.T) {
 	}
 }
 
-func TestClientIP(t *testing.T) {
+func TestRemoteAddrIPFallback(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
 	r.RemoteAddr = "10.0.0.1:5555"
-	if got := clientIP(r); got != "10.0.0.1" {
-		t.Errorf("clientIP(RemoteAddr) = %q, want 10.0.0.1", got)
+	if got := remoteAddrIP(r); got != "10.0.0.1" {
+		t.Errorf("remoteAddrIP(RemoteAddr) = %q, want 10.0.0.1", got)
 	}
+	// The fallback resolver must NEVER honor X-Forwarded-For — it is
+	// client-supplied. Trusted-proxy XFF resolution lives in shared/clientip
+	// and is injected via Config.ClientIP.
 	r.Header.Set("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
-	if got := clientIP(r); got != "203.0.113.9" {
-		t.Errorf("clientIP(XFF) = %q, want 203.0.113.9", got)
+	if got := remoteAddrIP(r); got != "10.0.0.1" {
+		t.Errorf("remoteAddrIP must ignore XFF, got %q", got)
 	}
 }
 

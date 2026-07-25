@@ -85,7 +85,8 @@ Job Service :8081  (control plane only — no file bytes)
 | `handlers/auth.go` | Extract authenticated user ID from auth context |
 | `internal/routing/routing.go` | `ToolServiceMap` -- single source of truth for tool-to-service mapping |
 | `internal/models/` | GORM models for `ProcessingJob` and `FileMetadata` |
-| `internal/cleanup/` | Sweep logic for the in-process cleanup loop (expired jobs, upload state, stale multiparts, backfill) |
+| `internal/cleanup/` | Sweep logic for the in-process cleanup loop (expired jobs, upload state, stale multiparts, backfill). Joined on shutdown so an in-flight sweep finishes instead of being abandoned mid-transaction |
+| `internal/ttlcache/` | Bounded, TTL-expiring generic cache backing the download-path `FileMetadata` lookup |
 | `routes/upload_routes.go` | Gin route registration with rate limiting |
 | `middleware/` | Rate limiting middleware |
 
@@ -151,7 +152,7 @@ These are registered under `/api/convert-from-pdf`, `/api/convert-to-pdf`, `/api
 | DELETE | `/api/{category}/:tool/:id` | `DeleteJobByID` | Delete job rows and remove its objects from the buckets |
 | GET | `/api/{category}/:tool/:id/download` | `DownloadJobFile` | 302 redirect to a 5-minute presigned GET URL (attachment disposition) |
 
-`DownloadJobFile` performs the usual ownership checks (user ID or guest token) and the `status == completed` check **before** presigning. The Location URL carries `response-content-disposition: attachment; filename=...` (built with `mime.FormatMediaType`) and `response-content-type` overrides so object storage serves the file with the correct headers. Jobs whose output predates the S3 migration (FileMetadata.Path is an absolute disk path starting with `/`) return 404 "download link has expired".
+`DownloadJobFile` performs the usual ownership checks (user ID or guest token) and the `status == completed` check **before** presigning. The Location URL carries `response-content-disposition: attachment; filename=...` (built with `mime.FormatMediaType`) and `response-content-type` overrides so object storage serves the file with the correct headers. Jobs whose output predates the S3 migration (FileMetadata.Path is an absolute disk path starting with `/`) return 404 "download link has expired". The `FileMetadata` lookup is served from a bounded in-process cache (`internal/ttlcache`, 30-minute TTL, 10k entries) rather than an unbounded `sync.Map`: jobs reaped by the retention sweep never pass through `DeleteJobByID`, so a delete hook alone would leak entries on long-lived replicas. `DeleteJobByID` still evicts explicitly so a re-created job cannot read stale output metadata.
 
 Where `{category}` is one of: `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`.
 
@@ -161,7 +162,7 @@ Where `{category}` is one of: `convert-from-pdf`, `convert-to-pdf`, `organize-pd
 |--------|------|---------|-------------|
 | POST | `/api/organize-pdf/detect-edges` | `DetectEdges` | Detect the document quad in an uploaded photo for the scanner UI (per-IP `RATE_LIMIT_DETECT` limiter, default 60/window) |
 
-Registered in `routes/upload_routes.go` with its own IP rate limiter (`ratelimit:detect`). Auth is the same as the other tool routes (JWT or guest token via the shared middleware). Request body: `{"uploadId": "..."}` — the id of a **completed** presigned upload that sniffs as an image (PDF uploads are rejected with 400). The handler **peeks** at the upload without consuming it (no `releaseUpload`), so the same `uploadId` remains valid for the subsequent scan-to-pdf job creation, then synchronously relays `{key}` to organize-pdf's `POST /internal/v1/detect-edges` (base URL `ORGANIZE_PDF_URL`, 15s timeout, `X-Internal-Token` header when `INTERNAL_API_TOKEN` is set).
+Registered in `routes/upload_routes.go` with its own IP rate limiter (`ratelimit:detect`). Auth is the same as the other tool routes (JWT or guest token via the shared middleware). Request body: `{"uploadId": "..."}` — the id of a **completed** presigned upload that sniffs as an image (PDF uploads are rejected with 400). The handler **peeks** at the upload without consuming it (no `releaseUpload`), so the same `uploadId` remains valid for the subsequent scan-to-pdf job creation, then synchronously relays `{key}` to organize-pdf's `POST /internal/v1/detect-edges` (base URL `ORGANIZE_PDF_URL`, 15s timeout, `X-Internal-Token` header carrying `INTERNAL_API_TOKEN` — required; organize-pdf refuses unauthenticated internal calls).
 
 **Success (200):**
 ```json
@@ -267,9 +268,16 @@ When a job is created, the service publishes a `JobCreated` event to NATS JetStr
   "inputPaths": ["uploads/<uploadId>/file.pdf"],
   "options": { ... },
   "correlationId": "uuid",
-  "timestamp": "2024-01-15T10:30:00Z"
+  "timestamp": "2024-01-15T10:30:00Z",
+  "queuedAt": "2024-01-15T10:30:00Z"
 }
 ```
+
+`queuedAt` is the dispatch timestamp. Workers echo it on terminal events so
+`shared/queue` can observe `job_duration_seconds` (end-to-end queued→terminal
+latency, including retries and DLQ dwell). The message also carries the W3C
+trace context in its **NATS headers**, so the worker leg continues the same
+trace as the API request that created the job.
 
 `inputPaths` are **object keys in the uploads bucket** (not filesystem paths): `uploads/{uploadId}/{fileName}` for presigned uploads, `uploads/{jobId}/{fileName}` for direct multipart submissions. Workers download the objects from the uploads bucket and write results to the outputs bucket.
 
@@ -294,11 +302,20 @@ The `JOBS_DLQ` stream provides a dead letter queue with 7-day retention for fail
 
 **When messages are routed to DLQ**: When retries are exhausted (MaxDeliver exceeded), the failed job payload is published to the DLQ before the original message is acknowledged.
 
-**DLQ Payload**: Includes the original job data plus `EventType: "JobFailed"` and the delivery count.
+**DLQ Payload**: Includes the original job data plus `EventType: "JobFailed"` and the delivery count. Both the dead-letter hop and the redrive re-publish carry the **original message headers**, so a dead-lettered or redriven job stays inside its end-to-end trace.
 
 ### Stream Setup
 
 On startup, the service calls `natsconn.EnsureStreams()` to create the required JetStream streams if they do not exist.
+
+### Schema migrations
+
+The schema is applied by **versioned SQL migrations** embedded in the binary
+(`internal/migrations/*.sql`, applied by goose at startup under a per-service
+Postgres advisory lock and recorded in `goose_db_version_job_service`). GORM
+`AutoMigrate` is no longer the authority — it remains only behind
+`DB_AUTOMIGRATE=true` for local development. A migration failure aborts startup.
+See [schema-migrations.md](../architecture/schema-migrations.md).
 
 ## DB Schema
 
@@ -486,10 +503,10 @@ sequenceDiagram
     JS->>DB: SELECT * FROM processing_jobs WHERE id=<jobId>
     JS->>JS: Authorize access + check status == 'completed'
     alt Cache hit
-        JS->>JS: Load FileMetadata from in-memory cache
+        JS->>JS: Load FileMetadata from bounded TTL cache (30m / 10k entries)
     else Cache miss
         JS->>DB: SELECT * FROM file_metadata WHERE job_id=<jobId> AND kind='output'
-        JS->>JS: Store FileMetadata in cache
+        JS->>JS: Store FileMetadata in TTL cache (evicted on job delete)
     end
     alt Legacy disk path (starts with "/")
         JS-->>C: 404 NOT_FOUND "download link has expired"
@@ -568,7 +585,7 @@ sequenceDiagram
 | `NOT_FOUND` | 404 | Job not found or not authorized |
 | `NOT_FOUND` | 404 | Output predates the S3 migration (legacy disk path) — "download link has expired" |
 | `NOT_READY` | 400 | Download requested but job status is not 'completed' |
-| `UNAUTHORIZED` | 401 | Job history requested without authentication |
+| `AUTH_UNAUTHORIZED` | 401 | Job history requested without authentication |
 | `SERVER_ERROR` | 500 | Database query or presign failure |
 
 ### Error Response Format
@@ -628,7 +645,7 @@ The service fails fast at boot if object storage is misconfigured or the buckets
 | `RATE_LIMIT_DETECT` | `60` | Detect-edges rate limit per IP per window |
 | `RATE_LIMIT_WINDOW` | `60s` | Rate limit time window |
 | `ORGANIZE_PDF_URL` | `http://organize-pdf:8084` | Base URL for the synchronous detect-edges relay to organize-pdf |
-| `INTERNAL_API_TOKEN` | `""` | Optional shared secret sent as `X-Internal-Token` on internal calls to organize-pdf (organize-pdf verifies it when set on its side) |
+| `INTERNAL_API_TOKEN` | `""` | Mesh-wide shared secret sent as `X-Internal-Token` on internal calls to organize-pdf. Required in production (organize-pdf fails closed without it) |
 | `TRUSTED_PROXIES` | `127.0.0.1,::1` | Trusted proxy IP addresses |
 | `AUTH_DENYLIST_ENABLED` | `true` | Enable token denylist |
 | `AUTH_DENYLIST_PREFIX` | `denylist:jwt` | Redis key prefix for denylist |

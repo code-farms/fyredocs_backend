@@ -38,11 +38,11 @@ func resolveOrg(c *gin.Context, orgIDStr, minRole string) (*uuid.UUID, bool) {
 		return nil, false
 	}
 	if !member {
-		response.NotFound(c, "NOT_FOUND", "Organization not found.")
+		response.NotFound(c, response.CodeNotFound, "Organization not found.")
 		return nil, false
 	}
 	if !roleAtLeast(role, minRole) {
-		response.Forbidden(c, "FORBIDDEN", "You don't have permission for this action.")
+		response.Forbidden(c, response.CodeForbidden, "You don't have permission for this action.")
 		return nil, false
 	}
 	return &orgID, true
@@ -57,6 +57,10 @@ func scopeOwned(q *gorm.DB, uid uuid.UUID, orgID *uuid.UUID) *gorm.DB {
 	return q.Where("user_id = ? AND organization_id IS NULL", uid)
 }
 
+// maxListPage bounds OFFSET depth on the document list (see the note at the
+// clamp below).
+const maxListPage = 200
+
 // ListDocuments returns the caller's documents with optional filters:
 // status, folderId, tagId, and full-text q. Cursor-friendly page/limit paging.
 func ListDocuments(c *gin.Context) {
@@ -69,7 +73,17 @@ func ListDocuments(c *gin.Context) {
 	if limit > 100 {
 		limit = 100
 	}
+	// Deep OFFSET degrades linearly — the database still walks every skipped
+	// row — so page depth is capped instead of being effectively unbounded.
+	// Reaching this cap means the caller wants a different query (filters or a
+	// narrower window), not page 4000 of an append-only table.
 	page := queryInt(c, "page", 1)
+	if page > maxListPage {
+		page = maxListPage
+	}
+	if page < 1 {
+		page = 1
+	}
 	offset := (page - 1) * limit
 
 	// Trash view lists soft-deleted documents (excluded from normal queries).
@@ -134,7 +148,7 @@ func ListDocuments(c *gin.Context) {
 	}()
 	wg.Wait()
 	if listErr != nil {
-		response.InternalErrorf(c, "LIST_FAILED", "Could not load documents.", listErr,
+		response.InternalErrorf(c, response.CodeServerError, "Could not load documents.", listErr,
 			"op", "db.documents.list", "userId", uid)
 		return
 	}
@@ -146,14 +160,14 @@ func ListDocuments(c *gin.Context) {
 }
 
 type createDocumentReq struct {
-	Name           string         `json:"name"`
-	FolderID       *string        `json:"folderId"`
-	OrganizationID *string        `json:"organizationId"`
-	FileType       string         `json:"fileType"`
-	MimeType       string         `json:"mimeType"`
-	FileSize       int64          `json:"fileSize"`
-	StoragePath    string         `json:"storagePath"`
-	Status         string         `json:"status"`
+	Name           string         `json:"name" binding:"required,max=255"`
+	FolderID       *string        `json:"folderId" binding:"omitempty,uuid"`
+	OrganizationID *string        `json:"organizationId" binding:"omitempty,uuid"`
+	FileType       string         `json:"fileType" binding:"omitempty,max=64"`
+	MimeType       string         `json:"mimeType" binding:"omitempty,max=128"`
+	FileSize       int64          `json:"fileSize" binding:"omitempty,gte=0"`
+	StoragePath    string         `json:"storagePath" binding:"omitempty,max=1024"`
+	Status         string         `json:"status" binding:"omitempty,oneof=uploaded processing ready failed"`
 	Metadata       datatypes.JSON `json:"metadata"`
 }
 
@@ -162,8 +176,7 @@ type createDocumentReq struct {
 func CreateDocument(c *gin.Context) {
 	uid, _ := userID(c)
 	var req createDocumentReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_BODY", "Invalid request body.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Name) == "" {
@@ -200,7 +213,7 @@ func CreateDocument(c *gin.Context) {
 		Metadata:       req.Metadata,
 	}
 	if err := models.DB.Create(&doc).Error; err != nil {
-		response.InternalErrorf(c, "CREATE_FAILED", "Could not create document.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not create document.", err,
 			"op", "db.documents.create", "userId", uid)
 		return
 	}
@@ -212,7 +225,7 @@ func GetDocument(c *gin.Context) {
 	uid, _ := userID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid document id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid document id.")
 		return
 	}
 	orgID, ok := resolveOrg(c, c.Query("orgId"), "viewer")
@@ -221,16 +234,16 @@ func GetDocument(c *gin.Context) {
 	}
 	var doc models.Document
 	if err := scopeOwned(models.DB.Preload("Tags"), uid, orgID).Where("id = ?", id).First(&doc).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "Document not found.")
+		response.NotFound(c, response.CodeNotFound, "Document not found.")
 		return
 	}
 	response.OK(c, "Document retrieved", doc)
 }
 
 type updateDocumentReq struct {
-	Name     *string        `json:"name"`
-	FolderID *string        `json:"folderId"`
-	Status   *string        `json:"status"`
+	Name     *string        `json:"name" binding:"omitempty,max=255"`
+	FolderID *string        `json:"folderId" binding:"omitempty,uuid"`
+	Status   *string        `json:"status" binding:"omitempty,oneof=uploaded processing ready failed"`
 	Metadata datatypes.JSON `json:"metadata"`
 	// Move the document between scopes: an org id (editor+ in the target org
 	// required), or "" to move it to the caller's personal space.
@@ -242,7 +255,7 @@ func UpdateDocument(c *gin.Context) {
 	uid, _ := userID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid document id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid document id.")
 		return
 	}
 	orgID, ok := resolveOrg(c, c.Query("orgId"), "editor")
@@ -250,8 +263,7 @@ func UpdateDocument(c *gin.Context) {
 		return
 	}
 	var req updateDocumentReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_BODY", "Invalid request body.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 
@@ -293,12 +305,12 @@ func UpdateDocument(c *gin.Context) {
 
 	res := scopeOwned(models.DB.Model(&models.Document{}), uid, orgID).Where("id = ?", id).Updates(updates)
 	if res.Error != nil {
-		response.InternalErrorf(c, "UPDATE_FAILED", "Could not update document.", res.Error,
+		response.InternalErrorf(c, response.CodeServerError, "Could not update document.", res.Error,
 			"op", "db.documents.update", "docId", id)
 		return
 	}
 	if res.RowsAffected == 0 {
-		response.NotFound(c, "NOT_FOUND", "Document not found.")
+		response.NotFound(c, response.CodeNotFound, "Document not found.")
 		return
 	}
 
@@ -314,7 +326,7 @@ func DeleteDocument(c *gin.Context) {
 	uid, _ := userID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid document id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid document id.")
 		return
 	}
 	orgID, ok := resolveOrg(c, c.Query("orgId"), "editor")
@@ -328,7 +340,7 @@ func DeleteDocument(c *gin.Context) {
 		return
 	}
 	if res.RowsAffected == 0 {
-		response.NotFound(c, "NOT_FOUND", "Document not found.")
+		response.NotFound(c, response.CodeNotFound, "Document not found.")
 		return
 	}
 	response.OK(c, "Document deleted", gin.H{"id": id})
@@ -339,7 +351,7 @@ func RestoreDocument(c *gin.Context) {
 	uid, _ := userID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid document id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid document id.")
 		return
 	}
 	orgID, ok := resolveOrg(c, c.Query("orgId"), "editor")
@@ -355,7 +367,7 @@ func RestoreDocument(c *gin.Context) {
 		return
 	}
 	if res.RowsAffected == 0 {
-		response.NotFound(c, "NOT_FOUND", "Document not found in Trash.")
+		response.NotFound(c, response.CodeNotFound, "Document not found in Trash.")
 		return
 	}
 	response.OK(c, "Document restored", gin.H{"id": id})
@@ -366,7 +378,7 @@ func PurgeDocument(c *gin.Context) {
 	uid, _ := userID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid document id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid document id.")
 		return
 	}
 	orgID, ok := resolveOrg(c, c.Query("orgId"), "editor")
@@ -380,7 +392,7 @@ func PurgeDocument(c *gin.Context) {
 		return
 	}
 	if res.RowsAffected == 0 {
-		response.NotFound(c, "NOT_FOUND", "Document not found.")
+		response.NotFound(c, response.CodeNotFound, "Document not found.")
 		return
 	}
 	if err := models.DB.Exec("DELETE FROM document_tags WHERE document_id = ?", id).Error; err != nil {
@@ -390,7 +402,7 @@ func PurgeDocument(c *gin.Context) {
 }
 
 type attachTagReq struct {
-	TagID string `json:"tagId"`
+	TagID string `json:"tagId" binding:"required,uuid"`
 }
 
 // AttachTag links an owned tag to an owned document.
@@ -398,12 +410,11 @@ func AttachTag(c *gin.Context) {
 	uid, _ := userID(c)
 	docID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid document id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid document id.")
 		return
 	}
 	var req attachTagReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_BODY", "Invalid request body.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	tagID, err := uuid.Parse(strings.TrimSpace(req.TagID))
@@ -418,7 +429,7 @@ func AttachTag(c *gin.Context) {
 
 	var doc models.Document
 	if err := scopeOwned(models.DB, uid, orgID).Where("id = ?", docID).First(&doc).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "Document not found.")
+		response.NotFound(c, response.CodeNotFound, "Document not found.")
 		return
 	}
 	var tag models.Tag
@@ -439,7 +450,7 @@ func DetachTag(c *gin.Context) {
 	uid, _ := userID(c)
 	docID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid document id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid document id.")
 		return
 	}
 	tagID, err := uuid.Parse(c.Param("tagId"))
@@ -453,7 +464,7 @@ func DetachTag(c *gin.Context) {
 	}
 	var doc models.Document
 	if err := scopeOwned(models.DB, uid, orgID).Where("id = ?", docID).First(&doc).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "Document not found.")
+		response.NotFound(c, response.CodeNotFound, "Document not found.")
 		return
 	}
 	if err := models.DB.Model(&doc).Association("Tags").Delete(&models.Tag{ID: tagID}); err != nil {

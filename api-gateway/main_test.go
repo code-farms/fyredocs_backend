@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fyredocs/shared/circuitbreaker"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -204,7 +205,7 @@ func TestNewProxyStreamsResponses(t *testing.T) {
 		targetURL:      backend.URL,
 		prefix:         "/test",
 		targetBasePath: "",
-	})
+	}, circuitBreakerForTest())
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/test/thing", nil)
@@ -241,7 +242,7 @@ func TestNewProxyForwardsExactPrefixWithoutTrailingSlash(t *testing.T) {
 		targetURL:      backend.URL,
 		prefix:         "/api/dashboard",
 		targetBasePath: "/api/dashboard",
-	})
+	}, circuitBreakerForTest())
 
 	t.Run("exact prefix forwards without trailing slash and keeps query", func(t *testing.T) {
 		got = captured{}
@@ -331,4 +332,150 @@ func TestWithCORSNoOriginHeader(t *testing.T) {
 	if !called {
 		t.Error("expected next handler to be called")
 	}
+}
+
+func TestWithV1AliasesMirrorsEveryRoute(t *testing.T) {
+	routes := []routeConfig{
+		{prefix: "/auth", targetBasePath: "/auth", targetURL: "http://auth:8086"},
+		{prefix: "/api/upload", targetBasePath: "/api/uploads", targetURL: "http://job:8081"},
+		{prefix: "/api/jobs", targetBasePath: "/api/jobs", targetURL: "http://job:8081"},
+		{prefix: "/admin", targetBasePath: "/admin", targetURL: "http://analytics:8087"},
+	}
+
+	got := withV1Aliases(routes)
+	if len(got) != len(routes)*2 {
+		t.Fatalf("expected one alias per route (%d entries), got %d", len(routes)*2, len(got))
+	}
+
+	byPrefix := map[string]routeConfig{}
+	for _, c := range got {
+		if _, dup := byPrefix[c.prefix]; dup {
+			t.Errorf("duplicate prefix %q — ServeMux would panic on registration", c.prefix)
+		}
+		byPrefix[c.prefix] = c
+	}
+
+	wantAliases := map[string]string{
+		"/api/v1/auth":   "/auth",
+		"/api/v1/upload": "/api/upload",
+		"/api/v1/jobs":   "/api/jobs",
+		"/api/v1/admin":  "/admin",
+	}
+	for alias, legacy := range wantAliases {
+		a, ok := byPrefix[alias]
+		if !ok {
+			t.Errorf("missing alias %q", alias)
+			continue
+		}
+		l := byPrefix[legacy]
+		// An alias must reach the SAME upstream and base path — the whole point
+		// is that downstream services need no changes.
+		if a.targetURL != l.targetURL || a.targetBasePath != l.targetBasePath {
+			t.Errorf("alias %q → (%s%s), want (%s%s)", alias,
+				a.targetURL, a.targetBasePath, l.targetURL, l.targetBasePath)
+		}
+		if a.deprecated {
+			t.Errorf("alias %q must not be marked deprecated", alias)
+		}
+		if !l.deprecated {
+			t.Errorf("legacy prefix %q should be marked deprecated", legacy)
+		}
+	}
+
+	// The /api/upload → /api/uploads rewrite is asymmetric; the alias must
+	// preserve it exactly or uploads 404 under v1.
+	if got := byPrefix["/api/v1/upload"].targetBasePath; got != "/api/uploads" {
+		t.Errorf("v1 upload alias targetBasePath = %q, want /api/uploads", got)
+	}
+}
+
+func TestV1AliasRoutesToSameUpstreamPath(t *testing.T) {
+	var seen []string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	mux := http.NewServeMux()
+	registerServiceRoutes(mux, withV1Aliases([]routeConfig{
+		{prefix: "/api/jobs", targetBasePath: "/api/jobs", targetURL: backend.URL},
+		{prefix: "/auth", targetBasePath: "/auth", targetURL: backend.URL},
+	}))
+
+	for _, path := range []string{
+		"/api/jobs/abc/download", "/api/v1/jobs/abc/download",
+		"/auth/login", "/api/v1/auth/login",
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: status %d, want 200", path, rec.Code)
+		}
+	}
+
+	want := []string{
+		"/api/jobs/abc/download", "/api/jobs/abc/download",
+		"/auth/login", "/auth/login",
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("upstream saw %v, want %v", seen, want)
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Errorf("request %d: upstream saw %q, want %q", i, seen[i], want[i])
+		}
+	}
+}
+
+func TestDeprecationHeaderOnlyOnLegacyAndOnlyWhenEnabled(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	mux := http.NewServeMux()
+	registerServiceRoutes(mux, withV1Aliases([]routeConfig{
+		{prefix: "/api/jobs", targetBasePath: "/api/jobs", targetURL: backend.URL},
+	}))
+
+	header := func(path string) string {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec.Header().Get("Deprecation")
+	}
+
+	// Off by default: the mobile app in the wild only knows the legacy paths.
+	t.Setenv("API_DEPRECATION_HEADERS", "false")
+	if got := header("/api/jobs"); got != "" {
+		t.Errorf("legacy path advertised Deprecation while disabled: %q", got)
+	}
+
+	t.Setenv("API_DEPRECATION_HEADERS", "true")
+	if got := header("/api/jobs"); got != "true" {
+		t.Errorf("legacy Deprecation header = %q, want \"true\"", got)
+	}
+	if got := header("/api/v1/jobs"); got != "" {
+		t.Errorf("versioned path must never advertise Deprecation, got %q", got)
+	}
+}
+
+func TestPublicAuthPathsCoverBothRoots(t *testing.T) {
+	paths := map[string]bool{}
+	for _, p := range publicAuthPaths() {
+		paths[p] = true
+	}
+	for _, want := range []string{
+		"/auth/login", "/auth/signup", "/auth/refresh", "/auth/plans",
+		"/api/v1/auth/login", "/api/v1/auth/signup", "/api/v1/auth/refresh", "/api/v1/auth/plans",
+	} {
+		if !paths[want] {
+			t.Errorf("public path %q missing — an expired cookie would block it", want)
+		}
+	}
+}
+
+// circuitBreakerForTest returns a fresh breaker so tests never share trip state.
+func circuitBreakerForTest() *circuitbreaker.TwoStep {
+	return circuitbreaker.NewTwoStep("test")
 }

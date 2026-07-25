@@ -41,7 +41,7 @@ func ListOrganizations(c *gin.Context) {
 
 	var total int64
 	if err := models.DB.Model(&models.Membership{}).Where("user_id = ?", uid).Count(&total).Error; err != nil {
-		response.InternalErrorf(c, "LIST_FAILED", "Could not load organizations.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not load organizations.", err,
 			"op", "db.memberships.count", "userId", uid)
 		return
 	}
@@ -53,7 +53,7 @@ func ListOrganizations(c *gin.Context) {
 	var memberships []models.Membership
 	if err := models.DB.Where("user_id = ?", uid).Order("created_at ASC").
 		Limit(limit).Offset(offset).Find(&memberships).Error; err != nil {
-		response.InternalErrorf(c, "LIST_FAILED", "Could not load organizations.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not load organizations.", err,
 			"op", "db.memberships.list", "userId", uid)
 		return
 	}
@@ -81,15 +81,14 @@ func ListOrganizations(c *gin.Context) {
 }
 
 type createOrgReq struct {
-	Name string `json:"name"`
+	Name string `json:"name" binding:"required,max=120"`
 }
 
 // CreateOrganization creates an org and an owner membership for the caller.
 func CreateOrganization(c *gin.Context) {
 	uid, _ := userID(c)
 	var req createOrgReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_BODY", "Invalid request body.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
@@ -113,7 +112,7 @@ func CreateOrganization(c *gin.Context) {
 		return tx.Create(&models.Membership{OrganizationID: org.ID, UserID: uid, Role: models.RoleOwner}).Error
 	})
 	if err != nil {
-		response.InternalErrorf(c, "CREATE_FAILED", "Could not create organization.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not create organization.", err,
 			"op", "db.orgs.create_tx", "userId", uid)
 		return
 	}
@@ -129,12 +128,12 @@ func orgParam(c *gin.Context) (uuid.UUID, string, bool) {
 	uid, _ := userID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid organization id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid organization id.")
 		return uuid.Nil, "", false
 	}
 	role, ok := membershipRole(c.Request.Context(), id, uid)
 	if !ok {
-		response.NotFound(c, "NOT_FOUND", "Organization not found.")
+		response.NotFound(c, response.CodeNotFound, "Organization not found.")
 		return uuid.Nil, "", false
 	}
 	return id, role, true
@@ -148,7 +147,7 @@ func GetOrganization(c *gin.Context) {
 	}
 	var org models.Organization
 	if err := models.DB.First(&org, "id = ?", orgID).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "Organization not found.")
+		response.NotFound(c, response.CodeNotFound, "Organization not found.")
 		return
 	}
 	response.OK(c, "Organization retrieved", gin.H{
@@ -177,8 +176,10 @@ func ListMembers(c *gin.Context) {
 }
 
 type addMemberReq struct {
-	UserID string `json:"userId"`
-	Role   string `json:"role"`
+	UserID string `json:"userId" binding:"required,uuid"`
+	// Empty role defaults to viewer; owner is only assignable via ownership
+	// transfer, never through this endpoint.
+	Role string `json:"role" binding:"omitempty,oneof=admin editor viewer"`
 }
 
 // AddMember adds or updates a member's role (admin/owner only).
@@ -188,12 +189,11 @@ func AddMember(c *gin.Context) {
 		return
 	}
 	if !models.RoleAtLeast(role, models.RoleAdmin) {
-		response.Forbidden(c, "FORBIDDEN", "You need an admin role to manage members.")
+		response.Forbidden(c, response.CodeForbidden, "You need an admin role to manage members.")
 		return
 	}
 	var req addMemberReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_BODY", "Invalid request body.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	targetID, err := uuid.Parse(strings.TrimSpace(req.UserID))
@@ -216,11 +216,11 @@ func AddMember(c *gin.Context) {
 	if tx.Error == nil {
 		// Don't change the owner's membership through this endpoint.
 		if existing.Role == models.RoleOwner {
-			response.Forbidden(c, "FORBIDDEN", "The organization owner's role cannot be changed here.")
+			response.Forbidden(c, response.CodeForbidden, "The organization owner's role cannot be changed here.")
 			return
 		}
 		if err := models.DB.Model(&existing).Update("role", newRole).Error; err != nil {
-			response.InternalErrorf(c, "UPDATE_FAILED", "Could not update member.", err,
+			response.InternalErrorf(c, response.CodeServerError, "Could not update member.", err,
 				"op", "db.memberships.update_role", "orgId", orgID, "targetUserId", targetID)
 			return
 		}
@@ -242,7 +242,7 @@ func AddMember(c *gin.Context) {
 }
 
 type updateMemberReq struct {
-	Role string `json:"role"`
+	Role string `json:"role" binding:"required,oneof=admin editor viewer"`
 }
 
 // UpdateMemberRole changes a member's role (admin/owner only; not the owner).
@@ -252,7 +252,7 @@ func UpdateMemberRole(c *gin.Context) {
 		return
 	}
 	if !models.RoleAtLeast(role, models.RoleAdmin) {
-		response.Forbidden(c, "FORBIDDEN", "You need an admin role to manage members.")
+		response.Forbidden(c, response.CodeForbidden, "You need an admin role to manage members.")
 		return
 	}
 	targetID, err := uuid.Parse(c.Param("userId"))
@@ -261,8 +261,7 @@ func UpdateMemberRole(c *gin.Context) {
 		return
 	}
 	var req updateMemberReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_BODY", "Invalid request body.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	newRole := strings.TrimSpace(req.Role)
@@ -272,15 +271,15 @@ func UpdateMemberRole(c *gin.Context) {
 	}
 	var m models.Membership
 	if err := models.DB.Where("organization_id = ? AND user_id = ?", orgID, targetID).First(&m).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "Member not found.")
+		response.NotFound(c, response.CodeNotFound, "Member not found.")
 		return
 	}
 	if m.Role == models.RoleOwner {
-		response.Forbidden(c, "FORBIDDEN", "The organization owner's role cannot be changed.")
+		response.Forbidden(c, response.CodeForbidden, "The organization owner's role cannot be changed.")
 		return
 	}
 	if err := models.DB.Model(&m).Update("role", newRole).Error; err != nil {
-		response.InternalErrorf(c, "UPDATE_FAILED", "Could not update member role.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not update member role.", err,
 			"op", "db.memberships.update_role", "orgId", orgID, "targetUserId", targetID)
 		return
 	}
@@ -294,7 +293,7 @@ func RemoveMember(c *gin.Context) {
 		return
 	}
 	if !models.RoleAtLeast(role, models.RoleAdmin) {
-		response.Forbidden(c, "FORBIDDEN", "You need an admin role to manage members.")
+		response.Forbidden(c, response.CodeForbidden, "You need an admin role to manage members.")
 		return
 	}
 	targetID, err := uuid.Parse(c.Param("userId"))
@@ -304,11 +303,11 @@ func RemoveMember(c *gin.Context) {
 	}
 	var m models.Membership
 	if err := models.DB.Where("organization_id = ? AND user_id = ?", orgID, targetID).First(&m).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "Member not found.")
+		response.NotFound(c, response.CodeNotFound, "Member not found.")
 		return
 	}
 	if m.Role == models.RoleOwner {
-		response.Forbidden(c, "FORBIDDEN", "The organization owner cannot be removed.")
+		response.Forbidden(c, response.CodeForbidden, "The organization owner cannot be removed.")
 		return
 	}
 	if err := models.DB.Delete(&m).Error; err != nil {

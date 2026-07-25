@@ -21,13 +21,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/redis/go-redis/v9"
-	"gorm.io/datatypes"
+	"go.opentelemetry.io/otel/attribute"
 	"gorm.io/gorm"
 
 	"convert-from-pdf/internal/models"
 
 	"fyredocs/shared/queue"
 	"fyredocs/shared/storage"
+	"fyredocs/shared/telemetry"
 )
 
 // ProcessResult is what a Process function returns: the local path of the
@@ -65,6 +66,9 @@ type JobPayload struct {
 	Options       json.RawMessage `json:"options,omitempty"`
 	Attempts      int             `json:"attempts"`
 	CorrelationID string          `json:"correlationId"`
+	// QueuedAt is stamped by job-service at dispatch and echoed on every
+	// status event so end-to-end job latency is observable (job_duration_seconds).
+	QueuedAt time.Time `json:"queuedAt,omitempty"`
 }
 
 // Structured error codes for worker failures.
@@ -118,6 +122,48 @@ func backoffDuration(attempt int) time.Duration {
 	return backoff[attempt]
 }
 
+// drainInFlight waits for in-flight jobs up to WORKER_DRAIN_TIMEOUT; on
+// timeout it cancels them via procCancel (they nak and get redelivered) and
+// waits for the goroutines to unwind.
+func drainInFlight(wg *sync.WaitGroup, procCancel context.CancelFunc, logger *slog.Logger) {
+	if !waitDrain(wg, drainTimeout(), procCancel) {
+		logger.Warn("drain timeout exceeded; cancelled in-flight jobs (they will be redelivered)")
+	}
+}
+
+// waitDrain blocks until wg completes or timeout elapses. On timeout it calls
+// onTimeout (used to cancel in-flight jobs) and then waits for wg to finish
+// unwinding. Returns true when the drain completed within the deadline.
+func waitDrain(wg *sync.WaitGroup, timeout time.Duration, onTimeout func()) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		if onTimeout != nil {
+			onTimeout()
+		}
+		<-done
+		return false
+	}
+}
+
+// drainTimeout reads WORKER_DRAIN_TIMEOUT (default 120s). It must stay below
+// the container's stop_grace_period (compose sets 3m) or Docker SIGKILLs the
+// process before the drain finishes.
+func drainTimeout() time.Duration {
+	if v := os.Getenv("WORKER_DRAIN_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 120 * time.Second
+}
+
 // concurrencyFromEnv reads the WORKER_CONCURRENCY environment variable.
 // Falls back to 2 if unset or invalid.
 func concurrencyFromEnv() int {
@@ -139,6 +185,14 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
 
+	// procCtx decouples job lifetime from the fetch loop: SIGTERM cancels ctx
+	// (stop fetching immediately) while in-flight jobs keep running on procCtx
+	// until the bounded drain below expires, at which point procCancel aborts
+	// them (their failure path naks → redelivery). Without this split, cancel
+	// would kill jobs mid-write the instant shutdown starts.
+	procCtx, procCancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer procCancel()
+
 	logger.Info("worker starting", "concurrency", maxConcurrency)
 
 	// ── Create / get durable pull consumer on JOBS_DISPATCH stream ──
@@ -159,18 +213,20 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("worker shutting down, waiting for in-flight jobs")
-			wg.Wait()
+			logger.Info("worker shutting down, draining in-flight jobs")
+			drainInFlight(&wg, procCancel, logger)
 			return
 		default:
 		}
 
 		// Pull up to maxConcurrency messages; jobs process in parallel goroutines
 		// bounded by the semaphore so one slow conversion never blocks the rest.
-		msgs, err := cons.Fetch(maxConcurrency, jetstream.FetchMaxWait(30*time.Second))
+		// The short FetchMaxWait keeps shutdown prompt — the loop re-checks
+		// ctx.Done() at most 5s after SIGTERM instead of 30s.
+		msgs, err := cons.Fetch(maxConcurrency, jetstream.FetchMaxWait(5*time.Second))
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				wg.Wait()
+				drainInFlight(&wg, procCancel, logger)
 				return
 			}
 			logger.Error("fetch failed", "error", err)
@@ -179,6 +235,12 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 		}
 
 		for msg := range msgs.Messages() {
+			if ctx.Err() != nil {
+				// Shutting down: never start new work on an already-fetched
+				// message — nak it for prompt redelivery elsewhere.
+				_ = msg.Nak()
+				continue
+			}
 			sem <- struct{}{} // acquire semaphore slot
 			wg.Add(1)
 			go func(m jetstream.Msg) {
@@ -192,13 +254,14 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 							const failMsg = "Processing failed unexpectedly. Please try again."
 							updateJobStatusString(cfg.DB, p.JobID, "failed", 0, failMsg)
 							if jid, e := uuid.Parse(p.JobID); e == nil {
-								publishStatusEvent(cfg.JS, jid, p.ToolType, "failed", 0, failMsg)
+								publishStatusEvent(queue.ExtractTraceContext(context.Background(), m.Headers()),
+									cfg.JS, jid, p.ToolType, "failed", 0, failMsg, p.QueuedAt)
 							}
 						}
 						_ = m.Term()
 					}
 				}()
-				processMessage(ctx, cfg, m, logger)
+				processMessage(procCtx, cfg, m, logger)
 			}(msg)
 		}
 
@@ -217,12 +280,23 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 		return
 	}
 
+	// Continue the dispatcher's trace (W3C context rides in the NATS message
+	// headers) so gateway → job-service → worker is one trace in Tempo. The
+	// ctx also feeds the *Context slog calls below, which stamps trace_id on
+	// worker logs (Grafana log→trace jump).
+	ctx, span := queue.StartConsumerSpan(ctx, telemetry.Tracer, msg.Subject(), msg.Headers(),
+		attribute.String("fyredocs.job_id", payload.JobID),
+		attribute.String("fyredocs.tool_type", payload.ToolType),
+		attribute.String("fyredocs.correlation_id", payload.CorrelationID),
+	)
+	defer span.End()
+
 	if !cfg.AllowedTools[payload.ToolType] {
-		logger.Warn("unsupported tool", "tool", payload.ToolType, "jobId", payload.JobID)
+		logger.WarnContext(ctx, "unsupported tool", "tool", payload.ToolType, "jobId", payload.JobID)
 		failMsg := friendlyMessage(ErrCodeUnsupportedTool)
 		updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, failMsg)
 		if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
-			publishStatusEvent(cfg.JS, parsed, payload.ToolType, "failed", 0, failMsg)
+			publishStatusEvent(ctx, cfg.JS, parsed, payload.ToolType, "failed", 0, failMsg, payload.QueuedAt)
 		}
 		// Non-recoverable: ack to stop redelivery.
 		_ = msg.Ack()
@@ -231,7 +305,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 
 	jobID, err := uuid.Parse(payload.JobID)
 	if err != nil {
-		logger.Error("invalid job id", "jobId", payload.JobID, "error", err)
+		logger.ErrorContext(ctx, "invalid job id", "jobId", payload.JobID, "error", err)
 		_ = msg.Ack()
 		return
 	}
@@ -240,7 +314,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 	var existingJob models.ProcessingJob
 	if err := cfg.DB.Select("status").Where("id = ?", jobID).First(&existingJob).Error; err == nil {
 		if existingJob.Status == "completed" || existingJob.Status == "processing" {
-			logger.Info("job already "+existingJob.Status+", skipping duplicate", "jobId", payload.JobID)
+			logger.InfoContext(ctx, "job already "+existingJob.Status+", skipping duplicate", "jobId", payload.JobID)
 			_ = msg.Ack()
 			return
 		}
@@ -248,7 +322,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 
 	// Only increase progress, never decrease on re-entry (retries).
 	updateJobStatusNoRegress(cfg.DB, jobID, "processing", 20)
-	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "processing", 20, "")
+	publishStatusEvent(ctx, cfg.JS, jobID, payload.ToolType, "processing", 20, "", payload.QueuedAt)
 
 	options := map[string]interface{}{}
 	if len(payload.Options) > 0 && json.Valid(payload.Options) {
@@ -283,7 +357,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 	// scratch directory (subprocess tools need real local files).
 	scratch, err := os.MkdirTemp("", "job-"+payload.JobID+"-")
 	if err != nil {
-		handleFailure(cfg, msg, payload, markRecoverable(fmt.Errorf("create scratch dir: %w", err)), logger)
+		handleFailure(ctx, cfg, msg, payload, markRecoverable(fmt.Errorf("create scratch dir: %w", err)), logger)
 		return
 	}
 	defer os.RemoveAll(scratch)
@@ -294,11 +368,11 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 	totalInput, err := totalInputSize(ctx, cfg.Storage, payload.InputPaths)
 	if err != nil {
 		// Stat failures are network-ish: retry via the recoverable path.
-		handleFailure(cfg, msg, payload, markRecoverable(err), logger)
+		handleFailure(ctx, cfg, msg, payload, markRecoverable(err), logger)
 		return
 	}
 	if projected := projectedFootprint(totalInput); projected > tmpfsBudgetBytes() {
-		handleFailure(cfg, msg, payload, fmt.Errorf("job too large for worker scratch space: projected %d MiB exceeds budget %d MiB (increase TMPFS_BUDGET_MB and the tmpfs mount, or route to a larger worker)", projected/bytesPerMiB, tmpfsBudgetBytes()/bytesPerMiB), logger)
+		handleFailure(ctx, cfg, msg, payload, fmt.Errorf("job too large for worker scratch space: projected %d MiB exceeds budget %d MiB (increase TMPFS_BUDGET_MB and the tmpfs mount, or route to a larger worker)", projected/bytesPerMiB, tmpfsBudgetBytes()/bytesPerMiB), logger)
 		return
 	}
 	if totalInput > largeJobThresholdBytes() {
@@ -306,7 +380,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 		case largeJobSem <- struct{}{}:
 			defer func() { <-largeJobSem }()
 		case <-ctx.Done():
-			handleFailure(cfg, msg, payload, markRecoverable(ctx.Err()), logger)
+			handleFailure(ctx, cfg, msg, payload, markRecoverable(ctx.Err()), logger)
 			return
 		}
 	}
@@ -314,13 +388,13 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 	localInputs, err := fetchInputs(ctx, cfg.Storage, scratch, payload.InputPaths)
 	if err != nil {
 		// Download failures are network-ish: retry via the recoverable path.
-		handleFailure(cfg, msg, payload, markRecoverable(err), logger)
+		handleFailure(ctx, cfg, msg, payload, markRecoverable(err), logger)
 		return
 	}
 
 	outDir := filepath.Join(scratch, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		handleFailure(cfg, msg, payload, markRecoverable(fmt.Errorf("create output dir: %w", err)), logger)
+		handleFailure(ctx, cfg, msg, payload, markRecoverable(fmt.Errorf("create output dir: %w", err)), logger)
 		return
 	}
 
@@ -348,12 +422,12 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 				logger.Warn("failed to update progress", "jobId", jobID, "error", err)
 			}
 		}
-		publishStatusEvent(cfg.JS, jobID, payload.ToolType, "processing", clamped, "")
+		publishStatusEvent(ctx, cfg.JS, jobID, payload.ToolType, "processing", clamped, "", payload.QueuedAt)
 	}
 
 	result, procErr := cfg.Process(jobCtx, jobID, payload.ToolType, localInputs, options, outDir, onProgress)
 	if procErr != nil {
-		handleFailure(cfg, msg, payload, procErr, logger)
+		handleFailure(ctx, cfg, msg, payload, procErr, logger)
 		return
 	}
 
@@ -363,13 +437,13 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 	if err != nil {
 		logger.Error("failed to upload output", "jobId", payload.JobID, "error", err)
 		// Upload failures are network-ish: retry via the recoverable path.
-		handleFailure(cfg, msg, payload, markRecoverable(err), logger)
+		handleFailure(ctx, cfg, msg, payload, markRecoverable(err), logger)
 		return
 	}
 
 	if err := recordOutput(cfg.DB, jobID, outKey, outSize); err != nil {
 		logger.Error("failed to record output", "jobId", payload.JobID, "error", err)
-		handleFailure(cfg, msg, payload, err, logger)
+		handleFailure(ctx, cfg, msg, payload, err, logger)
 		return
 	}
 
@@ -385,13 +459,13 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 	}
 
 	updateJobStatus(cfg.DB, jobID, "completed", 100, "")
-	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "completed", 100, "", outSize)
+	publishStatusEvent(ctx, cfg.JS, jobID, payload.ToolType, "completed", 100, "", payload.QueuedAt, outSize)
 	clearFailure(cfg.DB, jobID)
 
 	if err := msg.Ack(); err != nil {
-		logger.Error("failed to ack message", "jobId", payload.JobID, "error", err)
+		logger.ErrorContext(ctx, "failed to ack message", "jobId", payload.JobID, "error", err)
 	}
-	logger.Info("job completed", "jobId", payload.JobID, "correlationId", payload.CorrelationID)
+	logger.InfoContext(ctx, "job completed", "jobId", payload.JobID, "correlationId", payload.CorrelationID)
 }
 
 // tryServeFromCache attempts to satisfy the job from a previously cached
@@ -432,13 +506,13 @@ func tryServeFromCache(ctx context.Context, cfg WorkerConfig, cache cacheStore, 
 
 	mergeMetadata(cfg.DB, jobID, cv.Metadata, logger)
 	updateJobStatus(cfg.DB, jobID, "completed", 100, "")
-	publishStatusEvent(cfg.JS, jobID, payload.ToolType, "completed", 100, "", info.Size)
+	publishStatusEvent(ctx, cfg.JS, jobID, payload.ToolType, "completed", 100, "", payload.QueuedAt, info.Size)
 	clearFailure(cfg.DB, jobID)
-	logger.Info("job completed from cache", "jobId", payload.JobID, "correlationId", payload.CorrelationID)
+	logger.InfoContext(ctx, "job completed from cache", "jobId", payload.JobID, "correlationId", payload.CorrelationID)
 	return true
 }
 
-func handleFailure(cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err error, logger *slog.Logger) {
+func handleFailure(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err error, logger *slog.Logger) {
 	meta, _ := msg.Metadata()
 	deliveryCount := uint64(1)
 	if meta != nil {
@@ -449,35 +523,28 @@ func handleFailure(cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err 
 	// MaxDeliver is 4 (1 initial + 3 retries). If deliveryCount < 4 and the
 	// error is recoverable, NAK with delay so the server redelivers.
 	if recoverable && deliveryCount < 4 {
-		logger.Warn("job retry",
+		logger.WarnContext(ctx, "job retry",
 			"jobId", payload.JobID,
 			"delivery", deliveryCount,
 			"correlationId", payload.CorrelationID,
 			"error", err,
 		)
-		// Keep status as "processing" and do NOT reset progress — prevents
-		// the frontend from seeing a progress regression during retries.
+		// Retry contract (uniform across all four workers): the job returns to
+		// "queued" with a retrying reason until the redelivery picks it up.
 		retryReason := fmt.Sprintf("retrying (attempt %d): %v", deliveryCount, err)
-		if updateErr := cfg.DB.Model(&models.ProcessingJob{}).
-			Where("id = ?", payload.JobID).
-			Updates(map[string]interface{}{
-				"status":         "processing",
-				"failure_reason": retryReason,
-			}).Error; updateErr != nil {
-			logger.Error("failed to update retry status", "jobId", payload.JobID, "error", updateErr)
-		}
+		updateJobStatusString(cfg.DB, payload.JobID, "queued", 0, retryReason)
 		if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
-			publishStatusEvent(cfg.JS, parsed, payload.ToolType, "processing", 0, retryReason)
+			publishStatusEvent(ctx, cfg.JS, parsed, payload.ToolType, "queued", 0, retryReason, payload.QueuedAt)
 		}
 		delay := backoffDuration(int(deliveryCount) - 1)
 		if nakErr := msg.NakWithDelay(delay); nakErr != nil {
-			logger.Error("failed to nak message", "jobId", payload.JobID, "error", nakErr)
+			logger.ErrorContext(ctx, "failed to nak message", "jobId", payload.JobID, "error", nakErr)
 		}
 		return
 	}
 
 	// Non-recoverable or retries exhausted – ack to stop redelivery.
-	logger.Error("job failed",
+	logger.ErrorContext(ctx, "job failed",
 		"jobId", payload.JobID,
 		"delivery", deliveryCount,
 		"correlationId", payload.CorrelationID,
@@ -487,24 +554,26 @@ func handleFailure(cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err 
 	failMsg := friendlyMessage(errCode)
 	updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, failMsg)
 	if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
-		publishStatusEvent(cfg.JS, parsed, payload.ToolType, "failed", 0, failMsg)
+		publishStatusEvent(ctx, cfg.JS, parsed, payload.ToolType, "failed", 0, failMsg, payload.QueuedAt)
 	}
 
-	// Publish to DLQ before acking
+	// Publish to DLQ before acking. PublishRaw preserves the original message
+	// headers (trace context) so the dead-lettered copy keeps its trace, and
+	// WithoutCancel guarantees the DLQ hop survives a cancelled job ctx.
 	dlqSubject := "jobs.dlq." + cfg.ServiceName
 	if cfg.JS != nil {
 		dlqPayload := payload
 		dlqPayload.EventType = "JobFailed"
 		dlqPayload.Attempts = int(deliveryCount)
 		if dlqData, marshalErr := json.Marshal(dlqPayload); marshalErr == nil {
-			if _, pubErr := cfg.JS.Publish(context.Background(), dlqSubject, dlqData); pubErr != nil {
-				logger.Error("failed to publish to DLQ", "jobId", payload.JobID, "error", pubErr)
+			if pubErr := queue.PublishRaw(context.WithoutCancel(ctx), cfg.JS, dlqSubject, dlqData, msg.Headers()); pubErr != nil {
+				logger.ErrorContext(ctx, "failed to publish to DLQ", "jobId", payload.JobID, "error", pubErr)
 			}
 		}
 	}
 
 	if ackErr := msg.Ack(); ackErr != nil {
-		logger.Error("failed to ack failed message", "jobId", payload.JobID, "error", ackErr)
+		logger.ErrorContext(ctx, "failed to ack failed message", "jobId", payload.JobID, "error", ackErr)
 	}
 }
 
@@ -518,6 +587,9 @@ func updateJobStatus(db *gorm.DB, jobID uuid.UUID, status string, progress int, 
 	if status == "completed" {
 		now := time.Now().UTC()
 		updates["completed_at"] = &now
+		// Clear any previous failure reason in the same UPDATE to avoid an
+		// extra round trip.
+		updates["failure_reason"] = nil
 	}
 	if failureReason != "" {
 		updates["failure_reason"] = failureReason
@@ -566,24 +638,20 @@ func mergeMetadata(db *gorm.DB, jobID uuid.UUID, meta map[string]interface{}, lo
 	if meta == nil {
 		return
 	}
-	var job models.ProcessingJob
-	if err := db.First(&job, "id = ?", jobID).Error; err != nil {
-		logger.Error("failed to load job for metadata merge", "jobId", jobID, "error", err)
+	data, err := json.Marshal(meta)
+	if err != nil {
+		logger.Error("failed to marshal metadata", "jobId", jobID, "error", err)
 		return
 	}
-	existing := map[string]interface{}{}
-	if len(job.Metadata) > 0 {
-		if err := json.Unmarshal(job.Metadata, &existing); err != nil {
-			logger.Error("failed to unmarshal existing metadata", "jobId", jobID, "error", err)
-		}
-	}
-	for key, value := range meta {
-		existing[key] = value
-	}
-	if data, err := json.Marshal(existing); err == nil {
-		if err := db.Model(&models.ProcessingJob{}).Where("id = ?", jobID).Update("metadata", datatypes.JSON(data)).Error; err != nil {
-			logger.Error("failed to update metadata", "jobId", jobID, "error", err)
-		}
+	// Single atomic UPDATE using the PostgreSQL JSONB merge operator (||)
+	// instead of SELECT-modify-UPDATE, which races with concurrent metadata
+	// writes (a lost update). COALESCE handles NULL existing metadata.
+	result := db.Exec(
+		`UPDATE processing_jobs SET metadata = COALESCE(metadata, '{}'::jsonb) || ?::jsonb, updated_at = NOW() WHERE id = ?`,
+		string(data), jobID,
+	)
+	if result.Error != nil {
+		logger.Error("failed to update metadata", "jobId", jobID, "error", result.Error)
 	}
 }
 
@@ -642,8 +710,11 @@ func statusToEventType(status string) string {
 }
 
 // publishStatusEvent publishes a job status update to NATS so that SSE
-// consumers receive real-time updates without polling.
-func publishStatusEvent(js jetstream.JetStream, jobID uuid.UUID, toolType, status string, progress int, failureReason string, fileSize ...int64) {
+// consumers receive real-time updates without polling. ctx carries the job's
+// trace context (the event rides in the same trace); cancellation is stripped
+// so a cancelled job still gets its terminal event out. queuedAt echoes the
+// dispatch timestamp so terminal events feed job_duration_seconds.
+func publishStatusEvent(ctx context.Context, js jetstream.JetStream, jobID uuid.UUID, toolType, status string, progress int, failureReason string, queuedAt time.Time, fileSize ...int64) {
 	if js == nil {
 		return
 	}
@@ -655,12 +726,13 @@ func publishStatusEvent(js jetstream.JetStream, jobID uuid.UUID, toolType, statu
 		Progress:      progress,
 		FailureReason: failureReason,
 		Timestamp:     time.Now().UTC(),
+		QueuedAt:      queuedAt,
 	}
 	if len(fileSize) > 0 {
 		event.FileSize = fileSize[0]
 	}
 	subject := queue.SubjectForJobEvent(jobID.String(), eventType)
-	if err := queue.PublishJobEvent(context.Background(), js, subject, event); err != nil {
-		slog.Warn("failed to publish job event", "jobId", jobID, "event", eventType, "error", err)
+	if err := queue.PublishJobEvent(context.WithoutCancel(ctx), js, subject, event); err != nil {
+		slog.WarnContext(ctx, "failed to publish job event", "jobId", jobID, "event", eventType, "error", err)
 	}
 }

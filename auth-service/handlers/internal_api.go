@@ -19,7 +19,7 @@ func GetUserPlan(c *gin.Context) {
 	idStr := c.Param("id")
 	parsedID, err := uuid.Parse(idStr)
 	if err != nil {
-		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid user ID", err,
+		response.Errorf(c, http.StatusBadRequest, response.CodeInvalidInput, "Invalid user ID", err,
 			"op", "parse_user_id", "userIdStr", idStr)
 		return
 	}
@@ -27,7 +27,7 @@ func GetUserPlan(c *gin.Context) {
 	var user models.User
 	if err := models.DB.First(&user, "id = ?", parsedID).Error; err != nil {
 		logger.LogWarn(c.Request.Context(), "db.users.lookup", err, "userId", parsedID)
-		response.Err(c, http.StatusNotFound, "NOT_FOUND", "User not found")
+		response.Err(c, http.StatusNotFound, response.CodeNotFound, "User not found")
 		return
 	}
 

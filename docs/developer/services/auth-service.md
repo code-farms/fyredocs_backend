@@ -15,12 +15,12 @@ The Auth Service is a dedicated microservice responsible for user signup, login,
 
 1. **User Registration** — Create new user accounts with email/password (bcrypt).
 2. **User Login** — Authenticate users and issue an access + refresh JWT pair as HTTP-only cookies, store the session row in `user_sessions`.
-3. **Refresh-token Rotation** — Issue a new access token from a valid refresh cookie and update the session row with the new access-token hash. (No refresh-token replay: each refresh re-uses the original refresh row.)
+3. **Refresh-token Rotation + Reuse Detection** — Every successful refresh issues a **new refresh token** and retires the presented one (the old hash moves to `prev_refresh_token_hash`). Replaying a retired refresh token outside a short grace window (`AUTH_REFRESH_ROTATE_GRACE`, default 30s) is treated as theft: the session is soft-revoked (`revoked_at`), its access token is denylisted in Redis, and the cookies are cleared. Concurrent refreshes from multiple tabs are absorbed by the grace window (the loser gets a fresh access token but no second rotation). Rotation never extends the session's absolute lifetime — the new refresh expiry is capped at the original `refresh_expires_at`.
 4. **User Profile** — `GET /auth/me`, `GET /auth/profile` return the authenticated user, role, and plan.
 5. **Logout** — Revoke the access token via the Redis denylist, delete the session row, clear cookies, and delete the plan cache. The access token is read from the HttpOnly `access_token` **cookie** as well as the `Authorization` header, so cookie-based SPA logout revokes the token (not only Bearer-header API clients).
 6. **Plan Management** — `PUT /auth/plan` updates the user's `plan_name`, refreshes the Redis plan cache, and publishes `plan.changed` to NATS.
 7. **Plans Listing** — `GET /auth/plans` returns all selectable subscription plans.
-8. **Internal Admin** — `/internal/users/:id/plan`, `/internal/users/:id/revoke-sessions`, `/internal/sessions/:id` for service-to-service calls.
+8. **Internal Admin** — `/internal/users/:id/plan`, `/internal/users/:id/revoke-sessions`, `/internal/sessions/:id` for service-to-service calls. Guarded by the mesh-wide `INTERNAL_API_TOKEN` shared secret (`X-Internal-Token` header, verified constant-time by `authverify.InternalTokenGin`); fails closed with 503 when the token is unset.
 9. **Rate Limiting** — Login / signup / refresh / forgot-password / reset-password endpoints are IP-throttled via Redis.
 10. **Background Cleanup** — A 1-hour ticker calls `models.DeleteExpiredSessions` and `models.DeleteExpiredResetTokens` to prune expired rows.
 11. **Password Reset** — `POST /auth/forgot-password` issues a single-use, 1-hour magic-link token and emails it via Resend; `POST /auth/reset-password` consumes the token, updates the bcrypt hash, and revokes every active session for the user.
@@ -73,7 +73,9 @@ Auth Service :8086
 | `fyredocs/shared/authverify` | JWT verification, denylist, gin middleware (shared package, replaces the old `internal/authverify` copy) |
 | `internal/email/` | `Mailer` interface, `ResendMailer` (HTTPS API), `NoopMailer` (dev/test) |
 | `internal/models/user.go` | `User`, `SubscriptionPlan`, `AuthMetadata` |
-| `internal/models/token.go` | `UserSession` + `HashToken`, `StoreSession`, `FindSessionByRefreshHash`, `RevokeSessionByAccessHash`, `RevokeAllUserSessions`, `DeleteExpiredSessions` |
+| `internal/models/token.go` | `UserSession` + `HashToken`, `StoreSession`, `FindSessionByRefreshHash`, `FindSessionByPrevRefreshHash`, `RotateSessionTokens`, `MarkSessionRevoked`, `RevokeSessionByAccessHash`, `RevokeAllUserSessions`, `DeleteExpiredSessions` |
+| `internal/models/refresh_rotation.go` | `ClassifyRefresh` — pure decision table for refresh attempts (Rotate / Grace / Reuse / Invalid) |
+| `internal/models/roles.go` | Platform role rank (`user` < `admin` < `super-admin`); `CanImpersonate` requires strictly greater rank |
 | `internal/models/password_reset.go` | `PasswordResetToken` + `CreatePasswordResetToken`, `FindValidResetTokenByHash`, `DeleteResetTokensForUser`, `DeleteExpiredResetTokens` |
 | `routes/routes.go` | Gin route registration with rate limiting |
 
@@ -85,7 +87,7 @@ Auth Service :8086
 |--------|------|---------|------------|-------------|
 | POST | `/auth/signup` | `Signup` | 3/min per IP | Create a new user account; returns access+refresh cookies |
 | POST | `/auth/login` | `Login` | 5/min per IP | Authenticate; returns access+refresh cookies |
-| POST | `/auth/refresh` | `Refresh` | 10/min per IP | Issue a new access token from a valid refresh cookie (DB-backed rotation) |
+| POST | `/auth/refresh` | `Refresh` | 10/min per IP | Rotate the token pair: issues a new access **and** refresh cookie, retires the presented refresh token, and revokes the session on replay (reuse detection) |
 | POST | `/auth/forgot-password` | `ForgotPassword` | 3/min per IP | Issue a single-use reset token and email it; always responds 200 regardless of whether the email is registered |
 | POST | `/auth/reset-password` | `ResetPassword` | 5/min per IP | Consume a reset token, update password hash, revoke every active session for the user |
 | GET | `/auth/plans` | `GetAllPlans` | none | List all subscription plans (guest/free/pro) with limits |
@@ -98,13 +100,13 @@ Auth Service :8086
 | GET | `/auth/profile` | `Profile` | Get current user profile (alternate envelope) |
 | POST | `/auth/logout` | `Logout` | Deny access token, delete session row, clear cookies, drop plan cache |
 | PUT | `/auth/plan` | `ChangePlan` | Change user's `plan_name`; refresh Redis plan cache; publish `plan.changed` to NATS |
-| POST | `/auth/proxy-login` | `ProxyLogin` | **Admin impersonation.** Caller must be `admin`/`super-admin`. Mints a short-lived, refresh-less access token for the target user (`{"userId": "<uuid>"}`), sets the access cookie, and audit-logs the action. Requires `PROXY_LOGIN_ENABLED=true`. |
+| POST | `/auth/proxy-login` | `ProxyLogin` | **Admin impersonation.** Caller must be `admin`/`super-admin` (role re-read from the DB, not trusted from the JWT) and must **strictly outrank** the target (`CanImpersonate`): admins may impersonate users; super-admins may impersonate users and admins; nobody may impersonate a super-admin (403 `AUTH_FORBIDDEN` otherwise). Mints a short-lived, refresh-less access token for the target user (`{"userId": "<uuid>"}`), sets the access cookie, and audit-logs the action. Requires `PROXY_LOGIN_ENABLED=true`. |
 
 ### Internal Endpoints (not exposed via gateway)
 
 | Method | Path | Handler | Description |
 |--------|------|---------|-------------|
-| GET | `/internal/users/:id/plan` | `GetUserPlan` | Get a user's subscription plan (used by analytics-service / job-service if needed) |
+| GET | `/internal/users/:id/plan` | `GetUserPlan` | Get a user's subscription plan (used by analytics-service / job-service if needed). Requires `X-Internal-Token` |
 | POST | `/internal/users/:id/revoke-sessions` | `RevokeUserSessions` | Revoke all active sessions for a user; deny each access-token hash in Redis |
 | DELETE | `/internal/sessions/:id` | `RevokeSession` | Revoke a single session by `user_sessions.id` |
 
@@ -115,6 +117,15 @@ Auth Service :8086
 | GET | `/healthz` | Health check (returns "ok") |
 | GET | `/readyz` | Readiness check (PostgreSQL + Redis), returns 200/503 with individual check results |
 | GET | `/metrics` | Prometheus metrics |
+
+### Schema migrations
+
+The schema is applied by **versioned SQL migrations** embedded in the binary
+(`internal/migrations/*.sql`, applied by goose at startup under a per-service
+Postgres advisory lock and recorded in `goose_db_version_auth_service`). GORM
+`AutoMigrate` is no longer the authority — it remains only behind
+`DB_AUTOMIGRATE=true` for local development. A migration failure aborts startup.
+See [schema-migrations.md](../architecture/schema-migrations.md).
 
 ## DB Schema
 
@@ -180,24 +191,30 @@ columns), so changing the seed/DB propagates. Guest limits come from `shared/con
 
 ```sql
 CREATE TABLE user_sessions (
-    id                  UUID PRIMARY KEY,           -- == JWT 'jti'
-    user_id             UUID NOT NULL,              -- FK users(id) ON DELETE CASCADE
-    access_token_hash   TEXT NOT NULL,              -- SHA-256 hex
-    refresh_token_hash  TEXT,                       -- SHA-256 hex
-    access_expires_at   TIMESTAMP NOT NULL,
-    refresh_expires_at  TIMESTAMP,
-    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id                       UUID PRIMARY KEY,           -- == JWT 'jti'
+    user_id                  UUID NOT NULL,              -- FK users(id) ON DELETE CASCADE
+    access_token_hash        TEXT NOT NULL,              -- SHA-256 hex
+    refresh_token_hash       TEXT,                       -- SHA-256 hex (current)
+    prev_refresh_token_hash  TEXT,                       -- SHA-256 hex (superseded by last rotation)
+    access_expires_at        TIMESTAMP NOT NULL,
+    refresh_expires_at       TIMESTAMP,                  -- absolute session lifetime; rotation never extends it
+    rotated_at               TIMESTAMP,                  -- time of most recent rotation (grace-window anchor)
+    revoked_at               TIMESTAMP,                  -- soft revocation (reuse detection / admin action)
+    created_at               TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX idx_user_sessions_access_hash  ON user_sessions(access_token_hash);
-CREATE UNIQUE INDEX idx_user_sessions_refresh_hash ON user_sessions(refresh_token_hash);
-CREATE INDEX        idx_user_sessions_user_id     ON user_sessions(user_id);
+CREATE UNIQUE INDEX idx_user_sessions_access_hash       ON user_sessions(access_token_hash);
+CREATE UNIQUE INDEX idx_user_sessions_refresh_hash      ON user_sessions(refresh_token_hash);
+CREATE INDEX        idx_user_sessions_prev_refresh_hash ON user_sessions(prev_refresh_token_hash);
+CREATE INDEX        idx_user_sessions_revoked_at        ON user_sessions(revoked_at);
+CREATE INDEX        idx_user_sessions_user_id           ON user_sessions(user_id);
 ```
 
-- **One row per login** — created by `StoreSession` during `Login` / `Signup`.
-- **Refresh** updates the row's `access_token_hash` + `access_expires_at` (the refresh hash stays put for its 7-day lifetime).
+- **One row per login** — created by `StoreSession` during `Login` / `Signup`; rotation updates the row in place.
+- **Refresh (rotate)** — `RotateSessionTokens` runs a single guarded `UPDATE ... WHERE id = ? AND refresh_token_hash = <presented> AND revoked_at IS NULL`: the presented hash moves to `prev_refresh_token_hash`, new access/refresh hashes and expiries are written, and `rotated_at` is stamped. The guard makes exactly one of two concurrent refreshes win; the loser is served through the grace window.
+- **Reuse detection** — a refresh matching only `prev_refresh_token_hash` outside `AUTH_REFRESH_ROTATE_GRACE`, or any match on a row with `revoked_at` set, marks the session revoked (`MarkSessionRevoked`), denylists its access-token hash in Redis, and clears the caller's cookies.
 - **Logout** deletes the row by access-token hash.
-- **Background ticker** (every 1h) deletes rows where both access and refresh tokens have expired.
+- **Background ticker** (every 1h) deletes rows where both tokens have expired, plus soft-revoked rows older than 24h (kept only so replays stay classifiable).
 
 ### password_reset_tokens
 
@@ -310,16 +327,29 @@ sequenceDiagram
     AS->>AS: Read refresh cookie; reject if missing
     AS->>AS: Issuer.VerifyRefreshToken → userId
 
-    AS->>DB: FindSessionByRefreshHash(SHA256(refresh)) WHERE refresh_expires_at > NOW
-    alt not found / expired
+    AS->>DB: FindSessionByRefreshHash(SHA256(refresh))
+    alt no match on current hash
+        AS->>DB: FindSessionByPrevRefreshHash(SHA256(refresh))
+    end
+    AS->>AS: ClassifyRefresh → Rotate | Grace | Reuse | Invalid
+
+    alt Invalid (no session / expired)
         AS-->>C: 401 INVALID_REFRESH_TOKEN
-    else found
-        AS->>DB: SELECT users WHERE id=userId
-        AS->>DB: SELECT subscription_plans WHERE name=user.plan_name
+    else Reuse (superseded token outside grace, or revoked session)
+        AS->>DB: UPDATE user_sessions SET revoked_at=NOW WHERE id=session.id
+        AS->>R: Denylist session's access-token hash
+        AS->>R: DEL user:plan:<id>
+        AS-->>C: 401 INVALID_REFRESH_TOKEN + cleared cookies
+    else Grace (concurrent refresh lost the race, within AUTH_REFRESH_ROTATE_GRACE)
+        AS->>DB: SELECT users / subscription_plans
+        AS->>AS: IssueAccessToken (new) — no second rotation
+        AS-->>C: 200 + Set-Cookie access_token (no refresh cookie)
+    else Rotate
+        AS->>DB: SELECT users / subscription_plans
         AS->>R: SET user:plan:<id> EX=accessTTL
-        AS->>AS: IssueAccessToken (new) — refresh stays the same row
-        AS->>DB: UPDATE user_sessions SET access_token_hash, access_expires_at WHERE id=session.id
-        AS-->>C: 200 + Set-Cookie access_token (refresh cookie unchanged)
+        AS->>AS: IssueAccessToken + IssueRefreshToken (expiry capped at original refresh_expires_at)
+        AS->>DB: UPDATE user_sessions SET prev_refresh_token_hash=old, refresh_token_hash=new,<br/>access_token_hash=new, rotated_at=NOW WHERE id=? AND refresh_token_hash=old AND revoked_at IS NULL
+        AS-->>C: 200 + Set-Cookie access_token & refresh_token (both rotated)
     end
 ```
 
@@ -454,13 +484,16 @@ sequenceDiagram
     Admin->>GW: POST /auth/proxy-login {userId} (admin token)
     GW->>GW: Verify admin token (protected route)
     GW->>AS: forward request
-    AS->>AS: PROXY_LOGIN_ENABLED? caller role in {admin, super-admin}?
+    AS->>AS: PROXY_LOGIN_ENABLED? claimed role in {admin, super-admin}?
     alt disabled or not allowed
-        AS-->>Admin: 403 PROXY_LOGIN_DISABLED / FORBIDDEN
+        AS-->>Admin: 403 PROXY_LOGIN_DISABLED / AUTH_FORBIDDEN
     else
+        AS->>DB: SELECT caller by id (authoritative role, not the JWT claim)
         AS->>DB: SELECT target user by id
         alt target missing
             AS-->>Admin: 404 USER_NOT_FOUND
+        else caller does not strictly outrank target (CanImpersonate)
+            AS-->>Admin: 403 AUTH_FORBIDDEN (rank check)
         else
             AS->>AS: IssueImpersonationToken(target, impersonated_by=admin, short TTL)
             AS->>DB: StoreAccessOnlySession (no refresh hash)
@@ -478,17 +511,17 @@ sequenceDiagram
 | Error Code | HTTP Status | Condition |
 |------------|-------------|-----------|
 | `INVALID_INPUT` | 400 | Missing required fields or invalid payload |
-| `WEAK_PASSWORD` | 400 | Password less than 8 characters |
+| `INVALID_INPUT` | 400 | Password less than 8 characters |
 | `USER_ALREADY_EXISTS` | 409 | Email already registered |
 | `INVALID_CREDENTIALS` | 401 | Wrong email or password |
-| `INVALID_REFRESH_TOKEN` | 401 | Missing, expired, or unknown refresh token |
+| `INVALID_REFRESH_TOKEN` | 401 | Missing, expired, or unknown refresh token — **also returned on detected reuse** (replay of a rotated-out refresh token; the session is revoked and cookies cleared, but the response is indistinguishable by design) |
 | `INVALID_OR_EXPIRED_TOKEN` | 400 | Reset token does not match any active row or has expired |
-| `UNAUTHORIZED` | 401 | Not authenticated or token expired/revoked |
+| `AUTH_UNAUTHORIZED` | 401 | Not authenticated or token expired/revoked |
 | `RATE_LIMIT_EXCEEDED` | 429 | Too many attempts |
 | `INVALID_PLAN` | 400 | `ChangePlan` with unknown plan name |
 | `SAME_PLAN` | 400 | `ChangePlan` to current plan |
 | `PROXY_LOGIN_DISABLED` | 403 | `ProxyLogin` while `PROXY_LOGIN_ENABLED=false` |
-| `FORBIDDEN` | 403 | `ProxyLogin` caller is not `admin`/`super-admin` |
+| `AUTH_FORBIDDEN` | 403 | `ProxyLogin` caller is not `admin`/`super-admin`, or does not strictly outrank the target |
 | `INVALID_TARGET` | 400 | `ProxyLogin` target equals the caller (self-impersonation) |
 | `USER_NOT_FOUND` | 404 | `ProxyLogin` target user does not exist |
 | `SERVER_ERROR` | 500 | Database / token issuance failure |
@@ -604,7 +637,8 @@ Rate limits are per IP and enforced via Redis-backed middleware.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JWT_ACCESS_TTL` | `8h` | Access token lifetime |
-| `JWT_REFRESH_TTL` | `168h` (7d) | Refresh token lifetime |
+| `JWT_REFRESH_TTL` | `168h` (7d) | Refresh token lifetime (absolute; rotation never extends it) |
+| `AUTH_REFRESH_ROTATE_GRACE` | `30s` | Grace window in which a just-superseded refresh token still yields an access token (concurrent tabs); replays outside it revoke the session |
 | `JWT_CLOCK_SKEW` | `60s` | Allowed clock skew for validation |
 | `JWT_ALLOWED_ALGS` | `HS256` | Allowed JWT algorithms |
 
@@ -839,7 +873,7 @@ Content-Type: application/json
 | Status | Code | Cause |
 |--------|------|-------|
 | 400 | `INVALID_INPUT` | Missing token or empty/whitespace-only token |
-| 400 | `WEAK_PASSWORD` | New password shorter than 8 characters |
+| 400 | `INVALID_INPUT` | New password shorter than 8 characters |
 | 400 | `INVALID_INPUT` | New password longer than 128 characters |
 | 400 | `INVALID_OR_EXPIRED_TOKEN` | Token does not match any active row, or has expired |
 | 500 | `SERVER_ERROR` | bcrypt failure or transaction failure |

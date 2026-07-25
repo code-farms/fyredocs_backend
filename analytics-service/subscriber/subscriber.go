@@ -14,6 +14,7 @@ import (
 
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/queue"
+	"fyredocs/shared/telemetry"
 
 	"analytics-service/internal/models"
 )
@@ -34,10 +35,12 @@ var eventBackoff = []time.Duration{time.Second, 5 * time.Second, 15 * time.Secon
 
 // nakOrDLQ backs off a retry until maxDeliver is hit, then parks the message in
 // the DLQ and Terminates it so it stops redelivering (no poison-message loop).
-func nakOrDLQ(msg jetstream.Msg, service string, cause error) {
+func nakOrDLQ(ctx context.Context, msg jetstream.Msg, service string, cause error) {
 	if meta, err := msg.Metadata(); err == nil && meta.NumDelivered >= maxDeliver {
 		if natsconn.JS != nil {
-			_, _ = natsconn.JS.Publish(context.Background(), "jobs.dlq."+service, msg.Data())
+			// PublishRaw keeps the message's original headers (trace context)
+			// so the dead-lettered copy stays in its end-to-end trace.
+			_ = queue.PublishRaw(context.WithoutCancel(ctx), natsconn.JS, "jobs.dlq."+service, msg.Data(), msg.Headers())
 		}
 		slog.Error("event dropped to DLQ after max retries",
 			"op", "subscriber.dlq", "service", service, "error", cause, "deliveries", meta.NumDelivered)
@@ -100,7 +103,7 @@ func subscribeAnalyticsEvents(ctx context.Context) (jetstream.ConsumeContext, er
 	}
 
 	return consumer.Consume(func(msg jetstream.Msg) {
-		handleAnalyticsEvent(msg)
+		handleAnalyticsEvent(context.Background(), msg)
 	})
 }
 
@@ -119,11 +122,14 @@ func subscribeJobEvents(ctx context.Context) (jetstream.ConsumeContext, error) {
 	}
 
 	return consumer.Consume(func(msg jetstream.Msg) {
-		handleJobEvent(msg)
+		handleJobEvent(context.Background(), msg)
 	})
 }
 
-func handleAnalyticsEvent(msg jetstream.Msg) {
+func handleAnalyticsEvent(ctx context.Context, msg jetstream.Msg) {
+	// Continue the publisher's trace (W3C context rides in the NATS headers).
+	ctx, span := queue.StartConsumerSpan(ctx, telemetry.Tracer, msg.Subject(), msg.Headers())
+	defer span.End()
 	var event queue.AnalyticsEvent
 	if err := json.Unmarshal(msg.Data(), &event); err != nil {
 		slog.Warn("failed to unmarshal analytics event", "error", err)
@@ -166,16 +172,19 @@ func handleAnalyticsEvent(msg jetstream.Msg) {
 		record.CreatedAt = time.Now().UTC()
 	}
 
-	if err := models.DB.Create(&record).Error; err != nil {
+	if err := models.DB.WithContext(ctx).Create(&record).Error; err != nil {
 		slog.Error("failed to persist analytics event", "eventType", event.EventType, "error", err)
-		nakOrDLQ(msg, "analytics", err)
+		nakOrDLQ(ctx, msg, "analytics", err)
 		return
 	}
 
 	_ = msg.Ack()
 }
 
-func handleJobEvent(msg jetstream.Msg) {
+func handleJobEvent(ctx context.Context, msg jetstream.Msg) {
+	// Continue the publisher's trace (W3C context rides in the NATS headers).
+	ctx, span := queue.StartConsumerSpan(ctx, telemetry.Tracer, msg.Subject(), msg.Headers())
+	defer span.End()
 	var event queue.JobEvent
 	if err := json.Unmarshal(msg.Data(), &event); err != nil {
 		slog.Warn("failed to unmarshal job event", "error", err)
@@ -232,9 +241,9 @@ func handleJobEvent(msg jetstream.Msg) {
 		record.CreatedAt = time.Now().UTC()
 	}
 
-	if err := models.DB.Create(&record).Error; err != nil {
+	if err := models.DB.WithContext(ctx).Create(&record).Error; err != nil {
 		slog.Error("failed to persist job event", "eventType", eventType, "error", err)
-		nakOrDLQ(msg, "analytics", err)
+		nakOrDLQ(ctx, msg, "analytics", err)
 		return
 	}
 

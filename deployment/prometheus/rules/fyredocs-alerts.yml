@@ -68,6 +68,21 @@ groups:
           summary: "Elevated job failure rate"
           description: "Jobs are failing at >0.2/s (10m avg) across the pipeline — check the DLQ and worker logs."
 
+      # End-to-end job latency (queued → terminal) is degrading. Measured by
+      # job_duration_seconds, observed once per terminal outcome in the workers.
+      - alert: JobLatencyP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(job_duration_seconds_bucket{status="completed"}[15m])) by (le)
+          ) > 600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job p95 latency above 10 minutes"
+          description: "95th-percentile end-to-end job latency (queued to completed) has exceeded 10 minutes for 15 minutes — check worker saturation, the DLQ, and conversion tool health."
+
       # Dead-lettered jobs are piling up in JOBS_DLQ (metric from analytics-service).
       - alert: DLQBacklog
         expr: nats_dlq_pending_messages > 0
@@ -90,6 +105,19 @@ groups:
         annotations:
           summary: "Dependency {{ $labels.dependency }} is unreachable"
           description: "analytics-service cannot reach {{ $labels.dependency }} for over 2 minutes."
+
+  - name: security
+    rules:
+      # Rate limiting is failing open because Redis is unavailable — requests
+      # are being served with NO throttling at all.
+      - alert: RateLimitFailingOpen
+        expr: sum(rate(rate_limit_fail_open_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Rate limiting is failing open"
+          description: "Requests are bypassing rate limits because the limiter's Redis backend is unavailable — abuse protection is effectively off. Check Redis."
 
   - name: database
     rules:

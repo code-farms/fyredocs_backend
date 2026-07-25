@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -22,7 +23,10 @@ func ReadyCheck(c *gin.Context) {
 	checks := gin.H{}
 	ready := true
 	if err := models.DB.Exec("SELECT 1").Error; err != nil {
-		checks["postgres"] = err.Error()
+		// Raw driver errors can leak internal host:port details; the probe
+		// body stays generic and the cause goes to logs.
+		slog.Warn("readyz dependency check failed", "dependency", "postgres", "error", err)
+		checks["postgres"] = "unavailable"
 		ready = false
 	} else {
 		checks["postgres"] = "ok"

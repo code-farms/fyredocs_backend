@@ -16,8 +16,8 @@ import (
 )
 
 type workspaceHintReq struct {
-	JobID          string `json:"jobId"`
-	OrganizationID string `json:"organizationId"`
+	JobID          string `json:"jobId" binding:"required,uuid"`
+	OrganizationID string `json:"organizationId" binding:"omitempty,uuid"`
 }
 
 // SetJobWorkspaceHint records that a job should finalize into an organization
@@ -25,8 +25,7 @@ type workspaceHintReq struct {
 func SetJobWorkspaceHint(c *gin.Context) {
 	uid, _ := userID(c)
 	var req workspaceHintReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_BODY", "Invalid request body.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	jobID, err := uuid.Parse(strings.TrimSpace(req.JobID))

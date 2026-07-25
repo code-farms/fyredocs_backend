@@ -20,14 +20,14 @@ func (ae *AuthEndpoints) RevokeUserSessions(c *gin.Context) {
 	userIDStr := c.Param("id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid user ID.", err,
+		response.Errorf(c, http.StatusBadRequest, response.CodeInvalidInput, "Invalid user ID.", err,
 			"op", "parse_user_id", "userIdStr", userIDStr)
 		return
 	}
 
 	sessions, err := models.RevokeAllUserSessions(models.DB, userID)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Failed to revoke sessions.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Failed to revoke sessions.", err,
 			"op", "db.user_sessions.revoke_all", "userId", userID)
 		return
 	}
@@ -56,7 +56,7 @@ func (ae *AuthEndpoints) RevokeSession(c *gin.Context) {
 	sessionIDStr := c.Param("id")
 	sessionID, err := uuid.Parse(sessionIDStr)
 	if err != nil {
-		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid session ID.", err,
+		response.Errorf(c, http.StatusBadRequest, response.CodeInvalidInput, "Invalid session ID.", err,
 			"op", "parse_session_id", "sessionIdStr", sessionIDStr)
 		return
 	}
@@ -64,12 +64,12 @@ func (ae *AuthEndpoints) RevokeSession(c *gin.Context) {
 	var session models.UserSession
 	if err := models.DB.First(&session, "id = ?", sessionID).Error; err != nil {
 		logger.LogWarn(c.Request.Context(), "db.user_sessions.lookup", err, "sessionId", sessionID)
-		response.Err(c, http.StatusNotFound, "NOT_FOUND", "Session not found.")
+		response.Err(c, http.StatusNotFound, response.CodeNotFound, "Session not found.")
 		return
 	}
 
 	if err := models.DB.Delete(&session).Error; err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Failed to revoke session.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Failed to revoke session.", err,
 			"op", "db.user_sessions.delete", "sessionId", sessionID)
 		return
 	}

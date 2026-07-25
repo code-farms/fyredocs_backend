@@ -42,6 +42,15 @@ Non-members get `404` on org-scoped reads (existence is not leaked); insufficien
 
 **Pagination.** The two list endpoints (`GET /api/orgs`, `GET /api/orgs/:id/members`) accept `page` (default 1) and `limit` (default 25, max 100) query params and return the standard envelope with a `meta` object `{page, limit, total}`. (Previously they returned the full unbounded list with no `meta`.)
 
+### Schema migrations
+
+The schema is applied by **versioned SQL migrations** embedded in the binary
+(`internal/migrations/*.sql`, applied by goose at startup under a per-service
+Postgres advisory lock and recorded in `goose_db_version_user_service`). GORM
+`AutoMigrate` is no longer the authority — it remains only behind
+`DB_AUTOMIGRATE=true` for local development. A migration failure aborts startup.
+See [schema-migrations.md](../architecture/schema-migrations.md).
+
 ## DB Schema (own Postgres)
 - **organizations**: id (uuid v7), name, slug (unique), owner_user_id, plan_name (default `free`), created_at, updated_at.
 - **memberships**: id, organization_id, user_id, role, created_at, updated_at. Unique `(organization_id, user_id)`; index on `user_id`.

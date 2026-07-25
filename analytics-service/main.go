@@ -72,13 +72,13 @@ func main() {
 	// history). Runs for the lifetime of the process.
 	samplerCtx, stopSampler := context.WithCancel(context.Background())
 	defer stopSampler()
-	apisampler.Start(samplerCtx, models.DB)
+	samplerDone := apisampler.Start(samplerCtx, models.DB)
 
 	// Ops-health poller: exposes dependency_up{redis,nats,postgres} and
 	// nats_dlq_pending_messages on /metrics for the Prometheus alert rules.
 	opsCtx, stopOps := context.WithCancel(context.Background())
 	defer stopOps()
-	opsmetrics.Start(opsCtx, models.DB)
+	opsDone := opsmetrics.Start(opsCtx, models.DB)
 
 	r := gin.New()
 	r.Use(response.GinRecovery())
@@ -124,5 +124,22 @@ func main() {
 		slog.Error("server forced to shutdown", "error", err)
 	}
 	subs.Stop()
+
+	// Stop the background pollers and JOIN them, so an in-flight metric write
+	// or prune finishes instead of being abandoned mid-statement.
+	stopSampler()
+	stopOps()
+	joinPoller("apisampler", samplerDone)
+	joinPoller("opsmetrics", opsDone)
 	slog.Info("analytics-service exited")
+}
+
+// joinPoller waits (bounded) for a background poller to finish after its
+// context has been cancelled, so shutdown never abandons an in-flight DB write.
+func joinPoller(name string, done <-chan struct{}) {
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		slog.Warn("poller did not stop in time", "poller", name)
+	}
 }

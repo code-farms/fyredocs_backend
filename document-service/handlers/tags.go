@@ -20,24 +20,25 @@ func ListTags(c *gin.Context) {
 	}
 	var tags []models.Tag
 	if err := scopeOwned(models.DB, uid, orgID).Order("name ASC").Find(&tags).Error; err != nil {
-		response.InternalErrorf(c, "LIST_FAILED", "Could not load tags.", err, "op", "db.tags.list", "userId", uid)
+		response.InternalErrorf(c, response.CodeServerError, "Could not load tags.", err, "op", "db.tags.list", "userId", uid)
 		return
 	}
 	response.OK(c, "Tags retrieved", tags)
 }
 
 type tagReq struct {
-	Name           string  `json:"name"`
-	Color          string  `json:"color"`
-	OrganizationID *string `json:"organizationId"`
+	Name string `json:"name" binding:"omitempty,max=100"`
+	// Color is free-form (clients send hex today, but the API never promised
+	// a format); only its length is bounded.
+	Color          string  `json:"color" binding:"omitempty,max=32"`
+	OrganizationID *string `json:"organizationId" binding:"omitempty,uuid"`
 }
 
 // CreateTag creates a tag in scope (idempotent within the scope; org requires editor+).
 func CreateTag(c *gin.Context) {
 	uid, _ := userID(c)
 	var req tagReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_BODY", "Invalid request body.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
@@ -60,7 +61,7 @@ func CreateTag(c *gin.Context) {
 	}
 	tag := models.Tag{UserID: uid, OrganizationID: orgID, Name: name, Color: strings.TrimSpace(req.Color)}
 	if err := models.DB.Create(&tag).Error; err != nil {
-		response.InternalErrorf(c, "CREATE_FAILED", "Could not create tag.", err, "op", "db.tags.create", "userId", uid)
+		response.InternalErrorf(c, response.CodeServerError, "Could not create tag.", err, "op", "db.tags.create", "userId", uid)
 		return
 	}
 	response.Created(c, "Tag created", tag)
@@ -71,7 +72,7 @@ func DeleteTag(c *gin.Context) {
 	uid, _ := userID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid tag id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid tag id.")
 		return
 	}
 	orgID, ok := resolveOrg(c, c.Query("orgId"), "editor")
@@ -84,7 +85,7 @@ func DeleteTag(c *gin.Context) {
 		return
 	}
 	if res.RowsAffected == 0 {
-		response.NotFound(c, "NOT_FOUND", "Tag not found.")
+		response.NotFound(c, response.CodeNotFound, "Tag not found.")
 		return
 	}
 	if err := models.DB.Exec("DELETE FROM document_tags WHERE tag_id = ?", id).Error; err != nil {

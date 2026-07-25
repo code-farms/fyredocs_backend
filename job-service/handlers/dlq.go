@@ -79,7 +79,9 @@ func RedriveDLQ(c *gin.Context) {
 			skipped++
 			continue
 		}
-		if _, perr := natsconn.JS.Publish(ctx, queue.SubjectForDispatch(service), msg.Data()); perr != nil {
+		// PublishRaw keeps the dead-lettered message's original headers (its
+		// trace context), so the redriven job continues the same trace.
+		if perr := queue.PublishRaw(ctx, natsconn.JS, queue.SubjectForDispatch(service), msg.Data(), msg.Headers()); perr != nil {
 			logger.LogWarn(ctx, "dlq.republish", perr, "service", service)
 			_ = msg.Nak()
 			failed++

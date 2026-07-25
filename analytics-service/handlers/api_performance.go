@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -31,9 +32,12 @@ func APIPerformance(c *gin.Context) {
 
 	families, err := promscrape.MetricFamilies(ctx, gatewayURL)
 	if err != nil {
+		// The raw scrape error carries internal host:port details — log it and
+		// keep the response body generic.
+		slog.Warn("api_performance.scrape_gateway", "error", err, "url", gatewayURL)
 		response.OK(c, "API performance unavailable", gin.H{
-			"error": "Could not scrape API gateway metrics: " + err.Error(),
-			"hint":  "Ensure the API gateway is running and accessible at " + gatewayURL,
+			"error": "Could not scrape API gateway metrics.",
+			"hint":  "Ensure the API gateway is running and its /metrics endpoint is reachable.",
 		})
 		return
 	}

@@ -42,12 +42,12 @@ func createAndPush(ctx context.Context, n *models.Notification) error {
 }
 
 type internalNotifReq struct {
-	UserID   string `json:"userId"`
-	Type     string `json:"type"`
-	Title    string `json:"title"`
-	Body     string `json:"body"`
-	Link     string `json:"link"`
-	SourceID string `json:"sourceId"`
+	UserID   string `json:"userId" binding:"required,uuid"`
+	Type     string `json:"type" binding:"required,max=64"`
+	Title    string `json:"title" binding:"required,max=200"`
+	Body     string `json:"body" binding:"omitempty,max=2000"`
+	Link     string `json:"link" binding:"omitempty,max=512"`
+	SourceID string `json:"sourceId" binding:"omitempty,max=512"`
 }
 
 // CreateInternal lets other services raise a notification. It is mounted on an
@@ -55,8 +55,7 @@ type internalNotifReq struct {
 // Idempotent when sourceId is supplied.
 func CreateInternal(c *gin.Context) {
 	var req internalNotifReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_BODY", "Invalid request body.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	uid, err := uuid.Parse(strings.TrimSpace(req.UserID))
@@ -90,7 +89,7 @@ func CreateInternal(c *gin.Context) {
 	}
 	n := models.Notification{UserID: uid, Type: ntype, Title: req.Title, Body: req.Body, Link: req.Link, SourceJobID: src}
 	if err := createAndPush(c.Request.Context(), &n); err != nil {
-		response.InternalErrorf(c, "CREATE_FAILED", "Could not create notification.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not create notification.", err,
 			"op", "db.notifications.create", "userId", uid)
 		return
 	}
@@ -113,7 +112,7 @@ func userID(c *gin.Context) (uuid.UUID, bool) {
 func RequireUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if _, ok := userID(c); !ok {
-			response.Err(c, http.StatusUnauthorized, "UNAUTHORIZED", "Please log in.")
+			response.Err(c, http.StatusUnauthorized, response.CodeUnauthorized, "Please log in.")
 			c.Abort()
 			return
 		}
@@ -145,7 +144,7 @@ func ListNotifications(c *gin.Context) {
 	}()
 	wg.Wait()
 	if listErr != nil {
-		response.InternalErrorf(c, "LIST_FAILED", "Could not load notifications.", listErr,
+		response.InternalErrorf(c, response.CodeServerError, "Could not load notifications.", listErr,
 			"op", "db.notifications.list", "userId", uid)
 		return
 	}
@@ -161,7 +160,7 @@ func MarkRead(c *gin.Context) {
 	uid, _ := userID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid notification id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid notification id.")
 		return
 	}
 	now := time.Now().UTC()
@@ -169,7 +168,7 @@ func MarkRead(c *gin.Context) {
 		Where("id = ? AND user_id = ? AND read_at IS NULL", id, uid).
 		Update("read_at", now)
 	if res.Error != nil {
-		response.InternalErrorf(c, "UPDATE_FAILED", "Could not update notification.", res.Error,
+		response.InternalErrorf(c, response.CodeServerError, "Could not update notification.", res.Error,
 			"op", "db.notifications.mark_read", "notificationId", id, "userId", uid)
 		return
 	}
@@ -235,7 +234,7 @@ func MarkAllRead(c *gin.Context) {
 	if err := models.DB.Model(&models.Notification{}).
 		Where("user_id = ? AND read_at IS NULL", uid).
 		Update("read_at", now).Error; err != nil {
-		response.InternalErrorf(c, "UPDATE_FAILED", "Could not update notifications.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not update notifications.", err,
 			"op", "db.notifications.mark_all", "userId", uid)
 		return
 	}

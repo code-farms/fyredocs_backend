@@ -6,13 +6,41 @@ The Go services are instrumented for observability out of the box:
   service and installs HTTP/Gin middleware that starts a span per request and
   propagates W3C trace context. Services export to
   `OTEL_EXPORTER_OTLP_ENDPOINT` (`http://otel-collector:4318` in compose).
+
+  **Traces cross NATS, not just HTTP.** `shared/queue` injects the W3C context
+  into NATS message headers on publish (`PublishJobEvent`,
+  `PublishAnalyticsEvent`, and `PublishRaw` for DLQ/redrive hops, which also
+  preserve the original message's headers) and extracts it on consume
+  (`StartConsumerSpan`, used by the four PDF workers' `processMessage` and by
+  the analytics/notification/document subscribers). One job is therefore one
+  trace: gateway → job-service → `jobs.dispatch.*` → worker → terminal event.
+  Worker log lines use the `*Context` slog variants on that context, so they
+  carry `trace_id` and the Grafana log→trace jump works from the worker path
+  too.
 - **Metrics** — `shared/metrics` registers Prometheus collectors
-  (`http_request_duration_seconds`, `jobs_processed_total`, `jobs_failed_total`)
+  (`http_request_duration_seconds`, `jobs_processed_total`, `jobs_failed_total`,
+  `job_duration_seconds`)
   and every service serves `GET /metrics`. `http_request_duration_seconds` is
   recorded by the HTTP/Gin middleware; `jobs_processed_total` (label `status`) and
   `jobs_failed_total` (label `reason`), both keyed by `tool_type`, are emitted per
   job outcome from `shared/queue.PublishJobEvent` — the single choke point every
   worker's terminal `JobCompleted`/`JobFailed` event flows through.
+
+  `job_duration_seconds` (histogram, labels `tool_type`/`status`) is observed at
+  that same choke point and measures **end-to-end job latency**: job-service
+  stamps `JobEvent.QueuedAt` at dispatch, workers echo it on terminal events,
+  and the difference is recorded. Because a redelivery reuses the original
+  dispatch message, the measurement includes retry and DLQ dwell time — that is
+  deliberate, it is the latency a user actually experiences. Events without
+  `QueuedAt` (pre-upgrade messages) are skipped rather than mis-measured. The
+  `JobLatencyP95High` alert fires when the completed-job p95 exceeds 10 minutes
+  for 15 minutes.
+
+  `rate_limit_fail_open_total` (labels `service`/`limiter`) counts requests that
+  bypassed rate limiting because the limiter's Redis backend was unavailable.
+  Failing open is deliberate — a Redis blip must not take down request serving —
+  but it means throttling is silently off, so the `RateLimitFailingOpen` alert
+  treats any sustained rate as critical.
 
   **Low-cardinality route labels.** The api-gateway labels
   `http_request_duration_seconds` by the **route template** (e.g. `/api/jobs`), not
@@ -63,6 +91,48 @@ has a `trace_id` `derivedField` (log line → its Tempo trace). The gateway
 propagates `X-Request-ID` + W3C `traceparent` downstream, so one request keeps a
 single trace and request id across every service. See the diagram in
 [mermaid/system-overview.md](../mermaid/system-overview.md#observability-opt-in-observability-profile).
+
+## Resource budget
+
+The six observability containers are **inside** `deploy.sh`'s host resource
+budget (`RESOURCE_BUDGET_PCT`, default 70): their `*_MEM_LIMIT`/`*_CPU_LIMIT`
+are scaled from the same pool as the app services, so Σ(limits) ≤ budget holds
+for the whole stack. Previously they sat on top of the cap (~2.5 GB) and could
+push a small host into the OOM killer.
+
+Below `OBSERVABILITY_MIN_HOST_MB` (default 8192) the deploy **refuses** to
+enable the profile rather than squeezing the app services into caps they cannot
+run in — disable it (`COMPOSE_PROFILES= ./deployment/deploy.sh`) or override
+with `OBSERVABILITY_FORCE=1`.
+
+The collector runs a `memory_limiter` processor ahead of `batch`
+(75% soft / +25% spike, read from the cgroup limit) so it sheds load instead of
+being OOM-killed, and the OTLP exporter's default `sending_queue`/retry buffers
+spans across a brief Tempo restart.
+
+**Grafana's admin password has no default.** `GRAFANA_ADMIN_PASSWORD` is
+required whenever the profile is active (compose fails fast; `deploy.sh`
+validates it up front with a friendlier message). The old `admin` fallback made
+anyone with loopback/SSH-tunnel/SSRF access to `:3000` a Grafana admin.
+Anonymous **Viewer** access stays enabled — it is what lets the admin SPA embed
+dashboards same-origin through the Caddy `@grafana` block, which is itself
+guarded by `forward_auth`; the strong admin password removes the escalation
+path that made the combination dangerous.
+
+## Sampling
+
+`OTEL_TRACES_SAMPLER_RATIO` (0.0–1.0, default 1.0) controls trace sampling. The
+sampler is **ParentBased**, so the decision made at the edge is honored by every
+downstream service and NATS consumer — otherwise a trace would be sampled in one
+hop and dropped in the next, producing broken partial traces. Lower it (e.g.
+0.1) once production RPS makes 100% sampling expensive in Tempo storage.
+
+## Log volume
+
+Successful `/metrics`, `/healthz`, and `/readyz` requests are **not** logged:
+Prometheus scrapes every 15s and Docker healthchecks every 5–10s, which buried
+real traffic and dominated Loki ingest. A failing probe is still logged, at warn
+level.
 
 ## Starting it
 

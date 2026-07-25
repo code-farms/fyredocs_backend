@@ -67,7 +67,7 @@ via their leading-column prefix — fewer indexes = cheaper writes on hot tables
 `idx_event_user`, `idx_event_job`, `idx_event_tool` (analytics_events); `idx_processing_jobs_user_id`;
 `idx_documents_organization_id`; `idx_notifications_user_id`; `idx_user_sessions_user_id` (its FK
 cascade is still covered by `idx_session_user_access_exp`); `idx_tags_organization_id`. The
-corresponding `gorm:"index"` struct tags were removed so `AutoMigrate` does not recreate them.
+corresponding `gorm:"index"` struct tags were removed so the schema bootstrap does not recreate them.
 
 **Best practice**: Always create indexes that match your actual query patterns. The column order matters — put equality filters first, range/sort columns last. A single-column index is redundant when a composite already leads with that column — drop it to save write overhead.
 
@@ -234,14 +234,17 @@ Periodically review:
 
 Set up alerts for queries exceeding p95 thresholds.
 
-#### Centralized Migration Runner
-**Why**: Currently every service runs `AutoMigrate` on boot. DDL through connection poolers in transaction mode can cause issues. Multiple services racing to migrate the same tables adds unnecessary startup complexity.
+#### Versioned migrations — **done**
+Each DB-backed service now applies embedded, numbered SQL migrations
+(**goose**) at startup under a per-service Postgres advisory lock, recorded in
+`goose_db_version_<service>`. `AutoMigrate` is no longer the schema authority —
+it survives only behind `DB_AUTOMIGRATE=true` for local development. Migrations
+connect through `DATABASE_URL_DIRECT` when set, bypassing PgBouncer (session
+advisory locks are incompatible with transaction pooling).
 
-**Recommendation**:
-- Create a standalone `migrate` CLI tool or CI pipeline step
-- Run migrations once before deploying new service versions
-- Remove `AutoMigrate` from individual service startup
-- Use a proper migration tool (golang-migrate, Atlas, goose) for versioned, reversible migrations
+See [schema-migrations.md](./schema-migrations.md) for the workflow, the
+expand/contract rules that keep `deploy.sh --rollback` safe, and the baseline
+generator.
 
 ---
 
@@ -518,3 +521,81 @@ the round-trip itself is now sub-millisecond, so absolute latency is tiny.
 HA/PITR); monitor disk/RAM. Offsite backups are handled by the `db-backup`
 sidecar (hourly `pg_dump` → external S3 bucket via rclone) — see
 [backup-and-restore.md](./backup-and-restore.md).
+
+## Connection pooling (PgBouncer)
+
+The summed per-service pools (~145 connections) sat uncomfortably close to
+`max_connections=200`; scaling workers walked straight into it. `pgbouncer`
+(transaction pooling, `pgbouncer:6432`) multiplexes them onto a small number of
+real backends.
+
+**It ships dark.** The container runs, but services keep using it only once
+`DATABASE_URL` is pointed at `pgbouncer:6432` in `.env`. Reverting is that one
+line.
+
+### Rollout
+
+1. Deploy with the container present and `DATABASE_URL` still direct — confirm
+   `pgbouncer` is healthy (`docker compose ps`, `SHOW POOLS` below).
+2. Set `DATABASE_URL_DIRECT` to the direct `db:5432` DSN **first** — migrations
+   and `pg_dump` need it.
+3. Flip `DATABASE_URL` to `pgbouncer:6432` and redeploy.
+4. Watch service logs for `prepared statement "..." does not exist` or
+   `unsupported startup parameter`. Neither should appear; if one does, revert
+   `DATABASE_URL` and open an issue.
+
+### What transaction pooling breaks, and how each is handled
+
+| Hazard | Handling |
+|---|---|
+| Prepared statements (GORM/pgx extended protocol) | `max_prepared_statements=500` — PgBouncer ≥1.21 tracks them. Escape hatch if a driver ever trips: append `default_query_exec_mode=simple_protocol` to the DSN. |
+| `statement_timeout` / `idle_in_transaction_session_timeout` startup params | Listed in `ignore_startup_parameters` (otherwise connections are **rejected**) — but "ignored" means **not applied**, so `deploy.sh` sets them as role-in-database defaults (`DB_STATEMENT_TIMEOUT`, `DB_IDLE_TX_TIMEOUT`). The guard therefore holds through the pooler. |
+| Session advisory locks (goose migrations) | Migrations connect via `DATABASE_URL_DIRECT`. |
+| `pg_dump` needs a real session | `db-backup` uses `DATABASE_URL_DIRECT`, and clears `statement_timeout` for its own session via `PGOPTIONS`. |
+| Long index builds hitting the 15s guard | `RunMigrations` runs `SET statement_timeout = 0` on its session; the run is bounded by `DB_MIGRATION_TIMEOUT` instead. |
+
+### Operating it
+
+```bash
+# pool utilisation / waiting clients
+psql "postgresql://$POSTGRES_USER@localhost:6432/pgbouncer" -c 'SHOW POOLS'
+psql "postgresql://$POSTGRES_USER@localhost:6432/pgbouncer" -c 'SHOW STATS'
+
+# confirm the guard is live through the pooler (should error after ~15s)
+psql "$DATABASE_URL" -c 'SELECT pg_sleep(20)'
+```
+
+Per-service `MaxOpenConns` are deliberately unchanged for now: client
+connections to PgBouncer are cheap, and `max_client_conn=400` covers the current
+sum with room for a worker scale-out. Tune them down later based on
+`SHOW POOLS` observation rather than guesswork. `max_connections=200` on
+Postgres also stays as-is until the pooler has soaked.
+
+## Cross-service deletion (orphan prevention)
+
+There are **no cross-service foreign keys** — by design, since each service owns
+its own tables. The consequence is that nothing at the database level would stop
+a deleted user from leaving documents, folders, tags, memberships, and
+notifications behind in other services' tables.
+
+**Today this cannot happen: no user-delete or org-delete endpoint exists.** The
+only deletion paths are per-resource (a job, a document, an org member), and each
+is handled inside its owning service. Orphans are therefore only reachable by
+editing the database by hand.
+
+**Constraint for whoever adds account/organization deletion** — the deletion is
+not complete when the row disappears:
+
+1. The owning service (auth-service for users, user-service for organizations)
+   publishes a domain event (`user.deleted` / `org.deleted`) on NATS **in the
+   same flow as the delete**, following the existing analytics-event pattern in
+   `shared/queue`.
+2. Every service holding rows keyed by that id subscribes and purges its own:
+   document-service (documents, folders, tags, exports, job hints),
+   user-service (memberships), notification-service (notifications),
+   job-service (jobs + their objects in MinIO, which the retention sweep would
+   otherwise never reach for a user that no longer exists).
+3. Purges must be idempotent — the subscriber redelivers on failure.
+
+A periodic reconciliation sweep (find rows whose owning id no longer exists) is
+the backstop if an event is ever lost, not the primary mechanism.

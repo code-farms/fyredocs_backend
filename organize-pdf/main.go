@@ -68,29 +68,36 @@ func main() {
 		return &worker.ProcessResult{OutputPath: result.OutputPath, Metadata: result.Metadata}, nil
 	}
 
-	go worker.Run(ctx, worker.WorkerConfig{
-		ServiceName: "organize-pdf",
-		AllowedTools: map[string]bool{
-			"merge-pdf":        true,
-			"split-pdf":        true,
-			"remove-pages":     true,
-			"extract-pages":    true,
-			"organize-pdf":     true,
-			"scan-to-pdf":      true,
-			"rotate-pdf":       true,
-			"watermark-pdf":    true,
-			"protect-pdf":      true,
-			"unlock-pdf":       true,
-			"sign-pdf":         true,
-			"edit-pdf":         true,
-			"add-page-numbers": true,
-		},
-		Process:     processFunc,
-		JS:          natsconn.JS,
-		RedisClient: redisstore.Client,
-		DB:          models.DB,
-		Storage:     store,
-	})
+	// workerDone lets shutdown JOIN the worker: worker.Run drains in-flight
+	// jobs (bounded by WORKER_DRAIN_TIMEOUT) before main is allowed to exit,
+	// so a deploy never kills a PDF conversion mid-write.
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		worker.Run(ctx, worker.WorkerConfig{
+			ServiceName: "organize-pdf",
+			AllowedTools: map[string]bool{
+				"merge-pdf":        true,
+				"split-pdf":        true,
+				"remove-pages":     true,
+				"extract-pages":    true,
+				"organize-pdf":     true,
+				"scan-to-pdf":      true,
+				"rotate-pdf":       true,
+				"watermark-pdf":    true,
+				"protect-pdf":      true,
+				"unlock-pdf":       true,
+				"sign-pdf":         true,
+				"edit-pdf":         true,
+				"add-page-numbers": true,
+			},
+			Process:     processFunc,
+			JS:          natsconn.JS,
+			RedisClient: redisstore.Client,
+			DB:          models.DB,
+			Storage:     store,
+		})
+	}()
 
 	r := gin.New()
 	r.Use(telemetry.GinTraceMiddleware("organize-pdf"))
@@ -123,7 +130,10 @@ func main() {
 		defer hcancel()
 
 		if err := redisstore.Client.Ping(hctx).Err(); err != nil {
-			checks["redis"] = err.Error()
+			// Raw driver errors can leak internal host:port details; the probe
+			// body stays generic and the cause goes to logs.
+			slog.Warn("readyz dependency check failed", "dependency", "redis", "error", err)
+			checks["redis"] = "unavailable"
 			ready = false
 		} else {
 			checks["redis"] = "ok"
@@ -137,7 +147,10 @@ func main() {
 		}
 
 		if err := models.DB.Exec("SELECT 1").Error; err != nil {
-			checks["postgres"] = err.Error()
+			// Raw driver errors can leak internal host:port details; the probe
+			// body stays generic and the cause goes to logs.
+			slog.Warn("readyz dependency check failed", "dependency", "postgres", "error", err)
+			checks["postgres"] = "unavailable"
 			ready = false
 		} else {
 			checks["postgres"] = "ok"
@@ -171,6 +184,15 @@ func main() {
 
 	slog.Info("shutting down")
 	cancel()
+	// Join the worker's bounded drain (WORKER_DRAIN_TIMEOUT + margin as a
+	// safety net). Compose's stop_grace_period must exceed this or Docker
+	// SIGKILLs the process mid-drain.
+	select {
+	case <-workerDone:
+		slog.Info("worker drained")
+	case <-time.After(3 * time.Minute):
+		slog.Error("worker did not stop in time; exiting anyway")
+	}
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {

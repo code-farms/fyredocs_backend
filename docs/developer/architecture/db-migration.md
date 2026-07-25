@@ -14,6 +14,10 @@ source of truth and there must stay exactly one of it.** You do *not* run a seco
 Postgres; you move the one Postgres onto a **dedicated DB host** that both app
 servers point at.
 
+> **This is about moving Postgres to another host, not about schema changes.**
+> For versioned schema migrations (goose, per-service `internal/migrations/`),
+> see [schema-migrations.md](./schema-migrations.md).
+
 > **This document is the DB-migration mechanics only.** For the surrounding
 > scale-out sequence (private network, infra auth/TLS, worker fan-out, HA tier)
 > see [horizontal-scaling.md](./horizontal-scaling.md) §2 (second host) and §3 (HA

@@ -16,7 +16,7 @@ func GetAllPlans(c *gin.Context) {
 	if err := models.DB.
 		Order("max_file_size_mb asc").
 		Find(&plans).Error; err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Unable to retrieve plans", err,
+		response.InternalErrorf(c, response.CodeServerError, "Unable to retrieve plans", err,
 			"op", "db.subscription_plans.list_public")
 		return
 	}

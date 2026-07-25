@@ -7,6 +7,9 @@ import (
 
 	"gorm.io/gorm"
 
+	"user-service/internal/migrations"
+
+	"fyredocs/shared/config"
 	"fyredocs/shared/database"
 )
 
@@ -39,6 +42,31 @@ func Connect(pool ...PoolConfig) {
 // tables and adds supporting indexes. It fail-fasts if the core migration fails
 // but treats index creation as best-effort.
 func Migrate() {
+	// Versioned migrations are the schema authority (see
+	// docs/developer/architecture/schema-migrations.md). They run under a
+	// per-service Postgres advisory lock, so concurrent replicas serialize
+	// instead of racing the same DDL, and a failure aborts startup — a service
+	// that could not apply its schema must not serve traffic.
+	if config.GetEnvBool("DB_AUTOMIGRATE", false) {
+		slog.Warn("DB_AUTOMIGRATE=true — using the legacy GORM AutoMigrate path instead of versioned migrations. Development only; never set this in production.")
+		legacyAutoMigrate()
+
+		return
+	}
+
+	if err := database.RunMigrations(DB, "user-service", migrations.FS); err != nil {
+		slog.Error("Database migration failed", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Database migration completed")
+
+}
+
+// legacyAutoMigrate is the pre-migrations GORM bootstrap, kept behind
+// DB_AUTOMIGRATE for local development against a scratch database (and used by
+// scripts/gen-migration-baseline.sh to regenerate the baseline). It is NOT the
+// schema authority: changes must land as numbered migrations.
+func legacyAutoMigrate() {
 	if err := DB.AutoMigrate(&Organization{}, &Membership{}); err != nil {
 		slog.Error("Database migration failed", "error", err)
 		os.Exit(1)

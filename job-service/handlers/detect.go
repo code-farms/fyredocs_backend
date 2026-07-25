@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 
 	"fyredocs/shared/config"
 	"fyredocs/shared/logger"
@@ -18,7 +20,7 @@ import (
 )
 
 type detectEdgesRequest struct {
-	UploadID string `json:"uploadId"`
+	UploadID string `json:"uploadId" binding:"required,uuid"`
 }
 
 // detectHTTPClient is shared across requests; overridable in tests via
@@ -35,8 +37,7 @@ func organizePdfBaseURL() string {
 // detection to organize-pdf's internal endpoint, which owns the imaging logic.
 func DetectEdges(c *gin.Context) {
 	var req detectEdgesRequest
-	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.UploadID) == "" {
-		response.BadRequest(c, "INVALID_INPUT", "An uploadId is required.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	uploadID := strings.TrimSpace(req.UploadID)
@@ -46,7 +47,7 @@ func DetectEdges(c *gin.Context) {
 	// uploadId feeds job creation next.
 	consumed, err := consumeUpload(c.Request.Context(), "scan-to-pdf", uploadID)
 	if err != nil {
-		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", err.Error(), err,
+		response.Errorf(c, http.StatusBadRequest, response.CodeInvalidInput, err.Error(), err,
 			"op", "detect_edges.consume_upload", "uploadId", uploadID)
 		return
 	}
@@ -54,25 +55,32 @@ func DetectEdges(c *gin.Context) {
 	// Edge detection is image-only; PDFs are legal scan inputs but have no
 	// pixels to detect on.
 	if strings.EqualFold(filepath.Ext(consumed.OriginalName), ".pdf") {
-		response.BadRequest(c, "INVALID_INPUT", "Edge detection requires an image upload, not a PDF.")
+		response.BadRequest(c, response.CodeInvalidInput, "Edge detection requires an image upload, not a PDF.")
 		return
 	}
 
 	payload, err := json.Marshal(map[string]string{"key": consumed.Key})
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Failed to build detection request.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Failed to build detection request.", err,
 			"op", "detect_edges.marshal", "uploadId", uploadID)
 		return
 	}
 
 	upstreamURL := organizePdfBaseURL() + "/internal/v1/detect-edges"
-	upstreamReq, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, upstreamURL, bytes.NewReader(payload))
+	upstreamCtx := c.Request.Context()
+	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, upstreamURL, bytes.NewReader(payload))
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Failed to build detection request.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Failed to build detection request.", err,
 			"op", "detect_edges.new_request", "uploadId", uploadID)
 		return
 	}
 	upstreamReq.Header.Set("Content-Type", "application/json")
+	// Propagate the caller's trace and request ID so the internal hop stays
+	// correlated with the originating request (Grafana log↔trace jump).
+	otel.GetTextMapPropagator().Inject(upstreamCtx, propagation.HeaderCarrier(upstreamReq.Header))
+	if rid := logger.RequestIDFromContext(upstreamCtx); rid != "" {
+		upstreamReq.Header.Set(logger.RequestIDHeader, rid)
+	}
 	if token := config.GetEnv("INTERNAL_API_TOKEN", ""); token != "" {
 		upstreamReq.Header.Set("X-Internal-Token", token)
 	}

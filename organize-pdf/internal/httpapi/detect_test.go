@@ -61,6 +61,11 @@ func encodePNG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
+// testInternalToken is the shared secret used by the default test router. An
+// empty token now fails closed (503) instead of skipping the check, so every
+// functional test authenticates.
+const testInternalToken = "test-token"
+
 func newRouter(store ObjectGetter, token string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -71,6 +76,7 @@ func newRouter(store ObjectGetter, token string) *gin.Engine {
 func doDetect(r *gin.Engine, body string, headers map[string]string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/detect-edges", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Token", testInternalToken)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -83,7 +89,7 @@ func TestDetectEdgesHappyPath(t *testing.T) {
 	store := &fakeGetter{objects: map[string][]byte{
 		"uploads/photo.png": encodePNG(t, 200, 260),
 	}}
-	w := doDetect(newRouter(store, ""), `{"key":"photo.png"}`, nil)
+	w := doDetect(newRouter(store, testInternalToken), `{"key":"photo.png"}`, nil)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
@@ -115,14 +121,14 @@ func TestDetectEdgesHappyPath(t *testing.T) {
 }
 
 func TestDetectEdgesMissingObject(t *testing.T) {
-	w := doDetect(newRouter(&fakeGetter{objects: map[string][]byte{}}, ""), `{"key":"nope.png"}`, nil)
+	w := doDetect(newRouter(&fakeGetter{objects: map[string][]byte{}}, testInternalToken), `{"key":"nope.png"}`, nil)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status %d, want 404", w.Code)
 	}
 }
 
 func TestDetectEdgesMissingKey(t *testing.T) {
-	w := doDetect(newRouter(&fakeGetter{objects: map[string][]byte{}}, ""), `{}`, nil)
+	w := doDetect(newRouter(&fakeGetter{objects: map[string][]byte{}}, testInternalToken), `{}`, nil)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status %d, want 400", w.Code)
 	}
@@ -133,7 +139,7 @@ func TestDetectEdgesOversize(t *testing.T) {
 		objects: map[string][]byte{"uploads/big.png": encodePNG(t, 10, 10)},
 		sizes:   map[string]int64{"uploads/big.png": maxDetectObjectBytes + 1},
 	}
-	w := doDetect(newRouter(store, ""), `{"key":"big.png"}`, nil)
+	w := doDetect(newRouter(store, testInternalToken), `{"key":"big.png"}`, nil)
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("status %d, want 413", w.Code)
 	}
@@ -143,7 +149,7 @@ func TestDetectEdgesUndecodable(t *testing.T) {
 	store := &fakeGetter{objects: map[string][]byte{
 		"uploads/junk.bin": []byte("this is not an image"),
 	}}
-	w := doDetect(newRouter(store, ""), `{"key":"junk.bin"}`, nil)
+	w := doDetect(newRouter(store, testInternalToken), `{"key":"junk.bin"}`, nil)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("status %d, want 422", w.Code)
 	}
@@ -166,11 +172,23 @@ func TestDetectEdgesTokenAuth(t *testing.T) {
 	}
 }
 
+func TestDetectEdgesUnconfiguredTokenFailsClosed(t *testing.T) {
+	store := &fakeGetter{objects: map[string][]byte{
+		"uploads/photo.png": encodePNG(t, 64, 64),
+	}}
+	// No INTERNAL_API_TOKEN configured → every request is refused (503), even
+	// with an (unverifiable) token supplied.
+	r := newRouter(store, "")
+	if w := doDetect(r, `{"key":"photo.png"}`, nil); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("unconfigured token: status %d, want 503", w.Code)
+	}
+}
+
 func TestDetectEdgesCustomBucket(t *testing.T) {
 	store := &fakeGetter{objects: map[string][]byte{
 		"other/photo.png": encodePNG(t, 64, 64),
 	}}
-	w := doDetect(newRouter(store, ""), `{"bucket":"other","key":"photo.png"}`, nil)
+	w := doDetect(newRouter(store, testInternalToken), `{"bucket":"other","key":"photo.png"}`, nil)
 	if w.Code != http.StatusOK {
 		t.Errorf("status %d, want 200", w.Code)
 	}

@@ -22,12 +22,14 @@ import (
 )
 
 type forgotPasswordRequest struct {
-	Email string `json:"email"`
+	// Validation failures still return the generic 200 (see ForgotPassword), so
+	// these tags only guard what reaches the mailer lookup.
+	Email string `json:"email" binding:"required,email,max=254"`
 }
 
 type resetPasswordRequest struct {
-	Token       string `json:"token"`
-	NewPassword string `json:"newPassword"`
+	Token       string `json:"token" binding:"required,max=512"`
+	NewPassword string `json:"newPassword" binding:"required,min=8,max=128"`
 }
 
 // forgotPasswordSuccessMsg is intentionally generic so the response is identical
@@ -72,13 +74,13 @@ func (ae *AuthEndpoints) ForgotPassword(c *gin.Context) {
 
 	rawToken, err := generateResetToken()
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not start password reset. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not start password reset. Please try again.", err,
 			"op", "generate_reset_token", "userId", user.ID)
 		return
 	}
 
 	if err := models.CreatePasswordResetToken(models.DB, user.ID, rawToken, ttl, c.ClientIP()); err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not start password reset. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not start password reset. Please try again.", err,
 			"op", "db.password_reset_tokens.create", "userId", user.ID)
 		return
 	}
@@ -114,25 +116,15 @@ func (ae *AuthEndpoints) ForgotPassword(c *gin.Context) {
 // POST /auth/reset-password
 func (ae *AuthEndpoints) ResetPassword(c *gin.Context) {
 	var payload resetPasswordRequest
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		response.Errorf(c, http.StatusBadRequest, "INVALID_INPUT", "Invalid request. Please try again.", err,
-			"op", "bind_reset_password_payload")
+	if !response.BindJSON(c, &payload) {
 		return
 	}
 
+	// Length/presence rules live in the binding tags; only whitespace-only
+	// tokens need the post-trim check (validator does not trim).
 	token := strings.TrimSpace(payload.Token)
 	if token == "" {
-		response.Err(c, http.StatusBadRequest, "INVALID_INPUT", "Reset token is required.")
-		return
-	}
-
-	// Mirror the password length rules enforced in Signup.
-	if len(payload.NewPassword) < 8 {
-		response.Err(c, http.StatusBadRequest, "WEAK_PASSWORD", "Password must be at least 8 characters")
-		return
-	}
-	if len(payload.NewPassword) > 128 {
-		response.Err(c, http.StatusBadRequest, "INVALID_INPUT", "Password must not exceed 128 characters")
+		response.Err(c, http.StatusBadRequest, response.CodeInvalidInput, "Reset token is required.")
 		return
 	}
 
@@ -148,7 +140,7 @@ func (ae *AuthEndpoints) ResetPassword(c *gin.Context) {
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(payload.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not update your password. Please try again.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not update your password. Please try again.", err,
 			"op", "bcrypt.generate_password_hash", "userId", row.UserID)
 		return
 	}
@@ -169,7 +161,7 @@ func (ae *AuthEndpoints) ResetPassword(c *gin.Context) {
 		return nil
 	})
 	if txErr != nil {
-		response.InternalErrorf(c, "SERVER_ERROR", "Could not update your password. Please try again.", txErr,
+		response.InternalErrorf(c, response.CodeServerError, "Could not update your password. Please try again.", txErr,
 			"op", "db.password_reset.commit", "userId", row.UserID)
 		return
 	}

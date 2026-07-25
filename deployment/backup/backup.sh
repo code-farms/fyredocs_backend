@@ -77,14 +77,17 @@ while true; do
 	# Empty-source guard: only back up the DB when it actually has data. A wiped/
 	# fresh DB (e.g. server came back with an empty volume) must NOT overwrite or
 	# prune the good snapshots — skip + alert instead, and auto-resume when data
-	# returns. `users` is the signal (AutoMigrate/seedPlans re-create the schema
+	# returns. `users` is the signal (migrations + seedPlans re-create the schema
 	# and subscription_plans on a fresh DB, but never users).
 	USERS="$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM users" 2>/dev/null | tr -dc 0-9)"
 	if [ -z "$USERS" ]; then
 		alert "DB row-count check failed (DB unreachable/not ready?) — skipping DB backup"
 	elif [ "$USERS" -lt "$BACKUP_MIN_USERS" ]; then
 		alert "DB looks EMPTY (users=$USERS < $BACKUP_MIN_USERS) — skipping DB backup; existing snapshots kept"
-	elif pg_dump "$DATABASE_URL" --no-owner --no-privileges | gzip >"$TMP"; then
+	# statement_timeout is set as a role-in-database default (15s) so the guard
+	# survives PgBouncer; a full dump legitimately runs far longer, so clear it
+	# for this session only. PGOPTIONS applies to pg_dump's own connection.
+	elif PGOPTIONS='-c statement_timeout=0' pg_dump "$DATABASE_URL" --no-owner --no-privileges | gzip >"$TMP"; then
 		if rclone copyto "$TMP" "dest:${BACKUP_S3_BUCKET}/${BACKUP_PREFIX}${FILE}"; then
 			SIZE="$(wc -c <"$TMP" 2>/dev/null || echo '?')"
 			log "backup ok: ${FILE} (${SIZE} bytes)"

@@ -91,12 +91,32 @@ by Caddy directly, so they previously carried none. Caddy now sets them at the e
 - **SPA `handle`** — `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: strict-origin-when-cross-origin`, and a
   `Content-Security-Policy`:
-  `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`.
+  `default-src 'self'; script-src 'self' https://plausible.io; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://plausible.io; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`.
   `style-src 'unsafe-inline'` is required for Tailwind/Radix inline styles, the
   chart `<style>`, and inline Mermaid SVG; `default-src 'self'` still permits the
-  same-origin Grafana iframe. **Validate the CSP against the running SPA** (open the
-  docs page with Mermaid + charts and watch the browser console) before treating it
-  as final — relax a single directive only for a legitimately-blocked resource.
+  same-origin Grafana iframe.
+
+  **Third-party origins the SPA actually uses must be listed here or they fail
+  SILENTLY** — no user-visible error, just a missing feature. Two were previously
+  broken this way:
+  - *Google Fonts* — `index.html` loaded Inter from `fonts.googleapis.com` while
+    `style-src`/`font-src` were `'self'`, so the app quietly rendered in a system
+    font. Fixed by **bundling** Inter (`@fontsource/inter`, imported in
+    `src/main.tsx`); fonts are now same-origin and no CSP exception is needed.
+  - *Plausible analytics* — the script and its beacon were both blocked, so
+    analytics recorded nothing. Fixed by allowlisting `https://plausible.io` in
+    `script-src` (the snippet) and `connect-src` (the beacon).
+
+  **Validate the CSP against the running SPA** (open the docs page with Mermaid +
+  charts, confirm Inter renders and the Plausible beacon fires, and watch the
+  browser console) before treating it as final — relax a single directive only
+  for a legitimately-blocked resource.
+- **HSTS** — `Strict-Transport-Security: max-age=31536000; includeSubDomains` is
+  set at the site level, so it covers the SPA, the API routes, and the object
+  routes. Browsers ignore it over plain HTTP, so it is inert for the local `:80`
+  setup and takes effect only behind the automatic TLS a `PUBLIC_DOMAIN` deploy
+  gets. `preload` is deliberately omitted — it is a one-way, hard-to-reverse
+  commitment; add it only once the domain is final.
 - **`@objects`** — `X-Content-Type-Options: nosniff` so object bytes can't be
   MIME-sniffed into an executable type on this origin (downloads also force
   attachment disposition via the presigned `response-content-disposition`).

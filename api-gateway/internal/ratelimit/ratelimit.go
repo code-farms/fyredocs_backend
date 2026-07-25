@@ -21,6 +21,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"fyredocs/shared/authverify"
+	"fyredocs/shared/metrics"
 	"fyredocs/shared/response"
 )
 
@@ -40,6 +41,11 @@ type Config struct {
 	ProLimit   int
 	// KeyPrefix namespaces the Redis keys; defaults to "apilimit".
 	KeyPrefix string
+	// ClientIP resolves the originating client IP for unauthenticated bucket
+	// keys. The gateway wires shared/clientip's trusted-proxy resolver here so
+	// a spoofed X-Forwarded-For can't mint fresh guest buckets. When nil, the
+	// connection's RemoteAddr is used (fail-safe: never trusts XFF).
+	ClientIP func(*http.Request) string
 }
 
 // slidingWindowLua atomically trims the window, counts current entries, records
@@ -90,15 +96,10 @@ func identity(authCtx authverify.AuthContext, ok bool, clientIP string) (subject
 	return "ip:" + clientIP, ""
 }
 
-// clientIP extracts the originating client IP, honoring X-Forwarded-For
-// (leftmost entry) when present since the gateway runs behind a trusted proxy,
-// and falling back to the connection's remote address.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if first := strings.TrimSpace(strings.Split(xff, ",")[0]); first != "" {
-			return first
-		}
-	}
+// remoteAddrIP is the ClientIP fallback when no resolver is configured: the
+// TCP peer only, never X-Forwarded-For (which is client-supplied and spoofable
+// unless validated against a trusted-proxy list).
+func remoteAddrIP(r *http.Request) string {
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host
 	}
@@ -124,6 +125,9 @@ func Middleware(cfg Config) func(http.Handler) http.Handler {
 	if cfg.ProLimit <= 0 {
 		cfg.ProLimit = 600
 	}
+	if cfg.ClientIP == nil {
+		cfg.ClientIP = remoteAddrIP
+	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -135,12 +139,15 @@ func Middleware(cfg Config) func(http.Handler) http.Handler {
 			}
 
 			authCtx, ok := authverify.FromContext(r.Context())
-			subject, plan := identity(authCtx, ok, clientIP(r))
+			subject, plan := identity(authCtx, ok, cfg.ClientIP(r))
 			limit := cfg.limitForPlan(plan)
 			key := fmt.Sprintf("%s:%s:%s", cfg.KeyPrefix, planLabel(plan), subject)
 
 			count, err := cfg.allow(r.Context(), key)
 			if err != nil {
+				// Fail open (a Redis outage must not take down request
+				// serving) but make it visible: throttling is silently OFF.
+				metrics.RateLimitFailOpen.WithLabelValues("api-gateway", cfg.KeyPrefix).Inc()
 				slog.Warn("api rate limit check failed, allowing request", "key", key, "error", err)
 				next.ServeHTTP(w, r)
 				return

@@ -141,6 +141,7 @@ func TestEnforceProductionSecurity(t *testing.T) {
 		t.Setenv("DATABASE_URL", "postgres://u:p@db:5432/app?sslmode=require")
 		t.Setenv("PUBLIC_ORIGIN", "https://app.example.com")
 		t.Setenv("APP_BASE_URL", "https://app.example.com")
+		t.Setenv("INTERNAL_API_TOKEN", "test-internal-token")
 	}
 
 	t.Run("non-production is a no-op even when insecure", func(t *testing.T) {
@@ -185,6 +186,15 @@ func TestEnforceProductionSecurity(t *testing.T) {
 		t.Setenv("PUBLIC_ORIGIN", "http://app.example.com")
 		if err := EnforceProductionSecurity(); err == nil {
 			t.Error("expected error for plain-http PUBLIC_ORIGIN in production")
+		}
+	})
+
+	t.Run("production + missing INTERNAL_API_TOKEN fails", func(t *testing.T) {
+		t.Setenv("ENVIRONMENT", "production")
+		secure(t)
+		t.Setenv("INTERNAL_API_TOKEN", "")
+		if err := EnforceProductionSecurity(); err == nil {
+			t.Error("expected error for missing INTERNAL_API_TOKEN in production")
 		}
 	})
 }

@@ -29,7 +29,7 @@ func userID(c *gin.Context) (uuid.UUID, bool) {
 func RequireUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if _, ok := userID(c); !ok {
-			response.Err(c, http.StatusUnauthorized, "UNAUTHORIZED", "Please log in to access your documents.")
+			response.Err(c, http.StatusUnauthorized, response.CodeUnauthorized, "Please log in to access your documents.")
 			c.Abort()
 			return
 		}

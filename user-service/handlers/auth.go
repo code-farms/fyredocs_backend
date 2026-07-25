@@ -34,7 +34,7 @@ func userID(c *gin.Context) (uuid.UUID, bool) {
 func RequireUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if _, ok := userID(c); !ok {
-			response.Err(c, http.StatusUnauthorized, "UNAUTHORIZED", "Please log in.")
+			response.Err(c, http.StatusUnauthorized, response.CodeUnauthorized, "Please log in.")
 			c.Abort()
 			return
 		}

@@ -57,11 +57,13 @@ type exportFilters struct {
 }
 
 type createExportReq struct {
-	Format         string  `json:"format"`
-	OrganizationID *string `json:"organizationId"`
-	Status         string  `json:"status"`
-	FolderID       string  `json:"folderId"`
-	TagID          string  `json:"tagId"`
+	// Format is validated case-insensitively by the handler (csv/json), so the
+	// tag only bounds it.
+	Format         string  `json:"format" binding:"required,max=10"`
+	OrganizationID *string `json:"organizationId" binding:"omitempty,uuid"`
+	Status         string  `json:"status" binding:"omitempty,max=32"`
+	FolderID       string  `json:"folderId" binding:"omitempty,uuid"`
+	TagID          string  `json:"tagId" binding:"omitempty,uuid"`
 }
 
 // CreateExport queues an async export of the caller's documents (current scope
@@ -69,8 +71,7 @@ type createExportReq struct {
 func CreateExport(c *gin.Context) {
 	uid, _ := userID(c)
 	var req createExportReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "INVALID_BODY", "Invalid request body.")
+	if !response.BindJSON(c, &req) {
 		return
 	}
 	format := strings.ToLower(strings.TrimSpace(req.Format))
@@ -89,7 +90,7 @@ func CreateExport(c *gin.Context) {
 	filters, _ := json.Marshal(exportFilters{Status: req.Status, FolderID: req.FolderID, TagID: req.TagID})
 	exp := models.Export{UserID: uid, OrganizationID: orgID, Format: format, Status: models.ExportQueued, Filters: filters}
 	if err := models.DB.Create(&exp).Error; err != nil {
-		response.InternalErrorf(c, "CREATE_FAILED", "Could not create export.", err,
+		response.InternalErrorf(c, response.CodeServerError, "Could not create export.", err,
 			"op", "db.exports.create", "userId", uid)
 		return
 	}
@@ -102,7 +103,7 @@ func ListExports(c *gin.Context) {
 	uid, _ := userID(c)
 	var exports []models.Export
 	if err := models.DB.Omit("Content").Where("user_id = ?", uid).Order("created_at DESC").Limit(50).Find(&exports).Error; err != nil {
-		response.InternalErrorf(c, "LIST_FAILED", "Could not load exports.", err, "op", "db.exports.list", "userId", uid)
+		response.InternalErrorf(c, response.CodeServerError, "Could not load exports.", err, "op", "db.exports.list", "userId", uid)
 		return
 	}
 	response.OK(c, "Exports retrieved", exports)
@@ -113,12 +114,12 @@ func GetExport(c *gin.Context) {
 	uid, _ := userID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid export id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid export id.")
 		return
 	}
 	var exp models.Export
 	if err := models.DB.Omit("Content").Where("id = ? AND user_id = ?", id, uid).First(&exp).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "Export not found.")
+		response.NotFound(c, response.CodeNotFound, "Export not found.")
 		return
 	}
 	response.OK(c, "Export retrieved", exp)
@@ -129,12 +130,12 @@ func DownloadExport(c *gin.Context) {
 	uid, _ := userID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		response.BadRequest(c, "INVALID_ID", "Invalid export id.")
+		response.BadRequest(c, response.CodeInvalidID, "Invalid export id.")
 		return
 	}
 	var exp models.Export
 	if err := models.DB.Where("id = ? AND user_id = ?", id, uid).First(&exp).Error; err != nil {
-		response.NotFound(c, "NOT_FOUND", "Export not found.")
+		response.NotFound(c, response.CodeNotFound, "Export not found.")
 		return
 	}
 	if exp.Status != models.ExportReady || len(exp.Content) == 0 {

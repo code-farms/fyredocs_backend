@@ -24,7 +24,16 @@ Health: `GET /healthz`, `GET /readyz`. All `/api/notifications/*` require `X-Use
 | POST | `/api/notifications/read-all` | Mark all of the caller's notifications read. |
 | POST | `/api/notifications/:id/read` | Mark one notification read. |
 | GET | `/api/notifications/stream` | **SSE** stream of new notifications (live bell). |
-| POST | `/internal/notifications` | **Mesh-only** (not gateway-proxied): other services raise a notification. Body: `userId`, `title`, `type?`, `body?`, `link?`, `sourceId?` (idempotency). Used by document-service for `export.ready`. |
+| POST | `/internal/notifications` | **Mesh-only** (not gateway-proxied) and guarded by the `INTERNAL_API_TOKEN` shared secret (`X-Internal-Token` header; 401 on mismatch, 503 fail-closed when unset). Body: `userId`, `title`, `type?`, `body?`, `link?`, `sourceId?` (idempotency). Used by document-service for `export.ready` (it sends the token). |
+
+### Schema migrations
+
+The schema is applied by **versioned SQL migrations** embedded in the binary
+(`internal/migrations/*.sql`, applied by goose at startup under a per-service
+Postgres advisory lock and recorded in `goose_db_version_notification_service`). GORM
+`AutoMigrate` is no longer the authority — it remains only behind
+`DB_AUTOMIGRATE=true` for local development. A migration failure aborts startup.
+See [schema-migrations.md](../architecture/schema-migrations.md).
 
 ## DB Schema (own Postgres)
 - **notifications**: id (uuid v7), user_id, type (`job.completed`|`job.failed`|…), title, body, link, source_job_id?, read_at?, created_at. Index `(user_id, created_at DESC)`; partial unique `(user_id, source_job_id)` (`idx_notif_user_source`) for idempotency.
