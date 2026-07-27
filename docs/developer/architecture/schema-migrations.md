@@ -34,15 +34,31 @@ migrate them.
 ## Adopting migrations on an existing database
 
 Migration `00001_baseline.sql` captures exactly the schema `AutoMigrate`
-produced, written entirely in idempotent form (`CREATE TABLE IF NOT EXISTS`,
-`CREATE INDEX IF NOT EXISTS`, constraints guarded by a `pg_constraint` lookup
-plus a `duplicate_object / duplicate_table / invalid_table_definition`
-handler).
+produced, written so every statement **converges** the database onto it rather
+than assuming anything about the starting state:
+
+- `CREATE TABLE IF NOT EXISTS`, then one `ALTER TABLE … ADD COLUMN IF NOT EXISTS`
+  per column;
+- `CREATE INDEX IF NOT EXISTS`;
+- constraints guarded by a `pg_constraint` lookup plus a
+  `duplicate_object / duplicate_table / invalid_table_definition` handler.
+
+The per-column `ALTER`s are not redundant. `CREATE TABLE IF NOT EXISTS` is
+idempotent per *table*: on a database whose table was created before the models
+gained a column, it does nothing and the column stays missing — then a
+`CREATE INDEX` on that column fails with `42703` and the service crash-loops at
+boot, since a failed migration is fatal. That is a real outage this project has
+had; see `scripts/split_baseline.py`.
 
 That is why **no stamping step is needed**: on an existing production database
-run 1 executes only no-ops and records version 1; on a fresh database it creates
-the schema. Both paths converge on a byte-identical schema (verified by diffing
-`pg_dump --schema-only` from each).
+run 1 adds only what is missing and records version 1; on a fresh database it
+creates the schema.
+
+One asymmetry to be aware of: a column added to an already-populated table
+cannot be `NOT NULL` without a default, so the generator emits it nullable. A
+fresh database gets the stricter `CREATE TABLE` definition. If a column must be
+`NOT NULL` everywhere, backfill it and add the constraint in a *new* numbered
+migration.
 
 ## Writing a new migration
 
@@ -119,6 +135,15 @@ The script starts a throwaway Postgres, runs each service's legacy
 `AutoMigrate` path against it, `pg_dump`s the schema, and splits it per service
 by table ownership (`scripts/split_baseline.py`). You normally never need this —
 the baselines are committed.
+
+Before changing `split_baseline.py`, run `--check` **first**. It confirms the
+committed baselines still match the models, so the regenerated diff contains
+only your change and not unrelated model drift swept along with it. The rewrite
+rules themselves are unit-tested:
+
+```bash
+python3 -m unittest discover -s scripts -p 'test_*.py'
+```
 
 ## Environment variables
 

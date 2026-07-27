@@ -392,7 +392,7 @@ An earlier, infrastructure-focused review of `docker-compose.yml`, `deploy.sh`, 
 - **Multi-stage Docker builds** with `scratch` base images — minimal attack surface, small images
 - **Non-root containers** (`appuser` UID 10001) across all services
 - **Health checks on all services** with dependency ordering via `depends_on` + `condition`
-- **Shared Go builder base image** (`fyredocs-go-builder`) bakes the module cache + a warm `go-build` cache into image layers, so it survives `docker builder prune`/fresh machines — each service recompiles only its own packages (a cold ~21-min compile becomes seconds). See `docs/developer/architecture/base-image-setup.md`.
+- **Shared Go builder base image** (`fyredocs-go-builder`) bakes the module cache + a warm `go-build` cache into image layers, so it survives `docker builder prune`/fresh machines — each service recompiles only its own packages (a cold ~21-min compile becomes seconds). The image is stamped with a `fyredocs.gomod-hash` label covering `go.work` + every `go.mod`/`go.sum`, and `deploy.sh` rebuilds it automatically when the repo drifts from it — so a dependency change can't silently break builds against a stale base. See `docs/developer/architecture/base-image-setup.md`.
 - **Sequential builds** in `deploy.sh` with `go build -p ${GO_BUILD_PARALLELISM}` (default 6) — leaves CPU headroom for the daemon/OS on constrained hosts
 - **Shared base image** (`fyredocs-base`) for PDF tooling — avoids redundant layers across workers
 - **Go workspace** (`go.work`) for unified dependency management

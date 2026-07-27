@@ -40,26 +40,72 @@ print_error() {
 # (8-core box → leave 2). Override per-machine: GO_BUILD_PARALLELISM=4 deployment/deploy.sh
 GO_BUILD_PARALLELISM="${GO_BUILD_PARALLELISM:-6}"
 
-# Build the shared base images that every service FROM-s — only if they're missing.
-# These are "build once" images: rebuild them explicitly with
-# ./deployment/build-base-image.sh whenever go.mod deps, the Go toolchain, or the
-# LibreOffice/Alpine versions change. fyredocs-go-builder bakes the Go module cache
-# AND a warm go-build cache into image layers, so each service recompiles only its
-# own packages (turns a cold ~20-min compile into tens of seconds) and the cache
-# survives `docker builder prune` / fresh machines.
+# gomod_fingerprint(): hash of go.work + every go.mod/go.sum. Shared with
+# build-base-image.sh so both stamp/compare the identical value.
+# shellcheck source=scripts/gomod-fingerprint.sh
+source "$SCRIPT_DIR/scripts/gomod-fingerprint.sh"
+
+# Build the shared base images that every service FROM-s.
+#
+# fyredocs-go-builder bakes the Go module cache AND a warm go-build cache into image
+# layers, so each service recompiles only its own packages (turns a cold ~20-min
+# compile into tens of seconds) and the cache survives `docker builder prune` /
+# fresh machines. That speed comes from snapshotting go.work + every go.mod/go.sum
+# at base-build time — which means the image goes STALE the moment those change.
+#
+# A stale base used to fail deep inside a service build with a confusing error
+# (e.g. "go.work lists go 1.25.0" when the repo says 1.25.7), so we detect it here
+# instead: the image carries a `fyredocs.gomod-hash` label and we rebuild whenever
+# it no longer matches the repo. Images built before the label existed report ""
+# and are treated as stale, which is correct — they predate the check.
+#
+# The hash deliberately does NOT cover the Go toolchain or Alpine/LibreOffice
+# versions; bump those and rebuild by hand with ./deployment/build-base-image.sh.
 ensure_base_images() {
     if ! docker image inspect fyredocs-base:latest >/dev/null 2>&1; then
         print_step "Building fyredocs-base image (LibreOffice/poppler)..."
         docker build -f deployment/base-alpine-libreoffice.Dockerfile -t fyredocs-base:latest .
         print_success "fyredocs-base image built"
     fi
-    if ! docker image inspect fyredocs-go-builder:latest >/dev/null 2>&1; then
-        print_step "Building fyredocs-go-builder image (Go deps + warm build cache)..."
-        docker build -f deployment/base-go-builder.Dockerfile \
-            --build-arg GO_BUILD_PARALLELISM="$GO_BUILD_PARALLELISM" \
-            -t fyredocs-go-builder:latest .
-        print_success "fyredocs-go-builder image built"
+
+    local want have reason
+    want=$(gomod_fingerprint)
+
+    if docker image inspect fyredocs-go-builder:latest >/dev/null 2>&1; then
+        have=$(docker image inspect -f '{{index .Config.Labels "fyredocs.gomod-hash"}}' \
+                   fyredocs-go-builder:latest 2>/dev/null || true)
+        # Go templates print a missing label as the literal "<no value>".
+        if [ "$have" = "<no value>" ]; then
+            have=""
+        fi
+        if [ "$have" = "$want" ]; then
+            return 0   # up to date — the fast path every normal deploy takes
+        fi
+        reason="stale"
+    else
+        have=""
+        reason="missing"
     fi
+
+    if [ "$reason" = "stale" ]; then
+        print_warning "fyredocs-go-builder is STALE — go.work/go.mod changed since it was built."
+        print_warning "  baked: ${have:-<unlabelled, predates this check>}"
+        print_warning "  repo:  $want"
+        print_warning "Service builds against a stale base fail with confusing go.work/module errors."
+    fi
+
+    if [ "${SKIP_BASE_REBUILD:-0}" = "1" ]; then
+        print_warning "SKIP_BASE_REBUILD=1 — not rebuilding. Builds will likely fail."
+        return 0
+    fi
+
+    print_step "Building fyredocs-go-builder image ($reason; Go deps + warm build cache)..."
+    print_warning "This is the slow one-time step (~15-20 min). Skip with SKIP_BASE_REBUILD=1."
+    docker build -f deployment/base-go-builder.Dockerfile \
+        --build-arg GO_BUILD_PARALLELISM="$GO_BUILD_PARALLELISM" \
+        --build-arg GOMOD_HASH="$want" \
+        -t fyredocs-go-builder:latest .
+    print_success "fyredocs-go-builder image built"
 }
 
 usage() {
@@ -83,6 +129,12 @@ Usage: deployment/deploy.sh [options] [service ...]
                          only needed when the compose topology changed
                          drastically.
   -h, --help             Show this help.
+
+Environment:
+  GO_BUILD_PARALLELISM   Parallel compile actions per `go build` (default 6).
+  SKIP_BASE_REBUILD=1    Don't rebuild fyredocs-go-builder even when it's stale
+                         (its baked go.work/go.mod snapshot no longer matches the
+                         repo). Only warns. Service builds will likely fail.
 
 See docs/developer/architecture/compose-files.md for the compose files layout.
 Every full deploy tags each service image as fyredocs-<svc>:<git-sha> and keeps
@@ -184,7 +236,12 @@ do_rollback() {
     export COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
     export COMPOSE_ENV_FILES="$ROOT_DIR/.env"
     export COMPOSE_PROFILES="${COMPOSE_PROFILES-observability}"
-    docker compose up -d --force-recreate --no-build "${GO_SERVICES[@]}"
+    # No service list and no --force-recreate: the retag above moved :latest onto
+    # different image IDs, which is exactly what makes compose recreate those
+    # services — and only those, leaving infra up. Listing services explicitly
+    # would also activate profile-gated ones (notification-service). --no-build
+    # stays: a rollback must never build.
+    docker compose up -d --no-build
     print_success "Rolled back to ${sha}"
 }
 
@@ -602,17 +659,22 @@ fi
 
 # 3. Start/refresh all services.
 #
-# First pass: create anything new, apply changed env/limits to infra, and remove
-# orphans (the cleanup the old `down --remove-orphans` used to do).
+# One pass is enough. Compose records the image ID each container was created
+# from and recreates a service when its tag now resolves to different content, so
+# the app containers land on the images just built. Infra (caddy, db, redis,
+# nats, minio) keeps running because nothing about it changed — the edge never
+# goes down and the outage is a few seconds per app container instead of the
+# whole build window. This also creates anything new, applies changed env/limits,
+# and removes orphans (the cleanup the old `down --remove-orphans` used to do).
+#
+# Do NOT add an explicit service list here. This used to be followed by a second
+# `up -d --force-recreate --no-build "${GO_SERVICES[@]}"`, on the belief that
+# compose ignores new image content — it does not, so that pass only recreated
+# every app container a second time. Worse, naming a profiled service on the
+# command line ACTIVATES it: that is how notification-service, gated behind the
+# `notifications` profile, was started on every deploy.
 print_step "Starting all services in detached mode..."
 docker compose up -d --remove-orphans
-
-# Second pass: compose does NOT recreate a container just because its image tag
-# now points at new content, so the app services are force-recreated onto the
-# freshly built images. Infra (caddy, db, redis, nats, minio) is deliberately
-# NOT in this list — it keeps running, so the edge never goes down and the
-# outage is a few seconds per app container instead of the whole build window.
-docker compose up -d --force-recreate --no-build "${GO_SERVICES[@]}"
 print_success "All services are running!"
 
 # 4. Wait for services to be healthy

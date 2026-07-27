@@ -10,7 +10,10 @@
 # own (fresh) source on top, and recompiles only its own packages against the warm cache
 # — turning a cold ~20-min compile into tens of seconds.
 #
-# Rebuild ONLY when go.mod/go.sum or the Go toolchain version changes:
+# Rebuilds are automatic: the image carries a `fyredocs.gomod-hash` label (stamped at
+# the bottom of this file) covering go.work + every go.mod/go.sum, and deploy.sh
+# rebuilds when the repo no longer matches. Force one by hand — e.g. after a Go
+# toolchain bump, which the hash does NOT cover — with:
 #   ./deployment/build-base-image.sh
 FROM golang:1.25-alpine AS gobuilder
 
@@ -60,3 +63,13 @@ RUN set -eux; \
       ( cd "$m" && CGO_ENABLED=0 GOOS=linux \
           go build -p "${GO_BUILD_PARALLELISM}" -trimpath ./... ) || true; \
     done
+
+# 5. Stamp the hash of the blueprint this image was built from (go.work + every
+#    go.mod/go.sum — see deployment/scripts/gomod-fingerprint.sh). deploy.sh reads
+#    this label back and rebuilds automatically when it no longer matches the repo,
+#    so a stale base can't silently break service builds.
+#
+#    Declared LAST on purpose: the ARG only invalidates this final metadata layer,
+#    leaving the expensive `go mod download` and warm-compile layers cached.
+ARG GOMOD_HASH=unknown
+LABEL fyredocs.gomod-hash=$GOMOD_HASH

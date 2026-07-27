@@ -146,12 +146,15 @@ for the whole multi-minute build, so a deploy is no longer a full outage:
    `GRAFANA_ADMIN_PASSWORD` when observability is on).
 3. Build every Go service **sequentially, while the old stack is still up**, then
    tag each image `fyredocs-<svc>:<git-sha>` for rollback.
-4. Swap: `docker compose up -d --remove-orphans` (creates new/changed containers,
-   removes orphans), then `docker compose up -d --force-recreate --no-build
-   <go services>` — compose does not recreate a container just because its image
-   tag now points at new content, so the app containers are forced onto the new
-   images. **Infra (caddy, db, redis, nats, minio) is never recreated**, so the
-   public edge stays up and the outage is seconds per app container.
+4. Swap: a single `docker compose up -d --remove-orphans`. Compose records the
+   image ID each container was created from and recreates a service when its tag
+   resolves to different content, so the app containers land on the freshly built
+   images on their own. **Infra (caddy, db, redis, nats, minio) is never
+   recreated** — its config and images did not change — so the public edge stays
+   up and the outage is seconds per app container.
+   The swap deliberately passes **no service list**: naming a service on the
+   command line activates it even when a profile has it disabled, which is how
+   `notification-service` used to start on every deploy.
 5. Health gate: DB reachability + `curl http://localhost/healthz` (30s). On
    failure the script prints the rollback command and exits **without pruning**.
 6. Only past the gate: prune old SHA tags (`IMAGE_TAG_RETAIN`, default 5) and
@@ -159,8 +162,9 @@ for the whole multi-minute build, so a deploy is no longer a full outage:
 
 `--full-restart` restores the old tear-down-first behavior (full outage) for the
 rare case where the compose topology changed too much for an in-place recreate.
-`--rollback=<sha>` retags a previous build onto `:latest` and recreates the app
-services without rebuilding. `--dry-run` prints the budget and exits.
+`--rollback=<sha>` retags a previous build onto `:latest` and then runs
+`up -d --no-build`; the moved tags are what make compose recreate exactly those
+app services, leaving infra untouched. `--dry-run` prints the budget and exits.
 
 ### Shutdown grace
 

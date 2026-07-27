@@ -536,7 +536,10 @@ line.
 ### Rollout
 
 1. Deploy with the container present and `DATABASE_URL` still direct — confirm
-   `pgbouncer` is healthy (`docker compose ps`, `SHOW POOLS` below).
+   `pgbouncer` is healthy (`docker compose ps`, `SHOW POOLS` below). Its
+   healthcheck runs `SELECT 1` **through** the pooler against the real database,
+   so a green container means `client → pgbouncer → Postgres` already works; it
+   is not merely a liveness probe on the pgbouncer process.
 2. Set `DATABASE_URL_DIRECT` to the direct `db:5432` DSN **first** — migrations
    and `pg_dump` need it.
 3. Flip `DATABASE_URL` to `pgbouncer:6432` and redeploy.
@@ -555,6 +558,13 @@ line.
 | Long index builds hitting the 15s guard | `RunMigrations` runs `SET statement_timeout = 0` on its session; the run is bounded by `DB_MIGRATION_TIMEOUT` instead. |
 
 ### Operating it
+
+These connect to PgBouncer's virtual `pgbouncer` console database, which is
+reachable **only** by users in `admin_users`/`stats_users`. That is why the
+compose service sets `ADMIN_USERS: ${POSTGRES_USER}` — the image otherwise
+defaults `admin_users` to `postgres`, a user that isn't even in the generated
+`userlist.txt`, and every console connection is refused with
+`FATAL: not allowed`. Don't drop that env var as unused.
 
 ```bash
 # pool utilisation / waiting clients

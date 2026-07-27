@@ -98,6 +98,13 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       LISTEN_PORT: "6432"
       AUTH_TYPE: scram-sha-256
+      # PgBouncer's virtual `pgbouncer` console database is reachable only by
+      # users listed in admin_users/stats_users. The image defaults admin_users
+      # to `postgres`, which is not even in the generated userlist.txt (that
+      # holds DB_USER only), so every console connection was refused with
+      # "FATAL: not allowed" — including the SHOW POOLS / SHOW STATS commands in
+      # docs/developer/architecture/database.md. Grant it to the app user.
+      ADMIN_USERS: ${POSTGRES_USER}
       POOL_MODE: transaction
       # Clients are cheap; real backends are not. 400 client slots cover the
       # summed service pools (~145) with room for a worker scale-out.
@@ -112,8 +119,12 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      # pgbouncer's admin console answers on the pgbouncer virtual database.
-      test: ["CMD-SHELL", "PGPASSWORD=$$DB_PASSWORD psql -h 127.0.0.1 -p 6432 -U $$DB_USER -d pgbouncer -tAc 'SHOW VERSION' >/dev/null"]
+      # Through the pooler to the REAL database, not the admin console: green
+      # only when client -> pgbouncer -> Postgres actually works. That is the
+      # property step 1 of the rollout in database.md asserts before
+      # DATABASE_URL is flipped to pgbouncer:6432; a console `SHOW VERSION`
+      # would stay green with Postgres unreachable.
+      test: ["CMD-SHELL", "PGPASSWORD=$$DB_PASSWORD psql -h 127.0.0.1 -p 6432 -U $$DB_USER -d $$DB_NAME -tAc 'SELECT 1' >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 5
