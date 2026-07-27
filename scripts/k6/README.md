@@ -86,7 +86,8 @@ BASE_URL=... ./run.sh upload-heavy
 | Scenario | What it does |
 |---|---|
 | `smoke` | 1 VU: every read endpoint + **one job per tool** end-to-end. Contract check — run first; a failure here means a broken contract or bad fixture. |
-| `mixed-realistic` | **Headline.** Weighted job mix across all tools + browse traffic, fixed arrival rate. Real-world capacity. |
+| `capacity` | **Answers "how many req/s / jobs/min?"** Walks the arrival rate up step by step and reports the last step that held the SLO. `-e MODE=api` (req/min) or `-e MODE=jobs` (jobs/min). See §5. |
+| `mixed-realistic` | **Headline.** Weighted job mix across all tools + browse traffic, fixed arrival rate. Behaviour *at* that rate — use `capacity` to find the ceiling. |
 | `convert-to-pdf` / `convert-from-pdf` / `organize-pdf` / `optimize-pdf` | Per-group capacity. Raise `-e JOB_RATE=` until thresholds break = that group's max throughput. |
 | `browse` | Read-heavy (documents/notifications/history/dashboard/orgs/job-lists). |
 | `auth-churn` | login/refresh + some signup — exercises bcrypt (capacity-mode only). |
@@ -123,12 +124,63 @@ scanner payload); plus stubs `sign-pdf`/`edit-pdf`.
 
 ## 5. Finding the capacity ceiling
 
-1. `./run.sh smoke` → all green (contracts + fixtures OK).
-2. For each heavy group, run its scenario and **step `JOB_RATE` up** (e.g. 20 → 40
-   → 60/min) until `job_e2e p95` or `job_success` threshold fails. The last passing
-   rate is that tool's sustainable throughput.
-3. `./run.sh mixed-realistic` at the VPS-40 profile for the blended number.
-4. Save the `results/*.json|html` as your baseline to compare after tuning.
+Use the `capacity` scenario — it walks the arrival rate up automatically and tells
+you the last step that stayed inside the SLO, instead of you re-running by hand at
+20 → 40 → 60 and eyeballing which run went red.
+
+**"Requests per second" means two different things here**, so there are two modes.
+Do not mix the numbers: the API rate is bounded by the gateway and Go services, the
+job rate by the worker pools (currently one slot per worker on a small host).
+
+```bash
+./run.sh smoke                    # 1. contracts + fixtures green first
+
+# 2. API request capacity (~8 min). One iteration = exactly one request.
+./run.sh capacity -- -e MODE=api -e START_RATE=300 -e RATE_STEP=300 -e STEPS=8
+
+# 3. Job throughput (~25 min). One iteration = a whole job lifecycle, so the
+#    rate is JOBS/min. Slower: each step needs a drain window.
+./run.sh capacity -- -e MODE=jobs -e START_RATE=3 -e RATE_STEP=3 -e STEPS=6 \
+                     -e STEP_DURATION=3m -e SETTLE=1m
+```
+
+It prints a table and writes `results/capacity-<mode>-<ts>.md|json`:
+
+```
+  target      achieved   p95       p99       err%    drop   verdict
+  60/min      60/min     439ms     591ms     0.00%   0      PASS
+  120/min     120/min    254ms     388ms     0.00%   0      PASS
+  180/min     183/min    713ms     1.7s      0.00%   0      PASS
+
+  => Sustained API capacity: 180 req/min (3.0 req/s, p95 713ms)
+```
+
+Read it as: **the last `PASS` before the first `FAIL` is the answer.** Three things
+the summary does for you rather than leaving you to spot them:
+
+- **`INVALID` steps.** If k6 delivered materially less than the target rate
+  (default: under 90%, tunable with `ACHIEVED_TOLERANCE`), the step is marked
+  `INVALID (generator-bound)` and excluded — a load-generator limit is never
+  reported as a server limit. Raise `MAX_VUS` and re-run those.
+- **Warm-up.** The first step otherwise absorbs all cold-start cost and reports a
+  latency the server never has again — measured at p95 4.7s on step 1 versus
+  ~100–400 ms on the higher steps. `WARMUP` (default `30s` api / `90s` jobs) runs
+  untagged before the ladder. `WARMUP=0s` disables it.
+- **Non-monotonic curves.** If a step above the first failure passed, the run was
+  noisy and the summary says so instead of quietly reporting a number.
+
+The knobs: `MODE`, `START_RATE`, `RATE_STEP`, `STEPS`, `STEP_DURATION`, `SETTLE`,
+`WARMUP`, `MAX_VUS` / `PRE_ALLOC_VUS` (auto-sized from the top step by Little's law),
+`ACHIEVED_TOLERANCE`. The SLO is not a knob — it is read from `THRESHOLDS` in
+`config.js`, so a capacity number always means the same thing the rest of the suite
+enforces.
+
+If the top step still passes, the real ceiling is higher — raise `STEPS` or
+`RATE_STEP` (the summary tells you when this happens).
+
+For a single tool group you can still step `-e JOB_RATE=` by hand across runs of
+`convert-to-pdf` / `organize-pdf` / etc. Then `./run.sh mixed-realistic` for the
+blended picture, and save `results/*` as the baseline to diff after tuning.
 
 ### Metrics to read
 - `job_e2e` — create→completed (the number users feel). `queue_wait` — create→processing
@@ -163,3 +215,8 @@ LIKE '%@loadtest.fyredocs.local'` (and cascade) if you want a clean slate.
   (true SSE needs k6's experimental module); polling is equivalent for capacity.
 - **Estimates vs reality**: prior back-of-envelope was ~50–120 jobs/min for typical
   small files — this suite replaces that guess with measured numbers.
+- **Co-located generator**: running k6 on the same box as the stack means both
+  compete for the same CPU, so every capacity number is a **lower bound** — the
+  harder you push, the more k6 itself steals. On a small host (8 vCPU, stack already
+  capped at 80%) the distortion is large. Run k6 from another machine against
+  `BASE_URL=http://<host>` for a figure you can quote.

@@ -1,7 +1,9 @@
 // Headline scenario: realistic mixed load — weighted job traffic across ALL
 // tools running concurrently with read/browse traffic, at a fixed arrival rate.
 // constant-arrival-rate keeps firing regardless of backend slowness, so the
-// queue/latency growth (job_e2e, queue_wait) reveals the real capacity ceiling.
+// queue/latency growth (job_e2e, queue_wait) shows how the system behaves AT the
+// chosen rate — pass or fail. It does not search for the maximum: one fixed rate
+// cannot tell you where the ceiling is. Use scenarios/capacity.js for that.
 import { provisionUsers } from '../lib/auth.js';
 import { oneWeightedJob, browseOnce } from '../lib/actions.js';
 import { PROFILE, THRESHOLDS } from '../config.js';
