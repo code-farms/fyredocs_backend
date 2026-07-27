@@ -1,12 +1,14 @@
 # Base Image Setup for Faster Builds
 
-There are **two** shared base images. Both are built once by
-`./deployment/build-base-image.sh` (and auto-built by `deploy.sh` if missing):
+There are **two** shared base images. Both can be built explicitly with
+`./deployment/build-base-image.sh`; `deploy.sh` also builds either one if it's
+missing, and rebuilds `fyredocs-go-builder` on its own whenever the repo's Go
+modules have drifted from the copy baked into it:
 
 | Image | Purpose | Rebuild when |
 |-------|---------|--------------|
-| `fyredocs-base:latest` | **Runtime** base for `convert-to-pdf` — Alpine + LibreOffice/poppler/unoserver | Alpine/LibreOffice/unoserver version changes |
-| `fyredocs-go-builder:latest` | **Build** base for **every** service — Go toolchain + all module deps + a warm `go-build` cache | any service `go.mod`/`go.sum`, or the Go toolchain version, changes |
+| `fyredocs-base:latest` | **Runtime** base for `convert-to-pdf` — Alpine + LibreOffice/poppler/unoserver | Alpine/LibreOffice/unoserver version changes — **manual** |
+| `fyredocs-go-builder:latest` | **Build** base for **every** service — Go toolchain + all module deps + a warm `go-build` cache | `go.work`/any `go.mod`/`go.sum` changes — **automatic** (see [Staleness detection](#staleness-detection)); Go toolchain bump — **manual** |
 
 The Go builder base is documented in its own section below ("Go Builder Base Image").
 
@@ -181,18 +183,73 @@ GO_BUILD_PARALLELISM=4 ./deployment/build-base-image.sh
 ```
 
 ## When to rebuild
-Rebuild `fyredocs-go-builder` **only when deps or the toolchain change** (any service
-`go.mod`/`go.sum`, or the `golang:1.25-alpine` version). Day-to-day source edits do
-**not** need a base rebuild — the service build downloads/compiles just the changed
-packages on top of the warm cache.
+Day-to-day source edits do **not** need a base rebuild — the service build compiles
+just the changed packages on top of the warm cache.
+
+The base only goes out of date when its *inputs* change, and those split in two:
+
+| Input | Detected? |
+|-------|-----------|
+| `go.work`, any `go.mod`/`go.sum` | **Yes** — `deploy.sh` rebuilds automatically |
+| `golang:1.25-alpine` toolchain version | **No** — rebuild by hand |
 
 ```bash
-./deployment/build-base-image.sh        # rebuilds both base images
+./deployment/build-base-image.sh        # forces a rebuild of both base images
 ```
 
-`deploy.sh` builds the base automatically only if it's missing (via
-`ensure_base_images`), so a fresh machine's first deploy pays the one-time warm cost
-and subsequent deploys are fast.
+## Staleness detection
+
+The speed of this base comes from snapshotting `go.work` + every `go.mod`/`go.sum` at
+build time and pre-populating `/go/pkg/mod` from them. That snapshot is exactly what
+makes the image go stale: change a dependency and the image still carries the old
+workspace and the old module set.
+
+Left unchecked this surfaces as a confusing failure *deep inside an unrelated service
+build*, because a service Dockerfile copies fresh source onto a stale base:
+
+```
+go: module ../shared listed in go.work file requires go >= 1.25.7,
+    but go.work lists go 1.25.0; to update it: go work use
+```
+
+— even though the repo's `go.work` plainly says `1.25.7`. The `1.25.0` came from the
+base image's months-old copy.
+
+So the image is **self-describing**:
+
+- `deployment/scripts/gomod-fingerprint.sh` defines `gomod_fingerprint()`, a sha256
+  over `go.work`, `go.work.sum`, and every `*/go.mod` + `*/go.sum`.
+- `base-go-builder.Dockerfile` stamps it on as `LABEL fyredocs.gomod-hash` (declared
+  last, so a changed hash only invalidates the final metadata layer — the expensive
+  `go mod download` and warm-compile layers stay cached).
+- `ensure_base_images()` in `deploy.sh` recomputes the hash each deploy and rebuilds
+  when it differs from the label. A match is a silent no-op, so normal deploys stay
+  fast.
+
+Both `deploy.sh` and `build-base-image.sh` source the same helper, so they always
+agree on the value.
+
+```bash
+# What the current image was built from ("<no value>" = predates the label → stale)
+docker image inspect -f '{{index .Config.Labels "fyredocs.gomod-hash"}}' fyredocs-go-builder:latest
+
+# What the repo needs right now
+( cd fyredocs_backend && source deployment/scripts/gomod-fingerprint.sh && gomod_fingerprint )
+```
+
+The hash covers **only** the Go module blueprint. A Go toolchain or Alpine/LibreOffice
+bump is invisible to it — rebuild manually for those.
+
+### Escape hatch
+`SKIP_BASE_REBUILD=1 ./deployment/deploy.sh` warns about the stale base but skips the
+rebuild. Builds will most likely fail; it exists for the case where you know the drift
+is inconsequential (e.g. a `go.sum` touched for a test-only module).
+
+### Defence in depth
+Every service Dockerfile also does `COPY go.work go.work.sum* ./` before copying its
+source, so the workspace blueprint always matches the source being compiled. That
+alone fixes a bumped `go` directive against an older base; a genuinely **new
+dependency** still needs the module cache rebuilt, which is what the hash check is for.
 
 ## Verify the warm cache
 ```bash

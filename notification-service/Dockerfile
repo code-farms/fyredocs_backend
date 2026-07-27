@@ -7,6 +7,11 @@ ARG GO_BUILD_PARALLELISM=6
 
 WORKDIR /app
 
+# The workspace blueprint must match the fresh source below, not the older snapshot
+# the base image baked in — otherwise a bumped `go` directive or a new module in a
+# go.mod fails against a stale go.work ("go.work lists go 1.25.0").
+COPY go.work go.work.sum* ./
+
 # Fresh source on top of the base's warm cache — only these packages recompile.
 COPY shared/ ./shared/
 COPY notification-service/ ./notification-service/
