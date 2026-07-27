@@ -4,7 +4,7 @@
 # Usage:
 #   ./run.sh <scenario> [profile] [-- extra k6 args/-e overrides]
 #
-#   scenario : smoke | browse | auth-churn | mixed-realistic | spike | soak
+#   scenario : smoke | capacity | browse | auth-churn | mixed-realistic | spike | soak
 #              convert-to-pdf | convert-from-pdf | organize-pdf | optimize-pdf
 #              upload-heavy
 #   profile  : vps40 (default) | laptop
@@ -18,6 +18,8 @@
 #   BASE_URL=https://app.example.com ./run.sh smoke
 #   ./run.sh mixed-realistic vps40
 #   ./run.sh optimize-pdf vps40 -- -e JOB_RATE=40        # push a tool's rate
+#   ./run.sh capacity -- -e MODE=api                     # find max req/s (README §5)
+#   ./run.sh capacity -- -e MODE=jobs                    # find max jobs/min
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -51,8 +53,11 @@ JSON="$DIR/results/${SCENARIO}-${TS}.json"
 HTML="$DIR/results/${SCENARIO}-${TS}.html"
 
 echo "scenario=$SCENARIO profile=$PROFILE_ARG base=$BASE_URL"
+# RESULTS_DIR/RUN_TS let a scenario's handleSummary() write its own artefacts
+# next to the standard ones (the capacity ladder writes a capacity-*.md report).
 K6_WEB_DASHBOARD=true K6_WEB_DASHBOARD_EXPORT="$HTML" \
   k6 run -e BASE_URL="$BASE_URL" -e PROFILE="$PROFILE_ARG" \
+  -e RESULTS_DIR="$DIR/results" -e RUN_TS="$TS" \
   --summary-export "$JSON" "$@" "$FILE"
 
 echo ""
