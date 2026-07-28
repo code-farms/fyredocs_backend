@@ -1,3 +1,13 @@
+// Package models is a PDF worker's local view of the two job tables it reads
+// and writes while processing work dispatched by job-service.
+//
+// Data ownership: job-service owns the processing_jobs and file_metadata
+// schema and is the only service that migrates them (see database.go). This
+// package deliberately redeclares the structs instead of importing
+// job-service's, because cross-service imports and shared models are
+// forbidden — so the fact that this file is byte-identical across all four PDF
+// workers is intentional, not drift. Nothing checks that at compile time:
+// if job-service changes a column, every copy must be updated by hand.
 package models
 
 import (

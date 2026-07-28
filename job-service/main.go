@@ -31,6 +31,15 @@ import (
 	"job-service/routes"
 )
 
+// main boots the orchestration hub: presigned uploads, job creation, dispatch to workers, and live progress.
+//
+// Order here is load-bearing: configuration and logging come up first so any
+// later failure is diagnosable, then the database and its migrations, then the
+// external brokers, and only then does the server start accepting traffic —
+// binding the port before dependencies are ready would advertise readiness the
+// service cannot honour. Every dependency failure calls os.Exit rather than
+// degrading, so a misconfigured instance dies at boot instead of failing requests
+// one at a time. Shutdown is the reverse: stop accepting, drain, then release.
 func main() {
 	config.LoadConfig()
 	logger.Init("job-service", os.Getenv("LOG_MODE"))
@@ -190,6 +199,18 @@ func runCleanupLoop(ctx context.Context, store cleanup.ObjectStore) {
 	}
 }
 
+// buildAuthMiddleware assembles this service's auth middleware.
+//
+// AUTH_TRUST_GATEWAY_HEADERS decides whether identity headers injected upstream
+// are believed. It defaults to FALSE, which is the safe default: trusting those
+// headers is only sound when nothing but the gateway can reach this service, and
+// a service accidentally exposed directly would otherwise accept a
+// caller-supplied X-User-ID verbatim. With it off, the JWT is verified here
+// regardless of what the gateway claims.
+//
+// A verifier that cannot be constructed exits the process — booting without
+// working token verification would serve traffic with authentication silently
+// disabled.
 func buildAuthMiddleware(denylist authverify.TokenDenylist) gin.HandlerFunc {
 	trustGateway := config.GetEnvBool("AUTH_TRUST_GATEWAY_HEADERS", false)
 

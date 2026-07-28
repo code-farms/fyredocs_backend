@@ -15,8 +15,15 @@ import (
 )
 
 var (
+	// Conn is the process-wide NATS connection, nil until Connect succeeds.
+	// Readiness probes test Conn.IsConnected() rather than Conn != nil, because
+	// the client reconnects in the background: a non-nil Conn can still be
+	// disconnected mid-outage.
 	Conn *nats.Conn
-	JS   jetstream.JetStream
+	// JS is the JetStream context derived from Conn. Publishing through JS gives
+	// at-least-once delivery with acknowledgement; publishing on Conn directly
+	// is fire-and-forget and would silently drop job dispatches.
+	JS jetstream.JetStream
 )
 
 // Connect establishes a connection to the NATS server and initializes JetStream.

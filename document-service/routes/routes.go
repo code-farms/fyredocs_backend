@@ -1,3 +1,9 @@
+// Package routes maps document-service HTTP paths to handlers.
+//
+// Every /api route sits behind RequireUser, which trusts the gateway-injected
+// X-User-ID header. That trust is only sound because the gateway strips
+// client-supplied identity headers before proxying — this service must never be
+// exposed directly.
 package routes
 
 import (

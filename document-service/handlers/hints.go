@@ -15,6 +15,9 @@ import (
 	"fyredocs/shared/response"
 )
 
+// workspaceHintReq records which organization workspace a job's output should be
+// filed into once it completes. Written before the job finishes, because the
+// subscriber that files the result has no request context to read it from.
 type workspaceHintReq struct {
 	JobID          string `json:"jobId" binding:"required,uuid"`
 	OrganizationID string `json:"organizationId" binding:"omitempty,uuid"`

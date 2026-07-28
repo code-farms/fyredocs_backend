@@ -164,6 +164,13 @@ func guestContextFromCookie(r *http.Request, store GuestStore, cookieName string
 	}, nil
 }
 
+// authContextFromGatewayHeaders reconstructs identity from headers the gateway
+// injected, skipping token verification.
+//
+// This is ONLY sound when the caller cannot be anything but the gateway, which is
+// why it sits behind an explicit opt-in flag that defaults to off. A service that
+// enabled it and was then exposed directly would accept a caller-supplied
+// X-User-ID as proof of identity.
 func authContextFromGatewayHeaders(header http.Header) (AuthContext, bool) {
 	if header == nil {
 		return AuthContext{}, false
@@ -187,6 +194,9 @@ func authContextFromGatewayHeaders(header http.Header) (AuthContext, bool) {
 	}, true
 }
 
+// extractBearerToken pulls the token out of an Authorization header, requiring the
+// "Bearer" scheme. Locating a token is not verifying one; the caller must still
+// verify.
 func extractBearerToken(header string) (string, bool) {
 	parts := strings.Fields(header)
 	if len(parts) != 2 {

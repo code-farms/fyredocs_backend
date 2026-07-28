@@ -19,6 +19,7 @@ import (
 	"fyredocs/shared/logger"
 )
 
+// baseURL resolves user-service's internal address.
 func baseURL() string {
 	if v := strings.TrimSpace(os.Getenv("USER_SERVICE_URL")); v != "" {
 		return strings.TrimRight(v, "/")
@@ -26,6 +27,8 @@ func baseURL() string {
 	return "http://user-service:8090"
 }
 
+// httpClient is shared for connection reuse; its timeout bounds how long an
+// authorization check can block a request.
 var httpClient = &http.Client{Timeout: 4 * time.Second}
 
 // breaker trips after repeated user-service failures so document-service fails
@@ -33,11 +36,17 @@ var httpClient = &http.Client{Timeout: 4 * time.Second}
 // user-service is down. 404/403 are normal answers and do NOT count as failures.
 var breaker = circuitbreaker.New[membershipResult]("user-service.membership")
 
+// membershipResult is the caller's role within an organization, as reported by
+// user-service. This service asks rather than reading user-service's tables —
+// cross-service database access is forbidden — which means an authorization check
+// here is a network call that can fail.
 type membershipResult struct {
 	role   string
 	member bool
 }
 
+// orgResponse mirrors user-service's organization payload, decoding only the
+// fields this service needs.
 type orgResponse struct {
 	Data struct {
 		Role string `json:"role"`

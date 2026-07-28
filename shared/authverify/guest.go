@@ -146,6 +146,7 @@ func (d *RedisTokenDenylist) DenyTokenHash(ctx context.Context, tokenHash string
 	return d.client.Set(ctx, key, "1", ttl).Err()
 }
 
+// key namespaces a denylist entry by token identifier.
 func (d *RedisTokenDenylist) key(token string) string {
 	hash := sha256.Sum256([]byte(token))
 	return fmt.Sprintf("%s:%s", d.keyPrefix, hex.EncodeToString(hash[:]))

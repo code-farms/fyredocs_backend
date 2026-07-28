@@ -1,3 +1,9 @@
+// Package models owns the notification feed schema.
+//
+// A notification is a durable per-user row, not a transient push: the feed
+// survives restarts and missed SSE connections, and the read/unread state is
+// persisted so a badge count can be computed on reconnect. Live delivery over
+// SSE is a separate concern layered on top (see the handlers package).
 package models
 
 import (

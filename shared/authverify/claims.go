@@ -39,6 +39,9 @@ func (s *ScopeList) UnmarshalJSON(data []byte) error {
 	return fmt.Errorf("invalid scope claim")
 }
 
+// splitScope splits a space-delimited OAuth scope claim. Space-delimited, not
+// comma — that is what the JWT spec prescribes, and comma-splitting would silently
+// yield one bogus scope containing everything.
 func splitScope(value string) []string {
 	parts := strings.FieldsFunc(value, func(r rune) bool {
 		return r == ' ' || r == ',' || r == '\t' || r == '\n'

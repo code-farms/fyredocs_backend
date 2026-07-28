@@ -93,6 +93,9 @@ func GinAuthMiddleware(options GinMiddlewareOptions) gin.HandlerFunc {
 	}
 }
 
+// guestContextFromRequest builds an anonymous auth context for an unauthenticated
+// caller, so downstream handlers always have an identity object and never have to
+// branch on nil.
 func guestContextFromRequest(r *http.Request, store GuestStore, headerName string, cookieName string) (*AuthContext, error) {
 	if r == nil || store == nil {
 		return nil, nil

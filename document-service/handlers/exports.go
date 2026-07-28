@@ -32,6 +32,18 @@ var (
 	exportSem     chan struct{}
 )
 
+// acquireExportSlot takes one of EXPORT_MAX_CONCURRENCY (default 4) export slots,
+// blocking until one frees or ctx is cancelled. Returns false only on
+// cancellation.
+//
+// This is the DoS bound described above: each export scans a user's entire library
+// and builds the artifact in memory, so without a cap a burst of requests spawns
+// unbounded concurrent buffers and OOMs the service. The semaphore is created
+// under sync.Once on first use rather than at init so the environment is read
+// after configuration has loaded.
+//
+// Every successful call MUST be paired with releaseExportSlot, conventionally via
+// defer — a leaked slot is permanent and shrinks capacity for the process's life.
 func acquireExportSlot(ctx context.Context) bool {
 	exportSemOnce.Do(func() {
 		n := config.GetEnvInt("EXPORT_MAX_CONCURRENCY", 4)
@@ -48,14 +60,20 @@ func acquireExportSlot(ctx context.Context) bool {
 	}
 }
 
+// releaseExportSlot returns a slot. Panics if called without a matching
+// acquireExportSlot having initialised the semaphore, which would be a
+// programming error rather than a runtime condition.
 func releaseExportSlot() { <-exportSem }
 
+// exportFilters narrows which documents an export includes. Stored on the export
+// row so a re-run reproduces the same selection.
 type exportFilters struct {
 	Status   string `json:"status,omitempty"`
 	FolderID string `json:"folderId,omitempty"`
 	TagID    string `json:"tagId,omitempty"`
 }
 
+// createExportReq is the export request body.
 type createExportReq struct {
 	// Format is validated case-insensitively by the handler (csv/json), so the
 	// tag only bounds it.
@@ -229,6 +247,11 @@ func generateExport(id uuid.UUID) {
 		"Export ready", fileName, "/app/exports", id.String())
 }
 
+// exportDocs loads the documents for an export, capped in row count.
+//
+// The cap is a memory bound, not a product limit: the result set is serialized
+// into an in-memory buffer, so an unbounded library would decide this service's
+// peak memory. A user at the cap gets a truncated export rather than a failure.
 func exportDocs(exp models.Export) ([]models.Document, error) {
 	var f exportFilters
 	_ = json.Unmarshal(exp.Filters, &f)
@@ -258,6 +281,7 @@ func exportDocs(exp models.Export) ([]models.Document, error) {
 	return docs, err
 }
 
+// tagNames flattens a document's tags to their names for the export columns.
 func tagNames(d models.Document) string {
 	names := make([]string, 0, len(d.Tags))
 	for _, t := range d.Tags {
@@ -266,6 +290,8 @@ func tagNames(d models.Document) string {
 	return strings.Join(names, "; ")
 }
 
+// docsToCSV renders documents as CSV, built in memory — see exportDocs for why
+// the row count must stay bounded.
 func docsToCSV(docs []models.Document) []byte {
 	var buf bytes.Buffer
 	w := csv.NewWriter(&buf)
@@ -280,6 +306,8 @@ func docsToCSV(docs []models.Document) []byte {
 	return buf.Bytes()
 }
 
+// docsToJSON renders documents as JSON, with the same in-memory constraint as
+// docsToCSV.
 func docsToJSON(docs []models.Document) []map[string]any {
 	out := make([]map[string]any, 0, len(docs))
 	for _, d := range docs {

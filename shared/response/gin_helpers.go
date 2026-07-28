@@ -133,6 +133,8 @@ func reqContext(c *gin.Context) context.Context {
 	return context.Background()
 }
 
+// buildLogAttrs assembles the structured attributes attached to an error log,
+// including the correlation IDs that make a log line joinable to its trace.
 func buildLogAttrs(c *gin.Context, status int, code string, err error, extra []any) []any {
 	// trace_id/span_id/request_id are added by the shared contextHandler from the
 	// ctx passed to the *Context log call.
@@ -147,6 +149,7 @@ func buildLogAttrs(c *gin.Context, status int, code string, err error, extra []a
 	return append(attrs, extra...)
 }
 
+// extractMeta pulls request metadata for logging.
 func extractMeta(c *gin.Context) *Meta {
 	reqID := requestIDFromContext(c)
 	if reqID == "" {
@@ -155,6 +158,9 @@ func extractMeta(c *gin.Context) *Meta {
 	return &Meta{RequestID: reqID}
 }
 
+// requestIDFromContext reads the request ID for log correlation, returning empty
+// when absent rather than generating one — minting an ID here would produce a
+// value that appears in no other log line.
 func requestIDFromContext(c *gin.Context) string {
 	if c == nil {
 		return ""

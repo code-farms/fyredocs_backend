@@ -29,6 +29,11 @@ var proxyLoginAllowedRoles = map[string]bool{
 	"super-admin": true,
 }
 
+// proxyLoginRequest names the user an admin wishes to impersonate.
+//
+// This is the most sensitive request shape in the service: honouring it mints a
+// real session for somebody else. Authorization is enforced in the handler, not
+// here, and the endpoint carries its own dedicated rate limit.
 type proxyLoginRequest struct {
 	UserID string `json:"userId" binding:"required,uuid"`
 }

@@ -85,6 +85,8 @@ func replaceAttr(_ []string, a slog.Attr) slog.Attr {
 	return a
 }
 
+// parseLevel maps a configured level name to a slog.Level, defaulting to Info for
+// anything unrecognised so a typo cannot silence logging entirely.
 func parseLevel(level string) slog.Level {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "debug":

@@ -28,30 +28,38 @@ import (
 	"fyredocs/shared/response"
 )
 
-// Embed colors (decimal RGB) by alert state.
+// Embed colors (decimal RGB) by alert state. These are the accent stripe on the
+// Discord embed, so they are the fastest signal a human gets when scanning the
+// channel — keep critical/warning/resolved visually distinct.
 const (
 	colorCritical = 0xE01E5A // red
 	colorWarning  = 0xE8912D // orange
 	colorResolved = 0x2EB67D // green
 )
 
-// Embed is one Discord message embed.
+// EmbedField is one name/value row inside an Embed. Discord renders Inline
+// fields side by side, up to three per row.
 type EmbedField struct {
 	Name   string `json:"name"`
 	Value  string `json:"value"`
 	Inline bool   `json:"inline,omitempty"`
 }
 
+// EmbedAuthor is the small header line above an embed's title.
 type EmbedAuthor struct {
 	Name    string `json:"name"`
 	IconURL string `json:"icon_url,omitempty"`
 }
 
+// EmbedFooter is the small trailing line below an embed's fields.
 type EmbedFooter struct {
 	Text    string `json:"text"`
 	IconURL string `json:"icon_url,omitempty"`
 }
 
+// Embed is one Discord message embed — the rich card format an alert is
+// rendered as. These structs mirror Discord's webhook JSON schema, so the field
+// tags are the wire contract and must not be renamed.
 type Embed struct {
 	Title       string       `json:"title,omitempty"`
 	Description string       `json:"description,omitempty"`
@@ -113,11 +121,15 @@ type throttle struct {
 	seen   map[string]entry
 }
 
+// entry tracks one alert's last notification time, so a still-firing alert is
+// re-sent at most once per DISCORD_ALERT_REPEAT instead of on every scrape.
 type entry struct {
 	firing bool
 	last   time.Time
 }
 
+// newThrottle builds the per-alert repeat suppressor. Without it a firing alert
+// would post to Discord on every Prometheus evaluation cycle and bury the channel.
 func newThrottle(repeat time.Duration) *throttle {
 	return &throttle{repeat: repeat, seen: map[string]entry{}}
 }
@@ -244,6 +256,8 @@ func humanizeAlertName(s string) string {
 	return b.String()
 }
 
+// capitalizeFirst uppercases the first rune for display. Rune-aware rather than
+// byte-aware so a non-ASCII first character is not corrupted.
 func capitalizeFirst(s string) string {
 	if s == "" {
 		return s

@@ -16,6 +16,8 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
 
+// encryptPDF applies password protection. The password is a user secret and must
+// never be logged or echoed into an error message.
 func encryptPDF(inputPath string, outputPath string, password string) error {
 	slog.Info("encrypting PDF", "input", inputPath)
 	conf := model.NewDefaultConfiguration()
@@ -24,6 +26,9 @@ func encryptPDF(inputPath string, outputPath string, password string) error {
 	return api.EncryptFile(inputPath, outputPath, conf)
 }
 
+// decryptPDF removes password protection, given the correct password. A wrong
+// password surfaces as a tool error; the message must not distinguish "wrong
+// password" from "not encrypted" in a way that helps guessing.
 func decryptPDF(inputPath string, outputPath string, password string) error {
 	slog.Info("decrypting PDF", "input", inputPath)
 	conf := model.NewDefaultConfiguration()
@@ -31,6 +36,8 @@ func decryptPDF(inputPath string, outputPath string, password string) error {
 	return api.DecryptFile(inputPath, outputPath, conf)
 }
 
+// watermarkPDF dispatches to the text or image watermark implementation based on
+// the supplied options.
 func watermarkPDF(inputPath string, outputPath string, options map[string]interface{}) error {
 	slog.Info("adding watermark to PDF", "input", inputPath)
 
@@ -72,6 +79,9 @@ func watermarkPDF(inputPath string, outputPath string, options map[string]interf
 	return watermarkPDFText(inputPath, outputPath, options, position, opacity, rotation)
 }
 
+// watermarkPDFText stamps rendered text across pages. Option values reach a
+// pdfcpu description string, so they are constrained rather than interpolated
+// freely — see hexToRGBFloat for the colour case.
 func watermarkPDFText(inputPath, outputPath string, options map[string]interface{}, position string, opacity float64, rotation int) error {
 	text, _ := optionString(options, "text")
 	if text == "" {
@@ -104,6 +114,9 @@ func watermarkPDFText(inputPath, outputPath string, options map[string]interface
 	return api.AddWatermarksFile(inputPath, outputPath, nil, wm, nil)
 }
 
+// watermarkPDFImage stamps a user-supplied image across pages. The image is
+// itself an untrusted upload, so it is handled as a file path rather than being
+// decoded here.
 func watermarkPDFImage(inputPath, outputPath string, options map[string]interface{}, position string, opacity float64, rotation int) error {
 	imageData, ok := optionString(options, "imageData")
 	if !ok || imageData == "" {
@@ -159,6 +172,13 @@ func watermarkPDFImage(inputPath, outputPath string, options map[string]interfac
 	return api.AddWatermarksFile(inputPath, outputPath, nil, wm, nil)
 }
 
+// hexToRGBFloat converts a #RRGGBB colour to the 0..1 float triple pdfcpu
+// expects.
+//
+// This is also a sanitization step: the result is formatted into a pdfcpu
+// description string, so parsing to numbers first means a crafted colour value
+// cannot inject extra description directives. Unparseable input must therefore
+// fall back to a default rather than being passed through.
 func hexToRGBFloat(hex string) (string, string, string) {
 	hex = strings.TrimPrefix(hex, "#")
 	if len(hex) != 6 {
@@ -175,6 +195,8 @@ func hexToRGBFloat(hex string) (string, string, string) {
 		fmt.Sprintf("%.3f", float64(b)/255.0)
 }
 
+// addPageNumbers stamps page numbers using the same description-string mechanism
+// as the watermark tools, with position and format taken from options.
 func addPageNumbers(inputPath string, outputPath string, options map[string]interface{}) error {
 	slog.Info("adding page numbers to PDF", "input", inputPath)
 
@@ -264,6 +286,11 @@ func signatureWatermarkDesc(pdfcpuPos string) string {
 	return fmt.Sprintf("pos:%s, scalefactor:0.25, rot:0, opacity:1", pdfcpuPos)
 }
 
+// signPDF stamps a signature image onto a chosen page and position.
+//
+// This is a visual signature only — it does not create a cryptographic PDF
+// signature, so it proves nothing about authenticity. The distinction matters if
+// anyone reads the tool name as offering more than it does.
 func signPDF(inputPath string, outputPath string, options map[string]interface{}) error {
 	slog.Info("signing PDF", "input", inputPath)
 
@@ -345,6 +372,8 @@ func signPDF(inputPath string, outputPath string, options map[string]interface{}
 	return nil
 }
 
+// editPDF applies a combined edit description (annotations and stamps) in one
+// pass, so a multi-part edit produces a single output rather than chaining tools.
 func editPDF(inputPath string, outputPath string, options map[string]interface{}) error {
 	slog.Info("editing PDF with annotations", "input", inputPath)
 

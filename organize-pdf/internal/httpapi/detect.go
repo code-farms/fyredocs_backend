@@ -30,11 +30,15 @@ type ObjectGetter interface {
 	BucketUploads() string
 }
 
+// detectRequest carries one image for synchronous edge detection, relayed from
+// job-service on behalf of the mobile scanner.
 type detectRequest struct {
 	Bucket string `json:"bucket" binding:"omitempty,max=63"`
 	Key    string `json:"key" binding:"required,max=1024"`
 }
 
+// detectResponse returns the detected document quad in normalized 0..1
+// coordinates, so the client can scale it to whatever preview size it is showing.
 type detectResponse struct {
 	Corners    imaging.Quad `json:"corners"`
 	Confidence float64      `json:"confidence"`
@@ -51,6 +55,12 @@ func RegisterInternalRoutes(r *gin.Engine, store ObjectGetter, internalToken str
 	internal.POST("/detect-edges", detectEdgesHandler(store))
 }
 
+// detectEdgesHandler runs edge detection on a posted frame.
+//
+// Synchronous and deliberately cheap: the scanner calls it repeatedly at camera
+// frame rate, so it must never queue work or perform I/O beyond decoding. A
+// failure to find a document returns a full-image quad rather than an error, since
+// "no document detected" is the normal case while the user is still aiming.
 func detectEdgesHandler(store ObjectGetter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req detectRequest

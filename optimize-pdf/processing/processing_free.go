@@ -42,6 +42,14 @@ func ocrMaxWorkers() int {
 	return workers
 }
 
+// compressPDF re-renders a PDF through Ghostscript at a quality preset.
+//
+// Ghostscript is a subprocess, so stderr is captured and logged but never
+// returned to the user — its output names internal paths and tool versions.
+// stdout is discarded because the result is written to outputPath directly.
+// Compression is lossy for images: the returned metadata reports original and
+// final size so the caller can tell the user what was actually saved, and can
+// detect the case where "compression" made the file larger.
 func compressPDF(ctx context.Context, inputPath string, outputPath string, options map[string]interface{}) (map[string]interface{}, error) {
 	slog.Info("compressing PDF", "input", inputPath)
 
@@ -155,6 +163,13 @@ func buildCompressArgs(quality, outputPath, inputPath string) []string {
 	return args
 }
 
+// repairPDF rewrites a structurally damaged PDF by passing it through
+// Ghostscript, which parses leniently and emits a clean file.
+//
+// This works precisely because Ghostscript reconstructs rather than patches, so a
+// broken cross-reference table or truncated trailer is rebuilt. It is not
+// lossless: content Ghostscript cannot interpret is dropped, which is the
+// intended trade for a file that opens at all.
 func repairPDF(ctx context.Context, inputPath string, outputPath string) error {
 	slog.Info("repairing PDF using Ghostscript", "input", inputPath)
 
@@ -194,6 +209,14 @@ func repairPDF(ctx context.Context, inputPath string, outputPath string) error {
 	return nil
 }
 
+// findGhostscript locates the Ghostscript binary, trying the Linux names first
+// and then the Windows ones so a developer on Windows can run the tool locally
+// even though production is Alpine.
+//
+// The error text names the Alpine install command because that is what a reader
+// hitting this in a container needs. Resolution happens per call rather than being
+// cached — LookPath is cheap next to spawning Ghostscript, and caching would
+// survive a container-image change mid-process.
 func findGhostscript() (string, error) {
 	candidates := []string{"gs", "ghostscript", "gswin64c", "gswin32c"}
 	for _, name := range candidates {
@@ -284,7 +307,8 @@ var ocrLangMap = map[string]string{
 // ocrAllowedLanguages is the whitelist of tesseract language codes OCR will pass
 // to `tesseract -l`. Anything outside it (an unmapped or crafted option value) is
 // coerced to the default so an attacker-influenced language can never reach the
-// tesseract invocation verbatim (finding I1). Extend this if more language packs
+// tesseract invocation verbatim (finding I1 — docs/developer/architecture/backend-hardening.md section 3.20).
+// Extend this if more language packs
 // are installed in the image.
 var ocrAllowedLanguages = map[string]bool{
 	"eng": true, "spa": true, "fra": true, "deu": true, "ita": true,
@@ -351,6 +375,20 @@ func availableTesseractLangs(ctx context.Context) []string {
 	return langs
 }
 
+// ocrPDF adds a searchable text layer to a scanned PDF: rasterize each page with
+// pdftoppm, OCR it with tesseract, then reassemble.
+//
+// Both binaries are probed up front so a missing dependency fails immediately
+// with an actionable message rather than part-way through a long job. Pages are
+// processed by a bounded worker pool (ocrMaxWorkers, default min(NumCPU,4))
+// because each concurrent tesseract holds a full rasterized page in memory —
+// unbounded parallelism is what makes OCR OOM on small hosts. Render resolution
+// is separately capped by ocrMaxImageDim so a large page at high DPI cannot
+// produce an image tesseract refuses.
+//
+// The language option is untrusted and passes through sanitizeOCRLanguage before
+// it can reach a tesseract command line (finding I1 —
+// docs/developer/architecture/backend-hardening.md section 3.20).
 func ocrPDF(ctx context.Context, inputPath string, outputPath string, options map[string]interface{}) (map[string]interface{}, error) {
 	slog.Info("adding OCR layer to PDF", "input", inputPath)
 

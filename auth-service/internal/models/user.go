@@ -1,3 +1,12 @@
+// Package models owns the identity schema: users, their sessions, the
+// subscription plan catalogue, and password-reset tokens.
+//
+// auth-service is the platform's only token issuer, so this package is the
+// authority on who a caller is and what plan they hold. Other services never
+// read these tables — they receive identity as gateway-injected headers and
+// fetch plan data over the internal API. Session rows back refresh-token
+// rotation and reuse detection (see refresh_rotation.go), which is why a
+// session is a persisted row rather than purely a signed claim.
 package models
 
 import (

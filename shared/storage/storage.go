@@ -58,6 +58,7 @@ func ConfigFromEnv() (Config, error) {
 	return cfg, nil
 }
 
+// envOr reads an environment variable with a fallback, treating empty as unset.
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -251,6 +252,8 @@ func IsNotFound(err error) bool {
 	return resp.Code == "NoSuchKey" || resp.Code == "NoSuchBucket" || resp.StatusCode == 404
 }
 
+// unwrapAll walks an error chain to its root cause, used to classify a storage
+// failure by the underlying error rather than by whatever wrapped it last.
 func unwrapAll(err error) error {
 	for {
 		unwrapped := func() error {

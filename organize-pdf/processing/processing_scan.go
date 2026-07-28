@@ -41,10 +41,16 @@ type ScanCorners struct {
 	BL *imaging.Point `json:"bl"`
 }
 
+// complete reports whether all four corners are present. Nil-safe on the
+// receiver, because corners are absent entirely for a page the user did not crop.
+// A partially specified quad is treated as unusable rather than interpolated —
+// three corners cannot define the intended rectangle.
 func (c *ScanCorners) complete() bool {
 	return c != nil && c.TL != nil && c.TR != nil && c.BR != nil && c.BL != nil
 }
 
+// quad converts the wire form to an imaging.Quad. It dereferences all four
+// pointers, so callers MUST check complete() first or this panics.
 func (c *ScanCorners) quad() imaging.Quad {
 	return imaging.Quad{TL: *c.TL, TR: *c.TR, BR: *c.BR, BL: *c.BL}
 }
@@ -276,6 +282,14 @@ func importConfigForPageSize(pageSize string) (*pdfcpu.Import, error) {
 	}
 }
 
+// scanToPDF turns captured photos into a PDF: per page, apply the user's
+// perspective crop and rotation, optionally enhance, then lay the results out at
+// the requested page size.
+//
+// Corner coordinates arrive normalized to 0..1 against the DECODED pixel grid,
+// which is why the client bakes EXIF orientation into pixels before upload — this
+// code ignores EXIF, so a rotation left in metadata would misalign every crop.
+// Pages without a complete corner set are used whole rather than skipped.
 func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, options map[string]interface{}) error {
 	slog.Info("converting images to PDF (scan-to-pdf)", "count", len(inputPaths))
 

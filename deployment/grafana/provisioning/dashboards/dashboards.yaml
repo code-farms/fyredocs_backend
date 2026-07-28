@@ -7,6 +7,10 @@ providers:
     orgId: 1
     folder: fyredocs
     type: file
+    # editable: true lets an operator adjust a panel live while investigating,
+    # which is the point — but provisioned dashboards are reloaded from disk, so
+    # in-UI edits are NOT durable and are lost on restart. Anything worth keeping
+    # must be exported back into deployment/grafana/dashboards/ as JSON.
     disableDeletion: false
     editable: true
     updateIntervalSeconds: 30

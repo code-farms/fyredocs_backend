@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// entry is one cached value with its absolute expiry instant. Storing a deadline
+// rather than an insertion time lets Get judge staleness on its own, which is
+// what makes lazy expiry possible without a background sweeper goroutine.
 type entry[V any] struct {
 	value     V
 	expiresAt time.Time

@@ -1,4 +1,28 @@
 #!/bin/sh
+# Container entrypoint for convert-to-pdf.
+#
+# This service is two cooperating processes, which is why it needs an entrypoint
+# rather than running the Go binary directly: a pool of unoserver (LibreOffice)
+# daemons, plus the Go worker that drives them over the network. The daemons are
+# started here, health-gated, and torn down together with the worker so a dead
+# LibreOffice can never leave the container "up" but unable to convert.
+#
+# CONTRACT WITH THE GO SIDE (convert-to-pdf/processing/unopool.go): this script
+# launches UNOSERVER_INSTANCES daemons on consecutive ports from UNOSERVER_PORT,
+# and the Go pool independently recomputes that same port list. Nothing checks
+# that the two agree.
+#
+# KNOWN DIVERGENCE in the defaults. When UNOSERVER_INSTANCES is unset or empty:
+#   - this script falls back to 2
+#   - unopool.go falls back to WORKER_CONCURRENCY + 1 (3 at the default
+#     concurrency of 2)
+# so the Go pool believes in a daemon on a port nothing is listening on. The
+# symptom is not an error: conversions handed that port fail to connect and drop
+# to the slow cold-start LibreOffice path, so the service just gets sporadically
+# slower. deployment/deploy.sh avoids this by exporting a concrete
+# UNOSERVER_INSTANCES (and deriving concurrency as instances - 1), but a plain
+# `docker compose up` does not. Set UNOSERVER_INSTANCES explicitly, or keep the
+# two fallbacks equal, if you change either.
 set -e
 
 UNOSERVER_HOST="${UNOSERVER_HOST:-127.0.0.1}"

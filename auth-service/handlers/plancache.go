@@ -24,14 +24,25 @@ import (
 // takes up to PLAN_CACHE_TTL to propagate. That is acceptable for plan limits;
 // tune via the PLAN_CACHE_TTL env var (set to 0 to disable caching).
 
+// cachedPlan is one in-process plan entry with its absolute expiry. The expiry is
+// stored per entry rather than tracked globally so a lookup can judge freshness
+// without a sweep or eviction goroutine.
 type cachedPlan struct {
 	plan    models.SubscriptionPlan
 	expires time.Time
 }
 
 var (
-	planCacheMu  sync.RWMutex
-	planCache    = map[string]cachedPlan{}
+	// planCacheMu guards planCache. RWMutex rather than Mutex because reads vastly
+	// outnumber writes — every request that checks a plan limit reads, while writes
+	// only happen on a cache miss.
+	planCacheMu sync.RWMutex
+	// planCache is keyed by plan NAME, not user ID, so it holds a handful of
+	// entries regardless of user count and needs no size bound. Do not re-key this
+	// by user without adding eviction.
+	planCache = map[string]cachedPlan{}
+	// planCacheTTL bounds how long a plan-definition change takes to propagate to
+	// this process. Set PLAN_CACHE_TTL to 0 to disable caching entirely.
 	planCacheTTL = config.GetEnvDuration("PLAN_CACHE_TTL", 5*time.Minute)
 )
 

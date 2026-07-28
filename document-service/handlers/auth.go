@@ -53,14 +53,20 @@ func parseUUID(s *string) (*uuid.UUID, bool) {
 // not shared per repo rules). Reads need viewer+, writes need editor+.
 var orgRoleRank = map[string]int{"viewer": 1, "editor": 2, "admin": 3, "owner": 4}
 
+// roleAtLeast compares organization roles by rank, so authorization checks can
+// express a minimum privilege instead of enumerating every acceptable role — which
+// is what makes adding a role a one-line change rather than a sweep.
 func roleAtLeast(role, min string) bool {
 	return orgRoleRank[role] > 0 && orgRoleRank[role] >= orgRoleRank[min]
 }
 
+// queryInt reads an integer query parameter with a fallback.
 func queryInt(c *gin.Context, key string, fallback int) int {
 	return parseQueryInt(c.Query(key), fallback)
 }
 
+// parseQueryInt parses an integer query value, reporting whether it was usable so
+// callers can distinguish "absent" from "present but invalid".
 func parseQueryInt(val string, fallback int) int {
 	if val == "" {
 		return fallback

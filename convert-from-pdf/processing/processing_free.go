@@ -61,6 +61,11 @@ func pdfToImages(ctx context.Context, inputPath string, outputDir string, baseNa
 	return outputPath, zipDirectory(tempDir, outputPath)
 }
 
+// pdfToPdfa converts a PDF to the archival PDF/A profile via Ghostscript.
+//
+// Conversion can be lossy where the source uses features PDF/A forbids — notably
+// transparency and non-embedded fonts, which get flattened or substituted. That is
+// inherent to the format, not a defect here.
 func pdfToPdfa(ctx context.Context, inputPath string, outputPath string) error {
 	slog.Info("converting PDF to PDF/A", "input", inputPath)
 
@@ -86,6 +91,11 @@ func pdfToPdfa(ctx context.Context, inputPath string, outputPath string) error {
 	return nil
 }
 
+// pdfToOffice converts a PDF into a Word/Excel/PowerPoint format via LibreOffice.
+//
+// This direction is inherently approximate: a PDF describes positioned glyphs, not
+// paragraphs or cells, so the structure LibreOffice reports is inferred. Expect
+// layout fidelity rather than semantic fidelity.
 func pdfToOffice(ctx context.Context, inputPath string, outputPath string, outputFormat string) error {
 	slog.Info("converting PDF to office format", "format", outputFormat, "input", inputPath)
 
@@ -201,6 +211,11 @@ func pdfToXlsx(ctx context.Context, inputPath string, outputPath string) error {
 	return nil
 }
 
+// pdfToXlsxTicking runs the xlsx conversion while reporting progress.
+//
+// LibreOffice gives no progress output, so the "ticking" variants advance a
+// synthetic progress estimate on a timer. It exists so a long conversion does not
+// look hung in the UI; the numbers are an estimate, not a measurement.
 func pdfToXlsxTicking(ctx context.Context, inputPath string, outputPath string, onProgress ProgressFunc) error {
 	return runWithProgressTicking(ctx, onProgress, func(ctx context.Context) error {
 		return pdfToXlsx(ctx, inputPath, outputPath)
@@ -220,6 +235,8 @@ func pdfToOds(ctx context.Context, inputPath string, outputPath string) error {
 	return officeConvertTo(ctx, tmpXlsx, outputPath, "ods")
 }
 
+// pdfToOdsTicking is pdfToXlsxTicking for the OpenDocument spreadsheet target.
+// Same synthetic-progress caveat.
 func pdfToOdsTicking(ctx context.Context, inputPath string, outputPath string, onProgress ProgressFunc) error {
 	return runWithProgressTicking(ctx, onProgress, func(ctx context.Context) error {
 		return pdfToOds(ctx, inputPath, outputPath)
@@ -331,6 +348,8 @@ func pdfToDocxNativeTicking(ctx context.Context, inputPath string, outputPath st
 	})
 }
 
+// pdfToHTML converts a PDF to HTML plus its extracted assets, returned as a ZIP
+// since the conversion produces multiple files and a job has one output.
 func pdfToHTML(ctx context.Context, inputPath string, outputPath string) error {
 	slog.Info("converting PDF to HTML", "input", inputPath)
 
@@ -352,6 +371,9 @@ func pdfToHTML(ctx context.Context, inputPath string, outputPath string) error {
 	return zipDirectory(tempDir, outputPath)
 }
 
+// pdfToText extracts the text layer. Returns empty or garbled output for a
+// scanned PDF that has no text layer — OCR (optimize-pdf) is the tool for that
+// case, and this one cannot detect the difference.
 func pdfToText(ctx context.Context, inputPath string, outputPath string) error {
 	slog.Info("converting PDF to text", "input", inputPath)
 
@@ -367,6 +389,9 @@ func pdfToText(ctx context.Context, inputPath string, outputPath string) error {
 	return nil
 }
 
+// zipDirectory archives every file under sourceDir with paths relative to it, so
+// the archive contains no absolute paths. Used where a conversion emits multiple
+// files but a job has exactly one output object.
 func zipDirectory(sourceDir string, zipPath string) error {
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
@@ -416,6 +441,8 @@ func zipDirectory(sourceDir string, zipPath string) error {
 	return nil
 }
 
+// copyFile copies src to dst, surfacing a deferred Close error so a failed flush
+// is not mistaken for success.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {

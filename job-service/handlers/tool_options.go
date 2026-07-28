@@ -11,12 +11,24 @@ import (
 // enhancement) are the first schema'd payload. Validation lives here at the
 // public boundary — workers still re-clamp defensively on their side.
 
+// maxScanPages caps pages per scan-to-pdf job. Each page is a separate image
+// that gets decoded and perspective-corrected in memory, so this bounds peak
+// worker memory for one job rather than expressing a product limit.
 const maxScanPages = 50
 
 var (
+	// scanLanguages is the OCR language allowlist, and a TRUST BOUNDARY rather
+	// than a preference list: the value reaches a tesseract command line, and
+	// tesseract can only satisfy languages whose trained-data packs are installed
+	// in the optimize-pdf image. Adding an entry here without adding the pack to
+	// that Dockerfile turns every request using it into a job failure.
 	scanLanguages = map[string]bool{"eng": true, "deu": true, "fra": true, "spa": true, "hin": true}
+	// scanPageSizes is the allowlist of output geometries the scan pipeline can lay
+	// out. "" and "auto" both mean "infer from the pages themselves".
 	scanPageSizes = map[string]bool{"": true, "auto": true, "a4": true, "letter": true, "id": true}
-	scanEnhance   = map[string]bool{"": true, "none": true, "grayscale": true, "bw": true, "color-boost": true}
+	// scanEnhance is the allowlist of image-enhancement modes implemented in the
+	// imaging package. "" and "none" both mean no enhancement.
+	scanEnhance = map[string]bool{"": true, "none": true, "grayscale": true, "bw": true, "color-boost": true}
 )
 
 // scanOptionsPayload mirrors the scan-to-pdf options contract. job-service
@@ -30,11 +42,19 @@ type scanOptionsPayload struct {
 	Pages    []scanPagePayload `json:"pages"`
 }
 
+// scanPagePayload is one page of a scan job: the crop quad and rotation the user
+// chose for it. Both fields are pointers so "absent" is distinguishable from
+// "explicitly zero" — a rotation of 0 is meaningful, and a missing corners block
+// means "use the whole image".
 type scanPagePayload struct {
 	Corners  *scanCornersPayload `json:"corners"`
 	Rotation *int                `json:"rotation"`
 }
 
+// scanCornersPayload is the perspective-crop quad for one page, in the corner
+// order the imaging code expects. Coordinates are NORMALIZED to 0..1 against the
+// decoded pixel grid rather than device pixels, so the quad stays valid if the
+// client resized or re-encoded the image before upload.
 type scanCornersPayload struct {
 	TL *scanPointPayload `json:"tl"`
 	TR *scanPointPayload `json:"tr"`
@@ -42,6 +62,7 @@ type scanCornersPayload struct {
 	BL *scanPointPayload `json:"bl"`
 }
 
+// scanPointPayload is a single normalized 0..1 coordinate pair.
 type scanPointPayload struct {
 	X *float64 `json:"x"`
 	Y *float64 `json:"y"`
@@ -61,6 +82,13 @@ func validateToolOptions(toolType string, raw string) error {
 	}
 }
 
+// validateScanOptions is the hard validation gate for scan-to-pdf options.
+//
+// Unlike parseOptions in jobs.go, this rejects instead of defaulting, because
+// every field here either bounds resource use (page count) or feeds a subprocess
+// argument (language). Anything off an allowlist is refused at the public
+// boundary so it can never reach a worker command line. Workers re-clamp anyway;
+// that is defence in depth, not a reason to relax this.
 func validateScanOptions(raw string) error {
 	var opts scanOptionsPayload
 	if err := json.Unmarshal([]byte(raw), &opts); err != nil {

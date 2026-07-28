@@ -25,6 +25,10 @@ import (
 	"fyredocs/shared/response"
 )
 
+// defaultKeyPrefix namespaces this limiter's Redis keys. It must not collide
+// with the auth-service or job-service limiter prefixes — three independent
+// limiters share one Redis, and a shared prefix would silently merge their
+// windows so one endpoint's traffic throttled another.
 const defaultKeyPrefix = "apilimit"
 
 // Config configures the API rate limiter.

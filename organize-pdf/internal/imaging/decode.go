@@ -37,6 +37,14 @@ func DecodeFile(path string) (image.Image, string, error) {
 	return decodeBytes(data)
 }
 
+// decodeBytes decodes an untrusted image, checking its declared dimensions
+// BEFORE decoding pixels.
+//
+// The two-step DecodeConfig-then-Decode order is the whole point: a decompression
+// bomb declares a modest file size but enormous dimensions, and decoding first
+// would allocate width*height*4 bytes and OOM the worker. Reading only the header
+// lets MaxDecodePixels reject it for the cost of a few bytes. Never collapse this
+// into a single Decode call.
 func decodeBytes(data []byte) (image.Image, string, error) {
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {

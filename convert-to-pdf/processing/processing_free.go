@@ -13,6 +13,8 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 )
 
+// envOrDefault reads an environment variable with a fallback, treating empty as
+// unset so a variable exported as "" behaves like an absent one.
 func envOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -48,6 +50,12 @@ func tryUnoconvert(ctx context.Context, inputPath, outputPath, convertTo string)
 	return false
 }
 
+// officeToPDF converts an office document to PDF, preferring a warm unoserver
+// daemon from the pool and falling back to spawning LibreOffice directly.
+//
+// The fallback is correct but slow — a cold LibreOffice start costs seconds — so it
+// is meant to be effectively unreachable in a healthy container. If it starts
+// happening routinely, the daemon pool is misconfigured; see unopool.go.
 func officeToPDF(ctx context.Context, inputPath string, outputPath string, fileType string) error {
 	slog.Info("converting to PDF", "type", fileType, "input", inputPath)
 
@@ -72,6 +80,8 @@ func officeToPDF(ctx context.Context, inputPath string, outputPath string, fileT
 	return nil
 }
 
+// officeToOffice converts between office formats (for example .docx to .odt)
+// without going through PDF, using the same daemon pool as officeToPDF.
 func officeToOffice(ctx context.Context, inputPath string, outputPath string, outputFormat string) error {
 	slog.Info("converting office to ODF", "format", outputFormat, "input", inputPath)
 
@@ -96,6 +106,9 @@ func officeToOffice(ctx context.Context, inputPath string, outputPath string, ou
 	return nil
 }
 
+// imageToPDF wraps one or more images into a PDF, page per image. Does not go
+// through LibreOffice — the images are placed directly, which is both faster and
+// avoids LibreOffice's own rescaling.
 func imageToPDF(inputPaths []string, outputPath string) error {
 	slog.Info("converting images to PDF", "count", len(inputPaths))
 	return api.ImportImagesFile(inputPaths, outputPath, nil, nil)

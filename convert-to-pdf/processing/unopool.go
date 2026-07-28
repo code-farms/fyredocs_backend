@@ -17,8 +17,15 @@ type unoserverPool struct {
 	ports chan string
 }
 
+// pool is the process-wide daemon port pool, built at init. Package-level because
+// the port set is fixed for the container's lifetime and every conversion must
+// draw from the same pool for the bound to mean anything.
 var pool = newUnoserverPool()
 
+// newUnoserverPool builds the port pool at package init, pre-filling the channel
+// with one token per daemon port so a buffered-channel receive is the whole
+// acquire path. Nothing here contacts the daemons — a port in the pool is a claim
+// that entrypoint.sh launched one, not a verified connection.
 func newUnoserverPool() *unoserverPool {
 	host := envOrDefault("UNOSERVER_HOST", "127.0.0.1")
 	ports := UnoserverPorts()
@@ -49,6 +56,12 @@ func (p *unoserverPool) release(port string) {
 // there is one warm daemon per concurrent job plus a spare — keeping the slow
 // cold-start LibreOffice fallback effectively unreachable even as concurrency
 // is raised on larger hosts.
+//
+// NOTE: entrypoint.sh computes the same count independently and defaults to 2,
+// NOT to WORKER_CONCURRENCY + 1. With UNOSERVER_INSTANCES unset the two disagree
+// and this pool hands out a port no daemon is listening on; the only symptom is
+// conversions silently taking the slow fallback. See the header comment in
+// convert-to-pdf/entrypoint.sh. Pin UNOSERVER_INSTANCES to keep them aligned.
 func unoserverInstances() int {
 	if v := os.Getenv("UNOSERVER_INSTANCES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

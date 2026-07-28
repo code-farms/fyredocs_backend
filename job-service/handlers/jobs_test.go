@@ -1,3 +1,7 @@
+// Tests for job creation and lifecycle. The cases that matter most here pin the
+// three-layer idempotency scheme (Idempotency-Key, upload claims, consumed-upload
+// records) and the quota/plan gates — the guards that stop one upload being billed
+// and processed twice. See consumedUploadKey in jobs.go for the scheme itself.
 package handlers
 
 import (

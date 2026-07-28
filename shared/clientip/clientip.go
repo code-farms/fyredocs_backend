@@ -8,6 +8,15 @@
 // are trustworthy. Walking right-to-left and skipping trusted addresses, the
 // first untrusted entry is the closest address a trusted proxy actually
 // observed — everything left of it is client-supplied and spoofable.
+//
+// NOTE: This package is a security control, not a convenience. Its result is
+// the bucket key for every IP-based rate limiter on the platform (the
+// api-gateway, auth-service, and job-service limiters). If it can be made to
+// return an attacker-controlled value, the attacker mints a fresh rate-limit
+// bucket per request and throttling silently stops working — with no error and
+// no metric to notice. Two consequences follow: TRUSTED_PROXIES must list only
+// hops we actually operate, and a caller must never substitute a raw
+// X-Forwarded-For read for Parser.ClientIP.
 package clientip
 
 import (
@@ -88,6 +97,11 @@ func (p *Parser) ClientIP(r *http.Request) string {
 	return peer
 }
 
+// isTrusted reports whether ip falls inside a configured trusted-proxy network.
+//
+// A nil ip (unparseable input) is deliberately untrusted: treating a malformed
+// address as trusted would let a garbage X-Forwarded-For entry advance the walk
+// in ClientIP and hand an attacker control over the resolved client IP.
 func (p *Parser) isTrusted(ip net.IP) bool {
 	if ip == nil {
 		return false

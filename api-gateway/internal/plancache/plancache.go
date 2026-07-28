@@ -12,6 +12,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// keyPrefix namespaces cached plan entries. auth-service writes these keys on a
+// plan change and the gateway reads them, so the prefix is a cross-service
+// contract: changing it here without changing the writer makes every lookup miss
+// and silently fall back to the default plan limits.
 const keyPrefix = "user:plan:"
 
 // PlanInfo holds the cached plan data for a user.

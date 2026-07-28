@@ -22,6 +22,13 @@ const InternalTokenHeader = "X-Internal-Token"
 // silently letting the mesh go unauthenticated — a missing variable must never
 // reopen the hole. Comparison is constant-time over SHA-256 digests, which
 // also hides the secret's length.
+//
+// The fail-closed posture here is the deliberate opposite of the rate limiters,
+// which fail OPEN when Redis is unavailable. The asymmetry is intentional and
+// follows from what each control protects: a limiter that fails closed would
+// turn a Redis blip into a total outage, whereas an auth check that fails open
+// would expose the internal API. Availability loses to authentication; it wins
+// against throttling.
 func InternalTokenGin(expected string) gin.HandlerFunc {
 	if expected == "" {
 		slog.Error("INTERNAL_API_TOKEN is not configured — /internal routes will refuse all requests (503) until it is set")

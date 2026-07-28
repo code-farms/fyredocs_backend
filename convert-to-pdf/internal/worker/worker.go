@@ -111,8 +111,19 @@ func friendlyMessage(code string) string {
 
 // backoff mirrors the consumer BackOff configuration so that NakWithDelay
 // can supply a sensible delay on each redelivery.
+//
+// NOTE: These values MUST stay equal to the BackOff slice in the
+// CreateOrUpdateConsumer call in Run below. JetStream applies its own BackOff
+// when a message times out without an ack, while this table is used when we
+// explicitly NakWithDelay. If the two drift, identical failures get different
+// retry timing depending on which path they took — invisible from either site,
+// because neither references the other in code.
 var backoff = []time.Duration{10 * time.Second, 30 * time.Second, 2 * time.Minute}
 
+// backoffDuration returns the delay for a given zero-based retry attempt,
+// clamping past the end of the table rather than growing without bound. A
+// negative attempt is treated as the first retry, so a caller that miscomputes
+// deliveryCount-1 cannot panic.
 func backoffDuration(attempt int) time.Duration {
 	if attempt < 0 {
 		attempt = 0
@@ -298,6 +309,10 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 	logger.Info("worker starting", "concurrency", maxConcurrency)
 
 	// ── Create / get durable pull consumer on JOBS_DISPATCH stream ──
+	// NOTE: The BackOff slice below must stay equal to the package-level
+	// backoff table used by backoffDuration. This one governs redelivery
+	// after an ack timeout; that one governs explicit NakWithDelay. Nothing
+	// in code links them, so a change here needs a matching change there.
 	cons, err := cfg.JS.CreateOrUpdateConsumer(ctx, "JOBS_DISPATCH", jetstream.ConsumerConfig{
 		Durable:       cfg.ServiceName,
 		FilterSubject: "jobs.dispatch." + cfg.ServiceName,
@@ -375,6 +390,27 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 	}
 }
 
+// processMessage runs one dispatched job end to end: decode, validate, claim,
+// convert (or serve from the result cache), store the output, and publish the
+// terminal status event.
+//
+// The ack discipline is the important part, because it decides whether a message
+// is retried. Every early return here ACKs, even on error, because these are
+// permanent conditions — a malformed payload, an unknown tool, an unparseable
+// job ID, or a job another worker already owns will fail identically on every
+// redelivery, so NAKing would just spin until MaxDeliver. Only genuine transient
+// faults reach handleFailure, which is the sole NAK path.
+//
+// The status check against the database is a duplicate-delivery guard: JetStream
+// is at-least-once, so the same job can legitimately arrive twice. Skipping a job
+// already "completed" or "processing" prevents two workers from writing the same
+// output key concurrently. It is a guard, not a lock — it narrows the window
+// rather than closing it, and correctness ultimately rests on output writes being
+// idempotent (the output key is derived from the job ID).
+//
+// ctx is procCtx, not the fetch loop's ctx: that is what lets an in-flight job
+// keep running for the duration of the shutdown drain instead of dying the moment
+// SIGTERM arrives. See Run.
 func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, logger *slog.Logger) {
 	var payload JobPayload
 	if err := json.Unmarshal(msg.Data(), &payload); err != nil {
@@ -620,6 +656,26 @@ func tryServeFromCache(ctx context.Context, cfg WorkerConfig, cache cacheStore, 
 	return true
 }
 
+// handleFailure decides whether a failed job is retried or dead-lettered, and
+// is the only place in the worker that NAKs.
+//
+// A job is retried only when the error is transient (see isRecoverable) AND
+// deliveries remain under the consumer's MaxDeliver of 4. Both conditions
+// matter: retrying a permanent failure burns four attempts to reach the same
+// outcome while holding a concurrency slot, and retrying past MaxDeliver is
+// pointless because JetStream stops redelivering anyway.
+//
+// On the terminal path the job is marked failed, a copy is published to the
+// service's DLQ subject, and only THEN is the message acked. That order is
+// deliberate — acking first would let a crash between ack and publish lose the
+// job entirely, with no record anywhere. The DLQ publish uses PublishRaw with
+// the original headers so the dead-lettered copy keeps its trace context, and
+// context.WithoutCancel so it still completes when the job's own context has
+// already been cancelled (the common case during shutdown).
+//
+// Users never see err itself; classifyError maps it to a code and
+// friendlyMessage to prose, so tool paths and subprocess stderr stay out of the
+// API response.
 func handleFailure(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, payload JobPayload, err error, logger *slog.Logger) {
 	meta, _ := msg.Metadata()
 	deliveryCount := uint64(1)
@@ -682,8 +738,18 @@ func handleFailure(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, pay
 	}
 }
 
-// ─── DB helpers (unchanged) ─────────────────────────────────────────────────
+// ─── DB helpers ─────────────────────────────────────────────────────────────
+//
+// These all swallow their errors: a job's real work has already succeeded or
+// failed by the time they run, and losing a status write must not turn a
+// completed conversion into a failed one. The cost is that a dropped write
+// leaves the row stale until the next update or the TTL sweep.
 
+// updateJobStatus writes a job's status and progress in a single UPDATE.
+//
+// Reaching "completed" also stamps completed_at and clears failure_reason in the
+// same statement, so a job that succeeded on retry does not keep the previous
+// attempt's error text — and does so without a second round trip.
 func updateJobStatus(db *gorm.DB, jobID uuid.UUID, status string, progress int, failureReason string) {
 	updates := map[string]interface{}{
 		"status":   status,
@@ -704,6 +770,10 @@ func updateJobStatus(db *gorm.DB, jobID uuid.UUID, status string, progress int, 
 	}
 }
 
+// updateJobStatusString is updateJobStatus for call sites that only hold the
+// job ID as a string — chiefly the panic recovery path, which has nothing but a
+// partially decoded payload. An unparseable ID is logged and dropped rather than
+// propagated, because those callers have no way to handle it.
 func updateJobStatusString(db *gorm.DB, jobID string, status string, progress int, failureReason string) {
 	parsed, err := uuid.Parse(jobID)
 	if err != nil {
@@ -713,12 +783,22 @@ func updateJobStatusString(db *gorm.DB, jobID string, status string, progress in
 	updateJobStatus(db, parsed, status, progress, failureReason)
 }
 
+// clearFailure removes a stale failure_reason after a successful run. It exists
+// for the cache-hit path, which completes a job without going through the
+// "completed" branch of updateJobStatus that would otherwise clear it.
 func clearFailure(db *gorm.DB, jobID uuid.UUID) {
 	if err := db.Model(&models.ProcessingJob{}).Where("id = ?", jobID).Update("failure_reason", nil).Error; err != nil {
 		slog.Error("failed to clear failure reason", "jobId", jobID, "error", err)
 	}
 }
 
+// mergeMetadata merges tool-produced metadata into the job's existing JSONB
+// column, rather than replacing it.
+//
+// The merge happens inside Postgres via the jsonb || operator, so there is no
+// read-modify-write round trip and no lost-update window between two writers.
+// COALESCE covers a NULL starting value. Keys present on both sides take the new
+// value — the right-hand operand wins in a jsonb merge.
 func mergeMetadata(db *gorm.DB, jobID uuid.UUID, meta map[string]interface{}, logger *slog.Logger) {
 	if meta == nil {
 		return
@@ -759,6 +839,19 @@ func recordOutput(db *gorm.DB, jobID uuid.UUID, outputKey string, sizeBytes int6
 	return db.Create(&output).Error
 }
 
+// isRecoverable reports whether err is transient and therefore worth retrying.
+//
+// Two signals qualify: an explicit markRecoverable wrapper, and — as a fallback
+// — an embedded HTTP 5xx or 429 from object storage, matched on the error string
+// because the storage client does not expose the status any other way. That
+// string match is deliberately narrow; broadening it risks classifying a
+// permanent failure as transient, which costs four attempts and a held
+// concurrency slot to reach the same outcome.
+//
+// Unknown errors are treated as PERMANENT. For a worker that is the safe
+// default: a genuinely transient fault that we misjudge fails one job, whereas
+// treating everything as retryable turns a systematically broken input into
+// guaranteed queue churn.
 func isRecoverable(err error) bool {
 	if err == nil {
 		return false

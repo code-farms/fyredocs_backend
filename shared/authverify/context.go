@@ -23,8 +23,12 @@ type AuthContext struct {
 	ImpersonatedBy string
 }
 
+// authContextKey is the private key type for the auth context value. An unexported
+// zero-size struct type is the idiomatic guard against collision: no other package
+// can construct this type, so nothing outside can overwrite the stored identity.
 type authContextKey struct{}
 
+// authKey is the singleton context key instance.
 var authKey = authContextKey{}
 
 // WithAuthContext returns a copy of ctx carrying the given AuthContext.

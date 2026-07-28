@@ -1,3 +1,7 @@
+// Tests for HTTP auth middleware. The important cases are the negative ones: a
+// forged identity header must not be trusted when gateway-header trust is off, an
+// unsigned or wrong-algorithm token must be rejected (see keyFunc in verifier.go for
+// the algorithm-confusion defense), and a denylisted token must fail.
 package authverify
 
 import (

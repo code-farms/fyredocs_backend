@@ -16,17 +16,29 @@ import (
 )
 
 var (
+	// RequestDuration is the latency histogram backing the API-performance
+	// dashboards and the latency alert rules. The "path" label must be the
+	// ROUTE PATTERN, never the raw URL — labelling by raw path would mint a new
+	// time series per job ID and blow up Prometheus cardinality.
 	RequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "http_request_duration_seconds",
 		Help:    "Duration of HTTP requests in seconds",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"method", "path", "status"})
 
+	// JobsProcessed counts every job a worker reached a terminal state on,
+	// success or failure — the "status" label separates them. Divide JobsFailed
+	// by this for a failure rate; using JobsFailed alone gives no denominator.
 	JobsProcessed = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "jobs_processed_total",
 		Help: "Total number of jobs processed",
 	}, []string{"tool_type", "status"})
 
+	// JobsFailed counts permanent job failures only. Transient failures that
+	// get NAKed and redelivered are deliberately not counted here, so this
+	// tracks work that was actually lost rather than retry churn. Keep the
+	// "reason" label to a small closed set for the same cardinality reason as
+	// RequestDuration.
 	JobsFailed = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "jobs_failed_total",
 		Help: "Total number of failed jobs",
@@ -76,6 +88,10 @@ func MetricsHandler() gin.HandlerFunc {
 	}
 }
 
+// routeLabelKey is the private context key carrying the low-cardinality route
+// label. It exists so the metrics middleware records a route PATTERN rather than
+// the raw path — labelling by raw path would mint a series per resource ID and
+// exhaust Prometheus.
 type routeLabelKey struct{}
 
 // routeLabel is a mutable per-request holder the metrics middleware seeds and a
@@ -117,6 +133,12 @@ func HTTPMetricsHandler() http.Handler {
 	return promhttp.Handler()
 }
 
+// httpStatusWriter wraps http.ResponseWriter to capture the status code for the
+// RequestDuration "status" label. It records the code without touching the body,
+// so streaming responses are unaffected.
+//
+// status stays zero when a handler writes a body without calling WriteHeader;
+// callers must treat 0 as the implicit 200 that net/http sends.
 type httpStatusWriter struct {
 	http.ResponseWriter
 	status int

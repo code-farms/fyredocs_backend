@@ -1,5 +1,10 @@
 # Loki — single-binary, filesystem-backed log store for the observability profile.
 # Free / self-hosted. Fronted by Grafana (Loki datasource); fed by Alloy.
+# auth_enabled: false means Loki performs NO tenant authentication and trusts any
+# X-Scope-OrgID it receives. That is only safe because Loki is never published:
+# it listens on the internal compose network, Caddy does not route to it, and the
+# only client is Grafana. Exposing this port would make every service log
+# world-readable — logs carry user IDs, job IDs, and request paths.
 auth_enabled: false
 
 server:
@@ -30,6 +35,12 @@ schema_config:
         period: 24h
 
 limits_config:
+  # 7 days. This is the operative retention limit, and it is also a data-protection
+  # control, not just a disk-space one: logs contain user and request identifiers,
+  # so the window bounds how long that data is held. Raising it means holding
+  # personal data longer — check that against whatever retention policy applies
+  # before increasing it, and note the filesystem backend has no size cap of its
+  # own, so a longer window grows the volume until it fills.
   retention_period: 168h # 7 days
   reject_old_samples: true
   reject_old_samples_max_age: 168h

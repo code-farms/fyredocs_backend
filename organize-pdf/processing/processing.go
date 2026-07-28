@@ -128,6 +128,13 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	}, nil
 }
 
+// optionString reads a string option, coercing non-string JSON values (numbers,
+// bools) via json.Marshal so a client sending {"quality": 90} works the same as
+// {"quality": "90"}. Options arrive as free-form JSON from the API, so tolerating
+// both shapes here avoids every tool having to type-switch.
+//
+// The bool reports "present and non-empty", not merely "present": an explicit ""
+// is treated as absent so callers fall through to their default.
 func optionString(options map[string]interface{}, key string) (string, bool) {
 	if options == nil {
 		return "", false
@@ -148,6 +155,10 @@ func optionString(options map[string]interface{}, key string) (string, bool) {
 	}
 }
 
+// copyFile copies src to dst, reporting a deferred Close error so a failure to
+// flush is not mistaken for success. Used where a tool produces no transformation
+// (for example a requested conversion that is already a no-op) but the pipeline
+// still expects a distinct output file to upload.
 func copyFile(src, dst string) (err error) {
 	in, err := os.Open(src)
 	if err != nil {

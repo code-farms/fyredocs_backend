@@ -62,7 +62,7 @@ func DetectDocumentQuad(src image.Image) (Quad, float64) {
 	return quad, confidence
 }
 
-// ---- blur ----
+// ─── Blur ───────────────────────────────────────────────────────────────────
 
 // gaussianBlur applies a 5-tap separable Gaussian (σ≈1.4) in two passes.
 func gaussianBlur(g *image.Gray) *image.Gray {
@@ -117,7 +117,7 @@ func gaussianBlur(g *image.Gray) *image.Gray {
 	return out
 }
 
-// ---- gradient ----
+// ─── Gradient ───────────────────────────────────────────────────────────────
 
 // sobelMagnitude computes the 3×3 Sobel gradient magnitude per pixel.
 func sobelMagnitude(g *image.Gray) []int {
@@ -213,8 +213,13 @@ func dilate3x3(edges []bool, w, h int) {
 	}
 }
 
-// ---- Hough transform ----
+// ─── Hough transform ────────────────────────────────────────────────────────
 
+// houghLine is one detected line in polar form. Polar (rho, theta) rather than
+// endpoints because the Hough accumulator votes in that space and a line spanning
+// the whole image has no meaningful endpoints. theta is constrained to [0, pi)
+// since a line and its 180-degree rotation are the same line — the intersection
+// and side-pairing code below relies on that normalization.
 type houghLine struct {
 	rho   float64 // signed distance from origin
 	theta float64 // radians, [0, π)

@@ -24,6 +24,7 @@ import (
 // don't each block on the full HTTP timeout.
 var breaker = circuitbreaker.New[*http.Response]("notification-service.notify")
 
+// baseURL resolves notification-service's internal address.
 func baseURL() string {
 	if v := strings.TrimSpace(os.Getenv("NOTIFICATION_SERVICE_URL")); v != "" {
 		return strings.TrimRight(v, "/")
@@ -31,8 +32,14 @@ func baseURL() string {
 	return "http://notification-service:8091"
 }
 
+// httpClient is shared across calls so connections are reused; a fresh client per
+// request would leak a connection pool each time. Its timeout is what stops a
+// hung notification-service from holding this service's handler goroutines.
 var httpClient = &http.Client{Timeout: 4 * time.Second}
 
+// notifyReq is the internal notification-creation body. Must match
+// notification-service's handler shape — the two are coupled by JSON only, with no
+// compile-time check.
 type notifyReq struct {
 	UserID   string `json:"userId"`
 	Type     string `json:"type"`

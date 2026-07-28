@@ -23,6 +23,11 @@ import (
 // the cache path is logged and the job proceeds normally, so caching can never
 // fail a conversion.
 
+// cacheKeyPrefix namespaces this worker's result-cache entries. The service name
+// is part of the prefix so two workers can never collide on a key, and the "v1"
+// segment is a manual invalidation lever: bump it whenever a change to this
+// service's output would make previously cached results wrong, since the key
+// hashes only the inputs and options, not the code that produced the output.
 const cacheKeyPrefix = "rescache:v1:optimize-pdf:"
 
 // cachedResult is the value stored in Redis for a completed conversion.
@@ -42,6 +47,11 @@ type cacheStore interface {
 // errors so the cache is always best-effort.
 type redisCacheStore struct{ rdb *redis.Client }
 
+// get reports a miss for both a genuine absence (redis.Nil) and any Redis
+// failure. Collapsing the two is deliberate: the caller's only options are
+// "reuse a cached output" or "do the conversion", and doing the conversion is
+// always correct. Surfacing the error would invite a caller to fail the job over
+// a cache outage.
 func (r redisCacheStore) get(ctx context.Context, key string) (string, bool) {
 	v, err := r.rdb.Get(ctx, key).Result()
 	if err == redis.Nil {
@@ -54,6 +64,8 @@ func (r redisCacheStore) get(ctx context.Context, key string) (string, bool) {
 	return v, true
 }
 
+// set records a result and returns nothing — a failed write only costs a future
+// cache miss, so it is logged and dropped rather than propagated.
 func (r redisCacheStore) set(ctx context.Context, key, val string, ttl time.Duration) {
 	if err := r.rdb.Set(ctx, key, val, ttl).Err(); err != nil {
 		slog.Warn("result cache set failed", "error", err)

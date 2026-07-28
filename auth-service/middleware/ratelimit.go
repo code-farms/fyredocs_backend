@@ -2,6 +2,14 @@
 // sliding-window rate limiter. It throttles sensitive public endpoints (login,
 // signup, refresh, password reset, proxy login) by client IP and fails open so
 // a Redis outage never blocks authentication.
+//
+// This is the third of three independent sliding-window limiters on the platform
+// (the others are in api-gateway/internal/ratelimit and the sibling service's
+// middleware). The triplication is required by the microservice rules — no shared
+// business logic — so the ZSET algorithm and its fail-open rationale are
+// documented once, in api-gateway/internal/ratelimit/ratelimit.go. Read that
+// first; a change to the algorithm here should be mirrored there and in the third
+// copy, since nothing links them.
 package middleware
 
 import (

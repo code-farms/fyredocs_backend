@@ -22,6 +22,9 @@ func kpi(current, previous *float64, spark []sparkPoint) gin.H {
 	return gin.H{"current": current, "previous": previous, "sparkline": spark}
 }
 
+// f64 coerces a numeric value of unknown concrete type to float64. Aggregate SQL
+// results arrive as int64, float64, or []byte depending on the column and driver,
+// so call sites would otherwise each need the same type switch.
 func f64(v float64) *float64 { return &v }
 
 // ExecutiveOverview powers the 8 KPI cards with current value, previous-period
@@ -145,6 +148,9 @@ func ExecutiveOverview(c *gin.Context) {
 	})
 }
 
+// distinctActiveUsers counts unique users with activity in the window. Counting
+// DISTINCT users rather than events is what separates engagement from volume — one
+// very active user must not read as many users.
 func distinctActiveUsers(db *gorm.DB, from, to time.Time) int64 {
 	var count int64
 	db.Raw(`
@@ -155,6 +161,8 @@ func distinctActiveUsers(db *gorm.DB, from, to time.Time) int64 {
 	return count
 }
 
+// distinctSignupUsers counts unique users who signed up in the window, forming
+// the denominator for activation ratios.
 func distinctSignupUsers(db *gorm.DB, before time.Time) int64 {
 	var count int64
 	db.Raw(`
@@ -164,6 +172,9 @@ func distinctSignupUsers(db *gorm.DB, before time.Time) int64 {
 	return count
 }
 
+// ratio divides safely, returning 0 for a zero denominator. Every rate on the
+// executive dashboard goes through this, because an empty window is normal on a
+// quiet day and must not produce NaN or Inf in the JSON payload.
 func ratio(num, den float64) float64 {
 	if den <= 0 {
 		return 0

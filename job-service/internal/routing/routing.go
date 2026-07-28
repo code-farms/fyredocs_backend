@@ -1,3 +1,10 @@
+// Package routing decides which worker service handles a given tool.
+//
+// It is the single source of truth for queue routing and is intentionally a
+// static table rather than configuration: an unrecognized tool must fail at the
+// API boundary, not silently publish to a queue nobody consumes. Tools are
+// grouped by dependency and performance profile, so adding one means choosing
+// the worker whose installed toolchain and resource envelope already fit it.
 package routing
 
 // ToolServiceMap maps tool types to their processing service names.

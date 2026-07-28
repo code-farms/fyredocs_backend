@@ -28,14 +28,21 @@ func servicePoolBase() PoolConfig {
 
 // Connect opens the shared pooled GORM handle against DATABASE_URL and
 // fail-fasts on any error. Connection mechanics live in
-// fyredocs/shared/database; this service owns only its schema (see Migrate).
+// fyredocs/shared/database. This worker does not migrate anything; see the
+// note below on why schema ownership stays with job-service.
 func Connect(pool ...PoolConfig) {
 	DB = database.MustConnectFromEnv(servicePoolBase(), pool...)
 }
 
-// NOTE: This worker does NOT migrate processing_jobs / file_metadata. Those
-// tables are owned and migrated solely by job-service (the schema owner) to
-// avoid multiple services running concurrent, divergent AutoMigrate on the same
-// tables. This worker only reads/updates ProcessingJob and writes its own
-// FileMetadata output rows; the tables are guaranteed to exist because a worker
-// only processes jobs that job-service (already migrated) has dispatched.
+// NOTE: There is deliberately no Migrate function in this package.
+//
+// processing_jobs and file_metadata are owned and migrated solely by
+// job-service (the schema owner). If this worker also ran AutoMigrate, several
+// services would race to alter the same tables with their own possibly
+// divergent struct definitions. This worker only reads and updates
+// ProcessingJob and writes its own FileMetadata output rows; the tables are
+// guaranteed to already exist, because a worker only ever processes a job that
+// job-service — which has migrated — dispatched to it.
+//
+// Do not "restore" a Migrate call here to make this package look like the
+// request-serving services'; that would reintroduce the race.

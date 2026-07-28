@@ -12,6 +12,9 @@ import (
 // OOM. These helpers reject jobs that cannot physically fit and serialize large
 // jobs within a single pod.
 
+// bytesPerMiB converts the MiB-denominated environment knobs below into
+// bytes. The env vars are expressed in MiB because that is how operators
+// reason about a tmpfs size; every comparison here is in bytes.
 const bytesPerMiB = 1 << 20
 
 // largeJobSem serializes "large" jobs within this worker pod so two of them

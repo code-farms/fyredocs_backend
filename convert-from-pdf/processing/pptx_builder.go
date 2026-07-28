@@ -86,6 +86,9 @@ func buildPptxFromImages(imageDir string, outputPath string) error {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+// writeString adds a generated XML part to the .pptx archive. A .pptx is a ZIP of
+// XML parts, so every helper below emits one entry at the exact path the OOXML
+// spec requires — the names are the contract with PowerPoint, not arbitrary.
 func writeString(zw *zip.Writer, name, content string) error {
 	w, err := zw.Create(name)
 	if err != nil {
@@ -95,6 +98,9 @@ func writeString(zw *zip.Writer, name, content string) error {
 	return err
 }
 
+// writeFile adds an on-disk file (a rendered slide image) to the archive under
+// its OOXML part name. Reads the whole file into memory, which is acceptable only
+// because these are single rendered pages.
 func writeFile(zw *zip.Writer, name, srcPath string) error {
 	w, err := zw.Create(name)
 	if err != nil {
@@ -133,6 +139,9 @@ func imageDimensionsEMU(path string) (int64, int64, bool) {
 
 // ── XML Templates ────────────────────────────────────────────────────────────
 
+// contentTypesXML emits [Content_Types].xml, which maps every part extension to a
+// MIME type. PowerPoint refuses to open the file if a part's type is missing here,
+// so this must list every extension the builder actually writes.
 func contentTypesXML(slideCount int) string {
 	var sb strings.Builder
 	sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -151,6 +160,8 @@ func contentTypesXML(slideCount int) string {
 	return sb.String()
 }
 
+// topRelsXML emits _rels/.rels, the archive's root relationship pointing at the
+// presentation part. This is the entry point PowerPoint follows first.
 func topRelsXML() string {
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -158,6 +169,8 @@ func topRelsXML() string {
 </Relationships>`
 }
 
+// presentationXML emits the presentation part: slide size and the ordered slide
+// ID list. Slide order comes from this list, not from part names.
 func presentationXML(slideCount int, slideW, slideH int64) string {
 	var sb strings.Builder
 	sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -179,6 +192,9 @@ func presentationXML(slideCount int, slideW, slideH int64) string {
 	return sb.String()
 }
 
+// presentationRelsXML wires the presentation to its slides, master, and theme.
+// Every rId referenced from presentationXML must be defined here or the file is
+// rejected as corrupt.
 func presentationRelsXML(slideCount int) string {
 	var sb strings.Builder
 	sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -192,6 +208,9 @@ func presentationRelsXML(slideCount int) string {
 	return sb.String()
 }
 
+// slideXML emits one slide holding a single full-bleed picture — the rendered PDF
+// page. Geometry is in EMUs (English Metric Units, 914400 per inch), the unit
+// OOXML uses throughout.
 func slideXML(n int, slideW, slideH int64) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -235,6 +254,7 @@ func slideXML(n int, slideW, slideH int64) string {
 </p:sld>`, slideW, slideH, slideW, slideH, n, n, slideW, slideH)
 }
 
+// slideRelsXML relates a slide to its layout and its embedded image.
 func slideRelsXML(n int) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -243,6 +263,9 @@ func slideRelsXML(n int) string {
 </Relationships>`, n, n)
 }
 
+// slideMasterXML emits a minimal slide master. Required even though these slides
+// inherit nothing from it: OOXML mandates a master, and PowerPoint will not open a
+// presentation without one.
 func slideMasterXML() string {
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -260,6 +283,7 @@ func slideMasterXML() string {
 </p:sldMaster>`
 }
 
+// slideMasterRelsXML relates the master to its layout and theme.
 func slideMasterRelsXML() string {
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -268,6 +292,8 @@ func slideMasterRelsXML() string {
 </Relationships>`
 }
 
+// slideLayoutXML emits a blank layout. Deliberately empty of placeholders so
+// nothing overlays the page image.
 func slideLayoutXML() string {
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -281,6 +307,8 @@ func slideLayoutXML() string {
 </p:sldLayout>`
 }
 
+// slideLayoutRelsXML relates the layout back to its master, completing the
+// mandatory master/layout/slide chain.
 func slideLayoutRelsXML() string {
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -288,6 +316,8 @@ func slideLayoutRelsXML() string {
 </Relationships>`
 }
 
+// themeXML emits a minimal theme. Also mandatory: PowerPoint resolves colour and
+// font references against a theme even when, as here, nothing uses them.
 func themeXML() string {
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Blank">

@@ -1,3 +1,12 @@
+// Package routes maps auth-service HTTP paths to handlers and owns the
+// per-endpoint rate-limit configuration.
+//
+// The route groups encode the trust model: /auth public endpoints take no
+// token, the protected /auth group requires a valid one, and /internal is
+// service-to-service only, guarded by a shared secret that fails closed. Each
+// sensitive endpoint gets its own IP limiter with its own ceiling — login,
+// signup, refresh, password reset, and admin impersonation are limited
+// independently so exhausting one cannot lock a user out of the others.
 package routes
 
 import (

@@ -66,6 +66,8 @@ func natsMonitorURL() string {
 	return "http://nats:8222"
 }
 
+// buildServerInfo reshapes a NATS monitoring response into the dashboard's
+// payload, insulating the UI from the broker's own schema.
 func buildServerInfo(v *natsmon.Varz, err error) gin.H {
 	if err != nil || v == nil {
 		info := gin.H{"status": "unreachable"}
@@ -152,6 +154,7 @@ func buildJetStreamInfo(j *natsmon.JSZ, err error) (streams []gin.H, consumers [
 	return streams, consumers, summary
 }
 
+// max64 returns the larger of two int64 values.
 func max64(a, b int64) int64 {
 	if a > b {
 		return a

@@ -115,6 +115,12 @@ func stringField(m gin.H, key string) string {
 	return ""
 }
 
+// getSystemInfo gathers host-level stats from the Linux /proc filesystem.
+//
+// LINUX-ONLY: every reader below opens a /proc path. On darwin (local
+// development) those reads fail and the fields come back zero or empty rather
+// than erroring the request — the dashboard degrades instead of breaking, so a
+// developer seeing zeros on a Mac is looking at expected behaviour.
 func getSystemInfo() gin.H {
 	info := gin.H{
 		"cpu": gin.H{
@@ -154,6 +160,9 @@ func getSystemInfo() gin.H {
 	return info
 }
 
+// getSelfServiceInfo reports this process's own metrics without a network hop,
+// since analytics-service cannot usefully scrape itself over HTTP while serving
+// the very request doing the scraping.
 func getSelfServiceInfo() gin.H {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
@@ -179,6 +188,14 @@ func getSelfServiceInfo() gin.H {
 	}
 }
 
+// scrapeServicesParallel scrapes every service's metrics endpoint concurrently
+// and collects the results under a mutex.
+//
+// Concurrency is what makes this endpoint usable: serially scraping a dozen
+// services would sum their latencies, and a single slow service would dominate.
+// The map is written from multiple goroutines, hence the mutex — Go maps are not
+// safe for concurrent write. Fan-out is bounded by the number of configured
+// services, so no semaphore is needed.
 func scrapeServicesParallel(ctx context.Context, serviceURLs map[string]string) map[string]gin.H {
 	var mu sync.Mutex
 	results := make(map[string]gin.H)
@@ -199,6 +216,12 @@ func scrapeServicesParallel(ctx context.Context, serviceURLs map[string]string) 
 	return results
 }
 
+// scrapeServiceInfo probes one service's health and metrics, returning a status
+// payload rather than an error so one unreachable service cannot fail the whole
+// dashboard.
+//
+// Raw errors are logged but never returned in the payload: they embed internal
+// host:port topology, which must not reach an admin browser response.
 func scrapeServiceInfo(ctx context.Context, name, baseURL string) gin.H {
 	// Check health first
 	healthy, err := promscrape.CheckHealth(ctx, baseURL)
@@ -258,6 +281,9 @@ func scrapeServiceInfo(ctx context.Context, name, baseURL string) gin.H {
 	}
 }
 
+// parseServiceURLs builds the name-to-URL scrape map from configuration. These
+// are internal mesh addresses, so they belong in logs and never in a response
+// body.
 func parseServiceURLs() map[string]string {
 	raw := strings.TrimSpace(os.Getenv("SERVICE_URLS"))
 	if raw == "" {
@@ -284,8 +310,11 @@ func parseServiceURLs() map[string]string {
 	return result
 }
 
-// --- Linux /proc readers ---
+// ─── Linux /proc readers ────────────────────────────────────────────────────
 
+// readSystemUptime reads host uptime from /proc/uptime, whose first field is
+// seconds since boot. Inside a container this reports the HOST's uptime, not the
+// container's, because /proc/uptime is not namespaced.
 func readSystemUptime() (string, error) {
 	data, err := os.ReadFile("/proc/uptime")
 	if err != nil {
@@ -298,6 +327,9 @@ func readSystemUptime() (string, error) {
 	return formatDuration(time.Duration(uptimeSec) * time.Second), nil
 }
 
+// readLoadAvg reads the 1, 5, and 15-minute load averages from /proc/loadavg.
+// Also host-wide rather than container-scoped, and not normalized by core count —
+// interpret against the host's CPU count.
 func readLoadAvg() (float64, float64, float64, error) {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
@@ -310,6 +342,13 @@ func readLoadAvg() (float64, float64, float64, error) {
 	return l1, l5, l15, nil
 }
 
+// readCPUUsage computes CPU utilisation as a percentage.
+//
+// /proc/stat exposes cumulative jiffy counters since boot, not a rate, so a
+// single read cannot yield utilisation — this samples twice 200ms apart and
+// takes the delta. That sleep means the function BLOCKS for 200ms, which is why
+// it is called once per request from a parallel gather rather than per service.
+// A zero delta (a sample too fast to tick) returns 0 rather than dividing by zero.
 func readCPUUsage() (float64, error) {
 	// Read /proc/stat twice with a small gap to compute CPU usage
 	idle1, total1, err := readCPUStat()
@@ -330,6 +369,9 @@ func readCPUUsage() (float64, error) {
 	return (1.0 - float64(idleDelta)/float64(totalDelta)) * 100, nil
 }
 
+// readCPUStat returns the cumulative idle and total jiffy counters from the
+// aggregate "cpu " line of /proc/stat. Meaningful only as a delta against a
+// second sample; see readCPUUsage.
 func readCPUStat() (idle, total uint64, err error) {
 	data, err := os.ReadFile("/proc/stat")
 	if err != nil {
@@ -357,6 +399,9 @@ func readCPUStat() (idle, total uint64, err error) {
 	return 0, 0, fmt.Errorf("/proc/stat: cpu line not found")
 }
 
+// readMemInfo reads memory totals from /proc/meminfo. Uses MemAvailable rather
+// than MemFree, because Linux counts reclaimable page cache as used and MemFree
+// alone makes a healthy host look nearly exhausted.
 func readMemInfo() (gin.H, error) {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
@@ -394,6 +439,9 @@ func readMemInfo() (gin.H, error) {
 	}, nil
 }
 
+// readDiskUsage reports filesystem usage via statfs. Uses the syscall directly
+// rather than shelling out to df, which would mean spawning a process on every
+// dashboard request.
 func readDiskUsage(path string) (gin.H, error) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(path, &stat); err != nil {
@@ -417,16 +465,22 @@ func readDiskUsage(path string) (gin.H, error) {
 	}, nil
 }
 
-// --- Helpers ---
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
+// roundMB converts bytes to whole megabytes for display.
 func roundMB(bytes uint64) float64 {
 	return float64(bytes) / (1024 * 1024)
 }
 
+// roundMBf converts bytes to megabytes keeping one decimal, for values where
+// whole-MB rounding would lose meaningful precision.
 func roundMBf(bytes float64) float64 {
 	return bytes / (1024 * 1024)
 }
 
+// formatDuration renders a duration in compact human form (for example "3d 4h").
+// Go's default Duration string prints hours only, so a multi-day uptime would
+// otherwise read as an unhelpfully large hour count.
 func formatDuration(d time.Duration) string {
 	days := int(d.Hours()) / 24
 	hours := int(d.Hours()) % 24

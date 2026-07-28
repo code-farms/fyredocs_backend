@@ -26,6 +26,7 @@ func ListTags(c *gin.Context) {
 	response.OK(c, "Tags retrieved", tags)
 }
 
+// tagReq is the tag create body.
 type tagReq struct {
 	Name string `json:"name" binding:"omitempty,max=100"`
 	// Color is free-form (clients send hex today, but the API never promised
