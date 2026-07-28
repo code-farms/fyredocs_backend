@@ -10,6 +10,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/minio/minio-go/v7 v7.2.0
 	github.com/nats-io/nats.go v1.49.0
+	github.com/pressly/goose/v3 v3.27.3
 	github.com/prometheus/client_golang v1.19.1
 	github.com/prometheus/client_model v0.5.0
 	github.com/redis/go-redis/v9 v9.14.0
@@ -62,7 +63,6 @@ require (
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.3.1 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
-	github.com/pressly/goose/v3 v3.27.3 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect
