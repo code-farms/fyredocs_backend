@@ -1,9 +1,14 @@
 // Package routes maps document-service HTTP paths to handlers.
 //
-// Every /api route sits behind RequireUser, which trusts the gateway-injected
-// X-User-ID header. That trust is only sound because the gateway strips
-// client-supplied identity headers before proxying — this service must never be
-// exposed directly.
+// Every /api route sits behind RequireUser, which reads the identity resolved by
+// the auth middleware installed in main.go. That middleware verifies the JWT
+// locally by default (AUTH_TRUST_GATEWAY_HEADERS=false), so a forged X-User-ID
+// header grants nothing and the service stays safe when it is reachable from
+// anything other than the gateway — which it is once app servers span hosts.
+//
+// /healthz and /readyz are unauthenticated by design: the middleware passes
+// credential-less requests through as anonymous, and RequireUser does not guard
+// them, so container healthchecks need no token.
 package routes
 
 import (

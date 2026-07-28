@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/logger"
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/response"
@@ -107,10 +108,25 @@ func CreateInternal(c *gin.Context) {
 	response.Created(c, "Notification created", n)
 }
 
-// userID reads the caller's identity from the gateway-injected header. Returns the
-// zero value when absent, which callers must treat as unauthorized.
+// userID reads the caller's identity from the AuthContext resolved by the auth
+// middleware. Returns the zero value when absent, which callers must treat as
+// unauthorized.
+//
+// Reading the context rather than the X-User-ID header directly is what makes
+// this safe once the service is reachable across a host boundary: with
+// AUTH_TRUST_GATEWAY_HEADERS off (the default) the context is populated only from
+// a verified JWT, so a forged X-User-ID header resolves to no identity at all.
+// The accessor works unchanged when the flag is on.
+//
+// NOTE: this is the /api feed path only. The mesh-only POST /internal/notifications
+// takes its target user from the request body and is guarded by the shared secret
+// instead (see routes/routes.go) — it never consults this function.
 func userID(c *gin.Context) (uuid.UUID, bool) {
-	raw := strings.TrimSpace(c.GetHeader("X-User-ID"))
+	authCtx, ok := authverify.GetGinAuth(c)
+	if !ok {
+		return uuid.Nil, false
+	}
+	raw := strings.TrimSpace(authCtx.UserID)
 	if raw == "" {
 		return uuid.Nil, false
 	}

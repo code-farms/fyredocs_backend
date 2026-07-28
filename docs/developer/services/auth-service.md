@@ -693,7 +693,7 @@ Rate limits are per IP and enforced via Redis-backed middleware.
 |----------|---------|-------------|
 | `PORT` | `8086` | HTTP server port |
 | `TRUSTED_PROXIES` | `127.0.0.1,::1` | Trusted proxy IP addresses |
-| `AUTH_TRUST_GATEWAY_HEADERS` | `false` | Trust X-User-ID from gateway (only enable when gateway is upstream) |
+| `AUTH_TRUST_GATEWAY_HEADERS` | `false` | Believe the gateway's `X-User-*` headers instead of verifying the JWT here. **Keep false** — it is only sound while nothing but the gateway can reach this port, which stops being true on a multi-host deploy. |
 | `LOG_MODE` | `""` | Logging mode |
 
 ## Background Workers

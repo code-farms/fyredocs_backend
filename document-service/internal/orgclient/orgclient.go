@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/circuitbreaker"
 	"fyredocs/shared/logger"
 )
@@ -59,20 +60,30 @@ type orgResponse struct {
 // should fail safe.
 func Membership(ctx context.Context, orgID, userID string) (role string, member bool, err error) {
 	res, err := breaker.Execute(func() (membershipResult, error) {
-		url := fmt.Sprintf("%s/api/orgs/%s", baseURL(), orgID)
+		// The /internal/v1 mirror, not the public /api/orgs route: this hop holds
+		// the end user's ID but no JWT to forward, and user-service verifies tokens
+		// locally, so the public route would reject it with 401.
+		// NOTE: contract with user-service/routes/routes.go — that group is guarded
+		// by InternalTokenGin and reads identity via InternalIdentity.
+		url := fmt.Sprintf("%s/internal/v1/orgs/%s", baseURL(), orgID)
 		req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if rerr != nil {
 			return membershipResult{}, rerr
 		}
-		// Internal call on the trusted mesh: assert the caller's identity the same
-		// way the gateway would.
 		// Propagate the caller's trace and request ID so the internal hop stays
 		// correlated with the originating request (Grafana log↔trace jump).
 		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 		if rid := logger.RequestIDFromContext(ctx); rid != "" {
 			req.Header.Set(logger.RequestIDHeader, rid)
 		}
+		// The shared secret is what authorizes naming an arbitrary user here; the
+		// header below is only trusted because of it. An unset INTERNAL_API_TOKEN
+		// makes user-service fail closed (503), which the breaker treats as a
+		// dependency failure — callers then fail safe rather than granting access.
 		req.Header.Set("X-User-ID", userID)
+		if tok := strings.TrimSpace(os.Getenv("INTERNAL_API_TOKEN")); tok != "" {
+			req.Header.Set(authverify.InternalTokenHeader, tok)
+		}
 
 		resp, rerr := httpClient.Do(req)
 		if rerr != nil {

@@ -252,6 +252,12 @@ graph LR
 
 ## Authentication Flow
 
+Identity is verified **twice** on purpose. The gateway resolves it once for plan
+limits and header injection; each service then verifies the JWT again itself
+(`AUTH_TRUST_GATEWAY_HEADERS=false`). The second pass is what makes a forged
+`X-User-ID` worthless — required once services are reachable from anything but the
+gateway, i.e. as soon as app servers span hosts.
+
 ```mermaid
 flowchart TD
     Client -->|Request with auth cookie or Bearer token| Caddy[Caddy edge]
@@ -260,8 +266,21 @@ flowchart TD
     GW -->|Check token denylist| Redis[(Redis)]
     GW -->|No token? Issue/load guest_token cookie| Redis
     GW -->|ResolvePlan: read plan info| Redis
-    GW -->|Set X-User-ID, X-Role, X-Plan headers| Backend[Backend Service]
-    Backend -->|Trust gateway headers OR re-verify| Backend
+    GW -->|"Clear then set X-User-ID, X-Role, X-Plan<br/>(Authorization forwarded UNTOUCHED)"| Backend[Backend Service]
+    Backend -->|"Verify the JWT locally again<br/>(gateway headers not trusted)"| Backend
+    Backend -->|Check token denylist| Redis
+```
+
+Service-to-service hops hold no end-user JWT, so they authenticate with the
+`INTERNAL_API_TOKEN` shared secret on `/internal` routes instead. That secret fails
+**closed** — a 503 when unset, never an open door.
+
+```mermaid
+flowchart LR
+    DS[document-service] -->|"GET /internal/v1/orgs/:id<br/>X-Internal-Token + X-User-ID"| US[user-service]
+    DS -->|"POST /internal/notifications<br/>X-Internal-Token"| NS[notification-service]
+    JS[job-service] -->|"/internal/v1 detect<br/>X-Internal-Token"| OP[organize-pdf]
+    Prom[Prometheus] -->|"POST /internal/alerts (unauthenticated<br/>— cannot send an identity header)"| AN[analytics-service]
 ```
 
 ## Refresh Token Rotation

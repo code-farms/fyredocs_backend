@@ -349,9 +349,25 @@ services:
       # Ad-network hosts appended to the CSP script/img/connect/frame-src (empty =
       # strict, same-origin only). Set CSP_AD_DOMAINS in .env to enable ads.
       CSP_AD_DOMAINS: ${CSP_AD_DOMAINS:-}
-      # Internal port the api-gateway listens on; the Caddyfile @api upstream
-      # resolves {$API_GATEWAY_PORT:8080} to this. Must match the gateway's PORT.
+      # Internal port the api-gateway listens on. Must match the gateway's PORT.
       API_GATEWAY_PORT: ${API_GATEWAY_PORT:-8080}
+      # Upstream addresses the Caddyfile proxies to. Defaults are the single-host
+      # container names; on a multi-host deploy set each to a real host:port. All
+      # four MUST be given a concrete value here rather than left to the
+      # Caddyfile's {$VAR:default} fallback — compose always defines the variable
+      # in the container, and that fallback ignores defined-but-empty values (see
+      # the PUBLIC_DOMAIN note above).
+      #
+      # API_GATEWAY_UPSTREAMS is space-separated and load balanced, e.g.
+      #   API_GATEWAY_UPSTREAMS="app1.internal:8080 app2.internal:8080"
+      API_GATEWAY_UPSTREAMS: ${API_GATEWAY_UPSTREAMS:-api-gateway:${API_GATEWAY_PORT:-8080}}
+      # Single gateway used only for the /grafana forward_auth probe — it must be
+      # ONE address, not a list, so it cannot reuse API_GATEWAY_UPSTREAMS.
+      AUTHZ_UPSTREAM: ${AUTHZ_UPSTREAM:-api-gateway:${API_GATEWAY_PORT:-8080}}
+      # Object bytes (/uploads/*, /outputs/*) are relayed here. Multi-host: the
+      # data host's private address.
+      MINIO_UPSTREAM: ${MINIO_UPSTREAM:-minio:9000}
+      GRAFANA_UPSTREAM: ${GRAFANA_UPSTREAM:-grafana:3000}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ../../fyredocs_frontend/dist:/srv/spa:ro
@@ -407,7 +423,7 @@ services:
       DOCUMENT_SERVICE_URL: http://document-service:8089
       USER_SERVICE_URL: http://user-service:8090
       NOTIFICATION_SERVICE_URL: http://notification-service:8091
-      REDIS_ADDR: redis:6379
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
 
@@ -433,7 +449,7 @@ services:
       # Trusted proxies for client-IP resolution (rightmost-untrusted XFF).
       # Same list the Gin services use; without it guests collapse into one
       # shared rate-limit bucket (over-throttles, never under-throttles).
-      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
 
       # Per-plan API rate limits (requests per window, keyed by user; guests by IP).
       # These MUST be declared here to reach the container: compose only uses .env
@@ -503,10 +519,10 @@ services:
       # Migrations take a session advisory lock, which transaction-mode
       # pooling breaks — they always connect straight to Postgres.
       DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
-      REDIS_ADDR: redis:6379
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
-      NATS_URL: nats://nats:4222
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
 
       # JWT Configuration
       JWT_HS256_SECRET: ${JWT_HS256_SECRET}
@@ -559,7 +575,7 @@ services:
       PROXY_LOGIN_ENABLED: ${PROXY_LOGIN_ENABLED:-true}
       PROXY_LOGIN_TTL: ${PROXY_LOGIN_TTL:-30m}
 
-      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
       # Shared secret guarding mesh-only /internal routes (fails closed when
       # unset). Must be identical across all services. See .env.example.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
@@ -610,10 +626,10 @@ services:
       # Migrations take a session advisory lock, which transaction-mode
       # pooling breaks — they always connect straight to Postgres.
       DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
-      REDIS_ADDR: redis:6379
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
-      NATS_URL: nats://nats:4222
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
 
       # JWT Configuration
       JWT_HS256_SECRET: ${JWT_HS256_SECRET}
@@ -627,7 +643,12 @@ services:
       AUTH_GUEST_SUFFIX: "jobs"
       AUTH_DENYLIST_ENABLED: "true"
       AUTH_DENYLIST_PREFIX: "denylist:jwt"
-      AUTH_TRUST_GATEWAY_HEADERS: "true"
+      # Was hardcoded "true", which is only sound while the gateway is the sole
+      # thing that can reach this port. Once app servers span hosts that stops
+      # being true, so the default flips to false and the JWT is verified here.
+      # The gateway forwards Authorization untouched (it clears only X-User-*),
+      # so the token is available to verify — see api-gateway/main.go newProxy.
+      AUTH_TRUST_GATEWAY_HEADERS: ${AUTH_TRUST_GATEWAY_HEADERS:-false}
 
       # Object storage (MinIO)
       S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
@@ -641,7 +662,7 @@ services:
       S3_PUBLIC_ENDPOINT: ${PUBLIC_ORIGIN:-http://localhost}
       UPLOAD_PART_SIZE_MB: "${UPLOAD_PART_SIZE_MB:-8}"
 
-      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
       # Shared secret guarding mesh-only /internal routes (fails closed when
       # unset). Must be identical across all services. See .env.example.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
@@ -718,10 +739,10 @@ services:
     environment:
       PORT: "8082"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
-      REDIS_ADDR: redis:6379
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
-      NATS_URL: nats://nats:4222
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
 
       # Object storage (MinIO) — workers stream inputs/outputs; /tmp is the
       # only local scratch space (tmpfs below)
@@ -732,7 +753,7 @@ services:
       S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
 
-      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
 
       # Parallel jobs per container (pdf2docx/LibreOffice are CPU-heavy).
       # Overridable per host: on a VS-32-class box (16 cores) try 3-4.
@@ -794,10 +815,10 @@ services:
     environment:
       PORT: "8083"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
-      REDIS_ADDR: redis:6379
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
-      NATS_URL: nats://nats:4222
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
 
       # Object storage (MinIO)
       S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
@@ -807,7 +828,7 @@ services:
       S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
 
-      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
       # Overridable per host: on a VS-32-class box (16 cores) try 3-4.
       WORKER_CONCURRENCY: "${CONVERT_TO_PDF_CONCURRENCY:-2}"
       # Bounded drain on shutdown; must stay under stop_grace_period.
@@ -875,10 +896,10 @@ services:
     environment:
       PORT: "8084"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
-      REDIS_ADDR: redis:6379
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
-      NATS_URL: nats://nats:4222
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
 
       # Object storage (MinIO)
       S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
@@ -888,7 +909,7 @@ services:
       S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
 
-      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
       # Shared secret guarding mesh-only /internal routes (fails closed when
       # unset). Must be identical across all services. See .env.example.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
@@ -948,10 +969,10 @@ services:
     environment:
       PORT: "8085"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
-      REDIS_ADDR: redis:6379
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
-      NATS_URL: nats://nats:4222
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
 
       # Object storage (MinIO)
       S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
@@ -961,7 +982,7 @@ services:
       S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
 
-      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
 
       # OCR
       OCR_DEFAULT_LANGUAGE: ${OCR_DEFAULT_LANGUAGE:-eng}
@@ -1025,20 +1046,37 @@ services:
       # Migrations take a session advisory lock, which transaction-mode
       # pooling breaks — they always connect straight to Postgres.
       DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
-      NATS_URL: nats://nats:4222
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
       # NATS HTTP monitoring endpoint (`-m 8222`), internal-only. Scraped by the
       # admin NATS dashboard tab (/admin/metrics/nats).
-      NATS_MONITOR_URL: http://nats:8222
+      NATS_MONITOR_URL: ${NATS_MONITOR_URL:-http://nats:8222}
       # The admin dashboard scrapes the gateway; these must track API_GATEWAY_PORT.
       # SERVICE_URLS, when set, REPLACES the built-in default map (server_performance.go),
       # so every service is listed — only the api-gateway entry is parameterized.
       API_GATEWAY_METRICS_URL: http://api-gateway:${API_GATEWAY_PORT:-8080}/metrics
       SERVICE_URLS: "api-gateway=http://api-gateway:${API_GATEWAY_PORT:-8080},auth-service=http://auth-service:8086,job-service=http://job-service:8081,convert-from-pdf=http://convert-from-pdf:8082,convert-to-pdf=http://convert-to-pdf:8083,organize-pdf=http://organize-pdf:8084,optimize-pdf=http://optimize-pdf:8085"
-      # Redis backs the short-TTL /api/dashboard response cache.
-      REDIS_ADDR: redis:6379
+      # Redis backs the short-TTL /api/dashboard response cache and the JWT
+      # denylist. Without the latter a token revoked at logout would keep working
+      # here until natural expiry.
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
-      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
+
+      # JWT Configuration — this service verifies tokens itself rather than
+      # trusting gateway headers, so it needs the same signing config.
+      JWT_HS256_SECRET: ${JWT_HS256_SECRET}
+      JWT_ALLOWED_ALGS: "HS256"
+      JWT_ISSUER: "fyredocs"
+      JWT_AUDIENCE: "fyredocs-api"
+      JWT_CLOCK_SKEW: "60s"
+
+      # Auth settings. AUTH_TRUST_GATEWAY_HEADERS defaults to false so nobody who
+      # can reach this port can claim `X-User-Role: super-admin` and read
+      # platform-wide metrics once the service spans a host boundary.
+      AUTH_DENYLIST_ENABLED: "true"
+      AUTH_DENYLIST_PREFIX: "denylist:jwt"
+      AUTH_TRUST_GATEWAY_HEADERS: ${AUTH_TRUST_GATEWAY_HEADERS:-false}
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
@@ -1092,13 +1130,34 @@ services:
       # Migrations take a session advisory lock, which transaction-mode
       # pooling breaks — they always connect straight to Postgres.
       DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
-      NATS_URL: nats://nats:4222
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_DB: "0"
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
       USER_SERVICE_URL: http://user-service:8090
       NOTIFICATION_SERVICE_URL: http://notification-service:8091
-      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
       # Shared secret guarding mesh-only /internal routes (fails closed when
       # unset). Must be identical across all services. See .env.example.
+      # Also sent OUTBOUND by orgclient to user-service's /internal/v1 membership
+      # lookup — without it that call 503s and org document access fails safe.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+
+      # JWT Configuration — this service verifies tokens itself rather than
+      # trusting gateway headers, so it needs the same signing config.
+      JWT_HS256_SECRET: ${JWT_HS256_SECRET}
+      JWT_ALLOWED_ALGS: "HS256"
+      JWT_ISSUER: "fyredocs"
+      JWT_AUDIENCE: "fyredocs-api"
+      JWT_CLOCK_SKEW: "60s"
+
+      # Auth settings. AUTH_TRUST_GATEWAY_HEADERS defaults to false so a forged
+      # X-User-ID cannot impersonate a user once this service is reachable across
+      # a host boundary. The denylist needs Redis; without it a token revoked at
+      # logout would keep working here until natural expiry.
+      AUTH_DENYLIST_ENABLED: "true"
+      AUTH_DENYLIST_PREFIX: "denylist:jwt"
+      AUTH_TRUST_GATEWAY_HEADERS: ${AUTH_TRUST_GATEWAY_HEADERS:-false}
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
@@ -1125,6 +1184,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       nats:
         condition: service_healthy
       user-service:
@@ -1147,7 +1208,31 @@ services:
       # Migrations take a session advisory lock, which transaction-mode
       # pooling breaks — they always connect straight to Postgres.
       DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
-      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_DB: "0"
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
+      # Shared secret guarding the mesh-only /internal/v1 membership lookup that
+      # document-service calls (fails closed with 503 when unset, which makes
+      # org-scoped document authorization fail safe rather than open).
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+
+      # JWT Configuration — this service verifies tokens itself rather than
+      # trusting gateway headers, so it needs the same signing config.
+      JWT_HS256_SECRET: ${JWT_HS256_SECRET}
+      JWT_ALLOWED_ALGS: "HS256"
+      JWT_ISSUER: "fyredocs"
+      JWT_AUDIENCE: "fyredocs-api"
+      JWT_CLOCK_SKEW: "60s"
+
+      # Auth settings. AUTH_TRUST_GATEWAY_HEADERS defaults to false so a forged
+      # X-User-ID cannot act inside another tenant's organization once this
+      # service is reachable across a host boundary. The denylist needs Redis;
+      # without it a token revoked at logout would keep working here until
+      # natural expiry.
+      AUTH_DENYLIST_ENABLED: "true"
+      AUTH_DENYLIST_PREFIX: "denylist:jwt"
+      AUTH_TRUST_GATEWAY_HEADERS: ${AUTH_TRUST_GATEWAY_HEADERS:-false}
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
@@ -1174,6 +1259,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - fyredocs_net
 
@@ -1198,11 +1285,30 @@ services:
       # Migrations take a session advisory lock, which transaction-mode
       # pooling breaks — they always connect straight to Postgres.
       DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
-      NATS_URL: nats://nats:4222
-      TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_DB: "0"
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
       # Shared secret guarding mesh-only /internal routes (fails closed when
       # unset). Must be identical across all services. See .env.example.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+
+      # JWT Configuration — this service verifies tokens itself rather than
+      # trusting gateway headers, so it needs the same signing config.
+      JWT_HS256_SECRET: ${JWT_HS256_SECRET}
+      JWT_ALLOWED_ALGS: "HS256"
+      JWT_ISSUER: "fyredocs"
+      JWT_AUDIENCE: "fyredocs-api"
+      JWT_CLOCK_SKEW: "60s"
+
+      # Auth settings. AUTH_TRUST_GATEWAY_HEADERS defaults to false so a forged
+      # X-User-ID cannot read another user's notification feed once this service
+      # is reachable across a host boundary. The denylist needs Redis; without it
+      # a token revoked at logout would keep working here until natural expiry.
+      AUTH_DENYLIST_ENABLED: "true"
+      AUTH_DENYLIST_PREFIX: "denylist:jwt"
+      AUTH_TRUST_GATEWAY_HEADERS: ${AUTH_TRUST_GATEWAY_HEADERS:-false}
 
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
@@ -1228,6 +1334,8 @@ services:
         max-file: "3"
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       nats:
         condition: service_healthy
@@ -1271,7 +1379,7 @@ services:
       # Reuses the app's scoped MinIO creds (they can list+read the buckets).
       RCLONE_CONFIG_SRC_TYPE: s3
       RCLONE_CONFIG_SRC_PROVIDER: Minio
-      RCLONE_CONFIG_SRC_ENDPOINT: http://minio:9000
+      RCLONE_CONFIG_SRC_ENDPOINT: ${S3_INTERNAL_URL:-http://minio:9000}
       RCLONE_CONFIG_SRC_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
       RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
       RCLONE_CONFIG_SRC_REGION: ${S3_REGION:-us-east-1}

@@ -27,7 +27,13 @@
 		# Never let a browser MIME-sniff object bytes into an executable type on
 		# this origin (defense-in-depth; downloads already force attachment).
 		header X-Content-Type-Options nosniff
-		reverse_proxy minio:9000 {
+		# MINIO_UPSTREAM is "minio:9000" on the single-host stack. On a multi-host
+		# deploy it is the data host's PRIVATE address — all object bytes flow
+		# browser -> this edge -> that host, so the edge carries the file
+		# bandwidth. Serving MinIO from its own public subdomain would avoid the
+		# hop but breaks `connect-src 'self'` in the CSP below; if you ever do
+		# that, the CSP must change in the same commit or uploads fail.
+		reverse_proxy {$MINIO_UPSTREAM:minio:9000} {
 			header_up Host {host}
 			# Multipart parts arrive from the browser in parallel; allow
 			# long transfers to stream without buffering.
@@ -40,25 +46,32 @@
 	# the internal network; metrics are no longer internet-reachable.
 	@api path /api/* /auth/* /admin/* /healthz
 	handle @api {
-		# Load balanced across every running api-gateway replica. The
-		# upstreams are resolved dynamically from Docker's embedded DNS
-		# (127.0.0.11), which returns one A record per replica, so
-		# `docker compose up -d --scale api-gateway=N` is picked up on the
-		# next refresh with no edit here. Active health_uri checks do NOT
-		# apply to dynamic upstreams — the DNS refresh drops departed
-		# replicas and the passive checks below eject failing ones.
-		reverse_proxy {
-			dynamic a {
-				name      api-gateway
-				port      {$API_GATEWAY_PORT:8080}
-				refresh   5s
-				resolvers 127.0.0.11
-			}
-
+		# Load balanced across every api-gateway listed in API_GATEWAY_UPSTREAMS
+		# (space-separated "host:port"). Defaults to the single-host container
+		# name, so the local stack needs no configuration.
+		#
+		# This used to resolve upstreams via `dynamic a` against Docker's embedded
+		# DNS at 127.0.0.11, which auto-discovered replicas from
+		# `docker compose up -d --scale api-gateway=N`. That resolver only ever
+		# sees containers on the SAME host, so it cannot find a second app
+		# server's gateway — the whole point of a separate edge host. The static
+		# list is the trade: replicas are now enumerated explicitly, and in
+		# exchange active health checks work (they are unsupported for dynamic
+		# upstreams), so a dead gateway is detected by probe rather than only
+		# after real requests fail into it.
+		reverse_proxy {$API_GATEWAY_UPSTREAMS:api-gateway:8080} {
 			lb_policy       least_conn
 			lb_try_duration 5s
 			lb_try_interval 250ms
 
+			# Active probe. /healthz is routed to the gateway by this very
+			# matcher, so it is a real end-to-end check of the upstream.
+			health_uri      /healthz
+			health_interval 10s
+			health_timeout  5s
+
+			# Passive ejection still applies, covering failures a 200 on
+			# /healthz would not reveal.
 			fail_duration    30s
 			max_fails        3
 			unhealthy_status 5xx
@@ -75,12 +88,15 @@
 	# before Grafana is reached, so only admins can load the embed even though
 	# Grafana itself runs in anonymous Viewer mode. Only started under the
 	# `observability` compose profile — 502s here when the profile is down.
+	# On a multi-host deploy, GRAFANA_UPSTREAM points at the data host (where the
+	# observability profile runs) and the forward_auth target at an app host.
+	# Both 502 when the profile is down, same as on a single host.
 	@grafana path /grafana /grafana/*
 	handle @grafana {
-		forward_auth api-gateway:{$API_GATEWAY_PORT:8080} {
+		forward_auth {$AUTHZ_UPSTREAM:api-gateway:8080} {
 			uri /admin/authz
 		}
-		reverse_proxy grafana:3000
+		reverse_proxy {$GRAFANA_UPSTREAM:grafana:3000}
 	}
 
 	# ---- SPA (client-side routed) --------------------------------------

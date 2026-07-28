@@ -651,7 +651,7 @@ The service fails fast at boot if object storage is misconfigured or the buckets
 | `AUTH_DENYLIST_PREFIX` | `denylist:jwt` | Redis key prefix for denylist |
 | `AUTH_GUEST_PREFIX` | `guest` | Guest token Redis key prefix |
 | `AUTH_GUEST_SUFFIX` | `jobs` | Guest token Redis key suffix |
-| `AUTH_TRUST_GATEWAY_HEADERS` | `false` | Trust X-User-ID from gateway |
+| `AUTH_TRUST_GATEWAY_HEADERS` | `false` | Believe the gateway's `X-User-*` headers instead of verifying the JWT here. Compose previously pinned this to `true`; it now defaults to `false`, because trusting the headers is only sound while nothing but the gateway can reach this port — untrue once app servers span hosts. The gateway forwards `Authorization` untouched, so the token is available to verify. |
 | `LOG_MODE` | `""` | Logging mode |
 
 ## Scaling Constraints

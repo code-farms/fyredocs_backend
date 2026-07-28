@@ -2,13 +2,20 @@
 
 All compose files live in `deployment/` and share the same project name (`fyredocs`) and network (`fyredocs_net`), so containers started from different files see each other.
 
-## The three layers
+## The layers
 
 | File | Role | When to use |
 |------|------|-------------|
 | `docker-compose.yml` | **Canonical stack** — all 11 services + infra (db, redis, nats, minio, caddy) + backups, plus two profiles: `observability` (otel-collector, tempo, prometheus, grafana — **on by default via `deploy.sh`**) and `notifications` (notification-service — off by default). The single source of truth for every service's config. | Full deploys (`deployment/deploy.sh` uses it). |
 | `docker-compose.essentials.yml` | **Infra only** — db (5432), redis (6379), nats (4222), minio (9000, console 9001), minio-init. Ports published to the host. Creates `fyredocs_net`. | Local dev where services run on the host via `go run`, or as the dependency provider for per-service files. |
 | `docker-compose-<service>.yml` × 11 | **One service each** — extends the service's definition from `docker-compose.yml`. | Build/redeploy a single service against already-running infra. |
+| `docker-compose.data.yml` | **Data host** (multi-host only) — postgres, pgbouncer, redis, nats, minio, minio-init, db-backup, with every port bound to `PRIVATE_BIND_ADDR`. Also where the `observability` profile and all singletons belong. | `deploy.sh --host-role=data` on the stateful machine. |
+| `docker-compose.app.yml` | **App host** (multi-host only) — gateway + API services, with the inherited `depends_on` reset because the infra it names lives on another machine. | `deploy.sh --host-role=app` on each app server. |
+
+The two multi-host files add **only** port publishing / dependency resets on top of
+`extends` — never duplicated service config. `PRIVATE_BIND_ADDR` has no default on
+purpose: an unset value fails the run rather than binding `0.0.0.0` and exposing an
+unauthenticated NATS.
 
 Per-service files exist for: `api-gateway`, `auth-service`, `job-service`, `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`, `analytics-service`, `document-service`, `user-service`, `notification-service`.
 
@@ -129,9 +136,25 @@ or a `127.0.0.1`-bound mapping. Run it in CI and before deploys.
 
 ## Multi-host
 
-The same per-service `extends` files are how you run a subset of services (e.g.
-the conversion workers) on a **second host** pointed at shared infra. See the
-[horizontal-scaling runbook](./horizontal-scaling.md#4-stage-2--add-a-second-host-for-workers).
+`deploy.sh --host-role=<all|data|app|work>` selects the compose file and the
+service subset for a machine. `all` (the default) is the unchanged single-host
+behavior; the others map to the table above:
+
+```bash
+PRIVATE_BIND_ADDR=10.0.0.5 ./deployment/deploy.sh --host-role=data   # stateful host
+./deployment/deploy.sh --host-role=app                               # each app host
+./deployment/deploy.sh --host-role=work                              # worker host
+```
+
+Resource budgets are computed from whichever host runs the script, so each machine
+sizes its containers to its own hardware with no per-host tuning. The `data` role
+builds nothing (all upstream images) and exits after `up`.
+
+The per-service `extends` files remain the finer-grained tool for running an
+individual service on a second host. See the
+[horizontal-scaling runbook](./horizontal-scaling.md#4-stage-2--add-a-second-host-for-workers),
+which also covers the two prerequisites — local JWT verification and a private
+network — and why file bytes are never a cross-host concern.
 
 ## Full-deploy flow (`deployment/deploy.sh`)
 

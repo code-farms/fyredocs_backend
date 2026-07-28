@@ -7,7 +7,7 @@ The service stores **metadata only**; file bytes live in object storage (referen
 
 ## Design Constraints
 - Independent microservice: own Postgres schema, own module (`document-service`), no cross-service DB access or shared models (per repo `CLAUDE.md`).
-- Stateless: identity comes from the gateway-injected `X-User-ID` header (the gateway verifies the JWT). No session state.
+- Stateless: identity comes from the `AuthContext` resolved by the auth middleware, which **verifies the JWT locally** (`AUTH_TRUST_GATEWAY_HEADERS=false`). No session state.
 - Standard response envelope (`shared/response`): `{success, message, data, error, meta}`.
 
 ## Internal Architecture
@@ -20,7 +20,7 @@ The service stores **metadata only**; file bytes live in object storage (referen
 ## Routes
 Health: `GET /healthz` (liveness), `GET /readyz` (DB ping).
 
-All `/api/*` routes require auth (`X-User-ID`) and are scoped to that user. Reached through the gateway at the same paths (`/api/documents`, `/api/folders`, `/api/tags`).
+All `/api/*` routes require a verified caller and are scoped to that user. Reached through the gateway at the same paths (`/api/documents`, `/api/folders`, `/api/tags`).
 
 **Organization scoping (RBAC):** document endpoints accept an optional `orgId` (query param, or `organizationId` in the create body). When present, document-service verifies the caller's membership and role with **user-service** (`GET /api/orgs/:id`) and scopes documents by `organization_id`: reads (list/get) require `viewer`+, writes (create/update/delete/restore/purge) require `editor`+. When absent, documents are personal (scoped by `user_id`, `organization_id IS NULL`) — the default and the shape the finalize subscriber creates. Folders/tags remain personal-scoped in this increment.
 
@@ -87,11 +87,44 @@ Search: `search_vector @@ websearch_to_tsquery('english', q)` (pluggable behind 
 | EXPORT_MAX_CONCURRENCY | 4 | Max concurrent async export generations (semaphore) |
 | EXPORT_QUEUE_WAIT | 30s | How long an export waits for a semaphore slot before failing with a retryable message |
 | EXPORT_MAX_ROWS | 50000 | Max document rows an export query returns |
+| REDIS_ADDR | redis:6379 | Backs the JWT denylist. Without it a token revoked at logout keeps working here until natural expiry. |
+| REDIS_PASSWORD | — | Redis auth |
+| JWT_HS256_SECRET | — | Token signing secret (required — this service verifies tokens itself) |
+| JWT_ALLOWED_ALGS | HS256 | Permitted signing algorithms |
+| JWT_ISSUER / JWT_AUDIENCE | fyredocs / fyredocs-api | Claim checks |
+| JWT_CLOCK_SKEW | 60s | Allowed clock drift |
+| AUTH_DENYLIST_ENABLED | true | Check revoked tokens against Redis |
+| AUTH_TRUST_GATEWAY_HEADERS | false | Believe upstream `X-User-*` instead of verifying. **Keep false** — see Authentication. |
+| INTERNAL_API_TOKEN | — | Shared secret sent to user-service's `/internal/v1` membership lookup (fails closed when unset) |
 | TRUSTED_PROXIES | — | Trusted proxy CIDRs |
 | OTEL_EXPORTER_OTLP_ENDPOINT | — | OpenTelemetry collector |
 
 ## Authentication
-The API gateway verifies the JWT and injects `X-User-ID` (and `X-User-Role`) on proxied requests. `RequireUser()` rejects requests without a valid `X-User-ID`. All queries are filtered by that user id; documents are never visible across users.
+
+`main.go`'s `buildAuthMiddleware` resolves each caller's `AuthContext`. With
+`AUTH_TRUST_GATEWAY_HEADERS=false` (the default) it **verifies the JWT locally**
+rather than believing the gateway's `X-User-ID` header; the gateway forwards
+`Authorization` untouched, so the token is available to verify. `RequireUser()`
+rejects requests with no resolved identity. All queries are filtered by that user
+id; documents are never visible across users.
+
+**Why local verification matters:** trusting the gateway's `X-User-*` headers is
+only sound while nothing but the gateway can reach this port. Once app servers span
+hosts that stops being true, and a forged header would be account takeover by user
+ID. The middleware resolves identity but does **not** gate, so credential-less
+requests pass through as anonymous — which is what keeps `/healthz`, `/readyz`, and
+shared-secret `/internal` routes working. See
+[horizontal-scaling.md](../architecture/horizontal-scaling.md#prerequisite-1-identity-must-not-depend-on-network-isolation).
+
+### Outbound: org membership
+
+`internal/orgclient` calls user-service `GET /internal/v1/orgs/:id` to resolve the
+caller's org role. That hop carries the user's ID plus the `INTERNAL_API_TOKEN`
+shared secret — **not** a JWT, which document-service does not hold. It targets the
+`/internal/v1` mirror rather than the public `/api/orgs/:id` precisely because
+user-service now verifies tokens and would 401 a header-only call. An unset secret
+makes user-service fail closed (503), which the circuit breaker surfaces as a
+dependency failure so authorization fails **safe**.
 
 ## Scaling Constraints
 Stateless → horizontally scalable behind the gateway. Reads (list/search) are GIN/B-tree indexed; partition `documents` by `user_id`/month at 10M+ rows and use read replicas. Object bytes never transit the service.

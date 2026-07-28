@@ -7,14 +7,25 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/response"
 )
 
-// userID extracts the authenticated user from the gateway-injected X-User-ID
-// header. The gateway verifies the JWT and sets this header on proxied
-// requests, so it is trusted here (same model as analytics-service).
+// userID extracts the authenticated user from the AuthContext resolved by the
+// auth middleware.
+//
+// Reading the context rather than the X-User-ID header directly is what makes
+// this safe once the service is reachable across a host boundary: with
+// AUTH_TRUST_GATEWAY_HEADERS off (the default) the context is populated only from
+// a verified JWT, so a forged X-User-ID header resolves to no identity at all.
+// The accessor works unchanged when the flag is on, because the middleware
+// populates the same context from gateway headers in that mode.
 func userID(c *gin.Context) (uuid.UUID, bool) {
-	raw := strings.TrimSpace(c.GetHeader("X-User-ID"))
+	authCtx, ok := authverify.GetGinAuth(c)
+	if !ok {
+		return uuid.Nil, false
+	}
+	raw := strings.TrimSpace(authCtx.UserID)
 	if raw == "" {
 		return uuid.Nil, false
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"analytics-service/internal/models"
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/config"
 	"fyredocs/shared/redisstore"
 	"fyredocs/shared/response"
@@ -42,13 +43,16 @@ func dashboardCacheKey(role, userID string, days int) string {
 //   - regular user         -> personal KPIs scoped to their own user_id
 //
 // It reads only analytics-service's own analytics_events table (no
-// cross-service calls). Role/identity come from the gateway-set headers, the
-// same way adminAuth() reads them.
+// cross-service calls). Role/identity come from the verified AuthContext, the
+// same way adminAuth() reads them — never from the raw X-User-* headers, which a
+// caller reaching this service directly could forge to claim an admin role and
+// read system-wide KPIs.
 //
 // GET /api/dashboard
 func Dashboard(c *gin.Context) {
-	role := strings.TrimSpace(c.GetHeader("X-User-Role"))
-	userID := strings.TrimSpace(c.GetHeader("X-User-ID"))
+	authCtx, _ := authverify.GetGinAuth(c)
+	role := strings.TrimSpace(authCtx.Role)
+	userID := strings.TrimSpace(authCtx.UserID)
 
 	if userID == "" {
 		response.Err(c, http.StatusUnauthorized, response.CodeUnauthorized, "Please log in to view your dashboard.")

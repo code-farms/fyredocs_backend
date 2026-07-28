@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/redisstore"
 )
 
@@ -19,32 +20,56 @@ import (
 // admin/user branches require a database and are exercised by the end-to-end
 // verification, consistent with the other analytics handler tests.
 
-func dashboardRequest(headers map[string]string) *httptest.ResponseRecorder {
+// dashboardRequest drives the handler with an optional seeded AuthContext,
+// standing in for the auth middleware that main.go installs. A nil authCtx models
+// a request carrying no verifiable credentials. headers are still settable so
+// tests can assert that raw X-User-* headers do NOT influence the outcome.
+func dashboardRequest(authCtx *authverify.AuthContext, headers map[string]string) *httptest.ResponseRecorder {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
-	c, r := gin.CreateTestContext(rec)
+	_, r := gin.CreateTestContext(rec)
+	if authCtx != nil {
+		r.Use(func(c *gin.Context) {
+			authverify.SetGinAuth(c, *authCtx)
+			c.Next()
+		})
+	}
 	r.GET("/api/dashboard", Dashboard)
 	req := httptest.NewRequest(http.MethodGet, "/api/dashboard", nil)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	c.Request = req
 	r.ServeHTTP(rec, req)
 	return rec
 }
 
 func TestDashboardUnauthenticated(t *testing.T) {
-	rec := dashboardRequest(nil) // no X-User-ID
+	rec := dashboardRequest(nil, nil)
 	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 without X-User-ID, got %d", rec.Code)
+		t.Errorf("expected 401 without a verified identity, got %d", rec.Code)
+	}
+}
+
+// TestDashboardForgedHeadersRejected is the regression guard for the multi-host
+// split: the handler once read X-User-ID/X-User-Role straight off the request, so
+// a caller reaching this service directly could claim an admin role and receive
+// system-wide KPIs. Identity now comes only from the verified AuthContext.
+func TestDashboardForgedHeadersRejected(t *testing.T) {
+	rec := dashboardRequest(nil, map[string]string{
+		"X-User-ID":   "11111111-1111-1111-1111-111111111111",
+		"X-User-Role": "super-admin",
+	})
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for forged admin headers, got %d", rec.Code)
 	}
 }
 
 func TestDashboardGuestForbidden(t *testing.T) {
-	rec := dashboardRequest(map[string]string{
-		"X-User-ID":   "11111111-1111-1111-1111-111111111111",
-		"X-User-Role": "guest",
-	})
+	rec := dashboardRequest(&authverify.AuthContext{
+		UserID:  "11111111-1111-1111-1111-111111111111",
+		Role:    "guest",
+		IsGuest: true,
+	}, nil)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for guest, got %d", rec.Code)
 	}
@@ -91,7 +116,7 @@ func TestDashboardServesFromCacheWithoutDB(t *testing.T) {
 		t.Fatalf("seed cache: %v", err)
 	}
 
-	rec := dashboardRequest(map[string]string{"X-User-ID": uid, "X-User-Role": "user"})
+	rec := dashboardRequest(&authverify.AuthContext{UserID: uid, Role: "user"}, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 on cache hit, got %d (body=%s)", rec.Code, rec.Body.String())
 	}

@@ -1087,6 +1087,23 @@ func maxUploadBytes() int64 {
 
 // planMaxFileSizeMB reads the per-plan file size limit from X-User-Plan-Max-File-MB.
 // Falls back to the guest limit if the header is absent.
+//
+// This deliberately reads the raw gateway header rather than the AuthContext, and
+// is therefore unaffected by AUTH_TRUST_GATEWAY_HEADERS: plan data is resolved by
+// the gateway from its Redis plancache and is NOT carried in JWT claims (see
+// Claims.ToAuthContext in shared/authverify/claims.go), so local token
+// verification cannot reconstruct it. The gateway calls ClearUserHeaders on every
+// inbound request before setting its own, so a client cannot forge this through
+// the gateway.
+//
+// NOTE: that provenance guarantee is the gateway's, not this service's. A caller
+// able to reach job-service DIRECTLY — possible once app servers span hosts —
+// could send an inflated X-User-Plan-Max-File-MB and lift its own upload quota.
+// Identity is safe (that comes from the verified AuthContext); this is a quota
+// bypass only. Closing it properly means resolving the plan from Redis here rather
+// than trusting the header, duplicating api-gateway/internal/plancache. Until
+// then, app-service ports must stay unreachable except from the edge — see
+// docs/developer/architecture/horizontal-scaling.md.
 func planMaxFileSizeMB(c *gin.Context) int {
 	val := c.GetHeader("X-User-Plan-Max-File-MB")
 	if val == "" {
@@ -1101,6 +1118,9 @@ func planMaxFileSizeMB(c *gin.Context) int {
 
 // planMaxFilesPerJob reads the per-plan file count limit from X-User-Plan-Max-Files.
 // Falls back to the guest limit if the header is absent.
+//
+// Same provenance model and same residual quota-bypass caveat as
+// planMaxFileSizeMB above — see that comment.
 func planMaxFilesPerJob(c *gin.Context) int {
 	val := c.GetHeader("X-User-Plan-Max-Files")
 	if val == "" {

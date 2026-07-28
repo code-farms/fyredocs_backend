@@ -11,15 +11,27 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 
 	"user-service/internal/models"
 )
 
-// userID extracts the authenticated user from the gateway-injected header.
+// userID extracts the authenticated user from the AuthContext resolved upstream.
+//
+// Reading the context rather than the X-User-ID header directly is what makes
+// this safe once the service is reachable across a host boundary: with
+// AUTH_TRUST_GATEWAY_HEADERS off (the default) the context is populated only from
+// a verified JWT, so a forged X-User-ID header resolves to no identity at all.
+// The accessor works unchanged when the flag is on, and on the /internal/v1
+// routes where InternalIdentity populates the context behind the shared secret.
 func userID(c *gin.Context) (uuid.UUID, bool) {
-	raw := strings.TrimSpace(c.GetHeader("X-User-ID"))
+	authCtx, ok := authverify.GetGinAuth(c)
+	if !ok {
+		return uuid.Nil, false
+	}
+	raw := strings.TrimSpace(authCtx.UserID)
 	if raw == "" {
 		return uuid.Nil, false
 	}
@@ -28,6 +40,27 @@ func userID(c *gin.Context) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+// InternalIdentity names the acting user from the X-User-ID header for
+// service-to-service calls, which carry no end-user JWT.
+//
+// NOTE: this MUST only be mounted behind authverify.InternalTokenGin (see
+// routes/routes.go). The shared secret is what proves the caller is a peer
+// service rather than a browser; without that guard this middleware would let
+// any caller act as any user. The public /api routes deliberately do NOT use it —
+// there identity comes from a verified JWT (see main.go buildAuthMiddleware).
+func InternalIdentity() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		raw := strings.TrimSpace(c.GetHeader("X-User-ID"))
+		if raw == "" {
+			response.Err(c, http.StatusBadRequest, response.CodeInvalidInput, "X-User-ID is required.")
+			c.Abort()
+			return
+		}
+		authverify.SetGinAuth(c, authverify.AuthContext{UserID: raw})
+		c.Next()
+	}
 }
 
 // RequireUser aborts unauthenticated requests.
