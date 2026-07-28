@@ -29,6 +29,15 @@ import (
 	"optimize-pdf/processing"
 )
 
+// main boots the Ghostscript/Tesseract worker for compression, repair, and OCR.
+//
+// Order here is load-bearing: configuration and logging come up first so any
+// later failure is diagnosable, then the database and its migrations, then the
+// external brokers, and only then does the server start accepting traffic —
+// binding the port before dependencies are ready would advertise readiness the
+// service cannot honour. Every dependency failure calls os.Exit rather than
+// degrading, so a misconfigured instance dies at boot instead of failing requests
+// one at a time. Shutdown is the reverse: stop accepting, drain, then release.
 func main() {
 	config.LoadConfig()
 	logger.Init("optimize-pdf", os.Getenv("LOG_MODE"))

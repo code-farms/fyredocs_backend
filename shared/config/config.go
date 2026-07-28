@@ -31,6 +31,8 @@ func LoadConfig() {
 	}
 }
 
+// normalizeEnv canonicalises an environment value read from a .env file, trimming
+// whitespace and surrounding quotes that would otherwise become part of the value.
 func normalizeEnv() {
 	for _, entry := range os.Environ() {
 		parts := strings.SplitN(entry, "=", 2)
@@ -200,6 +202,9 @@ func EnforceProductionSecurity() error {
 	return nil
 }
 
+// unquoteValue strips matching surrounding quotes from a .env value. Shells remove
+// these before the process sees them, but a .env file is parsed by us, so a quoted
+// value would otherwise carry its quotes into the config.
 func unquoteValue(value string) string {
 	if len(value) < 2 {
 		return value

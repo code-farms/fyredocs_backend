@@ -220,6 +220,8 @@ func Realtime(c *gin.Context) {
 	})
 }
 
+// queryInt reads an integer query parameter with a fallback for absent or
+// unparseable values. Callers must bound the result themselves — this does not.
 func queryInt(c *gin.Context, key string, fallback int) int {
 	val := c.Query(key)
 	if val == "" {

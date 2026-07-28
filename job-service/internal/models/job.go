@@ -1,3 +1,10 @@
+// Package models owns the processing_jobs and file_metadata schema — the
+// authoritative record of every asynchronous document job on the platform.
+//
+// job-service is the sole migrator of these two tables. The four PDF workers
+// redeclare the same structs locally (cross-service imports and shared models
+// are forbidden) and deliberately do not migrate; a schema change here must be
+// mirrored into each worker's internal/models/job.go by hand.
 package models
 
 import (

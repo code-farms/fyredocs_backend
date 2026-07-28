@@ -14,6 +14,8 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 )
 
+// mergePDFs concatenates inputs in the order given. Input order is the user's
+// chosen order from the UI, so it must be preserved exactly rather than sorted.
 func mergePDFs(inputPaths []string, outputPath string) error {
 	if len(inputPaths) < 2 {
 		return fmt.Errorf("merge requires at least 2 PDF files")
@@ -22,6 +24,8 @@ func mergePDFs(inputPaths []string, outputPath string) error {
 	return api.MergeCreateFile(inputPaths, outputPath, false, nil)
 }
 
+// splitPDF divides a PDF into multiple files and returns them as a single ZIP,
+// because the job model has exactly one output object per job.
 func splitPDF(inputPath string, outputPath string, mode string, rangeValue string) error {
 	slog.Info("splitting PDF", "input", inputPath, "mode", mode, "range", rangeValue)
 
@@ -106,6 +110,8 @@ func splitPDF(inputPath string, outputPath string, mode string, rangeValue strin
 	return zipDirectory(tempDir, outputPath)
 }
 
+// removePages deletes the pages named by the caller's range expression. Page
+// numbers are 1-based throughout the PDF tools, matching what the user sees.
 func removePages(inputPath string, outputPath string, pages string) error {
 	slog.Info("removing pages from PDF", "pages", pages, "input", inputPath)
 
@@ -128,6 +134,8 @@ func removePages(inputPath string, outputPath string, pages string) error {
 	return api.RemovePagesFile(inputPath, outputPath, pageStrings, nil)
 }
 
+// extractPages keeps only the pages named by the range expression — the
+// complement of removePages.
 func extractPages(inputPath string, outputPath string, pages string) error {
 	slog.Info("extracting pages from PDF", "pages", pages, "input", inputPath)
 
@@ -150,6 +158,9 @@ func extractPages(inputPath string, outputPath string, pages string) error {
 	return api.CollectFile(inputPath, outputPath, pageStrings, nil)
 }
 
+// organizePDF reorders pages into an explicitly supplied sequence, which may
+// repeat or omit pages. This is the general case that rotate/remove/extract are
+// specializations of.
 func organizePDF(inputPath string, outputPath string, order string) error {
 	slog.Info("organizing PDF", "input", inputPath, "order", order)
 
@@ -172,6 +183,8 @@ func organizePDF(inputPath string, outputPath string, order string) error {
 	return api.CollectFile(inputPath, outputPath, pageStrings, nil)
 }
 
+// rotatePDF rotates pages by a multiple of 90 degrees. Rotation is recorded as
+// page metadata rather than by re-rendering content, so it is lossless and fast.
 func rotatePDF(inputPath string, outputPath string, rotation int, applyTo string) error {
 	slog.Info("rotating PDF", "input", inputPath, "rotation", rotation, "applyTo", applyTo)
 
@@ -188,6 +201,18 @@ func rotatePDF(inputPath string, outputPath string, rotation int, applyTo string
 	return api.RotateFile(inputPath, outputPath, rotation, pageSelection, nil)
 }
 
+// parsePageRange expands a page expression like "1,3,5-8" into 1-based page
+// numbers, deduplicated and in the order first seen. An empty string or "all"
+// means every page.
+//
+// Malformed or out-of-bounds components are SKIPPED rather than reported: a
+// reversed range, an unparseable number, or a page past the end simply
+// contributes nothing. That is deliberate for a user-facing selection — "1-5" on
+// a 3-page document should act on what exists instead of failing — but it means
+// this function cannot be used to validate input, because it never reports what
+// it ignored. A caller needing "the user asked for something impossible" must
+// compare the result length itself, and an expression naming no valid page yields
+// an empty slice.
 func parsePageRange(rangeStr string, maxPages int) []int {
 	rangeStr = strings.TrimSpace(rangeStr)
 	if rangeStr == "" || rangeStr == "all" {
@@ -309,10 +334,19 @@ func splitEqualGroups(pageCount int, n int) [][]int {
 	return groups
 }
 
+// parsePageOrder parses an explicit page sequence for organizePDF. Unlike
+// parsePageRange this preserves duplicates and order, since repeating a page is a
+// legitimate reordering request.
 func parsePageOrder(order string, maxPages int) []int {
 	return parsePageRange(order, maxPages)
 }
 
+// zipDirectory archives every file under sourceDir into a ZIP, using paths
+// relative to sourceDir so the archive has no absolute-path entries.
+//
+// Directories are skipped rather than added as entries; ZIP readers recreate them
+// implicitly from file paths. Only used for scratch directories this process just
+// produced, which is why symlinks are not specially handled — there are none.
 func zipDirectory(sourceDir string, zipPath string) error {
 	zipFile, err := os.Create(zipPath)
 	if err != nil {

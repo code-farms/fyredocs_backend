@@ -23,6 +23,7 @@ import (
 // dependency (e.g. Postgres down) is retried with backoff instead of a hot loop.
 const maxDeliver = 5
 
+// eventBackoff is the redelivery schedule for job events.
 var eventBackoff = []time.Duration{time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second}
 
 // nakOrDLQ backs off a retry until maxDeliver is hit, then parks the message in
@@ -84,6 +85,12 @@ func (s *Subscribers) Stop() {
 	s.jobs = nil
 }
 
+// handleJobEvent turns a job completion into a durable notification row and then
+// fans it out to any connected SSE clients.
+//
+// Persist-then-push is the required order: a client that is not connected loses
+// the push but must never lose the notification. Delivery is at-least-once, so
+// this must not create duplicate rows for a repeated event.
 func handleJobEvent(ctx context.Context, msg jetstream.Msg) {
 	// Continue the publisher's trace (W3C context rides in the NATS headers).
 	ctx, span := queue.StartConsumerSpan(ctx, telemetry.Tracer, msg.Subject(), msg.Headers())

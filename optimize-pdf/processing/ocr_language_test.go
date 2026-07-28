@@ -1,3 +1,7 @@
+// Tests the OCR language allowlist — a trust boundary, not a preference check. The
+// requested language reaches a tesseract command line, so anything off the allowlist
+// must be coerced to the default rather than passed through (finding I1 —
+// docs/developer/architecture/backend-hardening.md section 3.20).
 package processing
 
 import "testing"

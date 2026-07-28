@@ -1,3 +1,11 @@
+// Package handlers implements notification-service's HTTP surface: the per-user
+// feed, its read-state mutations, the SSE stream for live delivery, and the
+// internal endpoint other services call to raise a notification.
+//
+// Persistence and live delivery are deliberately separate. A notification is
+// written as a durable row first and only then fanned out to whichever SSE
+// clients happen to be connected, so a disconnected client loses the push but
+// never the notification.
 package handlers
 
 import (
@@ -41,6 +49,9 @@ func createAndPush(ctx context.Context, n *models.Notification) error {
 	return nil
 }
 
+// internalNotifReq is the body other services POST to raise a notification. The
+// endpoint is guarded by the internal shared secret, so the target user is taken
+// from this body rather than from an authenticated session.
 type internalNotifReq struct {
 	UserID   string `json:"userId" binding:"required,uuid"`
 	Type     string `json:"type" binding:"required,max=64"`
@@ -96,6 +107,8 @@ func CreateInternal(c *gin.Context) {
 	response.Created(c, "Notification created", n)
 }
 
+// userID reads the caller's identity from the gateway-injected header. Returns the
+// zero value when absent, which callers must treat as unauthorized.
 func userID(c *gin.Context) (uuid.UUID, bool) {
 	raw := strings.TrimSpace(c.GetHeader("X-User-ID"))
 	if raw == "" {

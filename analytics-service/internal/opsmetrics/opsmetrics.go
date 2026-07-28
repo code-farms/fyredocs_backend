@@ -21,20 +21,28 @@ import (
 	"fyredocs/shared/redisstore"
 )
 
+// dlqStreamName is the JetStream stream holding dead-lettered jobs. Its depth is
+// the platform's clearest "work was permanently lost" signal, which is why it is
+// exported as its own gauge.
 const dlqStreamName = "JOBS_DLQ"
 
 var (
+	// dependencyUp is a 0/1 gauge per external dependency. A gauge rather than a
+	// counter so an alert can fire on the current state instead of a rate of change.
 	dependencyUp = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "dependency_up",
 		Help: "Whether a backing dependency is reachable from analytics-service (1=up, 0=down).",
 	}, []string{"dependency"})
 
+	// dlqPending is the current dead-letter queue depth. Any sustained non-zero
+	// value means jobs are being permanently lost and needs human attention.
 	dlqPending = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "nats_dlq_pending_messages",
 		Help: "Messages sitting in the JOBS_DLQ dead-letter stream (dead-lettered jobs).",
 	})
 )
 
+// boolGauge maps a bool to the 1/0 Prometheus convention for up/down gauges.
 func boolGauge(up bool) float64 {
 	if up {
 		return 1
@@ -42,8 +50,11 @@ func boolGauge(up bool) float64 {
 	return 0
 }
 
+// setDependency records whether a named dependency is currently reachable.
 func setDependency(name string, up bool) { dependencyUp.WithLabelValues(name).Set(boolGauge(up)) }
-func setDLQ(n float64)                   { dlqPending.Set(n) }
+
+// setDLQ records the current dead-letter queue depth.
+func setDLQ(n float64) { dlqPending.Set(n) }
 
 // Start launches the poller: it samples once immediately, then every
 // OPS_METRICS_INTERVAL (default 20s) until ctx is cancelled. The returned

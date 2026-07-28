@@ -2,6 +2,26 @@
 # here should be something worth waking a human for. Metric names come from
 # shared/metrics (http_request_duration_seconds, jobs_processed_total,
 # jobs_failed_total) and Prometheus' own `up`.
+#
+# HOW TO READ THE THRESHOLDS
+#
+# Each rule has two numbers and they do different jobs. The expr threshold sets
+# "how bad", and `for:` sets "for how long" — the second is what suppresses
+# transient spikes, so shortening a `for:` is the fastest way to make a rule
+# flappy. Every value below is a deliberate trade between catching a real
+# incident and paging on noise; they are not defaults.
+#
+# Two rules of thumb used throughout:
+#   - `for:` is at least as long as the rate() window in its expr. A shorter
+#     `for:` than the averaging window cannot add confidence, because the metric
+#     itself has not finished responding to the change yet.
+#   - Ratio rules (error rate, pool usage) are preferred over absolute counts
+#     wherever a denominator exists, so the rule keeps working as traffic grows
+#     instead of needing to be retuned.
+#
+# When changing a threshold, record why here. A bare number with no rationale is
+# the reason alert rules rot: nobody can tell whether it was measured or guessed,
+# so nobody dares touch it.
 groups:
   - name: availability
     rules:
@@ -26,6 +46,14 @@ groups:
   - name: errors
     rules:
       # 5xx ratio per service over 5m. Fires when >5% of requests error for 5m.
+      #
+      # 5% rather than a fixed count so the rule scales with traffic. It is well
+      # above the steady-state rate (a healthy service sits near zero) but low
+      # enough to catch a partial outage — one failing upstream out of several
+      # typically lands in the 10-30% range. A ratio also means a low-traffic
+      # service will not page on a single error, which an absolute count would.
+      # Denominator note: this divides by ALL requests, so an endpoint returning
+      # 4xx heavily (bad client input) does not dilute the signal.
       - alert: HighServerErrorRate
         expr: |
           (
@@ -43,6 +71,15 @@ groups:
   - name: latency
     rules:
       # p95 request latency SLO burn. Fires when p95 exceeds 2s for 10m.
+      #
+      # p95 rather than p99, which on this traffic volume is dominated by a
+      # handful of slow requests and would flap. 2s is chosen against the API
+      # surface this measures: request-path endpoints here are metadata reads and
+      # presign calls, all of which should answer in tens of milliseconds, so 2s
+      # already means something is badly wrong. It is NOT a bound on job
+      # processing — long conversions are asynchronous and measured by
+      # job_duration_seconds below. 10m is deliberately long: a latency blip
+      # during a deploy is expected and must not page.
       - alert: HighRequestLatencyP95
         expr: |
           histogram_quantile(
@@ -59,6 +96,14 @@ groups:
   - name: jobs
     rules:
       # Sustained job-processing failures across the PDF pipeline.
+      #
+      # An absolute rate, not a ratio, because jobs_failed_total counts only
+      # PERMANENT failures (see shared/metrics) and the healthy value is
+      # essentially zero — a ratio against a low job volume would swing wildly.
+      # 0.2/s is roughly one failure every five seconds sustained for ten
+      # minutes, which is far above the trickle of genuinely corrupt user uploads
+      # that always exists. Aggregated across the pipeline rather than per tool,
+      # so a single broken tool still trips it without needing a rule each.
       - alert: HighJobFailureRate
         expr: sum(rate(jobs_failed_total[10m])) > 0.2
         for: 10m
@@ -70,6 +115,15 @@ groups:
 
       # End-to-end job latency (queued → terminal) is degrading. Measured by
       # job_duration_seconds, observed once per terminal outcome in the workers.
+      #
+      # 600s (10 minutes) is a queue-depth signal, not a per-conversion budget:
+      # this measures queued-to-completed, so it includes waiting for a free
+      # worker and any retry backoff. A single large OCR job legitimately takes
+      # minutes, which is why the threshold sits well above any one job's
+      # expected duration — crossing it means work is BACKING UP, not that one
+      # file was slow. Filtered to status="completed" on purpose: including
+      # failures would mix in retry-exhausted jobs that spent their whole life in
+      # backoff and shift the quantile for reasons unrelated to saturation.
       - alert: JobLatencyP95High
         expr: |
           histogram_quantile(
@@ -84,6 +138,12 @@ groups:
           description: "95th-percentile end-to-end job latency (queued to completed) has exceeded 10 minutes for 15 minutes — check worker saturation, the DLQ, and conversion tool health."
 
       # Dead-lettered jobs are piling up in JOBS_DLQ (metric from analytics-service).
+      #
+      # The threshold is > 0, not a backlog size, because a dead-lettered job is
+      # user work that has been permanently lost — one is already worth
+      # investigating. The 5m `for:` is what keeps this actionable rather than
+      # noisy: it allows an operator's redrive to clear the queue without the
+      # alert firing, while a backlog nobody is attending to still surfaces.
       - alert: DLQBacklog
         expr: nats_dlq_pending_messages > 0
         for: 5m
@@ -97,6 +157,15 @@ groups:
     rules:
       # A backing dependency (redis/nats/postgres) is unreachable from
       # analytics-service (metric from the ops-metrics poller).
+      #
+      # Critical because every dependency here is load-bearing for some user
+      # flow. 2m tolerates a broker restart or failover without paging, which is
+      # why it is longer than ServiceDown's 1m — a dependency blip is both more
+      # common and more often self-healing than a service disappearing.
+      #
+      # Blind spot worth knowing: this is measured from analytics-service only,
+      # so it reports reachability from ONE vantage point. A network partition
+      # affecting a different service will not show up here.
       - alert: DependencyDown
         expr: dependency_up == 0
         for: 2m
@@ -110,6 +179,15 @@ groups:
     rules:
       # Rate limiting is failing open because Redis is unavailable — requests
       # are being served with NO throttling at all.
+      #
+      # Threshold is any non-zero rate, and severity is critical, because this is
+      # the one alert that reports a SECURITY control being off rather than a
+      # performance problem. The limiters fail open by deliberate choice (a Redis
+      # blip must not take down request serving — see
+      # api-gateway/internal/ratelimit), and this alert is the other half of that
+      # decision: failing open is only acceptable if somebody finds out. If this
+      # rule is ever removed, the fail-open behaviour becomes silent and abuse
+      # protection can be absent indefinitely with no signal.
       - alert: RateLimitFailingOpen
         expr: sum(rate(rate_limit_fail_open_total[5m])) > 0
         for: 5m
@@ -122,6 +200,18 @@ groups:
   - name: database
     rules:
       # A service's connection pool is running out of headroom (in-use vs max).
+      #
+      # 90% is a leading indicator chosen to fire BEFORE symptoms: at full
+      # saturation requests block in the pool and surface as latency or timeouts
+      # whose cause is not obviously the database. Expressed as a ratio so it
+      # holds across services with different pool sizes (they range from 5 to 25
+      # — see each service's internal/models/database.go). 5m avoids paging on a
+      # legitimate burst. If this fires alongside HighRequestLatencyP95, the pool
+      # is the cause and the latency rule is the symptom.
+      #
+      # See also db_pool_wait_count_total (shared/database/poolmetrics.go): any
+      # sustained growth there means the pool is ALREADY exhausted and requests
+      # are queueing, which is a stronger signal than this ratio.
       - alert: DBPoolNearExhaustion
         expr: |
           (

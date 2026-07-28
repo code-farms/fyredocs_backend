@@ -20,6 +20,12 @@ ingester:
 
 compactor:
   compaction:
+    # 48h — deliberately much shorter than Loki's 7-day log retention. Traces are
+    # a debugging aid consulted while an incident is fresh, and they are far
+    # bulkier per unit of insight than logs, so a longer window costs a lot of
+    # disk for little value. Consequence: a trace ID found in a log line older
+    # than two days will no longer resolve in Tempo, which is expected rather
+    # than a broken correlation.
     block_retention: 48h
 
 storage:

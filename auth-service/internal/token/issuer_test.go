@@ -1,3 +1,6 @@
+// Tests for token issuance and refresh rotation. These pin the security-critical
+// behaviours: a rotated refresh token must not be reusable, expiry and issuer
+// claims must be present and validated, and a revoked token must be rejected.
 package token
 
 import (

@@ -1,3 +1,7 @@
+// Tests for the retention sweep. The invariants under guard are the distributed
+// lock's compare-and-delete release (a slow sweep must never delete another
+// replica's freshly acquired lock) and the delete ordering — objects before rows, so
+// a crash mid-sweep can never orphan a stored object with nothing pointing at it.
 package cleanup
 
 import (

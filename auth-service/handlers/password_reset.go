@@ -21,12 +21,18 @@ import (
 	"fyredocs/shared/response"
 )
 
+// forgotPasswordRequest is the body of a reset request. Only an email is taken:
+// the endpoint answers identically whether or not the address is registered, so
+// it cannot be used to enumerate accounts.
 type forgotPasswordRequest struct {
 	// Validation failures still return the generic 200 (see ForgotPassword), so
 	// these tags only guard what reaches the mailer lookup.
 	Email string `json:"email" binding:"required,email,max=254"`
 }
 
+// resetPasswordRequest carries the emailed token and the new password. The token
+// is the sole proof of identity here — the caller is by definition not logged in —
+// so it must be single-use and expiring.
 type resetPasswordRequest struct {
 	Token       string `json:"token" binding:"required,max=512"`
 	NewPassword string `json:"newPassword" binding:"required,min=8,max=128"`

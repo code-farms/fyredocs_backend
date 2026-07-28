@@ -1,3 +1,7 @@
+// Tests for gateway routing and middleware. These pin the behaviours a
+// misconfiguration would silently break: identity headers are stripped before
+// proxying (so a client cannot forge X-User-ID), legacy prefixes and their /api/v1
+// aliases route to the same upstream, and responses stream rather than buffer.
 package main
 
 import (

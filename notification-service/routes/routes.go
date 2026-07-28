@@ -1,3 +1,9 @@
+// Package routes maps notification-service HTTP paths to handlers.
+//
+// The /internal creation endpoint is how other services raise a notification;
+// it is guarded by a shared secret that fails closed rather than relying on the
+// gateway never routing /internal. The per-user /api group covers the feed and
+// its SSE stream, and identity comes from the gateway-injected X-User-ID header.
 package routes
 
 import (

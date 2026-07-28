@@ -168,6 +168,26 @@ func (v *Verifier) Verify(ctx context.Context, tokenString string) (*Claims, err
 	return claims, nil
 }
 
+// keyFunc selects the verification key for a token — and is this package's
+// defense against algorithm-confusion attacks.
+//
+// The attack it blocks: a JWT's header declares its own algorithm, so an
+// attacker who knows an RS256 public key can re-sign a forged token as HS256
+// using that public key as the HMAC secret. A naive verifier that trusts the
+// header and hands over "the key" would accept it. Three things prevent that
+// here, and all three must stay:
+//
+//  1. The declared alg must appear in the operator-configured allowlist, so an
+//     algorithm nobody intended can never be reached.
+//  2. "none" is rejected explicitly, even if it somehow got allowlisted — an
+//     unsigned token must never verify.
+//  3. The key is chosen by a switch on the algorithm family, so an HS256 header
+//     can only ever receive the HMAC secret and an RS256 header only ever the
+//     RSA public key. The two key materials are never interchangeable.
+//
+// Every failure returns the same opaque ErrTokenInvalid: distinguishing "bad
+// algorithm" from "bad signature" would tell an attacker which of the two they
+// got wrong.
 func (v *Verifier) keyFunc(token *jwt.Token) (interface{}, error) {
 	if token == nil || token.Method == nil {
 		return nil, ErrTokenInvalid
@@ -189,6 +209,12 @@ func (v *Verifier) keyFunc(token *jwt.Token) (interface{}, error) {
 	}
 }
 
+// allowedMethods flattens the configured algorithm allowlist for the JWT
+// parser's WithValidMethods option. This enforces the allowlist a second time,
+// inside the library, before keyFunc is even called — belt and braces on the
+// algorithm-confusion defense described above.
+//
+// Map iteration means the order is unspecified; nothing may depend on it.
 func (v *Verifier) allowedMethods() []string {
 	methods := make([]string, 0, len(v.allowedAlgs))
 	for alg := range v.allowedAlgs {
@@ -197,6 +223,13 @@ func (v *Verifier) allowedMethods() []string {
 	return methods
 }
 
+// parseRSAPublicKey decodes a PEM-encoded RSA public key, accepting both the
+// PKIX ("BEGIN PUBLIC KEY") and PKCS#1 ("BEGIN RSA PUBLIC KEY") encodings
+// because operators reasonably supply either.
+//
+// An empty input yields (nil, nil), not an error: RS256 is optional, and a
+// deployment configured for HS256 only must still boot. The nil key is safe
+// because keyFunc can only reach it when RS256 is in the allowlist.
 func parseRSAPublicKey(raw string) (*rsa.PublicKey, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -219,6 +252,9 @@ func parseRSAPublicKey(raw string) (*rsa.PublicKey, error) {
 	return key, nil
 }
 
+// parseCommaList splits a comma-separated environment variable into trimmed,
+// non-empty entries, so trailing commas and incidental whitespace in a config
+// value cannot introduce an empty allowlist member.
 func parseCommaList(raw string) []string {
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))

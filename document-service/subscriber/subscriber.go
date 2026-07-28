@@ -28,6 +28,7 @@ import (
 // dependency (e.g. Postgres down) is retried with backoff instead of a hot loop.
 const maxDeliver = 5
 
+// eventBackoff is the redelivery schedule for job events.
 var eventBackoff = []time.Duration{time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second}
 
 // nakOrDLQ backs off a retry until maxDeliver is hit, then parks the message in
@@ -85,6 +86,11 @@ func (s *Subscribers) Stop() {
 	s.jobs = nil
 }
 
+// handleJobEvent files a completed job's output into the user's library.
+//
+// This is how a processed file becomes a document without the browser doing
+// anything, so it must tolerate at-least-once delivery: seeing the same
+// completion twice must not create two library entries.
 func handleJobEvent(ctx context.Context, msg jetstream.Msg) {
 	// Continue the publisher's trace (W3C context rides in the NATS headers).
 	ctx, span := queue.StartConsumerSpan(ctx, telemetry.Tracer, msg.Subject(), msg.Headers())
@@ -152,6 +158,7 @@ func handleJobEvent(ctx context.Context, msg jetstream.Msg) {
 	_ = msg.Ack()
 }
 
+// documentName derives a library display name from the job's output filename.
 func documentName(outputPath, toolType string) string {
 	base := path.Base(strings.TrimSpace(outputPath))
 	if base != "" && base != "." && base != "/" {
@@ -163,6 +170,7 @@ func documentName(outputPath, toolType string) string {
 	return "Processed document"
 }
 
+// fileExt extracts a lowercased extension for type classification.
 func fileExt(outputPath string) string {
 	ext := strings.TrimPrefix(path.Ext(outputPath), ".")
 	return strings.ToLower(ext)

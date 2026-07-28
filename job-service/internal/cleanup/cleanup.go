@@ -32,9 +32,13 @@ type ObjectStore interface {
 	ListIncompleteUploads(ctx context.Context, bucket string, olderThan time.Duration) ([]storage.IncompleteUpload, error)
 }
 
+// cleanupLockKey names the distributed lock serialising sweeps. Every replica runs
+// the sweep timer, so without it N replicas would each try to delete the same
+// expired objects concurrently.
 const cleanupLockKey = "cleanup-worker:lock"
 
-// cleanupLockReleaseScript releases the lock only if we still own it (finding B3).
+// cleanupLockReleaseScript releases the lock only if we still own it
+// (finding B3 — docs/developer/architecture/backend-hardening.md section 3.20).
 // Comparing the stored token to ours before deleting stops a replica whose sweep
 // outran the lock TTL from deleting a DIFFERENT replica's freshly-acquired lock,
 // which would otherwise permit concurrent sweeps.
@@ -113,6 +117,17 @@ func removeJobObjects(ctx context.Context, store ObjectStore, files []models.Fil
 	}
 }
 
+// cleanupExpiredJobs deletes jobs past their retention expiry along with their
+// stored objects.
+//
+// Objects are deleted BEFORE the database row. Removing the row first would orphan
+// the object with nothing left referencing it — unreachable but still billed,
+// forever. This ordering means a crash mid-sweep leaves a row whose objects are
+// already gone, which the next sweep handles idempotently since a missing object
+// is not an error.
+//
+// Rows whose Path is an absolute filesystem path predate the object-storage
+// migration and are skipped rather than misread as object keys.
 func cleanupExpiredJobs(ctx context.Context, store ObjectStore) {
 	now := time.Now().UTC()
 	for {
@@ -198,6 +213,11 @@ func uploadReapAge() time.Duration {
 	return 2 * config.UploadTTL()
 }
 
+// cleanupUploadState aborts S3 multipart uploads whose Redis session has expired.
+//
+// Redis expiry alone is insufficient: the session key vanishing does not tell S3
+// to discard parts already uploaded against it, and those parts are billed until
+// explicitly aborted. This is the only thing that reclaims them.
 func cleanupUploadState(ctx context.Context, store ObjectStore) {
 	if redisstore.Client == nil {
 		return
@@ -258,6 +278,11 @@ func abortStaleMultipartUploads(ctx context.Context, store ObjectStore) {
 	}
 }
 
+// backfillExpiry assigns a retention expiry to rows predating per-plan TTLs.
+//
+// A NULL expires_at is invisible to the expiry sweep, so without this such a row
+// lingers indefinitely. It stays part of the recurring sweep rather than being a
+// one-off migration so it also covers rows restored from an old backup.
 func backfillExpiry(ctx context.Context) {
 	ttl := config.FreeJobTTL()
 	result := models.DB.Model(&models.ProcessingJob{}).

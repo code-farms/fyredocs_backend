@@ -12,21 +12,31 @@ import (
 )
 
 const (
-	defaultPrices   = "guest=0,free=0,pro=12"
+	// defaultPrices is the fallback plan pricing, kept in code so revenue figures
+	// are never silently zero on a deployment that has not configured them.
+	defaultPrices = "guest=0,free=0,pro=12"
+	// defaultCurrency is the fallback currency code for revenue reporting.
 	defaultCurrency = "USD"
 )
 
 var (
-	once     sync.Once
-	prices   map[string]float64
+	// once guards the one-time parse of pricing configuration. Prices are read on
+	// every revenue query, so parsing per call would be waste — and a mid-process
+	// change would make figures inconsistent within a single dashboard load.
+	once sync.Once
+	// prices maps plan name to monthly price, populated by load.
+	prices map[string]float64
+	// currency is the parsed currency code, populated by load.
 	currency string
 )
 
+// load parses pricing configuration exactly once, under once.Do.
 func load() {
 	prices = parsePrices(getEnv("PLAN_PRICES", defaultPrices))
 	currency = getEnv("PLAN_CURRENCY", defaultCurrency)
 }
 
+// getEnv reads an environment variable with a fallback, treating empty as unset.
 func getEnv(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v

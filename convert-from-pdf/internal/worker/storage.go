@@ -41,6 +41,14 @@ func markRecoverable(err error) error {
 
 // fetchInputs downloads every object key from the uploads bucket into
 // <scratch>/in/ and returns the local file paths in input order.
+//
+// SECURITY: path.Base(key) is the path-traversal containment, not tidiness. The
+// object key ultimately derives from a user-supplied filename, so a key like
+// "../../etc/cron.d/x" or an absolute "/etc/passwd" would otherwise make
+// filepath.Join write outside the per-job scratch directory. Taking the base
+// name reduces any key to a single path segment, so every download lands inside
+// <scratch>/in/. Do not remove this to "preserve the original key layout" —
+// the flat layout is what makes containment provable.
 func fetchInputs(ctx context.Context, store Storage, scratch string, keys []string) ([]string, error) {
 	localPaths := make([]string, 0, len(keys))
 	for _, key := range keys {
@@ -55,6 +63,13 @@ func fetchInputs(ctx context.Context, store Storage, scratch string, keys []stri
 
 // storeOutput uploads localPath to the outputs bucket under
 // jobs/{jobID}/{basename} and returns the object key plus the uploaded size.
+//
+// SECURITY: filepath.Base(localPath) keeps the produced object key inside this
+// job's own prefix. Some outputs are named from data inside the input document
+// (conversion tools derive sheet or slide names, for example), so an unbased
+// path could inject "../" segments into the key and let one job overwrite
+// another job's output in the shared bucket. Basing it makes the jobs/{jobID}/
+// prefix an actual boundary rather than a convention.
 func storeOutput(ctx context.Context, store Storage, jobID, localPath string) (string, int64, error) {
 	key := "jobs/" + jobID + "/" + filepath.Base(localPath)
 	size, err := store.UploadFromFile(ctx, store.BucketOutputs(), key, localPath, contentTypeFor(localPath))

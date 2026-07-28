@@ -78,6 +78,15 @@ func withV1Aliases(routes []routeConfig) []routeConfig {
 	return out
 }
 
+// main boots the single public entry point: authentication, rate limiting, circuit breaking, and reverse proxying.
+//
+// Order here is load-bearing: configuration and logging come up first so any
+// later failure is diagnosable, then the database and its migrations, then the
+// external brokers, and only then does the server start accepting traffic —
+// binding the port before dependencies are ready would advertise readiness the
+// service cannot honour. Every dependency failure calls os.Exit rather than
+// degrading, so a misconfigured instance dies at boot instead of failing requests
+// one at a time. Shutdown is the reverse: stop accepting, drain, then release.
 func main() {
 	config.LoadConfig()
 	logger.Init("api-gateway", os.Getenv("LOG_MODE"))
@@ -415,6 +424,19 @@ func deprecationHeadersEnabled() bool {
 	return config.GetEnvBool("API_DEPRECATION_HEADERS", false)
 }
 
+// newProxy builds the reverse-proxy handler for one route, wrapped in its
+// upstream's circuit breaker.
+//
+// Two properties here are easy to break. First, FlushInterval is -1 so responses
+// stream immediately instead of being buffered — SSE job progress and file
+// downloads both depend on it, and buffering would make progress arrive only at
+// completion. Second, the director calls ClearUserHeaders BEFORE applying the
+// verified identity: this is what stops a client from forging X-User-ID, since
+// downstream services trust those headers. Reordering those two lines would let
+// a caller-supplied header survive and impersonate any user.
+//
+// An unparseable target URL exits the process; a route pointing nowhere is a
+// configuration error that must surface at boot, not as 502s in production.
 func newProxy(cfg routeConfig, breaker *circuitbreaker.TwoStep) http.Handler {
 	target, err := url.Parse(cfg.targetURL)
 	if err != nil {
@@ -504,6 +526,12 @@ func (s *statusRecorder) Flush() {
 	}
 }
 
+// joinPath re-roots a request path under the upstream's base path.
+//
+// It deliberately does not normalize an empty extraPath to "/": an exact-prefix
+// match must forward the base path verbatim, because appending a trailing slash
+// makes upstream Gin routers answer with a 301 to the slashed form and the client
+// loops. See the director in newProxy for the full reasoning.
 func joinPath(basePath, extraPath string) string {
 	if basePath == "" {
 		return extraPath
@@ -514,6 +542,8 @@ func joinPath(basePath, extraPath string) string {
 	return basePath + extraPath
 }
 
+// corsConfig is the resolved CORS policy, built once at boot from the
+// environment rather than per request.
 type corsConfig struct {
 	allowedOrigins   []string
 	allowedMethods   string
@@ -521,6 +551,13 @@ type corsConfig struct {
 	allowCredentials bool
 }
 
+// withCORS applies the CORS policy and short-circuits preflight requests.
+//
+// Vary: Origin is set whenever an origin is echoed, which is required for
+// correctness rather than politeness: without it a shared cache can serve one
+// origin's Allow-Origin header to a different origin. OPTIONS returns 204 without
+// reaching the proxy, so a preflight never consumes an upstream request or a
+// circuit-breaker slot.
 func withCORS(next http.Handler, cfg corsConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
@@ -546,6 +583,16 @@ func withCORS(next http.Handler, cfg corsConfig) http.Handler {
 	})
 }
 
+// corsAllowOrigin resolves the Access-Control-Allow-Origin value for a request,
+// returning "" when the origin is not permitted.
+//
+// The wildcard case is the subtle one. Browsers reject the literal "*" on a
+// credentialed request, so when credentials are enabled a wildcard configuration
+// echoes the caller's own origin instead. That is a real widening — with
+// allowedOrigins ["*"] and credentials on, ANY site can make cookie-bearing
+// requests — so the wildcard must never be combined with credentials outside
+// local development. An unmatched origin returns "" and the response simply
+// carries no CORS headers, which is the correct fail-closed outcome.
 func corsAllowOrigin(origin string, allowedOrigins []string, allowCredentials bool) string {
 	if origin == "" {
 		return ""
@@ -564,6 +611,10 @@ func corsAllowOrigin(origin string, allowedOrigins []string, allowCredentials bo
 	return ""
 }
 
+// parseCommaList splits a comma-separated environment value into trimmed
+// entries. Note it does not drop empty entries, so a trailing comma yields an ""
+// element — harmless for the origin allowlist, since "" never matches a real
+// Origin header, but worth knowing before reusing this elsewhere.
 func parseCommaList(value string) []string {
 	if value == "" {
 		return nil

@@ -1,3 +1,7 @@
+// Tests for the presigned multipart upload protocol: part-size math against the S3
+// 5 MiB minimum and 1000-part cap, session expiry, resume via re-presigned URLs, and
+// ownership enforcement on a session. These pin the wire contract the web and mobile
+// clients both implement independently.
 package handlers
 
 import (

@@ -31,6 +31,9 @@ type Subscribers struct {
 // dependency (e.g. Postgres down) is retried with backoff instead of a hot loop.
 const maxDeliver = 5
 
+// eventBackoff is the redelivery schedule for event consumers. Analytics events
+// are lower value than jobs, so the schedule trades promptness for load: a
+// briefly unavailable database should not be hammered by retries.
 var eventBackoff = []time.Duration{time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second}
 
 // nakOrDLQ backs off a retry until maxDeliver is hit, then parks the message in
@@ -88,6 +91,7 @@ func (s *Subscribers) Stop() {
 	}
 }
 
+// subscribeAnalyticsEvents consumes the analytics event stream.
 func subscribeAnalyticsEvents(ctx context.Context) (jetstream.ConsumeContext, error) {
 	consumer, err := natsconn.JS.CreateOrUpdateConsumer(ctx, "ANALYTICS", jetstream.ConsumerConfig{
 		Durable:       "analytics-service",
@@ -107,6 +111,8 @@ func subscribeAnalyticsEvents(ctx context.Context) (jetstream.ConsumeContext, er
 	})
 }
 
+// subscribeJobEvents consumes job lifecycle events, kept a separate consumer from
+// analytics events so a failure handling one stream cannot stall the other.
 func subscribeJobEvents(ctx context.Context) (jetstream.ConsumeContext, error) {
 	consumer, err := natsconn.JS.CreateOrUpdateConsumer(ctx, "JOBS_EVENTS", jetstream.ConsumerConfig{
 		Durable:       "analytics-job-events",
@@ -126,6 +132,11 @@ func subscribeJobEvents(ctx context.Context) (jetstream.ConsumeContext, error) {
 	})
 }
 
+// handleAnalyticsEvent persists one analytics event.
+//
+// A malformed message is ACKed rather than retried: it will fail identically on
+// every redelivery, so NAKing would spin until MaxDeliver with no chance of
+// success. Only transient failures are worth redelivering.
 func handleAnalyticsEvent(ctx context.Context, msg jetstream.Msg) {
 	// Continue the publisher's trace (W3C context rides in the NATS headers).
 	ctx, span := queue.StartConsumerSpan(ctx, telemetry.Tracer, msg.Subject(), msg.Headers())
@@ -181,6 +192,8 @@ func handleAnalyticsEvent(ctx context.Context, msg jetstream.Msg) {
 	_ = msg.Ack()
 }
 
+// handleJobEvent records a job lifecycle transition for reporting. Events are
+// at-least-once, so writes here must tolerate seeing the same transition twice.
 func handleJobEvent(ctx context.Context, msg jetstream.Msg) {
 	// Continue the publisher's trace (W3C context rides in the NATS headers).
 	ctx, span := queue.StartConsumerSpan(ctx, telemetry.Tracer, msg.Subject(), msg.Headers())

@@ -1,3 +1,11 @@
+// Package routes maps analytics-service HTTP paths to handlers.
+//
+// Three access tiers coexist here and the distinction is load-bearing: the
+// role-aware /api/dashboard is open to any authenticated user (the handler
+// itself decides how much to show), /admin/* is super-admin only via adminAuth,
+// and the Prometheus alert receiver under /internal is deliberately
+// unauthenticated because Prometheus cannot send the gateway's role header.
+// Moving a route between tiers changes who can read platform-wide metrics.
 package routes
 
 import (
@@ -64,6 +72,14 @@ func SetupRouter(r *gin.Engine) {
 	}
 }
 
+// adminAuth restricts a route group to super-admins.
+//
+// The role is read from the gateway-injected X-User-Role header, which is only
+// trustworthy because the gateway strips client-supplied identity headers before
+// proxying — this service must never be exposed directly. The 401-versus-403
+// distinction is deliberate: no user ID means "not logged in" and the client
+// should authenticate, whereas a present ID with the wrong role means
+// re-authenticating will not help.
 func adminAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role := strings.TrimSpace(c.GetHeader("X-User-Role"))

@@ -1,3 +1,11 @@
+// Package routes maps job-service HTTP paths to handlers.
+//
+// Rate limiters are split by cost rather than applied uniformly: presign-only
+// upload calls are cheap, job creation writes to Postgres and publishes to
+// NATS, and scanner edge detection is a synchronous relay to organize-pdf.
+// Giving them one shared bucket would let cheap polling starve job creation.
+// The four per-tool-group route blocks are intentionally identical in shape —
+// the tool name is a path parameter resolved through internal/routing.
 package routes
 
 import (

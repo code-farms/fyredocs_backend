@@ -1,3 +1,10 @@
+// Package handlers implements user-service's HTTP surface: organizations,
+// their membership lists, and role changes.
+//
+// Authorization here is relative, not absolute: what a caller may do depends on
+// their own role inside the target organization, so each handler resolves the
+// caller's membership first. Guarding these routes at the router level would be
+// insufficient, which is why the checks live in the handlers.
 package handlers
 
 import (
@@ -80,6 +87,8 @@ func ListOrganizations(c *gin.Context) {
 	response.OKWithMeta(c, "Organizations retrieved", out, &response.Meta{Page: page, Limit: limit, Total: total})
 }
 
+// createOrgReq is the organization create body. The creator becomes owner; the
+// role is never taken from the request.
 type createOrgReq struct {
 	Name string `json:"name" binding:"required,max=120"`
 }
@@ -175,6 +184,8 @@ func ListMembers(c *gin.Context) {
 	response.OKWithMeta(c, "Members retrieved", members, &response.Meta{Page: page, Limit: limit, Total: total})
 }
 
+// addMemberReq names the user to add and the role to grant. The granting caller's
+// own role bounds what they may grant, checked in the handler.
 type addMemberReq struct {
 	UserID string `json:"userId" binding:"required,uuid"`
 	// Empty role defaults to viewer; owner is only assignable via ownership
@@ -241,6 +252,8 @@ func AddMember(c *gin.Context) {
 	response.Created(c, "Member added", m)
 }
 
+// updateMemberReq carries a member's new role. Handlers must prevent a
+// last-owner demotion, which would leave the organization unadministrable.
 type updateMemberReq struct {
 	Role string `json:"role" binding:"required,oneof=admin editor viewer"`
 }

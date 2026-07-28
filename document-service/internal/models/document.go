@@ -1,3 +1,11 @@
+// Package models owns the document library schema: documents, the folders and
+// tags that organize them, saved exports, and job workspace hints.
+//
+// Rows are scoped to a user and optionally to an organization, and deletion is
+// two-phase — DeletedAt marks a document as trashed so it can be restored,
+// while a separate purge removes it permanently along with its stored object.
+// Callers must therefore filter on the soft-delete state; forgetting to do so
+// surfaces trashed documents in the library.
 package models
 
 import (

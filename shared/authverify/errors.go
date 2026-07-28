@@ -10,8 +10,13 @@ import (
 type ErrorCode string
 
 const (
+	// ErrCodeUnauthorized means the caller is not identified — no token, or one
+	// that cannot be trusted. The client's correct response is to log in.
 	ErrCodeUnauthorized ErrorCode = "AUTH_UNAUTHORIZED"
-	ErrCodeForbidden    ErrorCode = "AUTH_FORBIDDEN"
+	// ErrCodeForbidden means the caller IS identified but lacks permission.
+	// Re-authenticating will not help, so clients must not treat this as a
+	// prompt to refresh or re-login.
+	ErrCodeForbidden ErrorCode = "AUTH_FORBIDDEN"
 	// ErrCodeTokenExpired distinguishes a valid-but-expired token from an
 	// otherwise-invalid one so the client can silently refresh instead of
 	// forcing a re-login.

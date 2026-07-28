@@ -76,6 +76,9 @@ func (q Quad) Clamp01() Quad {
 	return Quad{TL: cp(q.TL), TR: cp(q.TR), BR: cp(q.BR), BL: cp(q.BL)}
 }
 
+// corners returns the quad's points in fixed TL, TR, BR, BL winding order. Both
+// Area's shoelace sum and the perspective transform depend on this exact order,
+// so it is centralized here rather than re-listed at each use.
 func (q Quad) corners() [4]Point {
 	return [4]Point{q.TL, q.TR, q.BR, q.BL}
 }

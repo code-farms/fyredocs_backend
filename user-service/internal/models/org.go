@@ -1,3 +1,10 @@
+// Package models owns the multi-tenancy schema: organizations and the
+// memberships that bind users to them with a role.
+//
+// Membership.Role is the RBAC anchor for the whole platform — document-service
+// asks this service who may act inside an organization. Because the role lives
+// here and is enforced by the service that reads it, adding a role means
+// updating every consumer's authorization checks, not just this table.
 package models
 
 import (
@@ -15,6 +22,10 @@ const (
 	RoleViewer = "viewer"
 )
 
+// roleRank orders roles by privilege so authorization can be expressed as a
+// minimum rather than an enumeration. Adding a role means placing it here; a role
+// absent from this map ranks lowest and is therefore denied everything, which is
+// the safe default.
 var roleRank = map[string]int{RoleViewer: 1, RoleEditor: 2, RoleAdmin: 3, RoleOwner: 4}
 
 // RoleAtLeast reports whether `role` meets or exceeds `min`.

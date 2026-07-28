@@ -19,12 +19,20 @@ var (
 )
 
 var (
+	// descPoolOpen describes the open-connection gauge (in use plus idle).
 	descPoolOpen = prometheus.NewDesc("db_pool_open_connections",
 		"Open connections to the database (in use + idle).", nil, nil)
+	// descPoolInUse describes the in-use gauge. Approaching descPoolMaxOpen is the
+	// signal that requests are about to start queueing for a connection.
 	descPoolInUse = prometheus.NewDesc("db_pool_in_use_connections",
 		"Connections currently in use.", nil, nil)
+	// descPoolMaxOpen exports the configured ceiling so a dashboard can plot
+	// utilisation as a fraction rather than an unanchored count.
 	descPoolMaxOpen = prometheus.NewDesc("db_pool_max_open_connections",
 		"Configured maximum number of open connections.", nil, nil)
+	// descPoolWaitCount describes the cumulative wait counter. Sustained growth
+	// means the pool is exhausted and requests are blocking — the earliest warning
+	// that pool sizing, not the database, is the bottleneck.
 	descPoolWaitCount = prometheus.NewDesc("db_pool_wait_count_total",
 		"Cumulative number of connection waits (pool exhaustion pressure).", nil, nil)
 )

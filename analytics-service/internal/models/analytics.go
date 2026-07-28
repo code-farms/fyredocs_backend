@@ -1,3 +1,11 @@
+// Package models owns the analytics schema: raw events, pre-aggregated daily
+// metrics, and sampled API latency records.
+//
+// These tables are append-mostly and read by dashboard queries that scan wide
+// time ranges, so DailyMetric exists specifically to avoid aggregating raw
+// AnalyticsEvent rows on every dashboard load. APIMetricSample is sampled
+// rather than complete — see internal/apisampler for the sampling rate — so
+// counts derived from it are estimates, not exact totals.
 package models
 
 import (

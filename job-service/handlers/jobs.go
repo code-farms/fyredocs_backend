@@ -1,3 +1,13 @@
+// Package handlers implements job-service's HTTP surface: the presigned upload
+// protocol, job creation and lifecycle queries, result downloads, live progress
+// over SSE, scanner edge detection, and dead-letter redrive.
+//
+// This is the platform's orchestration seam. A request here turns an uploaded
+// object into a queued NATS message that some PDF worker will pick up, so the
+// package carries the guards that make that transition safe to retry: upload
+// claims, idempotency records, quota enforcement, and content-type validation.
+// Those guards are the reason job creation is not a thin insert — see the
+// idempotency notes in this file before simplifying any of it.
 package handlers
 
 import (
@@ -195,7 +205,8 @@ func CreateJobFromTool(c *gin.Context) {
 
 		// Atomically claim the uploads so a concurrent duplicate submission
 		// (double-click, client retry, two tabs) cannot consume the same upload
-		// and create a second job (finding B1). Claims are released on return;
+		// and create a second job (finding B1 — docs/developer/architecture/backend-hardening.md section 3.20).
+		// Claims are released on return;
 		// the winner's consumed-upload record dedups later duplicates.
 		claimed, conflict, cerr := claimUploads(c.Request.Context(), uploadIDs)
 		if cerr != nil {
@@ -765,15 +776,33 @@ const consumedUploadIdempotencyTTL = 10 * time.Minute
 // idempotencyKeyTTL bounds how long an Idempotency-Key reservation lives.
 const idempotencyKeyTTL = 10 * time.Minute
 
-// uploadClaimTTL bounds a per-upload processing claim (finding B1). It is only a
+// uploadClaimTTL bounds a per-upload processing claim (finding B1 — docs/developer/architecture/backend-hardening.md section 3.20).
+// It is only a
 // safety net: the claim is released when the request returns, and expires on its
 // own if the process dies mid-flight.
 const uploadClaimTTL = 10 * time.Minute
 
+// consumedUploadKey names the record proving an upload has already been turned
+// into a job. It is the second of three layers that keep job creation
+// replay-safe (finding B1 — docs/developer/architecture/backend-hardening.md
+// section 3.20):
+//
+//  1. Idempotency-Key reservation — dedups a client retrying the SAME request.
+//  2. consumed-upload record (this one) — dedups any later request reusing an
+//     uploadId that already produced a job, even a different request shape.
+//  3. uploadClaimKey — a short-lived mutex stopping two CONCURRENT requests from
+//     consuming one upload before either has written its consumed record.
+//
+// All three are needed: (1) misses distinct requests, (2) cannot help while the
+// first request is still in flight, and (3) evaporates once the request returns.
+// Together they stop one upload from being billed and processed twice.
 func consumedUploadKey(uploadID string) string {
 	return "idempotency:upload:" + uploadID
 }
 
+// uploadClaimKey names the short-lived concurrency claim on an upload — layer 3
+// in the scheme described on consumedUploadKey. Held only for the duration of a
+// job-creation request; uploadClaimTTL is a crash backstop, not the mechanism.
 func uploadClaimKey(uploadID string) string {
 	return "claim:upload:" + uploadID
 }
@@ -917,6 +946,13 @@ func bucketFor(kind string) string {
 	return objStore.BucketOutputs()
 }
 
+// normalizeToolType folds legacy tool aliases onto their canonical names.
+//
+// The aliases exist because older clients (and shipped mobile builds) still send
+// the short spellings, so they cannot be dropped without breaking them. Canonical
+// names are what routing.ToolServiceMap, validateFileType, and mimeCategory are
+// all keyed by — normalizing here, at the edge, is what keeps those three tables
+// from each needing their own alias handling.
 func normalizeToolType(toolType string) (string, error) {
 	toolType = strings.TrimSpace(toolType)
 	switch toolType {
@@ -950,11 +986,18 @@ type createJobResponse struct {
 	GuestToken string `json:"guestToken,omitempty"`
 }
 
+// toJobResponse decorates a job row with its computed output file name.
+//
+// The name is derived rather than stored, so it stays correct for jobs created
+// before an extension mapping changed. A derivation failure is ignored: an empty
+// output name is cosmetic, and must not turn a successful job lookup into an
+// error.
 func toJobResponse(job models.ProcessingJob) jobResponse {
 	name, _ := outputFileName(job.ToolType, job.FileName, job.Metadata)
 	return jobResponse{ProcessingJob: job, OutputFileName: name}
 }
 
+// toJobResponses maps toJobResponse over a slice, preserving order.
 func toJobResponses(jobs []models.ProcessingJob) []jobResponse {
 	out := make([]jobResponse, len(jobs))
 	for i, j := range jobs {
@@ -963,6 +1006,13 @@ func toJobResponses(jobs []models.ProcessingJob) []jobResponse {
 	return out
 }
 
+// outputFileName derives the download filename and Content-Type for a job's
+// result from the tool type and the original input name.
+//
+// This is the single place that mapping lives; the frontend and the mobile app
+// both rely on the server-computed name rather than recomputing it, so a new
+// tool needs a case here or its downloads inherit the generic
+// application/octet-stream fallback and the input's original extension.
 func outputFileName(toolType string, inputName string, metadata datatypes.JSON) (string, string) {
 	contentType := "application/octet-stream"
 	fileName := inputName
@@ -1027,6 +1077,10 @@ func resolveOutputExt(metadata datatypes.JSON, defaultExt string, defaultCT stri
 	}
 }
 
+// maxUploadBytes is the absolute per-file ceiling, independent of plan. It is a
+// thin indirection over shared config so this package has one call site to change
+// if the limit ever becomes plan-derived; per-plan limits are separate and come
+// from planMaxFileSizeMB below.
 func maxUploadBytes() int64 {
 	return config.MaxUploadBytes()
 }
@@ -1059,6 +1113,17 @@ func planMaxFilesPerJob(c *gin.Context) int {
 	return n
 }
 
+// validateFileType rejects a file whose EXTENSION cannot be right for the tool.
+//
+// This is a cheap first-pass check on an attacker-controlled string, not a
+// security boundary — an extension proves nothing about content. The real check
+// is validateMIMEHead, which sniffs actual bytes. Both exist because this one
+// can reject an obvious mistake before the upload is even read, giving a clearer
+// error at lower cost.
+//
+// A tool absent from this switch accepts any extension. That is intentional for
+// tools with genuinely open input, but it means adding a format-specific tool
+// requires adding a case here AND in mimeCategory.
 func validateFileType(toolType string, fileName string) error {
 	ext := strings.ToLower(filepath.Ext(fileName))
 	isPDF := ext == ".pdf"
@@ -1149,7 +1214,13 @@ func mimeCategory(toolType string) string {
 func validateMIMEHead(toolType string, head []byte) error {
 	category := mimeCategory(toolType)
 	if category == "" {
-		return nil // unknown category, skip MIME check
+		// FAIL-OPEN: a tool with no declared MIME category accepts any content.
+		// This is deliberate — tools with genuinely open input (and new tools not
+		// yet categorised) must not be blocked by a check that has no allowlist to
+		// compare against. The consequence is that forgetting to add a case to
+		// mimeCategory silently disables content validation for that tool rather
+		// than failing loudly, so the two must be added together.
+		return nil
 	}
 	allowed, ok := allowedMIMETypes[category]
 	if !ok {
@@ -1169,6 +1240,13 @@ func validateMIMEHead(toolType string, head []byte) error {
 	return fmt.Errorf("file content type %q is not allowed for this tool", detected)
 }
 
+// parseOptions decodes a tool options blob for internal use, yielding an empty
+// map for both absent and malformed input.
+//
+// Swallowing the parse error is safe only because options are advisory: every
+// tool defaults any option it does not find. Options that must be valid are
+// validated separately and explicitly (see validateScanOptions in
+// tool_options.go), which is where a hard error belongs.
 func parseOptions(raw string) map[string]interface{} {
 	if raw == "" {
 		return map[string]interface{}{}
@@ -1180,6 +1258,12 @@ func parseOptions(raw string) map[string]interface{} {
 	return parsed
 }
 
+// optionsPayload passes an options blob through to the queued NATS message,
+// dropping it entirely if it is not valid JSON.
+//
+// Validating here matters: the payload is embedded in the dispatch message, so
+// forwarding malformed JSON would fail at the worker after the job row already
+// exists — a failure attributed to processing rather than to bad input.
 func optionsPayload(raw string) json.RawMessage {
 	if raw == "" {
 		return nil
@@ -1190,6 +1274,9 @@ func optionsPayload(raw string) json.RawMessage {
 	return json.RawMessage(raw)
 }
 
+// queryInt reads an integer query parameter, returning fallback when absent or
+// unparseable. Callers must still bound the result — see clampInt — because this
+// deliberately does not reject large or negative values.
 func queryInt(c *gin.Context, key string, fallback int) int {
 	value := c.Query(key)
 	if value == "" {
@@ -1207,6 +1294,9 @@ func queryInt(c *gin.Context, key string, fallback int) int {
 // cost stops being acceptable for a request-path query.
 const maxListPage = 200
 
+// clampInt bounds a value into [min, max]. Pagination parameters arrive from the
+// client, so clamping rather than rejecting keeps a nonsense page number from
+// becoming an error while still capping the database work it can request.
 func clampInt(value int, min int, max int) int {
 	if value < min {
 		return min
@@ -1237,6 +1327,19 @@ func jobExpiry(userID *uuid.UUID, planName string) *time.Time {
 	return &expires
 }
 
+// assignGuestTokenIfNeeded gives an anonymous caller a token recording ownership
+// of the jobs they create, and returns it so a cross-origin client can echo it
+// back via X-Guest-Token.
+//
+// Guest ownership is a Redis set keyed by the token, expiring with the guest job
+// TTL, rather than a database column — an anonymous claim should not outlive the
+// files it refers to. The token is the ONLY thing standing between a guest job
+// and any other visitor (see authorizeJobAccess), which is why the cookie is set
+// HttpOnly so page scripts cannot read or leak it.
+//
+// Returns "" for authenticated callers, who are identified properly, and when
+// Redis is unavailable — in which case guest jobs simply become unlistable
+// rather than becoming public.
 func assignGuestTokenIfNeeded(c *gin.Context, userID *uuid.UUID, jobID uuid.UUID) string {
 	if userID != nil {
 		return ""
@@ -1256,6 +1359,9 @@ func assignGuestTokenIfNeeded(c *gin.Context, userID *uuid.UUID, jobID uuid.UUID
 	return token
 }
 
+// guestJobIDs lists the job IDs a guest token owns. A Redis error yields nil,
+// which callers must read as "cannot prove ownership" — the fail-safe direction,
+// since authorizeJobAccess turns an empty list into a denial.
 func guestJobIDs(ctx context.Context, token string) []string {
 	if token == "" || redisstore.Client == nil {
 		return nil
@@ -1268,6 +1374,8 @@ func guestJobIDs(ctx context.Context, token string) []string {
 	return jobIDs
 }
 
+// removeGuestJob drops a job from a guest's ownership set after deletion, so the
+// set does not accumulate references to jobs that no longer exist.
 func removeGuestJob(ctx context.Context, token string, jobID uuid.UUID) {
 	if ctx == nil || redisstore.Client == nil {
 		return
@@ -1279,6 +1387,16 @@ func removeGuestJob(ctx context.Context, token string, jobID uuid.UUID) {
 	redisstore.Client.SRem(ctx, key, jobID.String())
 }
 
+// authorizeJobAccess reports whether the caller may read or delete this job.
+//
+// Two ownership models meet here. A job with a UserID belongs to that user and
+// only an exact ID match passes — notably, a guest token can never reach an
+// account's job. A job without a UserID is a guest job, authorized only if the
+// caller's token holds it in Redis.
+//
+// Every path defaults to false: a missing token, an absent user, or an
+// unreachable Redis all deny. This is the function that stops job IDs from being
+// enumerable, so it must fail closed, and any new branch added here must too.
 func authorizeJobAccess(c *gin.Context, job *models.ProcessingJob) bool {
 	userID := authUserID(c)
 	if job.UserID != nil {
@@ -1299,6 +1417,8 @@ func authorizeJobAccess(c *gin.Context, job *models.ProcessingJob) bool {
 	return false
 }
 
+// guestToken reads the guest ownership token from its HttpOnly cookie, returning
+// "" when absent — which callers treat as unauthorized rather than as a new guest.
 func guestToken(c *gin.Context) string {
 	if value, err := c.Cookie("guest_token"); err == nil {
 		return value
@@ -1306,6 +1426,12 @@ func guestToken(c *gin.Context) string {
 	return ""
 }
 
+// publishJobAnalyticsEvent emits a job lifecycle event for analytics-service.
+//
+// Best-effort by design: a nil JetStream handle or a publish failure is logged
+// and ignored, because losing a metric must never fail the user's job. Guests are
+// recorded as IsGuest with no UserID rather than being skipped, so anonymous
+// traffic still shows up in totals without being attributed to anyone.
 func publishJobAnalyticsEvent(ctx context.Context, eventType string, jobID string, toolType string, userID *uuid.UUID, fileSize int64) {
 	if natsconn.JS == nil {
 		return
@@ -1326,6 +1452,12 @@ func publishJobAnalyticsEvent(ctx context.Context, eventType string, jobID strin
 	}
 }
 
+// publishPlanLimitHit records that a request was refused by a plan limit.
+//
+// This is the signal for how often limits actually bite — the conversion
+// argument for a paid tier — so it is emitted on rejection paths where the
+// request is about to fail. Best-effort for the same reason as
+// publishJobAnalyticsEvent.
 func publishPlanLimitHit(c *gin.Context, limitType string, toolType string) {
 	if natsconn.JS == nil {
 		return

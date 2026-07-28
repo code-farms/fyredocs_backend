@@ -1,3 +1,11 @@
+// Package handlers implements document-service's HTTP surface: the document
+// library, folders, tags, saved exports, and job workspace hints.
+//
+// Two constraints shape this package. Identity arrives as a gateway-injected
+// header (see RequireUser in auth.go) and organization permissions are resolved
+// by calling user-service rather than reading its tables. And exports are
+// bounded by a process-wide concurrency semaphore, because each one scans a
+// user's whole library and builds the archive in memory — see exports.go.
 package handlers
 
 import (
@@ -159,6 +167,9 @@ func ListDocuments(c *gin.Context) {
 	response.OKWithMeta(c, "Documents retrieved", docs, &response.Meta{Page: page, Limit: limit, Total: total})
 }
 
+// createDocumentReq is the create-document body. Ownership is never taken from
+// the body — it comes from the authenticated caller — so a client cannot file a
+// document into someone else's library.
 type createDocumentReq struct {
 	Name           string         `json:"name" binding:"required,max=255"`
 	FolderID       *string        `json:"folderId" binding:"omitempty,uuid"`
@@ -240,6 +251,9 @@ func GetDocument(c *gin.Context) {
 	response.OK(c, "Document retrieved", doc)
 }
 
+// updateDocumentReq is the patch body. Pointer fields distinguish "omitted" from
+// "explicitly cleared", which a partial update needs in order to leave untouched
+// fields alone.
 type updateDocumentReq struct {
 	Name     *string        `json:"name" binding:"omitempty,max=255"`
 	FolderID *string        `json:"folderId" binding:"omitempty,uuid"`
@@ -401,6 +415,8 @@ func PurgeDocument(c *gin.Context) {
 	response.OK(c, "Document permanently deleted", gin.H{"id": id})
 }
 
+// attachTagReq names the tag to attach. The tag must belong to the same owner as
+// the document, checked by the handler.
 type attachTagReq struct {
 	TagID string `json:"tagId" binding:"required,uuid"`
 }

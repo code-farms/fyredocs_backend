@@ -1,3 +1,13 @@
+// Package handlers implements auth-service's HTTP surface: signup, login,
+// refresh, logout, the current-user endpoints, password reset, plan changes,
+// admin impersonation, and the internal service-to-service API.
+//
+// Because this service is the platform's only token issuer, everything here is
+// security-critical. Two conventions run throughout and should be preserved:
+// responses deliberately avoid revealing whether an email exists, and
+// validation is asymmetric between signup and login — signup enforces password
+// policy, login must not, or it would leak which accounts predate a policy
+// change.
 package handlers
 
 import (
@@ -527,6 +537,12 @@ func (ae *AuthEndpoints) denyAccessToken(ctx context.Context, tokenStr string) e
 	return ae.Denylist.DenyToken(ctx, tokenStr, ttl)
 }
 
+// buildUserResponse assembles the client-facing user payload.
+//
+// This is the single place the user shape is constructed, which is what keeps the
+// password hash from ever reaching a response body: no handler serializes
+// models.User directly. Any new field must be added here deliberately rather than
+// inherited from the model.
 func buildUserResponse(user models.User, role string, plan models.SubscriptionPlan) authUser {
 	if strings.TrimSpace(user.Role) != "" {
 		role = user.Role
@@ -550,10 +566,24 @@ func buildUserResponse(user models.User, role string, plan models.SubscriptionPl
 	}
 }
 
+// normalizeEmail lowercases and trims an address so it can be used as an
+// identity key. Every read AND write of users.email must go through this — the
+// uniqueness guarantee is only as good as the normalization, so a signup that
+// skipped it would let "User@x.com" and "user@x.com" become two accounts.
 func normalizeEmail(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
 
+// loadUserFromAuth resolves the verified caller to their database row, writing a
+// 401 response and returning false if that is not possible.
+//
+// Every failure — no auth context, an unparseable ID, or a missing row — produces
+// the same generic "session expired" message. That uniformity is deliberate: a
+// valid token whose user row has been deleted must not be distinguishable from an
+// invalid token, or the endpoint becomes a way to test whether an account exists.
+//
+// The returned bool is the only thing callers should branch on; the response has
+// already been written when it is false.
 func loadUserFromAuth(c *gin.Context) (models.User, authverify.AuthContext, bool) {
 	authCtx, ok := authverify.GetGinAuth(c)
 	if !ok || strings.TrimSpace(authCtx.UserID) == "" {
@@ -578,6 +608,14 @@ func loadUserFromAuth(c *gin.Context) (models.User, authverify.AuthContext, bool
 	return user, authCtx, true
 }
 
+// isDuplicateError reports whether err is a unique-constraint violation, so
+// signup can answer "email already registered" instead of a 500.
+//
+// The string fallback exists because GORM does not reliably translate every
+// driver's duplicate-key error into gorm.ErrDuplicatedKey. It is a heuristic, and
+// a false positive would report a genuine server error as a duplicate — acceptable
+// here because the alternative (a 500 on a routine repeat signup) is worse, but a
+// reason not to reuse this for anything security-relevant.
 func isDuplicateError(err error) bool {
 	if err == nil {
 		return false
@@ -589,6 +627,14 @@ func isDuplicateError(err error) bool {
 	return strings.Contains(lower, "duplicate") || strings.Contains(lower, "unique")
 }
 
+// setAccessTokenCookie issues the access token as an HttpOnly cookie scoped to
+// "/".
+//
+// HttpOnly is what keeps the token out of reach of page scripts, so an XSS bug
+// cannot exfiltrate it — this is why the frontend reads an expiry timestamp from
+// the response body instead of decoding the token itself. Secure defaults to true
+// and logs loudly when disabled, because a non-Secure cookie is sent over plain
+// HTTP and disabling it is only ever acceptable on localhost.
 func setAccessTokenCookie(c *gin.Context, tokenStr string, ttl time.Duration) {
 	name := config.GetEnv("AUTH_ACCESS_COOKIE", "access_token")
 	domain := strings.TrimSpace(config.GetEnv("AUTH_COOKIE_DOMAIN", ""))
@@ -604,6 +650,10 @@ func setAccessTokenCookie(c *gin.Context, tokenStr string, ttl time.Duration) {
 	c.SetCookie(name, tokenStr, maxAge, "/", domain, secure, true)
 }
 
+// clearAccessTokenCookie expires the access cookie on logout. The name, domain,
+// secure flag, and SameSite mode must match setAccessTokenCookie exactly — a
+// browser treats a differing attribute set as a different cookie and the original
+// would survive the logout.
 func clearAccessTokenCookie(c *gin.Context) {
 	name := config.GetEnv("AUTH_ACCESS_COOKIE", "access_token")
 	domain := strings.TrimSpace(config.GetEnv("AUTH_COOKIE_DOMAIN", ""))
@@ -614,6 +664,13 @@ func clearAccessTokenCookie(c *gin.Context) {
 	c.SetCookie(name, "", -1, "/", domain, secure, true)
 }
 
+// setRefreshTokenCookie issues the refresh token as an HttpOnly cookie scoped to
+// "/auth" rather than "/".
+//
+// The narrower path is the point: the refresh token is long-lived and can mint new
+// access tokens, so it is only ever sent to the auth endpoints that need it. Every
+// other API request carries the short-lived access cookie alone, which shrinks the
+// surface on which the more valuable credential can leak.
 func setRefreshTokenCookie(c *gin.Context, tokenStr string, ttl time.Duration) {
 	name := config.GetEnv("AUTH_REFRESH_COOKIE", "refresh_token")
 	domain := strings.TrimSpace(config.GetEnv("AUTH_COOKIE_DOMAIN", ""))
@@ -625,6 +682,9 @@ func setRefreshTokenCookie(c *gin.Context, tokenStr string, ttl time.Duration) {
 	c.SetCookie(name, tokenStr, maxAge, "/auth", domain, secure, true)
 }
 
+// clearRefreshTokenCookie expires the refresh cookie. As with the access cookie,
+// the attribute set — including the "/auth" path — must match the setter or the
+// browser keeps the original.
 func clearRefreshTokenCookie(c *gin.Context) {
 	name := config.GetEnv("AUTH_REFRESH_COOKIE", "refresh_token")
 	domain := strings.TrimSpace(config.GetEnv("AUTH_COOKIE_DOMAIN", ""))
@@ -635,6 +695,12 @@ func clearRefreshTokenCookie(c *gin.Context) {
 	c.SetCookie(name, "", -1, "/auth", domain, secure, true)
 }
 
+// parseSameSite maps the configured SameSite mode, defaulting to Lax for any
+// unrecognized value.
+//
+// Defaulting to Lax rather than None is the safe direction: None disables
+// SameSite protection entirely and browsers only accept it alongside Secure, so a
+// typo in configuration degrades to a stricter policy instead of a weaker one.
 func parseSameSite(value string) http.SameSite {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "strict":
@@ -646,6 +712,17 @@ func parseSameSite(value string) http.SameSite {
 	}
 }
 
+// extractAccessToken finds the caller's access token, checking the Authorization
+// header, then the request context, then the HttpOnly cookie.
+//
+// All three sources are needed because clients differ: the mobile app and internal
+// callers send a bearer header, middleware may have already stashed the token, and
+// the web SPA has only the cookie. The cookie fallback is specifically what makes
+// logout work — without it the token never reaches denyAccessToken and stays valid
+// until expiry despite the user having logged out.
+//
+// This function only LOCATES a token; it does not verify one. Callers must not
+// treat a true result as authentication.
 func extractAccessToken(c *gin.Context) (string, bool) {
 	authHeader := c.GetHeader("Authorization")
 	if authHeader != "" {
@@ -676,6 +753,16 @@ func extractAccessToken(c *gin.Context) (string, bool) {
 	return "", false
 }
 
+// getTokenRemainingTTL reports how long a token has left, used to size the
+// denylist entry on logout so a revoked token is remembered exactly as long as it
+// could otherwise have been accepted — and no longer, which keeps the denylist
+// bounded.
+//
+// It parses WITHOUT verifying the signature, which is safe only because of how the
+// result is used: the caller has already authenticated the request, and the value
+// is a cache TTL rather than an authorization decision. A forged expiry could only
+// shorten or lengthen a denylist entry, never grant access. Never reuse this
+// function anywhere the claims are trusted.
 func getTokenRemainingTTL(tokenString string) (time.Duration, error) {
 	parsed, _, err := new(jwt.Parser).ParseUnverified(tokenString, &token.Claims{})
 	if err != nil {
@@ -716,6 +803,23 @@ func canChangePlan(role string) bool {
 	return planChangeAllowedRoles[strings.TrimSpace(role)]
 }
 
+// ChangePlan moves a user onto a different subscription plan (PUT /auth/plan).
+//
+// This endpoint is admin-only and must stay that way: there is no billing or
+// entitlement check anywhere in the path, so allowing a caller to change their
+// own plan would let any authenticated user grant themselves a paid tier for
+// free. See canChangePlan above. When real billing arrives, the natural shape is
+// an internal webhook-driven endpoint rather than relaxing this check.
+//
+// The plan name is validated against the subscription_plans catalogue rather
+// than trusted, and a no-op change is rejected so the plan-changed event is only
+// emitted on a real transition. On success three things must all happen, in
+// order: the users row is updated, the Redis plan cache is refreshed (a stale
+// entry would keep the old upload limits in force for up to the access-token
+// TTL), and a plan-changed event is published for analytics.
+//
+// Errors: 403 if the caller's role is not permitted, 400 for a missing or
+// unknown plan name or a plan the user already holds, 500 on database failure.
 func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 	user, _, ok := loadUserFromAuth(c)
 	if !ok {
@@ -776,14 +880,28 @@ func (ae *AuthEndpoints) ChangePlan(c *gin.Context) {
 	})
 }
 
+// planCacheKeyPrefix namespaces the per-user plan entries this service writes and
+// the api-gateway reads. It is a cross-service contract: the gateway's
+// internal/plancache must use the same prefix, or every lookup misses and callers
+// silently fall back to default limits.
 const planCacheKeyPrefix = "user:plan:"
 
+// planCacheEntry is the cached plan shape shared with the gateway. Field names
+// are the wire contract for that JSON, so renaming one breaks the gateway's decode
+// without any compile-time signal.
 type planCacheEntry struct {
 	Plan      string `json:"plan"`
 	MaxFileMB int    `json:"max_file_mb"`
 	MaxFiles  int    `json:"max_files"`
 }
 
+// cachePlanInfo publishes a user's plan limits to Redis for the gateway to read,
+// so enforcing a limit does not require a call back into this service on every
+// request.
+//
+// The entry's TTL matches the access-token lifetime, which bounds how long a stale
+// plan can remain in force: a plan change also writes here immediately (see
+// ChangePlan), and the TTL is the backstop if that write is lost.
 func (ae *AuthEndpoints) cachePlanInfo(ctx context.Context, userID string, plan models.SubscriptionPlan, ttl time.Duration) {
 	if ae.RedisClient == nil {
 		return
@@ -803,6 +921,9 @@ func (ae *AuthEndpoints) cachePlanInfo(ctx context.Context, userID string, plan 
 	}
 }
 
+// deletePlanCache invalidates a user's cached plan, forcing the next request to
+// resolve limits fresh. Best-effort — a failed delete leaves the entry to expire
+// on its own TTL.
 func (ae *AuthEndpoints) deletePlanCache(ctx context.Context, userID string) {
 	if ae.RedisClient == nil {
 		return
@@ -812,6 +933,10 @@ func (ae *AuthEndpoints) deletePlanCache(ctx context.Context, userID string) {
 	}
 }
 
+// publishPlanChangedEvent announces a plan transition for analytics. Best-effort:
+// the plan is already committed by this point, so a failed publish must not fail
+// the request. It carries both old and new plan so upgrades and downgrades can be
+// distinguished downstream without keeping prior state.
 func publishPlanChangedEvent(ctx context.Context, userID, oldPlan, newPlan string) {
 	if natsconn.JS == nil {
 		return
@@ -832,6 +957,9 @@ func publishPlanChangedEvent(ctx context.Context, userID, oldPlan, newPlan strin
 	}
 }
 
+// publishAnalyticsEvent emits an auth lifecycle event. Best-effort, and
+// deliberately carries no credential material — these events fan out to analytics
+// storage with a different retention and access model than the auth database.
 func publishAnalyticsEvent(ctx context.Context, eventType string, userID string, planName string) {
 	if natsconn.JS == nil {
 		return

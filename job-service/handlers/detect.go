@@ -19,6 +19,10 @@ import (
 	"fyredocs/shared/response"
 )
 
+// detectEdgesRequest carries a single scanner frame for synchronous edge
+// detection. This path deliberately is not a job: the mobile camera needs an
+// answer within a frame or two, so it relays straight to organize-pdf instead of
+// going through the queue.
 type detectEdgesRequest struct {
 	UploadID string `json:"uploadId" binding:"required,uuid"`
 }
@@ -27,6 +31,9 @@ type detectEdgesRequest struct {
 // organizePdfBaseURL.
 var detectHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
+// organizePdfBaseURL resolves the organize-pdf address for the synchronous detect
+// relay. The call goes over HTTP by service name rather than importing the
+// imaging package, which the microservice boundary rules forbid.
 func organizePdfBaseURL() string {
 	return strings.TrimRight(config.GetEnv("ORGANIZE_PDF_URL", "http://organize-pdf:8084"), "/")
 }

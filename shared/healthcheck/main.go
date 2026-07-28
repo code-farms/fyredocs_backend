@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// main is a tiny HTTP probe used as a container HEALTHCHECK command. It exists as
+// its own binary so images need no curl or wget — keeping the runtime image
+// minimal and free of a shell-accessible HTTP client.
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: healthcheck <url>")

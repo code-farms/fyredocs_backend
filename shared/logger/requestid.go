@@ -13,6 +13,8 @@ import (
 // RequestIDHeader is the HTTP header name for request IDs.
 const RequestIDHeader = "X-Request-ID"
 
+// requestIDKey is the private context key type for the request ID, unexported so
+// no other package can overwrite the stored value.
 type requestIDKey struct{}
 
 // RequestIDFromContext extracts the request ID from context.

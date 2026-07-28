@@ -95,6 +95,10 @@ type endpointKey struct {
 	Path   string
 }
 
+// bucketEntry is one Prometheus histogram bucket: its upper bound and cumulative
+// count. Prometheus buckets are CUMULATIVE — each count includes all lower
+// buckets — which is what makes quantile interpolation possible and why the raw
+// counts must not be read as per-bucket populations.
 type bucketEntry struct {
 	UpperBound float64
 	Count      float64

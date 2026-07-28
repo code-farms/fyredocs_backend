@@ -147,6 +147,84 @@ Claude must keep them synced with code & docs:
 - Update Postman collections to reflect true routes & examples
 - Place Swagger specs under `/docs/developer/swagger/`
 
+## 5.6 Go source comment standard
+
+Source comments are documentation and are governed by this section. Follow
+standard GoDoc conventions, plus the rules below.
+
+### Prime directive
+Explain **why**, not **what**. The house idiom — established in
+`api-gateway/internal/ratelimit/ratelimit.go` and
+`job-service/internal/cleanup/cleanup.go` — is to **state the failure mode that
+occurs if the code were written the obvious way instead**. A comment that
+restates the signature is worse than no comment, because it costs a reader time
+and rots silently.
+
+Banned openings: "getUser gets a user", "returns an error if it fails".
+
+### Required coverage
+- **Every package** has a doc comment (`// Package x ...`) stating its
+  responsibility and, where relevant, the architectural constraint that shaped
+  it (e.g. why a utility is reimplemented per-service rather than shared, per
+  Section 1).
+- **Every exported declaration** has a doc comment beginning with its own name.
+- **Every unexported function** has at least a one-line contract statement.
+  Prioritise the non-obvious: fail-open vs fail-closed posture, nil handling,
+  units, TTLs, must-hold-lock requirements, goroutine-safety, blocking
+  behaviour, and error swallowing.
+- **Struct fields** that carry a business rule, a unit, a default, or a
+  security posture are documented individually on the line above.
+
+### Placement and formatting
+- Package docs live above `package x` in an existing source file. **Do not
+  create `doc.go` files** — no package in this repo uses one.
+- **Never place a comment inside a composite literal**; it breaks `gofmt`
+  field alignment. Comment above the literal instead.
+- **Never place a comment or blank line between a `//go:` directive and its
+  target.** Doing so silently disables the directive — a comment between
+  `//go:embed` and `var FS embed.FS` compiles cleanly and then ships with no
+  migrations.
+- Inside a `const` block, comment individual constants on the line above.
+  A bare separator or blank comment line mid-block splits one grouped block
+  into two in rendered `go doc` output.
+- Section separators use the Unicode form `// ─── Name ───`, and only for
+  genuine sections — never as decoration around a single function.
+- Units, defaults, and the governing environment variable are always stated
+  inline: `maxDim = 500 // working resolution for detection`.
+
+### Interface-satisfying methods
+Put the load-bearing fact on the **type**, not spread across the methods.
+Mechanical implementations of `http.ResponseWriter`, `prometheus.Collector`,
+`slog.Handler`, `error`/`Unwrap`, and similar do not need per-method prose
+restating the upstream contract; document only where behaviour departs from
+the obvious implementation.
+
+### Cross-file and cross-service coupling
+Where correctness depends on something a reader cannot see from the current
+file, say so explicitly and **name the exact path**. Use a `NOTE:` prefix.
+This is mandatory for:
+- values that must stay in sync across two files (e.g. a retry/backoff table
+  and the consumer configuration it mirrors),
+- code duplicated across services by design under Section 1 — say that it is
+  intentional, so nobody "fixes" it into a shared package,
+- contracts between a Go file and a shell script, Dockerfile, or entrypoint.
+
+### Audit findings
+Comments that cite a hardening finding ID must include the source, so the
+reference resolves without a repo-wide grep:
+
+```go
+// ... (finding B1 — docs/developer/architecture/backend-hardening.md §3.20)
+```
+
+### Prohibited
+- `TODO` / `FIXME` / `HACK` as a substitute for completing work (see Section 10).
+  If work is genuinely deferred it belongs in a tracked issue, not a comment.
+  `NOTE:` is permitted — it conveys information, not deferred work.
+- Commented-out code. Delete it; git remembers.
+- Any claim not traceable to the code as written. Where intent is genuinely
+  unknown, describe the observable constraint rather than inventing a rationale.
+
 ────────────────────────────────────────
 # 6. LOGGING & OBSERVABILITY
 
@@ -195,6 +273,39 @@ After ANY code change, Claude MUST update all affected documentation. This is no
 - If Claude cannot determine which docs to update, it must ask the user before proceeding
 - Missing documentation is treated as an incomplete task — Claude must not consider work done until docs are updated
 
+## 8.1 Comment-only change exemption
+
+A change that adds, improves, or removes **source comments alone** is exempt
+from Section 8 and Section 9. It remains subject to Section 10 Step 4
+verification in full.
+
+A change qualifies as comment-only when **all** of the following hold:
+- No declaration is added, removed, renamed, or re-typed
+- No statement or expression is altered
+- No struct tag, import, or build directive is touched
+- The change is provably comments-only by this check, which must print nothing:
+
+```bash
+git diff -w -U0 -- '*.go' | grep '^[+-]' | grep -v '^[+-][+-]' | grep -vE '^[+-][[:space:]]*//'
+```
+
+`-w` is required, not a convenience. Adding a comment line inside a grouped
+`const` or `var` block splits gofmt's alignment group, so gofmt legitimately
+re-pads the surrounding members. Those lines are whitespace-only and semantically
+inert; `gofmt -l` staying clean is the proof. Without `-w` the check reports them
+as if they were logic edits.
+
+Rationale: every Section 8 checklist item is conditioned on routes, handlers,
+models, logic, architecture, endpoints, payloads, or the service list changing.
+A comment changes none of them. Section 9 is likewise keyed to new functions,
+behaviour changes, and deleted or renamed functions. Mechanically generating
+tests to satisfy a rule with no trigger would produce tests that assert nothing,
+which Section 9 exists to prevent.
+
+This exemption does **not** apply to a change that mixes comments with any
+other edit. Split it: land the code change under the full Section 8/9 workflow,
+and the comments separately.
+
 ────────────────────────────────────────
 # 9. MANDATORY TEST UPDATES
 
@@ -238,8 +349,31 @@ When applying any code change, Claude MUST follow this workflow in order:
 - Update existing test cases if the change modifies tested behavior
 - Create new test cases for new functions, handlers, or logic
 - If no tests exist for the changed code, create them
-- Run `go build ./...` and `go vet ./...` to verify compilation
-- Run `go test ./...` for affected packages
+- Verify compilation and run tests **per module**, then check formatting
+
+This repository is a Go workspace (`go.work`) of 12 sibling modules.
+Root-relative `./...` patterns **do not work** — `go build ./...` fails with
+`directory prefix . does not contain modules listed in go.work`. Always scope
+to a module, or use `make test` which loops over all of them:
+
+```bash
+# Single module (preferred while iterating)
+go build ./job-service/... && go vet ./job-service/... && go test ./job-service/...
+
+# All modules
+SVCS=(analytics-service api-gateway auth-service convert-from-pdf convert-to-pdf \
+      document-service job-service notification-service optimize-pdf \
+      organize-pdf shared user-service)
+for s in $SVCS; do go build ./$s/... && go vet ./$s/...; done
+make test
+
+# Formatting — must list no files other than known pre-existing offenders
+gofmt -l .
+```
+
+Note for zsh (the default shell here): unquoted parameters are **not**
+word-split, so a space-joined string variable will be passed as a single
+argument. Use an array as shown above.
 
 ## Step 5: Document
 - Update all affected documentation per Section 8

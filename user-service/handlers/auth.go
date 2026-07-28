@@ -56,6 +56,9 @@ func membershipRole(ctx context.Context, orgID, uid uuid.UUID) (string, bool) {
 	return m.Role, true
 }
 
+// slugNonAlnum matches characters stripped when deriving an organization slug.
+// Compiled once at package level — recompiling per call would be needless work on
+// a request path.
 var slugNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 
 // slugify produces a URL-safe slug; callers append a uniqueness suffix.

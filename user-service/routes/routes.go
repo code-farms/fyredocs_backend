@@ -1,3 +1,9 @@
+// Package routes maps user-service HTTP paths to handlers.
+//
+// Identity comes from the gateway-injected X-User-ID header; organization-level
+// RBAC is not expressed here but enforced inside each handler from the caller's
+// membership role, because permission depends on the target organization rather
+// than on the route.
 package routes
 
 import (

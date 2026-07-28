@@ -53,6 +53,9 @@ type UploadInitRequest struct {
 	ContentType string `json:"contentType" binding:"omitempty,max=255"`
 }
 
+// uploadPartURL is one presigned PUT target handed to the client. These are
+// short-lived (partURLExpiry) and re-issued by the parts endpoint, so a client
+// resuming a slow upload refreshes them rather than restarting.
 type uploadPartURL struct {
 	PartNumber int    `json:"partNumber"`
 	URL        string `json:"url"`
@@ -141,7 +144,7 @@ func InitUpload(c *gin.Context) {
 		"totalParts":   totalParts,
 		"createdAt":    time.Now().UTC().Format(time.RFC3339),
 		// Bind the session to its initiator so only they can resume, complete,
-		// abort, or inspect it (finding F4).
+		// abort, or inspect it (finding F4 — docs/developer/architecture/backend-hardening.md section 3.20).
 		"owner": uploadOwnerID(c, true),
 	})
 	pipe.Expire(ctx, uploadKey, uploadTTL())
@@ -438,7 +441,8 @@ func sanitizeFileName(name string) string {
 }
 
 // uploadOwnerID returns a stable identity string used to bind an upload session
-// to its initiator (finding F4): "user:<uuid>" for an authenticated caller, else
+// to its initiator (finding F4 — docs/developer/architecture/backend-hardening.md section 3.20):
+// "user:<uuid>" for an authenticated caller, else
 // "guest:<token>" from the guest_token cookie. When mint is true and a guest has
 // no token yet, one is generated and set as a cookie so the guest has a stable
 // owner for the rest of the multipart flow; when mint is false the cookie is only
@@ -471,6 +475,13 @@ func uploadOwnerMatches(c *gin.Context, state map[string]string) bool {
 	return uploadOwnerID(c, false) == owner
 }
 
+// fetchUploadState loads an upload session's Redis hash.
+//
+// Returns redis.Nil for an empty hash as well as a missing key, so callers get
+// one "session is gone" signal. That distinction matters because sessions expire
+// on uploadTTL: an expired session is indistinguishable from a bogus uploadId,
+// and both must produce the same client-visible outcome so the endpoint cannot
+// be used to probe which upload IDs once existed.
 func fetchUploadState(ctx context.Context, uploadID string) (map[string]string, error) {
 	state, err := redisstore.Client.HGetAll(ctx, uploadStateKey(uploadID)).Result()
 	if err != nil {
@@ -482,6 +493,10 @@ func fetchUploadState(ctx context.Context, uploadID string) (map[string]string, 
 	return state, nil
 }
 
+// uploadStateKey names the Redis hash holding one upload session: fileName,
+// declaredSize, contentType, bucket, key, s3UploadId, partSize, totalParts,
+// createdAt, and — once finalized — size. The session is Redis-only and never
+// written to Postgres, so an abandoned upload costs nothing to reap.
 func uploadStateKey(uploadID string) string {
 	return fmt.Sprintf("upload:%s", uploadID)
 }
@@ -509,6 +524,9 @@ func uploadPartSize() int64 {
 	return size
 }
 
+// uploadTTL is how long an unfinished upload session survives (UPLOAD_TTL,
+// default 30m). It bounds how long orphaned S3 multipart uploads can accumulate
+// after a client abandons one; the cleanup sweep uses the same value.
 func uploadTTL() time.Duration {
 	return config.UploadTTL()
 }
