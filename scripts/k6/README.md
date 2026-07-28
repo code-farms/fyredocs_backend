@@ -34,6 +34,32 @@ cat scripts/k6/capacity-mode.env >> .env      # TEST box only — never producti
 ./deployment/deploy.sh                        # redeploy with raised limits
 ```
 
+**Then verify it actually took effect** — this silently did nothing until
+2026-07-28, and the resulting numbers looked perfectly plausible:
+
+```bash
+docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' \
+  $(docker compose -f deployment/docker-compose.yml --env-file .env ps -q api-gateway) \
+  | grep RATE_LIMIT_API_FREE        # expect 1000000; 120 or empty = NOT active
+```
+
+Use `docker inspect`, not `docker exec <svc> env` — the service images are
+`scratch` and have no `env` binary, so the exec fails and the empty output reads
+as "no limits set".
+
+Two things that make a throttled run hard to spot, both now caught automatically
+by the `capacity` scenario:
+
+- **429s look like saturation.** They inflate the error rate, so the ladder reads
+  as if the server broke. The tell is that latency *falls* as errors rise, and the
+  error rate pins at exactly 100% regardless of load. Any step with a 429 is now
+  marked `INVALID (THROTTLED)` and excluded from the ceiling.
+- **A short user pool silently lowers the answer.** Signup is capped at
+  `RATE_LIMIT_SIGNUP` (default **3/min per IP**) and `provisionUsers()` signs the
+  pool up in a tight loop, so without capacity mode you get ~3 users, not 10.
+  Per-plan API limits are *per user*, so the pool size becomes the ceiling. The
+  capacity report now prints `User pool: N/M` and flags a shortfall.
+
 Revert afterwards: `mv .env.bak .env && ./deployment/deploy.sh`.
 (If you prefer realistic-mode testing *with* limits, skip this and expect 429s in
 the results — that measures user-experience, not raw capacity.)
@@ -168,6 +194,15 @@ the summary does for you rather than leaving you to spot them:
   untagged before the ladder. `WARMUP=0s` disables it.
 - **Non-monotonic curves.** If a step above the first failure passed, the run was
   noisy and the summary says so instead of quietly reporting a number.
+- **429s.** Any throttled step is `INVALID`, and the run reports a *lower bound*
+  rather than a ceiling — a limiter ended the ladder, so the ceiling is unknown.
+
+**Sample size caveat for `MODE=jobs`.** Each iteration picks a random tool from the
+weighted matrix, so a step with few jobs measures a different workload than its
+neighbours — a 3-minute step at 3/min is 9 jobs, and a "p95" of 9 samples is just
+the max. That is how a run can show 24.6s at 9/min and 3.0s at 12/min. Treat `ok%`
+and `queue_wait` as the saturation signal at low rates; for a trustworthy `job_e2e
+p95`, lengthen `STEP_DURATION` or pin a single tool with the per-group scenarios.
 
 The knobs: `MODE`, `START_RATE`, `RATE_STEP`, `STEPS`, `STEP_DURATION`, `SETTLE`,
 `WARMUP`, `MAX_VUS` / `PRE_ALLOC_VUS` (auto-sized from the top step by Little's law),

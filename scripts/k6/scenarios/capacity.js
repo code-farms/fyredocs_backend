@@ -140,7 +140,15 @@ for (let i = 0; i < STEPS; i++) {
 }
 
 function metricsFor(rate) {
-  return [`iterations{step:${rate}}`, `dropped_iterations{step:${rate}}`, `http_reqs{step:${rate}}`];
+  return [
+    `iterations{step:${rate}}`,
+    `dropped_iterations{step:${rate}}`,
+    `http_reqs{step:${rate}}`,
+    // 429s per step. `status` is a default k6 system tag, so this needs no
+    // change to lib/http.js. Any 429 means a rate limiter — not the backend —
+    // decided the outcome, and the step must not count toward capacity.
+    `http_reqs{step:${rate},status:429}`,
+  ];
 }
 
 export const options = {
@@ -167,6 +175,11 @@ export function jobs(data) {
 // ---------------------------------------------------------------------------
 export function handleSummary(data) {
   const rows = RATES.map((rate) => row(data, rate));
+  // Pool size is part of the result, not trivia: per-plan API limits are per
+  // USER, so a short pool lowers the aggregate quota and therefore the number
+  // this run reports.
+  const pool = (data.setup_data && data.setup_data.users && data.setup_data.users.length) || 0;
+  const poolWanted = (data.setup_data && data.setup_data.requested) || pool;
 
   // The ceiling is the last PASS before the first FAIL — you cannot claim a rate
   // as sustainable if a LOWER rate already breached the SLO. Steps k6 could not
@@ -186,7 +199,7 @@ export function handleSummary(data) {
     firstFailIdx >= 0 ? rows.slice(firstFailIdx + 1).filter((r) => r.verdict === 'PASS') : [];
 
   const invalid = rows.filter((r) => r.verdict === 'INVALID');
-  const text = render(rows, ceiling, invalid, passesAboveFail);
+  const text = render(rows, ceiling, invalid, passesAboveFail, pool, poolWanted);
 
   const out = { stdout: '\n' + text + '\n' };
   const dir = (__ENV.RESULTS_DIR || '.').replace(/\/$/, '');
@@ -205,6 +218,7 @@ function row(data, rate) {
   const iters = val(data, `iterations{step:${rate}}`, 'count', 0);
   const dropped = val(data, `dropped_iterations{step:${rate}}`, 'count', 0);
   const reqs = val(data, `http_reqs{step:${rate}}`, 'count', 0);
+  const throttled = val(data, `http_reqs{step:${rate},status:429}`, 'count', 0);
   const errRate = val(data, `http_req_failed{step:${rate}}`, 'rate', 0);
   const p95 = val(data, `http_req_duration{step:${rate},kind:api}`, 'p(95)', 0);
   const p99 = val(data, `http_req_duration{step:${rate},kind:api}`, 'p(99)', 0);
@@ -239,6 +253,17 @@ function row(data, rate) {
   if (iters === 0 && reqs === 0) {
     verdict = 'INVALID';
     reasons.push('no traffic recorded for this step');
+  } else if (throttled > 0) {
+    // Checked BEFORE the SLO: 429s inflate the error rate, so a throttled step
+    // would otherwise read as a FAIL and be reported as the capacity ceiling.
+    // That is exactly how a run once concluded "300 req/min" when it had really
+    // measured the free-plan quota of a 3-user pool. A limiter decided this
+    // step's outcome, so it says nothing about the server.
+    verdict = 'INVALID';
+    reasons.push(
+      `${throttled} of ${reqs} requests were 429 — THROTTLED, not saturated. ` +
+        'capacity-mode.env is not in effect (append it to .env and redeploy; see README §2)'
+    );
   } else if (sloBreached.length) {
     // The server already broke at (or below) the rate it did receive — a real
     // failure regardless of whether the full target was offered.
@@ -258,12 +283,16 @@ function row(data, rate) {
     verdict = 'PASS';
   }
 
-  return { rate, achieved, iters, reqs, dropped, errRate, p95, p99, jobP95, jobOk, queueP95, verdict, reasons };
+  return { rate, achieved, iters, reqs, dropped, throttled, errRate, p95, p99, jobP95, jobOk, queueP95, verdict, reasons };
 }
 
-function render(rows, ceiling, invalid, passesAboveFail) {
+function render(rows, ceiling, invalid, passesAboveFail, pool, poolWanted) {
   const L = [];
   L.push(`Capacity ladder — MODE=${MODE}`);
+  L.push(
+    `User pool: ${pool}/${poolWanted}` +
+      (pool < poolWanted ? '  << SHORT — signup was rate-limited; this caps the aggregate quota' : '')
+  );
   L.push(
     `SLO: api p95<${ms(SLO.p95)}, p99<${ms(SLO.p99)}, errors<${pct(SLO.errRate)}` +
       (IS_JOBS ? `, job e2e p95<${ms(SLO.jobP95)}, job success>${pct(SLO.jobSuccess)}` : '')
@@ -289,8 +318,19 @@ function render(rows, ceiling, invalid, passesAboveFail) {
     L.push('  ' + line + (r.reasons.length ? `  <- ${r.reasons.join('; ')}` : ''));
   }
 
+  const anyThrottled = rows.some((r) => r.throttled > 0);
   L.push('');
-  if (ceiling) {
+  if (ceiling && anyThrottled) {
+    // A limiter, not the server, ended the ladder. The passing steps are real —
+    // the server did serve them inside the SLO — but the ceiling is unknown and
+    // must not be stated as one.
+    const perSec = ceiling.rate / 60;
+    L.push(
+      IS_JOBS
+        ? `  => LOWER BOUND ONLY: >= ${ceiling.rate} jobs/min. NOT a ceiling — see THROTTLED below.`
+        : `  => LOWER BOUND ONLY: >= ${ceiling.rate} req/min (${perSec.toFixed(1)} req/s). NOT a ceiling — see THROTTLED below.`
+    );
+  } else if (ceiling) {
     const perSec = ceiling.rate / 60;
     L.push(
       IS_JOBS
@@ -311,9 +351,18 @@ function render(rows, ceiling, invalid, passesAboveFail) {
     L.push('     on the box stealing CPU. The number above is the conservative reading — re-run');
     L.push('     before trusting it.');
   }
-  if (invalid.length) {
+  const throttledSteps = rows.filter((r) => r.throttled > 0);
+  if (throttledSteps.length) {
+    L.push('');
+    L.push(`  !! THROTTLED: ${throttledSteps.length} step(s) got HTTP 429. This run measured a RATE`);
+    L.push('     LIMITER, not the server. Nothing above is a capacity figure. Fix with:');
+    L.push('       cat scripts/k6/capacity-mode.env >> .env && ./deployment/deploy.sh');
+    L.push('     then confirm it took effect (README §2) before re-running.');
+  }
+  const generatorBound = invalid.filter((r) => r.throttled === 0);
+  if (generatorBound.length) {
     L.push(
-      `  !! ${invalid.length} step(s) INVALID (k6 could not offer the rate). Those are generator limits,`
+      `  !! ${generatorBound.length} step(s) INVALID (k6 could not offer the rate). Those are generator limits,`
     );
     L.push('     not server limits — raise MAX_VUS (or run k6 off-box) and re-run before trusting them.');
   }
