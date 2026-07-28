@@ -76,6 +76,18 @@ if %SECRET_LEN% LSS 32 (
 
 echo %GREEN%JWT secret validated (%SECRET_LEN% characters)%NC%
 
+REM Multi-host roles are deploy.sh-only. This script is a Windows development
+REM convenience: it has no resource budgeting, image-SHA tagging, or rollback, all
+REM of which a multi-host production deploy relies on. Reject the flag explicitly
+REM rather than let it fall through to the service-name check below, which would
+REM report a confusing "Unknown service '--host-role=data'".
+echo %~1 | findstr /b /c:"--host-role" >nul
+if not errorlevel 1 (
+    echo %RED%--host-role is not supported by deploy.bat - use deployment/deploy.sh on Linux.%NC%
+    echo See docs\developer\architecture\horizontal-scaling.md
+    exit /b 1
+)
+
 REM Single-service mode: deploy.bat <service> rebuilds + redeploys only that
 REM service via deployment\docker-compose-<service>.yml (extends-based; see
 REM docs\developer\architecture\COMPOSE_FILES.md). Infra must already run.

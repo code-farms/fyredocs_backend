@@ -77,9 +77,9 @@ sequenceDiagram
 
 | Matcher | Paths | Upstream / action | Notes |
 |---------|-------|-------------------|-------|
-| `@objects` | `/{$S3_BUCKET_UPLOADS}/*`, `/{$S3_BUCKET_OUTPUTS}/*` (default `uploads`/`outputs`) | `reverse_proxy minio:9000` | `header_up Host {host}` (SigV4), `flush_interval -1`, no auth middleware — the presigned signature is the credential |
-| `@api` | `/api/*`, `/auth/*`, `/admin/*`, `/healthz` | `reverse_proxy` → **dynamic `a` upstreams** for `api-gateway:8080` | Load balanced (`lb_policy least_conn`) across every running gateway replica; `flush_interval -1` for SSE streams. See [Scaling the gateway](#scaling-the-gateway) |
-| `@grafana` | `/grafana`, `/grafana/*` | `forward_auth` → gateway `/admin/authz`, then `reverse_proxy grafana:3000` | Serves the embedded observability dashboards. `forward_auth` enforces super-admin (this path bypasses the gateway proxy). Only present when the `observability` compose profile is up. See [observability.md](./observability.md#in-app-embedding-admin-observability-tab) |
+| `@objects` | `/{$S3_BUCKET_UPLOADS}/*`, `/{$S3_BUCKET_OUTPUTS}/*` (default `uploads`/`outputs`) | `reverse_proxy {$MINIO_UPSTREAM}` (default `minio:9000`) | `header_up Host {host}` (SigV4), `flush_interval -1`, no auth middleware — the presigned signature is the credential |
+| `@api` | `/api/*`, `/auth/*`, `/admin/*`, `/healthz` | `reverse_proxy` → `{$API_GATEWAY_UPSTREAMS}` (default `api-gateway:8080`) | Load balanced (`lb_policy least_conn`) across every listed gateway, with active `/healthz` probes; `flush_interval -1` for SSE streams. See [Scaling the gateway](#scaling-the-gateway) |
+| `@grafana` | `/grafana`, `/grafana/*` | `forward_auth` → `{$AUTHZ_UPSTREAM}` `/admin/authz`, then `reverse_proxy {$GRAFANA_UPSTREAM}` | Serves the embedded observability dashboards. `forward_auth` enforces super-admin (this path bypasses the gateway proxy). Only present when the `observability` compose profile is up. See [observability.md](./observability.md#in-app-embedding-admin-observability-tab) |
 | (fallback) | everything else | `file_server` from `/srv/spa` | `try_files {path} /index.html`; `/assets/*` served `Cache-Control: public, max-age=31536000, immutable`; **security headers** (see below) |
 
 ### Security headers (finding A1 / production-readiness S8)
@@ -179,39 +179,77 @@ prefix) would invalidate every presigned URL. See
 
 ## Scaling the gateway
 
-The `@api` route load balances across api-gateway replicas using Caddy's
-**dynamic upstreams** (`dynamic a`). Instead of a fixed `api-gateway:8080`
-target, Caddy re-resolves the Compose service name against Docker's embedded
-DNS (`127.0.0.11`) every `5s`. Docker returns one A record per running replica,
-so scaling is a runtime operation — no Caddyfile edit:
-
-> **Gateway port is configurable.** The upstream port is
-> `port {$API_GATEWAY_PORT:8080}`, resolved from the `API_GATEWAY_PORT` env var
-> (default `8080`, set in the root `.env`). The same var drives the gateway
-> container's `PORT`/`expose`/healthcheck and the analytics dashboard's
-> gateway-scrape URLs, so they always agree. The gateway is **internal-only**
-> (never host-published — only Caddy's 80/443 are), so this port is not reachable
-> from outside; choosing a non-obvious value is defense-in-depth on the internal
-> network. The `.env` ships a non-default value (e.g. `47821`).
+The `@api` route load balances across the addresses in `API_GATEWAY_UPSTREAMS`, a
+space-separated list of `host:port`. Compose defaults it to
+`api-gateway:${API_GATEWAY_PORT:-8080}`, so the single-host stack needs no
+configuration.
 
 ```bash
-docker compose up -d --scale api-gateway=3   # add replicas
-docker compose up -d --scale api-gateway=1   # scale back
+# Single host (default) — nothing to set.
+# Multi-host: enumerate each app server's gateway.
+API_GATEWAY_UPSTREAMS="app1.internal:8080 app2.internal:8080"
 ```
 
-The `api-gateway` service intentionally has **no `container_name`** so Compose
-can run multiple instances; keep it that way.
+> **Gateway port is configurable.** `API_GATEWAY_PORT` (default `8080`, set in the
+> root `.env`) drives the gateway container's `PORT`/`expose`/healthcheck, the
+> analytics dashboard's gateway-scrape URLs, and the default upstream above, so
+> they always agree. The gateway is **internal-only** (never host-published — only
+> Caddy's 80/443 are), so this port is not reachable from outside; choosing a
+> non-obvious value is defense-in-depth on the internal network. The `.env` ships
+> a non-default value (e.g. `47821`).
+
+### Why not dynamic DNS upstreams
+
+This route previously used Caddy's `dynamic a` upstreams, re-resolving the
+Compose service name against Docker's embedded DNS (`127.0.0.11`) every 5s. That
+auto-discovered replicas, so `docker compose up -d --scale api-gateway=3` needed
+no Caddyfile edit.
+
+**That resolver only ever sees containers on the same host.** Once Caddy moves to
+its own edge host — the topology in
+[horizontal-scaling.md §4](./horizontal-scaling.md) — it cannot discover an app
+server's gateway at all, so the dynamic form is not an option there. Replicas are
+now enumerated explicitly instead.
+
+What that buys back: **active health checks work on static upstreams** but are
+unsupported for dynamic ones. A dead gateway is now caught by probe rather than
+only after real requests fail into it.
+
+The `api-gateway` service intentionally has **no `container_name`** so Compose can
+still run multiple instances behind one address; keep it that way.
 
 Balancing and resilience settings on the route:
 
 - `lb_policy least_conn` — send each request to the replica with the fewest
   active connections.
 - `lb_try_duration 5s` / `lb_try_interval 250ms` — a failed request is
-  transparently retried against another replica.
+  transparently retried against another upstream.
+- Active health (`health_uri /healthz`, `health_interval 10s`,
+  `health_timeout 5s`) — probes each upstream directly. `/healthz` is routed to
+  the gateway by this same matcher, so the probe exercises the real path.
 - Passive health (`max_fails 3`, `fail_duration 30s`, `unhealthy_status 5xx`) —
-  a replica returning 5xx is ejected temporarily. Active `health_uri` checks do
-  **not** apply to dynamic upstreams; the DNS refresh removes departed replicas
-  and passive checks cover failing ones.
+  an upstream returning 5xx is ejected temporarily. Kept alongside the active
+  probe because it catches failures a 200 on `/healthz` would not reveal.
+
+### Upstream addresses are all configurable
+
+Every proxy target in the Caddyfile reads an env var so the edge can sit on its
+own host. Compose supplies concrete defaults for all of them — required, because
+compose always defines the variable in the container and Caddy's `{$VAR:default}`
+fallback ignores a defined-but-empty value (same trap as `PUBLIC_DOMAIN` below).
+
+| Var | Default | Multi-host value |
+|---|---|---|
+| `API_GATEWAY_UPSTREAMS` | `api-gateway:8080` | every app host's gateway, space-separated |
+| `AUTHZ_UPSTREAM` | `api-gateway:8080` | one app host — the `/grafana` `forward_auth` probe needs a single address, not a list |
+| `MINIO_UPSTREAM` | `minio:9000` | the data host's private address |
+| `GRAFANA_UPSTREAM` | `grafana:3000` | the data host (where the `observability` profile runs) |
+
+**`TRUSTED_PROXIES` must be widened when Caddy moves off-host.** Its source IP
+then falls outside the default `172.18.0.0/16`, Gin stops trusting
+`X-Forwarded-For`, and every request appears to originate from the proxy —
+collapsing all rate-limit and guest buckets into a single shared key. Add the edge
+host's private address.
 
 ## TLS modes
 

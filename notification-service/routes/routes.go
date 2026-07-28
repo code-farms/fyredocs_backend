@@ -3,7 +3,10 @@
 // The /internal creation endpoint is how other services raise a notification;
 // it is guarded by a shared secret that fails closed rather than relying on the
 // gateway never routing /internal. The per-user /api group covers the feed and
-// its SSE stream, and identity comes from the gateway-injected X-User-ID header.
+// its SSE stream, and identity there comes from the AuthContext resolved by the
+// auth middleware in main.go — which verifies the JWT locally by default, so a
+// forged X-User-ID header grants nothing even when this service is reachable from
+// something other than the gateway.
 package routes
 
 import (
@@ -15,8 +18,8 @@ import (
 	"notification-service/handlers"
 )
 
-// SetupRouter registers health and the per-user notification API. Identity
-// comes from the gateway-injected X-User-ID header.
+// SetupRouter registers health and the per-user notification API. Identity on
+// /api comes from the verified AuthContext; /internal uses the shared secret.
 func SetupRouter(r *gin.Engine) {
 	r.GET("/healthz", handlers.HealthCheck)
 	r.GET("/readyz", handlers.ReadyCheck)

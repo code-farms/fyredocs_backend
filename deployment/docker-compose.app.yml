@@ -1,0 +1,104 @@
+# App host: the stateless API services, for a multi-host deploy.
+#
+# Companion to docker-compose.data.yml. Together they split the single-host
+# docker-compose.yml across machines:
+#
+#   Edge host  : caddy  (TLS, SPA, /api -> app hosts, /uploads /outputs -> data)
+#   Data host  : docker-compose.data.yml — postgres, redis, nats, minio, backups
+#   App host N : THIS FILE — gateway + API services
+#
+# Service definitions are extended from the canonical docker-compose.yml — do not
+# duplicate config here; edit the main file and this picks it up. What differs is
+# only that the infra dependencies are gone: they live on another machine, so the
+# inherited depends_on (db/redis/nats healthchecks) can never be satisfied here
+# and is reset. Container start order stops being a readiness guarantee across
+# hosts; each service's own fail-fast boot is what covers that instead — every one
+# of them os.Exit()s if Postgres, Redis, or NATS is unreachable.
+#
+# The PDF workers are deliberately NOT here. They are the CPU and tmpfs-heavy
+# tier, so the natural split is to run them on their own host using the existing
+# per-service slices, which need no changes for this:
+#
+#   docker compose -f deployment/docker-compose-organize-pdf.yml   --env-file .env up -d
+#   docker compose -f deployment/docker-compose-optimize-pdf.yml   --env-file .env up -d
+#   docker compose -f deployment/docker-compose-convert-from-pdf.yml --env-file .env up -d
+#   docker compose -f deployment/docker-compose-convert-to-pdf.yml --env-file .env up -d
+#
+# They need no coordination with this file: job dispatch is a shared durable
+# JetStream pull consumer keyed by service name, so replicas anywhere compete for
+# the same messages and each job is delivered once. Files are never a factor —
+# jobs carry object KEYS, and each worker downloads into its own scratch dir.
+#
+# ── Required per-host env (see docs/developer/architecture/multi-host.md) ─────
+#
+#   REDIS_ADDR        <data-host-private-ip>:6379
+#   NATS_URL          nats://<data-host-private-ip>:4222
+#   NATS_MONITOR_URL  http://<data-host-private-ip>:8222
+#   S3_ENDPOINT       <data-host-private-ip>:9000
+#   S3_INTERNAL_URL   http://<data-host-private-ip>:9000
+#   DATABASE_URL      postgresql://...@<data-host-private-ip>:6432/fyredocs
+#   DATABASE_URL_DIRECT  postgresql://...@<data-host-private-ip>:5432/fyredocs
+#   TRUSTED_PROXIES   must include the EDGE host's private address, or client-IP
+#                     resolution breaks and every rate-limit bucket collapses
+#                     into one shared key
+#
+# Leave S3_PUBLIC_ENDPOINT as PUBLIC_ORIGIN. Presigned SigV4 URLs are signed
+# against the public edge origin and the signature covers the Host header, so a
+# per-host value here would invalidate every upload and download URL.
+#
+# Only ONE app host should run the migrations if you prefer determinism, but it is
+# safe not to care: migrations take a session advisory lock over
+# DATABASE_URL_DIRECT, so concurrent boots serialize rather than corrupt.
+#
+# Usage (from the repo root):
+#   docker compose -f deployment/docker-compose.app.yml --env-file .env up -d --build
+name: fyredocs
+
+services:
+  api-gateway:
+    extends:
+      file: docker-compose.yml
+      service: api-gateway
+    depends_on: !reset []
+
+  auth-service:
+    extends:
+      file: docker-compose.yml
+      service: auth-service
+    depends_on: !reset []
+
+  job-service:
+    extends:
+      file: docker-compose.yml
+      service: job-service
+    depends_on: !reset []
+
+  document-service:
+    extends:
+      file: docker-compose.yml
+      service: document-service
+    depends_on: !reset []
+
+  user-service:
+    extends:
+      file: docker-compose.yml
+      service: user-service
+    depends_on: !reset []
+
+  analytics-service:
+    extends:
+      file: docker-compose.yml
+      service: analytics-service
+    depends_on: !reset []
+
+  # Inherits profiles: ["notifications"], so it stays opt-in here too. Enable
+  # with --profile notifications.
+  notification-service:
+    extends:
+      file: docker-compose.yml
+      service: notification-service
+    depends_on: !reset []
+
+networks:
+  fyredocs_net:
+    name: fyredocs_net

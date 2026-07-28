@@ -1,0 +1,107 @@
+# Data host: every stateful component, for a multi-host deploy.
+#
+# Companion to docker-compose.app.yml. Together they split the single-host
+# docker-compose.yml across machines:
+#
+#   Edge host  : caddy  (TLS, SPA, /api -> app hosts, /uploads /outputs -> here)
+#   Data host  : THIS FILE — postgres, pgbouncer, redis, nats, minio, db-backup
+#   App host N : docker-compose.app.yml and/or the per-worker slices
+#
+# Service definitions are extended from the canonical docker-compose.yml — do not
+# duplicate config here; edit the main file and this picks it up. Only the port
+# publishing differs, because that is exactly what has to change when the clients
+# live on another machine.
+#
+# ── The private-address requirement is not optional ───────────────────────────
+#
+# PRIVATE_BIND_ADDR must be an address on a PRIVATE network (Tailscale/WireGuard
+# overlay, or a provider VPC). None of these four can be exposed publicly:
+#
+#   nats     runs with NO authentication at all (--jetstream --store_dir=/data)
+#   postgres runs with sslmode=disable in the default DATABASE_URL
+#   minio    runs with S3_USE_SSL=false
+#   redis    has a password but no TLS
+#
+# On the single-host stack that is safe because nothing but Caddy publishes a
+# port. Split across hosts, this bind address is what replaces that guarantee.
+# There is deliberately no default: an unset PRIVATE_BIND_ADDR fails the compose
+# run rather than silently binding 0.0.0.0 and putting an unauthenticated
+# JetStream on the internet.
+#
+# Every singleton lives here on purpose. db-backup must run in exactly one place
+# — two copies would prune the same offsite bucket against each other. minio-init
+# is a one-shot bootstrap. The observability profile is likewise single-instance;
+# start it here with `--profile observability`.
+#
+# Usage (from the repo root):
+#   docker compose -f deployment/docker-compose.data.yml --env-file .env up -d
+#
+# NOTE: app hosts must set REDIS_ADDR, NATS_URL, S3_ENDPOINT, S3_INTERNAL_URL and
+# DATABASE_URL/DATABASE_URL_DIRECT to ${PRIVATE_BIND_ADDR} at the ports below.
+# See docs/developer/architecture/multi-host.md.
+name: fyredocs
+
+services:
+  db:
+    extends:
+      file: docker-compose.yml
+      service: db
+    ports:
+      - "${PRIVATE_BIND_ADDR:?set PRIVATE_BIND_ADDR to this host's private IP}:5432:5432"
+
+  pgbouncer:
+    extends:
+      file: docker-compose.yml
+      service: pgbouncer
+    ports:
+      - "${PRIVATE_BIND_ADDR:?set PRIVATE_BIND_ADDR to this host's private IP}:6432:6432"
+
+  redis:
+    extends:
+      file: docker-compose.yml
+      service: redis
+    ports:
+      - "${PRIVATE_BIND_ADDR:?set PRIVATE_BIND_ADDR to this host's private IP}:6379:6379"
+
+  nats:
+    extends:
+      file: docker-compose.yml
+      service: nats
+    ports:
+      - "${PRIVATE_BIND_ADDR:?set PRIVATE_BIND_ADDR to this host's private IP}:4222:4222"
+      # Monitoring endpoint, scraped by analytics-service's NATS dashboard.
+      - "${PRIVATE_BIND_ADDR:?set PRIVATE_BIND_ADDR to this host's private IP}:8222:8222"
+
+  minio:
+    extends:
+      file: docker-compose.yml
+      service: minio
+    ports:
+      # Object port, reached by app hosts AND by the edge Caddy's /uploads
+      # /outputs route. The console stays loopback-only via the base definition.
+      - "${PRIVATE_BIND_ADDR:?set PRIVATE_BIND_ADDR to this host's private IP}:9000:9000"
+
+  # One-shot bucket/policy/app-credential bootstrap (idempotent). Run it here so
+  # the buckets, scoped app user, and IAM policy exist before app hosts start.
+  minio-init:
+    extends:
+      file: docker-compose.yml
+      service: minio-init
+
+  # Pinned to this host: two db-backup containers would race on the same offsite
+  # bucket, and its rclone "src" remote reads MinIO, which is local here.
+  db-backup:
+    extends:
+      file: docker-compose.yml
+      service: db-backup
+    depends_on: !reset []
+
+networks:
+  fyredocs_net:
+    name: fyredocs_net
+
+volumes:
+  postgres_data:
+  redis_data:
+  nats_data:
+  minio_data:

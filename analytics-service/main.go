@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/config"
 	"fyredocs/shared/logger"
 	"fyredocs/shared/metrics"
@@ -89,17 +90,33 @@ func main() {
 	defer stopOps()
 	opsDone := opsmetrics.Start(opsCtx, models.DB)
 
+	var denylist authverify.TokenDenylist
+	if config.GetEnvBool("AUTH_DENYLIST_ENABLED", true) {
+		denylist = authverify.NewRedisTokenDenylist(redisstore.Client, os.Getenv("AUTH_DENYLIST_PREFIX"))
+		if denylist == nil {
+			slog.Warn("Token denylist enabled but Redis unavailable")
+		} else {
+			slog.Info("Token denylist enabled")
+		}
+	} else {
+		slog.Warn("Token denylist disabled")
+	}
+
 	r := gin.New()
 	r.Use(response.GinRecovery())
 	r.Use(telemetry.GinTraceMiddleware("analytics-service"))
 	r.Use(metrics.GinMetricsMiddleware())
 	r.Use(logger.GinRequestID())
 	r.Use(logger.GinRequestLogger())
+	// Registered before the auth middleware so Prometheus can scrape without a
+	// token — Gin binds a route's chain at registration, so a later r.Use does
+	// not apply retroactively. Moving this below the r.Use call breaks scraping.
 	r.GET("/metrics", metrics.MetricsHandler())
 	if err := r.SetTrustedProxies(config.TrustedProxies()); err != nil {
 		slog.Error("failed to set trusted proxies", "error", err)
 		os.Exit(1)
 	}
+	r.Use(buildAuthMiddleware(denylist))
 
 	routes.SetupRouter(r)
 
@@ -151,4 +168,42 @@ func joinPoller(name string, done <-chan struct{}) {
 	case <-time.After(10 * time.Second):
 		slog.Warn("poller did not stop in time", "poller", name)
 	}
+}
+
+// buildAuthMiddleware assembles this service's auth middleware.
+//
+// AUTH_TRUST_GATEWAY_HEADERS decides whether identity headers injected upstream
+// are believed. It defaults to FALSE, which is the safe default: trusting those
+// headers is only sound when nothing but the gateway can reach this service, and
+// a service reachable across a host boundary would otherwise accept a
+// caller-supplied X-User-Role verbatim — here that means anyone who can reach the
+// port could claim super-admin and read platform-wide metrics. With it off, the
+// JWT is verified here regardless of what the gateway claims.
+//
+// This middleware resolves identity but does not gate — credential-less requests
+// pass through anonymously. That is load-bearing for two routes: /healthz and
+// /readyz (healthchecks send no token) and POST /internal/alerts/api/v2/alerts,
+// which Prometheus calls and which cannot carry a token at all. adminAuth and the
+// Dashboard handler do the gating.
+//
+// GuestStore is deliberately nil: the Dashboard handler rejects role "guest"
+// outright, so resolving guest tokens here would only add a Redis round-trip.
+//
+// NOTE: intentionally duplicated per service rather than shared (CLAUDE.md §1);
+// job-service/main.go and auth-service/main.go carry the same function. A
+// verifier that cannot be constructed exits the process — booting without working
+// token verification would serve traffic with authentication silently disabled.
+func buildAuthMiddleware(denylist authverify.TokenDenylist) gin.HandlerFunc {
+	trustGateway := config.GetEnvBool("AUTH_TRUST_GATEWAY_HEADERS", false)
+
+	verifier, err := authverify.NewVerifierFromEnv(denylist)
+	if err != nil {
+		slog.Error("auth verifier init failed", "error", err)
+		os.Exit(1)
+	}
+
+	return authverify.GinAuthMiddleware(authverify.GinMiddlewareOptions{
+		Verifier:            verifier,
+		TrustGatewayHeaders: trustGateway,
+	})
 }

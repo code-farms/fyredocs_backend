@@ -4,8 +4,14 @@
 // role-aware /api/dashboard is open to any authenticated user (the handler
 // itself decides how much to show), /admin/* is super-admin only via adminAuth,
 // and the Prometheus alert receiver under /internal is deliberately
-// unauthenticated because Prometheus cannot send the gateway's role header.
+// unauthenticated because Prometheus cannot send an identity header at all.
 // Moving a route between tiers changes who can read platform-wide metrics.
+//
+// Identity for the first two tiers comes from the AuthContext resolved by the
+// auth middleware in main.go, which verifies the JWT locally by default. The
+// third tier works because that middleware passes credential-less requests
+// through as anonymous rather than rejecting them — so wrapping it in anything
+// that demands a token would silently break Discord alerting.
 package routes
 
 import (
@@ -15,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"analytics-service/handlers"
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/response"
 )
 
@@ -74,22 +81,26 @@ func SetupRouter(r *gin.Engine) {
 
 // adminAuth restricts a route group to super-admins.
 //
-// The role is read from the gateway-injected X-User-Role header, which is only
-// trustworthy because the gateway strips client-supplied identity headers before
-// proxying — this service must never be exposed directly. The 401-versus-403
-// distinction is deliberate: no user ID means "not logged in" and the client
-// should authenticate, whereas a present ID with the wrong role means
-// re-authenticating will not help.
+// The role comes from the AuthContext resolved by the auth middleware in main.go,
+// which verifies the JWT locally by default (AUTH_TRUST_GATEWAY_HEADERS=false).
+// Reading the context rather than the X-User-Role header directly is what keeps
+// this sound once the service is reachable across a host boundary — otherwise
+// anyone who could reach the port could simply claim `X-User-Role: super-admin`
+// and read platform-wide metrics.
+//
+// The 401-versus-403 distinction is deliberate: no user ID means "not logged in"
+// and the client should authenticate, whereas a present ID with the wrong role
+// means re-authenticating will not help.
 func adminAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		role := strings.TrimSpace(c.GetHeader("X-User-Role"))
-		if role == "super-admin" {
+		authCtx, _ := authverify.GetGinAuth(c)
+
+		if strings.TrimSpace(authCtx.Role) == "super-admin" {
 			c.Next()
 			return
 		}
 
-		userID := strings.TrimSpace(c.GetHeader("X-User-ID"))
-		if userID == "" {
+		if strings.TrimSpace(authCtx.UserID) == "" {
 			response.Err(c, http.StatusUnauthorized, response.CodeUnauthorized, "Please log in to access this page.")
 			c.Abort()
 			return

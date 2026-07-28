@@ -6,7 +6,7 @@ The analytics-service collects, stores, and aggregates business metrics for the 
 ## Design Constraints
 - Fully independent microservice with its own database tables
 - Receives events via NATS JetStream (no direct DB access to other services)
-- Admin endpoints protected by JWT role-based auth (`super-admin` role required, verified via `X-User-Role` header set by API gateway)
+- Admin endpoints protected by JWT role-based auth (`super-admin` required). The role comes from the locally-verified `AuthContext`, **not** the raw `X-User-Role` header.
 - Lightweight: designed for low overhead on the main request path (fire-and-forget NATS publish from other services)
 
 ## Internal Architecture
@@ -28,7 +28,7 @@ Events are persisted to the `analytics_events` PostgreSQL table for querying.
 
 ### Alert receiver & ops-metrics poller
 Two observability responsibilities live here so no standalone Alertmanager/exporter container is needed:
-- **Alert receiver** — `POST /internal/alerts/api/v2/alerts` (`shared/discord`) accepts Prometheus's Alertmanager-v2 alert POSTs and forwards them to Discord (`DISCORD_WEBHOOK_URL`). Internal-only, unauthenticated (Prometheus can't send `X-User-Role`; Caddy never routes `/internal`).
+- **Alert receiver** — `POST /internal/alerts/api/v2/alerts` (`shared/discord`) accepts Prometheus's Alertmanager-v2 alert POSTs and forwards them to Discord (`DISCORD_WEBHOOK_URL`). Internal-only, unauthenticated (Prometheus can't send an identity header at all; Caddy never routes `/internal`). This works because the auth middleware passes credential-less requests through as anonymous — wrapping it in anything that demands a token would break Discord alerting **silently**.
 - **Ops-metrics poller** — `internal/opsmetrics` runs a background ticker (`OPS_METRICS_INTERVAL`, default 20s, cancelled on shutdown) that pings Redis/Postgres and reads the JOBS_DLQ backlog, exposing `dependency_up{dependency=redis|nats|postgres}` and `nats_dlq_pending_messages` on `/metrics`. Prometheus's `DependencyDown` and `DLQBacklog` rules fire on these. (DB connection-pool gauges come from `shared/database` on every DB service — see observability.md.)
 
 ### Event Types
@@ -47,10 +47,10 @@ Two observability responsibilities live here so no standalone Alertmanager/expor
 ### Unified Dashboard (any authenticated user)
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/dashboard?days=30` | Role-aware landing summary. Reads the gateway-set `X-User-Role` / `X-User-ID` headers and filters the payload **server-side** by role, so a single endpoint serves everyone and no separate `/admin/dashboard` route is needed. Computed entirely from this service's own `analytics_events` table. |
+| GET | `/api/dashboard?days=30` | Role-aware landing summary. Reads the role/identity from the locally-verified `AuthContext` and filters the payload **server-side** by role, so a single endpoint serves everyone and no separate `/admin/dashboard` route is needed. Computed entirely from this service's own `analytics_events` table. |
 
 Behaviour by caller:
-- **No `X-User-ID`** → `401 UNAUTHORIZED`. **`X-User-Role: guest`** → `403 FORBIDDEN`.
+- **No verified identity** → `401 UNAUTHORIZED` (a forged `X-User-ID` header alone counts as none). **Role `guest`** → `403 FORBIDDEN`.
 - **`admin` / `super-admin`** → `data.role: "admin"` with a system summary:
   `period`, `today` (signups, logins, dau, guestSessions, jobsCreated/Completed/Failed),
   `totalUsers`, `toolUsage` (top 10), `planDistribution`.
@@ -59,7 +59,7 @@ Behaviour by caller:
   `recentActivity` (daily counts), `plan` (from `X-User-Plan`, fallback latest
   event), `memberSince`.
 
-### Admin Endpoints (require `X-User-Role: super-admin` header)
+### Admin Endpoints (require a verified `super-admin` role)
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/admin/authz` | Lightweight authorization probe — returns 200 for super-admins, 401/403 otherwise. Does no work; exists so the Caddy edge can `forward_auth` the `/grafana/*` observability embed through the gateway and admit only super-admins. See [observability.md](../architecture/observability.md#in-app-embedding-admin-observability-tab). |
@@ -166,14 +166,35 @@ older than `API_METRIC_RETENTION_DAYS`.
 | API_METRIC_RETENTION_DAYS | 30 | How long `api_metric_samples` rows are kept before the sampler prunes them |
 | PLAN_PRICES | guest=0,free=0,pro=12 | Comma-separated `plan=monthlyPrice` pairs used to compute **estimated** revenue (MRR/ARR). No billing integration. |
 | PLAN_CURRENCY | USD | Currency code reported with estimated revenue figures. |
-| REDIS_ADDR | redis:6379 | Redis host:port (backs the dashboard response cache) |
+| REDIS_ADDR | redis:6379 | Redis host:port (backs the dashboard response cache **and** the JWT denylist — without it a revoked token keeps working here until natural expiry) |
 | REDIS_PASSWORD | — | Redis password |
+| JWT_HS256_SECRET | — | Token signing secret (required — this service verifies tokens itself) |
+| JWT_ALLOWED_ALGS | HS256 | Permitted signing algorithms |
+| JWT_ISSUER / JWT_AUDIENCE | fyredocs / fyredocs-api | Claim checks |
+| JWT_CLOCK_SKEW | 60s | Allowed clock drift |
+| AUTH_DENYLIST_ENABLED | true | Check revoked tokens against Redis |
+| AUTH_TRUST_GATEWAY_HEADERS | false | Believe upstream `X-User-*` instead of verifying. **Keep false** — see Authentication. |
 | REDIS_DB | 0 | Redis logical DB index |
 | DASHBOARD_CACHE_TTL | 30s | TTL for the `/api/dashboard` response cache. `0` disables caching. |
 | OTEL_EXPORTER_OTLP_ENDPOINT | http://localhost:4318 | OpenTelemetry collector |
 
 ## Authentication
-Admin endpoints require the `super-admin` role. The API gateway verifies the JWT and sets `X-User-Role` header on proxied requests. The analytics service checks this header — no API keys or hardcoded credentials. To promote a user to super-admin, run:
+
+Admin endpoints require the `super-admin` role. `main.go`'s `buildAuthMiddleware`
+**verifies the JWT locally** (`AUTH_TRUST_GATEWAY_HEADERS=false`) and `adminAuth()`
+reads the role from the resulting `AuthContext` — never from the raw `X-User-Role`
+header, which anyone able to reach this port could otherwise forge to read
+platform-wide metrics. No API keys or hardcoded credentials.
+
+**Why local verification matters:** trusting the gateway's `X-User-*` headers is
+only sound while nothing but the gateway can reach this port. Once app servers span
+hosts that stops being true, and a forged header would be account takeover by user
+ID. The middleware resolves identity but does **not** gate, so credential-less
+requests pass through as anonymous — which is what keeps `/healthz`, `/readyz`, and
+shared-secret `/internal` routes working. See
+[horizontal-scaling.md](../architecture/horizontal-scaling.md#prerequisite-1-identity-must-not-depend-on-network-isolation).
+
+To promote a user to super-admin, run:
 ```sql
 UPDATE users SET role = 'super-admin' WHERE email = 'your@email.com';
 ```

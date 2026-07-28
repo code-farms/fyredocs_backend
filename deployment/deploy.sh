@@ -128,6 +128,17 @@ Usage: deployment/deploy.sh [options] [service ...]
                          behavior). Causes a full outage for the restart window;
                          only needed when the compose topology changed
                          drastically.
+  --host-role=<role>     Which slice of the stack this machine runs. Default
+                         `all` = the single-host stack (unchanged behavior).
+                           all   docker-compose.yml — everything on one host
+                           data  docker-compose.data.yml — postgres, pgbouncer,
+                                 redis, nats, minio, minio-init, db-backup.
+                                 Requires PRIVATE_BIND_ADDR. Builds nothing.
+                           app   docker-compose.app.yml — gateway + API services
+                           work  the four PDF worker slices
+                         Resource budgets are computed from THIS host, so each
+                         machine sizes to its own hardware. See
+                         docs/developer/architecture/multi-host.md.
   -h, --help             Show this help.
 
 Environment:
@@ -135,6 +146,10 @@ Environment:
   SKIP_BASE_REBUILD=1    Don't rebuild fyredocs-go-builder even when it's stale
                          (its baked go.work/go.mod snapshot no longer matches the
                          repo). Only warns. Service builds will likely fail.
+  PRIVATE_BIND_ADDR      Required for --host-role=data: the private address the
+                         datastores bind to. There is deliberately no default —
+                         NATS runs unauthenticated, so binding 0.0.0.0 by
+                         accident would put JetStream on the internet.
 
 See docs/developer/architecture/compose-files.md for the compose files layout.
 Every full deploy tags each service image as fyredocs-<svc>:<git-sha> and keeps
@@ -148,12 +163,14 @@ USAGE
 DRY_RUN=0
 ROLLBACK_SHA=""
 FULL_RESTART="${FULL_RESTART:-0}"
+HOST_ROLE="${HOST_ROLE:-all}"
 SERVICES_TO_DEPLOY=()
 for arg in "$@"; do
     case "$arg" in
         --dry-run|--print-budget) DRY_RUN=1 ;;
         --rollback=*) ROLLBACK_SHA="${arg#*=}" ;;
         --full-restart) FULL_RESTART=1 ;;
+        --host-role=*) HOST_ROLE="${arg#*=}" ;;
         -h|--help) usage; exit 0 ;;
         -*) print_error "Unknown option: $arg"; usage; exit 1 ;;
         *) SERVICES_TO_DEPLOY+=("$arg") ;;
@@ -168,6 +185,59 @@ GO_SERVICES=(
   "convert-from-pdf" "convert-to-pdf" "organize-pdf" "optimize-pdf"
   "document-service" "user-service" "notification-service"
 )
+
+# ─── Host role ───────────────────────────────────────────────────────────────
+# Selects which compose file and which services this machine is responsible for.
+# `all` reproduces the original single-host behavior exactly, so every existing
+# invocation is unaffected.
+#
+# NOTE: must stay below GO_SERVICES (the `all` branch copies it) and below
+# SCRIPT_DIR. ROLE_COMPOSE becomes COMPOSE_FILE further down; ROLE_SERVICES
+# narrows the build/deploy loop. The data role builds nothing — all upstream
+# images. Resource budgets are computed from the host running the script, so each
+# machine automatically sizes its containers to its own hardware.
+case "$HOST_ROLE" in
+    all)
+        ROLE_COMPOSE="$SCRIPT_DIR/docker-compose.yml"
+        ROLE_SERVICES=("${GO_SERVICES[@]}")
+        ;;
+    data)
+        ROLE_COMPOSE="$SCRIPT_DIR/docker-compose.data.yml"
+        ROLE_SERVICES=()
+        # Fail before any work: an unset bind address would otherwise expose an
+        # unauthenticated NATS and a no-TLS Postgres/Redis/MinIO on 0.0.0.0.
+        if [ -z "${PRIVATE_BIND_ADDR:-}" ]; then
+            print_error "--host-role=data requires PRIVATE_BIND_ADDR (this host's private IP)."
+            print_error "Datastores must never bind 0.0.0.0: NATS has no auth and the rest have no TLS."
+            exit 1
+        fi
+        ;;
+    app)
+        ROLE_COMPOSE="$SCRIPT_DIR/docker-compose.app.yml"
+        ROLE_SERVICES=(
+          "api-gateway" "auth-service" "job-service"
+          "document-service" "user-service" "analytics-service" "notification-service"
+        )
+        ;;
+    work)
+        ROLE_COMPOSE="$SCRIPT_DIR/docker-compose.yml"
+        ROLE_SERVICES=("convert-from-pdf" "convert-to-pdf" "organize-pdf" "optimize-pdf")
+        ;;
+    *)
+        print_error "Unknown --host-role=$HOST_ROLE (expected: all, data, app, work)"
+        exit 1
+        ;;
+esac
+
+if [ "$HOST_ROLE" != "all" ]; then
+    print_step "Host role: $HOST_ROLE  (compose: $(basename "$ROLE_COMPOSE"))"
+fi
+
+# An explicit service list still wins over the role's default set, so
+# `deploy.sh --host-role=app job-service` redeploys just that one.
+if [ ${#SERVICES_TO_DEPLOY[@]} -eq 0 ] && [ "$HOST_ROLE" != "all" ] && [ ${#ROLE_SERVICES[@]} -gt 0 ]; then
+    SERVICES_TO_DEPLOY=("${ROLE_SERVICES[@]}")
+fi
 # Short git SHA of the tree being deployed (falls back to a timestamp-free label
 # when not in a git checkout — Date.now-style values would break reproducibility).
 GIT_SHA="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo "untagged")"
@@ -233,7 +303,7 @@ do_rollback() {
         docker tag "${COMPOSE_PROJECT}-${svc}:${sha}" "${COMPOSE_PROJECT}-${svc}:latest"
     done
     export DOCKER_BUILDKIT=1
-    export COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+    export COMPOSE_FILE="$ROLE_COMPOSE"
     export COMPOSE_ENV_FILES="$ROOT_DIR/.env"
     export COMPOSE_PROFILES="${COMPOSE_PROFILES-observability}"
     # No service list and no --force-recreate: the retag above moved :latest onto
@@ -615,8 +685,20 @@ print_success "Using Go Workspace caching for ultra-fast builds"
 # runs from the repo root with no compose file discovered and silently no-ops,
 # leaving every old container in place.
 export DOCKER_BUILDKIT=1
-export COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+export COMPOSE_FILE="$ROLE_COMPOSE"
 export COMPOSE_ENV_FILES="$ROOT_DIR/.env"
+
+# The data host runs only upstream images (postgres/redis/nats/minio/rclone), so
+# there is nothing to build or image-tag. Bring it up and stop — skipping the
+# build/swap/edge-wait stages below, none of which apply.
+if [ "$HOST_ROLE" = "data" ]; then
+    print_step "Starting data-host services (bind: $PRIVATE_BIND_ADDR)..."
+    docker compose up -d --remove-orphans
+    docker compose ps
+    print_success "Data host up. App hosts must point REDIS_ADDR / NATS_URL /"
+    print_success "S3_ENDPOINT / S3_INTERNAL_URL / DATABASE_URL at $PRIVATE_BIND_ADDR."
+    exit 0
+fi
 
 # 1. Sequential Build Stage (CPU-Safe Mode)
 #

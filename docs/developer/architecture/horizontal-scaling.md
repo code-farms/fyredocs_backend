@@ -180,7 +180,50 @@ first thing to move because the WorkQueue balances them **with zero application
 changes** — a worker on host #2 pulls from the same `JOBS_DISPATCH` durable and
 just starts draining jobs.
 
-### The prerequisite: shared infra must be reachable from host #2
+### Prerequisite 1: identity must not depend on network isolation
+
+**Do this before opening any port.** Services used to take the caller's identity
+from the `X-User-ID` / `X-User-Role` headers the gateway injects, trusting them
+because nothing but the gateway could reach the port. The moment a service is
+reachable across a host boundary that guarantee is gone, and a forged
+`X-User-ID` is account takeover of any user by ID.
+
+All seven HTTP services now verify the JWT locally. `AUTH_TRUST_GATEWAY_HEADERS`
+defaults to **false** and should stay there — the gateway forwards `Authorization`
+untouched (it clears only `X-User-*`, see `api-gateway/main.go` `newProxy`), so the
+token is always available downstream to verify.
+
+Service-to-service hops hold no end-user JWT, so they use the
+`INTERNAL_API_TOKEN` shared secret on `/internal` routes instead. There is one:
+document-service → user-service `GET /internal/v1/orgs/:id` for org membership
+(`document-service/internal/orgclient`). The secret fails **closed** (503 when
+unset), which makes org-scoped document authorization fail safe rather than open.
+
+> **Verify the property directly.** From inside the private network, `curl` a
+> service with a fabricated `X-User-ID` and no bearer token. It must return 401.
+> This is worth running before and after — before the change it returns that
+> user's data, which makes the rest of this section self-justifying.
+
+#### Still open: plan quotas are header-derived
+
+Identity no longer depends on network isolation, but **plan quotas still do.**
+`planMaxFileSizeMB` / `planMaxFilesPerJob` (`job-service/handlers/jobs.go`) read
+`X-User-Plan-Max-File-MB` / `X-User-Plan-Max-Files` directly from the request. They
+cannot use the verified `AuthContext`, because plan data is resolved by the gateway
+from its Redis plancache and is deliberately **not** in the JWT claims
+(`Claims.ToAuthContext`), so local verification cannot reconstruct it.
+
+Through the gateway this is safe — it calls `ClearUserHeaders` before setting its
+own. But a caller able to reach job-service **directly** could inflate its own
+upload quota. That is a quota bypass, not impersonation.
+
+**Mitigation today:** keep app-service ports reachable only from the edge host
+(firewall the private network so nothing else can dial `:8081`). **Proper fix:**
+resolve the plan from Redis inside job-service instead of trusting the header,
+which means duplicating `api-gateway/internal/plancache`. Do it before you allow
+anything other than the edge to reach an app host.
+
+### Prerequisite 2: shared infra must be reachable from host #2
 
 Today infra ports are **not published** (MinIO object port internal, NATS/Redis
 loopback-only) — correct for one host, blocking for two. Before host #2 can run
@@ -198,27 +241,106 @@ workers you must expose Postgres/Redis/NATS/MinIO to it **securely**:
 3. **Publish the infra ports on the private interface** (bind to the private IP,
    not `0.0.0.0`) or keep infra in a shared overlay network.
 
+`deployment/docker-compose.data.yml` does step 3 for you. It extends the canonical
+service definitions and adds only the port publishing, bound to
+`PRIVATE_BIND_ADDR`. That variable has **no default on purpose** — an unset value
+fails the compose run rather than silently binding `0.0.0.0` and putting an
+unauthenticated JetStream on the internet.
+
+```bash
+# On the data host:
+PRIVATE_BIND_ADDR=10.0.0.5 ./deployment/deploy.sh --host-role=data
+```
+
 ### Deploy workers on host #2
 
 Reuse the per-service `extends` pattern ([compose-files.md](./compose-files.md)).
-On host #2, run only the worker compose files, pointing their env at host #1's
-**private** infra addresses:
+On host #2, run only the worker compose files, pointing their env at the data
+host's **private** infra addresses:
 
 ```bash
-# host #2 .env — point at host #1's private IP
-NATS_URL=nats://<host1-private-ip>:4222
-REDIS_ADDR=<host1-private-ip>:6379
-DATABASE_URL=postgres://...@<host1-private-ip>:5432/fyredocs?sslmode=require
-S3_ENDPOINT=<host1-private-ip>:9000
+# host #2 .env — point at the data host's private IP
+NATS_URL=nats://<data-host-private-ip>:4222
+REDIS_ADDR=<data-host-private-ip>:6379
+DATABASE_URL=postgres://...@<data-host-private-ip>:6432/fyredocs?sslmode=require
+S3_ENDPOINT=<data-host-private-ip>:9000
+S3_INTERNAL_URL=http://<data-host-private-ip>:9000
 S3_PUBLIC_ENDPOINT=https://<your-public-origin>    # presigned URLs use this
 
-docker compose -f deployment/docker-compose-convert-to-pdf.yml \
-  --env-file .env up -d --build
-# repeat for convert-from-pdf / optimize-pdf / organize-pdf
+./deployment/deploy.sh --host-role=work
+# (or the individual docker-compose-<worker>.yml slices)
 ```
 
 The workers register durable consumers on `JOBS_DISPATCH` and immediately share
 the queue with host #1's workers. **No gateway or job-service change needed.**
+
+### Why files are never the problem here
+
+A natural worry when splitting hosts is that an upload received by host #1 would
+be invisible to a worker on host #2. It cannot happen: **file bytes never touch a
+service's disk.**
+
+1. The browser uploads **directly to MinIO** via presigned S3 multipart URLs.
+   job-service mints the URLs and never sees the bytes
+   (`job-service/handlers/uploads.go`).
+2. The dispatched NATS event carries **object keys, not bytes**
+   (`queue.JobEvent.InputPaths`). `FileMetadata.Path` is an object key, not a
+   filesystem path.
+3. Each worker creates its **own** tmpfs scratch dir, downloads the object into
+   it, shells out to ghostscript/libreoffice/tesseract on those local paths, then
+   uploads the result back (`internal/worker/worker.go`, `storage.go`).
+4. Download is a 302 to a 5-minute presigned GET — no service streams file bytes.
+
+The only thing crossing a host boundary is a **string key**, which is what makes
+any worker on any host able to serve any job.
+
+> **The one presigned-URL trap:** leave `S3_PUBLIC_ENDPOINT` as the public origin
+> on *every* host. SigV4 signs the Host header, so a per-host value would produce
+> signatures the browser's request can never match — breaking every upload and
+> download. `S3_ENDPOINT` (internal, per-host) and `S3_PUBLIC_ENDPOINT` (public,
+> identical everywhere) are deliberately separate for this reason.
+
+### Splitting the app tier too (DB on its own server, N app servers)
+
+Moving the workers off is Stage 2's default because they are the bottleneck. If
+instead you want the **stateful tier on its own machine and multiple app
+servers** — a common shape once the DB deserves dedicated resources — the same
+pieces compose:
+
+```
+Edge host  : caddy (TLS, SPA, /api -> app hosts, /uploads /outputs -> data host)
+Data host  : docker-compose.data.yml  — postgres, pgbouncer, redis, nats, minio,
+                                        minio-init, db-backup, observability
+App host 1 : docker-compose.app.yml   — gateway + API services
+App host 2 : the four worker slices   — deploy.sh --host-role=work
+```
+
+```bash
+./deployment/deploy.sh --host-role=app     # on each app host
+```
+
+`docker-compose.app.yml` resets the inherited `depends_on`: the infra healthchecks
+it waits on live on another machine and can never be satisfied locally. Container
+start order stops being a readiness guarantee across hosts — each service's own
+fail-fast boot covers it instead, since every one `os.Exit()`s when Postgres,
+Redis, or NATS is unreachable.
+
+**Singletons that must run in exactly one place:** `db-backup` (two copies would
+prune the same offsite bucket against each other), `minio-init` (one-shot), and the
+whole `observability` profile. All three are pinned to the data host. The
+job-service cleanup loop needs no such care — it is already Redis-lock guarded, so
+`CLEANUP_ENABLED` can stay `true` everywhere.
+
+**What does NOT need changing:** SSE (NATS-backed, so no sticky sessions), upload
+resume (`GET /api/uploads/:id/parts` re-presigns from Redis, so either host can
+serve it), idempotency keys, rate limits, and the result cache — all already in
+Redis rather than process memory.
+
+At the edge, `API_GATEWAY_UPSTREAMS` must enumerate each app host's gateway;
+Caddy's former dynamic-DNS discovery only ever saw same-host containers
+([caddy-edge.md](./caddy-edge.md#why-not-dynamic-dns-upstreams)). And
+`TRUSTED_PROXIES` must include the edge host's private address, or client-IP
+resolution breaks and every rate-limit bucket collapses into one shared key.
 
 ### Also address at this stage
 

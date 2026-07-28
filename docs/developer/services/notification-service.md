@@ -5,7 +5,7 @@ Owns the user **in-app notification feed**. It consumes job-completion events fr
 
 ## Design Constraints
 - Independent microservice: own Postgres schema, own module (`notification-service`), no cross-service DB access or shared models.
-- Stateless HTTP; identity from the gateway-injected `X-User-ID` header.
+- Stateless HTTP; identity from the `AuthContext` resolved by the auth middleware, which **verifies the JWT locally** (`AUTH_TRUST_GATEWAY_HEADERS=false`).
 - Standard response envelope (`shared/response`).
 
 ## Internal Architecture
@@ -16,7 +16,12 @@ Owns the user **in-app notification feed**. It consumes job-completion events fr
 - `internal/models/` — `database.go`, `notification.go`.
 
 ## Routes
-Health: `GET /healthz`, `GET /readyz`. All `/api/notifications/*` require `X-User-ID`.
+Health: `GET /healthz`, `GET /readyz`. All `/api/notifications/*` require a
+verified caller.
+
+`POST /internal/notifications` is the mesh-only creation endpoint. It takes its
+target user from the request **body** and is guarded by the `INTERNAL_API_TOKEN`
+shared secret, so it never consults the per-user identity path above.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -46,6 +51,15 @@ See [schema-migrations.md](../architecture/schema-migrations.md).
 | PORT | 8091 | Service port |
 | DATABASE_URL | — | PostgreSQL connection string (required) |
 | NATS_URL | nats://nats:4222 | NATS for the event subscriber |
+| REDIS_ADDR | redis:6379 | Backs the JWT denylist. Without it a token revoked at logout keeps working here until natural expiry. |
+| REDIS_PASSWORD | — | Redis auth |
+| JWT_HS256_SECRET | — | Token signing secret (required — this service verifies tokens itself) |
+| JWT_ALLOWED_ALGS | HS256 | Permitted signing algorithms |
+| JWT_ISSUER / JWT_AUDIENCE | fyredocs / fyredocs-api | Claim checks |
+| JWT_CLOCK_SKEW | 60s | Allowed clock drift |
+| AUTH_DENYLIST_ENABLED | true | Check revoked tokens against Redis |
+| AUTH_TRUST_GATEWAY_HEADERS | false | Believe upstream `X-User-*` instead of verifying. **Keep false** — see Authentication. |
+| INTERNAL_API_TOKEN | — | Shared secret guarding `POST /internal/notifications` (fails closed when unset) |
 | TRUSTED_PROXIES | — | Trusted proxy CIDRs |
 | OTEL_EXPORTER_OTLP_ENDPOINT | — | OpenTelemetry collector |
 

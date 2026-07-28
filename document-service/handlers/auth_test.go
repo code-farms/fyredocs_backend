@@ -7,6 +7,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+
+	"fyredocs/shared/authverify"
 )
 
 func TestParseQueryInt(t *testing.T) {
@@ -46,35 +48,66 @@ func TestParseUUID(t *testing.T) {
 	}
 }
 
-func TestRequireUser(t *testing.T) {
+// serveWithAuth runs a RequireUser-guarded route, optionally seeding the
+// AuthContext the way the auth middleware would after verifying a JWT. Passing a
+// nil authCtx models an unauthenticated request that reached the handler chain.
+func serveWithAuth(authCtx *authverify.AuthContext, mutate func(*http.Request)) int {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	if authCtx != nil {
+		r.Use(func(c *gin.Context) {
+			authverify.SetGinAuth(c, *authCtx)
+			c.Next()
+		})
+	}
 	r.Use(RequireUser())
 	r.GET("/x", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
-	// Missing header → 401.
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	if mutate != nil {
+		mutate(req)
+	}
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("no X-User-ID: expected 401, got %d", w.Code)
+	return w.Code
+}
+
+// TestRequireUserRejectsForgedHeader is the regression guard for the multi-host
+// split: identity must come from the verified AuthContext, never from the raw
+// X-User-ID header. Before local JWT verification this header alone granted
+// access, so a service reachable from anything but the gateway could be
+// impersonated. If this test starts passing a 200, that hole is back open.
+func TestRequireUserRejectsForgedHeader(t *testing.T) {
+	forged := uuid.Must(uuid.NewV7()).String()
+	code := serveWithAuth(nil, func(req *http.Request) {
+		req.Header.Set("X-User-ID", forged)
+	})
+	if code != http.StatusUnauthorized {
+		t.Errorf("forged X-User-ID with no verified identity: expected 401, got %d", code)
+	}
+}
+
+func TestRequireUser(t *testing.T) {
+	// No identity at all → 401.
+	if code := serveWithAuth(nil, nil); code != http.StatusUnauthorized {
+		t.Errorf("no identity: expected 401, got %d", code)
 	}
 
-	// Valid header → 200.
-	req = httptest.NewRequest(http.MethodGet, "/x", nil)
-	req.Header.Set("X-User-ID", uuid.Must(uuid.NewV7()).String())
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("valid X-User-ID: expected 200, got %d", w.Code)
+	// Verified identity → 200.
+	valid := authverify.AuthContext{UserID: uuid.Must(uuid.NewV7()).String()}
+	if code := serveWithAuth(&valid, nil); code != http.StatusOK {
+		t.Errorf("verified identity: expected 200, got %d", code)
 	}
 
-	// Malformed header → 401.
-	req = httptest.NewRequest(http.MethodGet, "/x", nil)
-	req.Header.Set("X-User-ID", "garbage")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("malformed X-User-ID: expected 401, got %d", w.Code)
+	// Verified context carrying a non-UUID subject → 401. The token was valid but
+	// its subject cannot name a document owner, so it must not authorize.
+	if code := serveWithAuth(&authverify.AuthContext{UserID: "garbage"}, nil); code != http.StatusUnauthorized {
+		t.Errorf("malformed subject: expected 401, got %d", code)
+	}
+
+	// Empty UserID (e.g. a guest context) → 401.
+	guest := authverify.AuthContext{Role: "guest", IsGuest: true}
+	if code := serveWithAuth(&guest, nil); code != http.StatusUnauthorized {
+		t.Errorf("guest identity: expected 401, got %d", code)
 	}
 }

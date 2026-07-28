@@ -6,11 +6,29 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"fyredocs/shared/authverify"
 )
 
-func newTestRouter() *gin.Engine {
+// seedAuth stands in for the auth middleware installed in main.go, populating the
+// AuthContext the way a verified JWT would. Tests use it instead of setting
+// X-User-* headers because adminAuth deliberately no longer reads those headers —
+// see TestAdminAuth_ForgedHeaders_Rejected.
+func seedAuth(userID, role string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authverify.SetGinAuth(c, authverify.AuthContext{UserID: userID, Role: role})
+		c.Next()
+	}
+}
+
+// newTestRouter builds an adminAuth-guarded route. A nil seed models a request
+// that arrived with no verifiable credentials.
+func newTestRouter(seed gin.HandlerFunc) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	if seed != nil {
+		r.Use(seed)
+	}
 	r.Use(adminAuth())
 	r.GET("/test", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
@@ -18,64 +36,71 @@ func newTestRouter() *gin.Engine {
 	return r
 }
 
-func TestAdminAuth_NoHeaders_Returns401(t *testing.T) {
-	r := newTestRouter()
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+func serve(r *gin.Engine, path string, mutate func(*http.Request)) int {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if mutate != nil {
+		mutate(req)
+	}
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
+	return w.Code
+}
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", w.Code)
+// TestAdminAuth_ForgedHeaders_Rejected is the regression guard for the multi-host
+// split. adminAuth once read X-User-Role straight off the request, so anyone who
+// could reach this service's port could claim super-admin and read platform-wide
+// metrics. Identity now comes only from the verified AuthContext; if this test
+// starts seeing 200, that hole is back open.
+func TestAdminAuth_ForgedHeaders_Rejected(t *testing.T) {
+	r := newTestRouter(nil)
+
+	code := serve(r, "/test", func(req *http.Request) {
+		req.Header.Set("X-User-ID", "attacker-uuid")
+		req.Header.Set("X-User-Role", "super-admin")
+	})
+	if code != http.StatusUnauthorized {
+		t.Errorf("forged super-admin headers with no verified identity: expected 401, got %d", code)
+	}
+}
+
+func TestAdminAuth_NoIdentity_Returns401(t *testing.T) {
+	if code := serve(newTestRouter(nil), "/test", nil); code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", code)
 	}
 }
 
 func TestAdminAuth_RegularUser_Returns403(t *testing.T) {
-	r := newTestRouter()
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("X-User-ID", "some-uuid")
-	req.Header.Set("X-User-Role", "user")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusForbidden {
-		t.Errorf("expected 403, got %d", w.Code)
+	r := newTestRouter(seedAuth("some-uuid", "user"))
+	if code := serve(r, "/test", nil); code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", code)
 	}
 }
 
 func TestAdminAuth_SuperAdmin_Passes(t *testing.T) {
-	r := newTestRouter()
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("X-User-ID", "admin-uuid")
-	req.Header.Set("X-User-Role", "super-admin")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
+	r := newTestRouter(seedAuth("admin-uuid", "super-admin"))
+	if code := serve(r, "/test", nil); code != http.StatusOK {
+		t.Errorf("expected 200, got %d", code)
 	}
 }
 
+// TestAdminAuth_EmptyRole_Returns401 covers a verified token whose claims carry no
+// role and no subject — authenticated in form but naming nobody, so it must read
+// as "not logged in" rather than falling through to the 403 branch.
 func TestAdminAuth_EmptyRole_Returns401(t *testing.T) {
-	r := newTestRouter()
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("X-User-Role", "")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", w.Code)
+	r := newTestRouter(seedAuth("", ""))
+	if code := serve(r, "/test", nil); code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", code)
 	}
 }
 
 func TestAuthzProbe_GatedByAdminAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	newRouter := func() *gin.Engine {
+	newRouter := func(seed gin.HandlerFunc) *gin.Engine {
 		r := gin.New()
+		if seed != nil {
+			r.Use(seed)
+		}
 		admin := r.Group("/admin")
 		admin.Use(adminAuth())
 		admin.GET("/authz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
@@ -86,26 +111,22 @@ func TestAuthzProbe_GatedByAdminAuth(t *testing.T) {
 		name   string
 		userID string
 		role   string
+		seeded bool
 		want   int
 	}{
-		{"no headers -> 401", "", "", http.StatusUnauthorized},
-		{"regular user -> 403", "some-uuid", "user", http.StatusForbidden},
-		{"super-admin -> 200", "admin-uuid", "super-admin", http.StatusOK},
+		{"no identity -> 401", "", "", false, http.StatusUnauthorized},
+		{"regular user -> 403", "some-uuid", "user", true, http.StatusForbidden},
+		{"super-admin -> 200", "admin-uuid", "super-admin", true, http.StatusOK},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/admin/authz", nil)
-			if tc.userID != "" {
-				req.Header.Set("X-User-ID", tc.userID)
+			var seed gin.HandlerFunc
+			if tc.seeded {
+				seed = seedAuth(tc.userID, tc.role)
 			}
-			if tc.role != "" {
-				req.Header.Set("X-User-Role", tc.role)
-			}
-			w := httptest.NewRecorder()
-			newRouter().ServeHTTP(w, req)
-			if w.Code != tc.want {
-				t.Errorf("expected %d, got %d", tc.want, w.Code)
+			if code := serve(newRouter(seed), "/admin/authz", nil); code != tc.want {
+				t.Errorf("expected %d, got %d", tc.want, code)
 			}
 		})
 	}
@@ -124,45 +145,47 @@ func TestNewEndpoints_RequireAdminAuth(t *testing.T) {
 		"/admin/metrics/api-performance",
 	}
 
+	newRouter := func(seed gin.HandlerFunc) *gin.Engine {
+		r := gin.New()
+		if seed != nil {
+			r.Use(seed)
+		}
+		admin := r.Group("/admin")
+		admin.Use(adminAuth())
+		for _, p := range []string{
+			"/metrics/business", "/metrics/growth", "/metrics/engagement",
+			"/metrics/reliability", "/metrics/system",
+			"/metrics/server-performance", "/metrics/api-performance",
+		} {
+			admin.GET(p, func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+		}
+		return r
+	}
+
 	for _, ep := range endpoints {
 		t.Run(ep+" requires auth", func(t *testing.T) {
-			r := gin.New()
-			admin := r.Group("/admin")
-			admin.Use(adminAuth())
-			admin.GET("/metrics/business", func(c *gin.Context) { c.String(200, "ok") })
-			admin.GET("/metrics/growth", func(c *gin.Context) { c.String(200, "ok") })
-			admin.GET("/metrics/engagement", func(c *gin.Context) { c.String(200, "ok") })
-			admin.GET("/metrics/reliability", func(c *gin.Context) { c.String(200, "ok") })
-			admin.GET("/metrics/system", func(c *gin.Context) { c.String(200, "ok") })
-			admin.GET("/metrics/server-performance", func(c *gin.Context) { c.String(200, "ok") })
-			admin.GET("/metrics/api-performance", func(c *gin.Context) { c.String(200, "ok") })
+			// No identity -> 401
+			if code := serve(newRouter(nil), ep, nil); code != http.StatusUnauthorized {
+				t.Errorf("%s: expected 401 without auth, got %d", ep, code)
+			}
 
-			// No auth headers -> 401
-			req := httptest.NewRequest(http.MethodGet, ep, nil)
-			w := httptest.NewRecorder()
-			r.ServeHTTP(w, req)
-			if w.Code != http.StatusUnauthorized {
-				t.Errorf("%s: expected 401 without auth, got %d", ep, w.Code)
+			// Forged admin headers with no verified identity -> still 401.
+			code := serve(newRouter(nil), ep, func(req *http.Request) {
+				req.Header.Set("X-User-ID", "attacker-uuid")
+				req.Header.Set("X-User-Role", "super-admin")
+			})
+			if code != http.StatusUnauthorized {
+				t.Errorf("%s: expected 401 for forged headers, got %d", ep, code)
 			}
 
 			// Regular user -> 403
-			req = httptest.NewRequest(http.MethodGet, ep, nil)
-			req.Header.Set("X-User-ID", "some-uuid")
-			req.Header.Set("X-User-Role", "user")
-			w = httptest.NewRecorder()
-			r.ServeHTTP(w, req)
-			if w.Code != http.StatusForbidden {
-				t.Errorf("%s: expected 403 for regular user, got %d", ep, w.Code)
+			if code := serve(newRouter(seedAuth("some-uuid", "user")), ep, nil); code != http.StatusForbidden {
+				t.Errorf("%s: expected 403 for regular user, got %d", ep, code)
 			}
 
 			// Super admin -> 200
-			req = httptest.NewRequest(http.MethodGet, ep, nil)
-			req.Header.Set("X-User-ID", "admin-uuid")
-			req.Header.Set("X-User-Role", "super-admin")
-			w = httptest.NewRecorder()
-			r.ServeHTTP(w, req)
-			if w.Code != http.StatusOK {
-				t.Errorf("%s: expected 200 for super-admin, got %d", ep, w.Code)
+			if code := serve(newRouter(seedAuth("admin-uuid", "super-admin")), ep, nil); code != http.StatusOK {
+				t.Errorf("%s: expected 200 for super-admin, got %d", ep, code)
 			}
 		})
 	}
