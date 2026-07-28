@@ -98,8 +98,21 @@ export function provisionUsers() {
   if (users.length === 0) {
     throw new Error('could not provision any authenticated user — check BASE_URL / auth env / capacity-mode limits');
   }
+  if (users.length < n) {
+    // Not cosmetic. Signup is capped at RATE_LIMIT_SIGNUP (default 3/min per IP)
+    // and this loop is tight, so a short pool is the normal outcome without
+    // capacity-mode. Pool size scales the aggregate API quota (per-plan limits
+    // are per USER), so a silently-short pool becomes the ceiling a capacity run
+    // reports — a run once concluded "300 req/min" that was really 3 free users
+    // x 120/min. Loud, because the number it corrupts looks perfectly plausible.
+    console.warn(
+      `!! provisioned only ${users.length}/${n} users — signup is rate-limited ` +
+        '(RATE_LIMIT_SIGNUP, default 3/min per IP). Any capacity number from this run ' +
+        'reflects the pool size, not the server. Apply scripts/k6/capacity-mode.env and redeploy.'
+    );
+  }
   console.log(`provisioned ${users.length}/${n} users`);
-  return { users };
+  return { users, requested: n };
 }
 
 // Pick a token for the current VU+iteration (spreads across the pool).

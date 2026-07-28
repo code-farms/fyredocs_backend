@@ -435,6 +435,17 @@ services:
       # shared rate-limit bucket (over-throttles, never under-throttles).
       TRUSTED_PROXIES: "172.18.0.0/16,127.0.0.1,::1"
 
+      # Per-plan API rate limits (requests per window, keyed by user; guests by IP).
+      # These MUST be declared here to reach the container: compose only uses .env
+      # to interpolate ${...} into THIS file, it does not inject .env into
+      # containers. Without these lines scripts/k6/capacity-mode.env is silently
+      # inert and a load test measures the limiter instead of the backend.
+      # Defaults mirror api-gateway/main.go exactly, so omitting them changes nothing.
+      RATE_LIMIT_API_GUEST: ${RATE_LIMIT_API_GUEST:-30}
+      RATE_LIMIT_API_FREE: ${RATE_LIMIT_API_FREE:-120}
+      RATE_LIMIT_API_PRO: ${RATE_LIMIT_API_PRO:-600}
+      RATE_LIMIT_API_WINDOW: ${RATE_LIMIT_API_WINDOW:-1m}
+
       # Observability
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     healthcheck:
@@ -521,14 +532,20 @@ services:
       AUTH_DENYLIST_ENABLED: "true"
       AUTH_DENYLIST_PREFIX: "denylist:jwt"
 
-      # Rate Limiting
-      RATE_LIMIT_LOGIN: "5"
-      RATE_LIMIT_SIGNUP: "3"
-      RATE_LIMIT_REFRESH: "10"
-      RATE_LIMIT_FORGOT_PASSWORD: "3"
-      RATE_LIMIT_RESET_PASSWORD: "5"
-      RATE_LIMIT_PROXY_LOGIN: "5"
-      RATE_LIMIT_WINDOW: "60s"
+      # Rate Limiting (per IP). Interpolated, not hardcoded: as literals these
+      # PINNED the limits, so scripts/k6/capacity-mode.env could never raise them
+      # and a load run measured the limiter instead of the backend. Values are
+      # unchanged — they still match auth-service/routes/routes.go.
+      # NOTE RATE_LIMIT_SIGNUP=3/min: k6's provisionUsers() signs a pool up in a
+      # tight loop, so without capacity-mode it silently gets ~3 users, and the
+      # per-user API quota that implies becomes the "capacity" it measures.
+      RATE_LIMIT_LOGIN: ${RATE_LIMIT_LOGIN:-5}
+      RATE_LIMIT_SIGNUP: ${RATE_LIMIT_SIGNUP:-3}
+      RATE_LIMIT_REFRESH: ${RATE_LIMIT_REFRESH:-10}
+      RATE_LIMIT_FORGOT_PASSWORD: ${RATE_LIMIT_FORGOT_PASSWORD:-3}
+      RATE_LIMIT_RESET_PASSWORD: ${RATE_LIMIT_RESET_PASSWORD:-5}
+      RATE_LIMIT_PROXY_LOGIN: ${RATE_LIMIT_PROXY_LOGIN:-5}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60s}
 
       # Password Reset / Email (Resend)
       # Leave RESEND_API_KEY blank to fall back to the no-op mailer (logs the
@@ -632,6 +649,17 @@ services:
       FREE_JOB_TTL: ${FREE_JOB_TTL:-168h}
       PRO_JOB_TTL: ${PRO_JOB_TTL:-720h}
       UPLOAD_TTL: 30m
+
+      # Per-IP job/upload rate limits. Declared here so they actually reach the
+      # container — see the note in the api-gateway block. Defaults mirror
+      # job-service/routes/upload_routes.go exactly.
+      # NOTE these bite during load tests well before the workers do: a presigned
+      # job costs 1 job-create + several uploads, so UPLOAD=30/min caps job
+      # throughput around 12-15 jobs/min regardless of how fast the workers are.
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60s}
+      RATE_LIMIT_UPLOAD: ${RATE_LIMIT_UPLOAD:-30}
+      RATE_LIMIT_JOB_CREATE: ${RATE_LIMIT_JOB_CREATE:-20}
+      RATE_LIMIT_DETECT: ${RATE_LIMIT_DETECT:-60}
 
       # In-process TTL sweep (expired jobs, upload sessions, stale multipart
       # uploads). Runs inside this container — job-service owns all the data
