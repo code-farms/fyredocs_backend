@@ -1,5 +1,10 @@
-# Environment files with secrets
+# Environment files with secrets.
+# **/.env alone does NOT cover suffixed variants — .env.backup was committed
+# through that gap and had to be purged from history. **/.env.* catches every
+# variant (.env.backup, .env.production, .env.old); the !**/.env.example
+# negation below re-includes the one file that is safe to track.
 **/.env
+**/.env.*
 .env.local
 .env.*.local
 
