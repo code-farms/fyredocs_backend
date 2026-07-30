@@ -1522,7 +1522,10 @@ paths:
     get:
       tags: [Organize PDF]
       summary: List jobs by tool
-      description: Returns a list of jobs for the specified organize-pdf tool.
+      description: |
+        Returns a list of jobs for the specified organize-pdf tool. Rows omit
+        the bulky OCR metadata keys `extractedText`/`textTruncated` (scan-to-pdf
+        with ocr:true); fetch the single job for the full metadata.
       operationId: listOrganizePdfJobs
       security:
         - BearerAuth: []
@@ -1645,6 +1648,10 @@ paths:
       description: |
         Creates a new job to optimize a PDF (compress, repair, OCR, or flatten).
         Accepts multipart file upload or JSON body with `uploadId`.
+        For `ocr-pdf`, `options` follows the `OcrPdfOptions` schema (language
+        en/eng only, dpi 72–600) and is validated at job creation — violations
+        return 400 INVALID_OPTIONS. Completed ocr-pdf jobs carry the extracted
+        text in `metadata.extractedText` (see `ProcessingJob.metadata`).
       operationId: createOptimizePdfJob
       security:
         - BearerAuth: []
@@ -1699,7 +1706,10 @@ paths:
     get:
       tags: [Optimize PDF]
       summary: List jobs by tool
-      description: Returns a list of jobs for the specified optimize-pdf tool.
+      description: |
+        Returns a list of jobs for the specified optimize-pdf tool. Rows omit
+        the bulky OCR metadata keys `extractedText`/`textTruncated`; fetch the
+        single job for the full metadata.
       operationId: listOptimizePdfJobs
       security:
         - BearerAuth: []
@@ -1818,7 +1828,9 @@ paths:
       summary: Get job history
       description: |
         Returns a paginated list of all processing jobs for the authenticated user,
-        across all tool types, ordered by creation date descending.
+        across all tool types, ordered by creation date descending. Rows omit the
+        bulky OCR metadata keys `extractedText`/`textTruncated`; fetch the single
+        job for the full metadata.
       operationId: getJobHistory
       security:
         - BearerAuth: []
@@ -3391,6 +3403,35 @@ components:
         subject: Docs
         keywords: a, b
 
+    OcrPdfOptions:
+      type: object
+      description: |
+        Options for ocr-pdf jobs (all fields optional). Validated by
+        job-service at job creation — violations return 400 INVALID_OPTIONS.
+        Only English is accepted today: the optimize-pdf image ships only the
+        English tesseract pack, and the allowlist grows together with the
+        image when more packs are added.
+      properties:
+        language:
+          type: string
+          enum: [en, eng]
+          default: eng
+          description: OCR language (case-insensitive). English only until more tesseract packs land in the worker image.
+        dpi:
+          type: integer
+          minimum: 72
+          maximum: 600
+          default: 150
+          description: |
+            Rasterization resolution for OCR. Accepted as a JSON number or a
+            numeric string ("300"); must be a whole number between 72 and 600.
+            Default comes from the worker's OCR_DEFAULT_DPI (150). The worker
+            may cap the effective DPI further on very large pages to bound
+            image size.
+      example:
+        language: eng
+        dpi: 300
+
     # -- Job Schemas --
     CreateJobRequest:
       type: object
@@ -3415,6 +3456,8 @@ components:
             creation; violations return 400 INVALID_OPTIONS).
             For pdf-metadata: see the PdfMetadataOptions schema (REQUIRED — at
             least one of title/author/subject/keywords; validated at job
+            creation; violations return 400 INVALID_OPTIONS).
+            For ocr-pdf: see the OcrPdfOptions schema (validated at job
             creation; violations return 400 INVALID_OPTIONS).
             For watermark-pdf:
               - type: "text" | "image" (default: "text")
@@ -3469,7 +3512,17 @@ components:
         metadata:
           type: object
           additionalProperties: true
-          description: Internal processing metadata (input paths, options, correlation ID)
+          description: |
+            Internal processing metadata (input paths, options, correlation
+            ID). OCR jobs (ocr-pdf, and scan-to-pdf with ocr:true) may also
+            carry `extractedText` (string — recognized plain text, pages in
+            output-PDF order separated by form-feed \f, capped at 512 KB;
+            OCR-fallback and PDF-passthrough pages contribute empty slots so
+            page breaks stay aligned) and `textTruncated` (boolean — present
+            only when the cap was hit); ocr-pdf additionally reports
+            `language`, `dpi`, and `pagesOCRed`. `extractedText` and
+            `textTruncated` appear only on the single-job GET — list and
+            history endpoints scrub them to keep payloads small.
         createdAt:
           type: string
           format: date-time

@@ -41,6 +41,9 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	outputFileName := fmt.Sprintf("processed_%s_%d", jobID, time.Now().Unix())
 	var outputPath string
 	var err error
+	// Tool-specific metadata to surface on the job (only scan-to-pdf sets it
+	// today: the OCR extractedText sidecar).
+	var toolMeta map[string]interface{}
 
 	switch toolType {
 	case "merge-pdf":
@@ -86,7 +89,7 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		err = rotatePDF(inputPaths[0], outputPath, rotation, applyTo)
 	case "scan-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = scanToPDF(ctx, inputPaths, outputPath, options)
+		toolMeta, err = scanToPDF(ctx, inputPaths, outputPath, options)
 	case "watermark-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = watermarkPDF(inputPaths[0], outputPath, options)
@@ -125,6 +128,9 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	}
 
 	meta := map[string]interface{}{}
+	for k, v := range toolMeta {
+		meta[k] = v
+	}
 	return Result{
 		OutputPath: outputPath,
 		Metadata:   meta,

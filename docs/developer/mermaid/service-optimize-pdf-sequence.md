@@ -88,12 +88,13 @@ sequenceDiagram
     Worker->>S3: Download scanned.pdf key → scratch/in
     Worker->>Processing: ProcessFile(ctx, jobId, "ocr-pdf",<br/>[scratch/in/scanned.pdf], {language: "en"}, scratch/out)
 
-    Processing->>Processing: Run OCR engine<br/>(extract text from images)
-    Processing->>Processing: Add searchable text layer
-    Processing-->>Worker: {OutputPath in scratch/out, Metadata}
+    Processing->>Processing: Run OCR engine per page<br/>(tesseract output configs "pdf txt" — searchable page PDF + .txt text sidecar)
+    Processing->>Processing: Merge page PDFs (searchable text layer)
+    Processing->>Processing: collectOCRText: concat .txt sidecars in page order<br/>(\f-separated, 512 KB cap)
+    Processing-->>Worker: {OutputPath in scratch/out, Metadata:<br/>{language, dpi, pagesOCRed, extractedText?, textTruncated?}}
 
     Worker->>S3: Upload OCR-enhanced PDF → outputs bucket jobs/&lt;jobId&gt;/...
-    Worker->>PG: Record output (object key + uploaded size), merge metadata
+    Worker->>PG: Record output (object key + uploaded size), merge metadata<br/>(incl. extractedText — scrubbed from LIST responses by job-service)
     Worker->>PG: SET status=completed, progress=100
     Worker->>NATS: ACK
 ```

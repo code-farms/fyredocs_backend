@@ -318,7 +318,7 @@ func TestScanToPDFPlainStillWorks(t *testing.T) {
 	writeTestPNG(t, in, 100, 130)
 	outPath := filepath.Join(dir, "out.pdf")
 
-	if err := scanToPDF(context.Background(), []string{in}, outPath, nil); err != nil {
+	if _, err := scanToPDF(context.Background(), []string{in}, outPath, nil); err != nil {
 		t.Fatalf("plain scanToPDF: %v", err)
 	}
 	if fi, err := os.Stat(outPath); err != nil || fi.Size() == 0 {
@@ -339,7 +339,7 @@ func TestScanToPDFWithProcessing(t *testing.T) {
 			map[string]interface{}{"rotation": 180},
 		},
 	}
-	if err := scanToPDF(context.Background(), []string{in}, outPath, options); err != nil {
+	if _, err := scanToPDF(context.Background(), []string{in}, outPath, options); err != nil {
 		t.Fatalf("processed scanToPDF: %v", err)
 	}
 	if fi, err := os.Stat(outPath); err != nil || fi.Size() == 0 {

@@ -991,3 +991,42 @@ func TestFindExistingJobForUploads_MissOnEmptyUploadID(t *testing.T) {
 		t.Errorf("empty uploadId in slice: ok=%v job=%v, want (false, nil)", ok, job)
 	}
 }
+
+// TestScrubForList pins the list-response metadata scrub: the OCR
+// extracted-text sidecar is served only on single-job GETs, and scrubbing
+// must never mutate the source row's metadata bytes.
+func TestScrubForList(t *testing.T) {
+	original := datatypes.JSON(`{"extractedText":"hello world","textTruncated":true,"language":"eng"}`)
+	job := models.ProcessingJob{Metadata: original}
+
+	scrubbed := scrubForList(job)
+
+	var meta map[string]interface{}
+	if err := json.Unmarshal(scrubbed.Metadata, &meta); err != nil {
+		t.Fatalf("scrubbed metadata unparsable: %v", err)
+	}
+	if _, ok := meta["extractedText"]; ok {
+		t.Error("extractedText must be scrubbed from list rows")
+	}
+	if _, ok := meta["textTruncated"]; ok {
+		t.Error("textTruncated must be scrubbed from list rows")
+	}
+	if meta["language"] != "eng" {
+		t.Errorf("unrelated metadata keys must survive, got %v", meta)
+	}
+	if string(job.Metadata) != string(original) {
+		t.Error("source row metadata was mutated")
+	}
+}
+
+// TestScrubForListPassthrough pins the no-op paths: rows without scrub keys
+// (or without metadata) pass through byte-identical.
+func TestScrubForListPassthrough(t *testing.T) {
+	plain := datatypes.JSON(`{"language":"eng","dpi":150}`)
+	if got := scrubForList(models.ProcessingJob{Metadata: plain}); string(got.Metadata) != string(plain) {
+		t.Errorf("row without scrub keys must pass through unchanged, got %s", got.Metadata)
+	}
+	if got := scrubForList(models.ProcessingJob{}); len(got.Metadata) != 0 {
+		t.Errorf("empty metadata must stay empty, got %s", got.Metadata)
+	}
+}

@@ -578,6 +578,26 @@ Convert images to a PDF document, with optional per-page perspective correction 
 - **EXIF contract:** the server ignores EXIF orientation — `corners` and `rotation` are relative to the **decoded pixel grid**. Clients must bake EXIF orientation into the pixels before uploading.
 - Unknown option fields are ignored; string enums are case-insensitive. The worker re-clamps values defensively and never fails a job on a bad enum — it degrades to the default.
 
+**Completed-job metadata (when `ocr: true`):**
+
+If OCR ran and recognized any text, the completed job's `metadata` object carries:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `extractedText` | string | Plain text recognized by OCR, pages concatenated in output-PDF page order and separated by form-feed (`\f`, U+000C). Pages where OCR failed (raw image embedded instead) and PDF-passthrough inputs contribute empty slots, so form-feed positions always align with PDF page breaks. Capped at 512 KB. |
+| `textTruncated` | boolean | Present (`true`) only when `extractedText` was cut at the 512 KB cap. |
+
+```json
+{
+  "status": "completed",
+  "metadata": {
+    "extractedText": "Receipt total 42.00...\fSecond page text..."
+  }
+}
+```
+
+Both keys are returned only by the single-job `GET /api/organize-pdf/scan-to-pdf/{id}`; job list and history endpoints omit them to keep list payloads small (see [Jobs API](jobs-api.md)). Without `ocr: true`, or when no text was recognized, neither key is present.
+
 ---
 
 ### watermark-pdf
@@ -731,7 +751,7 @@ For tools that accept page ranges:
 | fileName | string | Output file name |
 | fileSize | string | Human-readable file size |
 | failureReason | string | Error message (if failed) |
-| metadata | object | Job metadata including options |
+| metadata | object | Job metadata including options; for `scan-to-pdf` with `ocr: true` also (single-job GET only) `extractedText` / `textTruncated` |
 | createdAt | string | ISO 8601 timestamp |
 | updatedAt | string | ISO 8601 timestamp |
 | completedAt | string | ISO 8601 timestamp |

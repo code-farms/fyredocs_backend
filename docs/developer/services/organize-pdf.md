@@ -144,6 +144,12 @@ Per-image preprocessing pipeline (`processing/processing_scan.go`): decode (jpeg
 - **EXIF contract:** Go image decoding ignores EXIF orientation. `corners` and `rotation` are relative to the **decoded pixel grid**; clients must bake EXIF orientation into the pixels before upload.
 - Options are validated by job-service at job creation (400 `INVALID_OPTIONS`); the worker re-clamps defensively and never fails a job on a bad enum value — it degrades to the default with a `slog.Warn`.
 
+**Job metadata (OCR path only):** when `ocr: true` and tesseract produced any text, the worker returns metadata that job-service stores on the job row:
+- `extractedText` (string): plain text from tesseract's per-page `.txt` sidecars (`tesseract ... pdf txt`), concatenated in output-PDF page order and separated by form-feed (`\f`). Fallback pages (tesseract failed → image embedded as-is) and PDF-passthrough inputs contribute empty slots, keeping page-break positions aligned. Capped at 512 KB (rune-safe truncation).
+- `textTruncated` (boolean): present (`true`) only when the cap was hit.
+
+Without `ocr: true` (or when no page yields text) the job carries no such metadata. `collectOCRText` is intentionally duplicated from `optimize-pdf/processing/processing_free.go` (§1 no-shared-code); both copies carry sync NOTEs. job-service strips these keys from job LIST responses — the single-job GET keeps them (see `docs/developer/services/job-service.md`).
+
 **Example:**
 ```bash
 curl -X POST http://localhost/api/organize-pdf/scan-to-pdf \
@@ -729,7 +735,7 @@ sequenceDiagram
         W->>PC: pdfcpu reorder pages [3,1,2,4]
     else scan-to-pdf
         W->>W: preprocess images (warp corners → rotate → enhance, internal/imaging)
-        W->>PC: pdfcpu import images to PDF with page-size config (+ optional Tesseract OCR)
+        W->>PC: pdfcpu import images to PDF with page-size config (+ optional Tesseract OCR: pdf txt per page, .txt sidecars → metadata.extractedText)
     else watermark-pdf
         W->>PC: pdfcpu add text/image watermark
     else protect-pdf

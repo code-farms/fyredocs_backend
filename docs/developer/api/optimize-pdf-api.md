@@ -326,35 +326,23 @@ Add a searchable text layer to scanned PDF documents.
 
 **Conversion Engine:** Tesseract OCR
 
-**Options:**
+**Options** (validated by job-service at job creation — violations return 400 `INVALID_OPTIONS`):
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| language | string | "eng" | OCR language code |
-| dpi | string | "300" | Image resolution for OCR |
+| Option | Type | Default | Rule | Description |
+|--------|------|---------|------|-------------|
+| language | string | `"eng"` | one of `"en"`, `"eng"` (case-insensitive) or omitted | OCR language. Only English is supported today — the worker image ships only the English tesseract pack. The allowlist grows together with the image when more language packs are added. |
+| dpi | number or string | `150` (server env `OCR_DEFAULT_DPI`) | whole number, 72–600 | Rasterization resolution for OCR. Both `300` and `"300"` are accepted. The worker may additionally cap the effective DPI on very large pages to bound image size. |
 
 **Supported Languages:**
 
 | Code | Language |
 |------|----------|
-| `eng` | English |
-| `deu` | German |
-| `fra` | French |
-| `spa` | Spanish |
-| `ita` | Italian |
-| `por` | Portuguese |
-| `nld` | Dutch |
-| `rus` | Russian |
-| `chi_sim` | Chinese (Simplified) |
-| `chi_tra` | Chinese (Traditional) |
-| `jpn` | Japanese |
-| `kor` | Korean |
-| `ara` | Arabic |
-| `hin` | Hindi |
+| `en` / `eng` | English |
 
-**Request Examples:**
+More languages will be accepted once their tesseract packs are added to the optimize-pdf image; requests for any other code are currently rejected with 400 `INVALID_OPTIONS`.
 
-English OCR (default):
+**Request Example:**
+
 ```json
 {
   "uploadId": "upload-id",
@@ -365,27 +353,42 @@ English OCR (default):
 }
 ```
 
-German OCR with higher DPI:
-```json
-{
-  "uploadId": "upload-id",
-  "options": {
-    "language": "deu",
-    "dpi": "400"
-  }
-}
-```
-
 **DPI Recommendations:**
 
 | DPI | Use Case |
 |-----|----------|
-| 150 | Low-quality scans, faster processing |
+| 150 | Low-quality scans, faster processing (server default) |
 | 300 | Standard scans (recommended) |
 | 400 | High-quality scans, small text |
-| 600 | Very high quality, detailed documents |
+| 600 | Very high quality, detailed documents (maximum accepted) |
 
-**Note:** Higher DPI improves accuracy but increases processing time.
+**Note:** Higher DPI improves accuracy but increases processing time. Values outside 72–600 are rejected.
+
+**Completed-job metadata:**
+
+The completed job's `metadata` object carries the OCR results:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `language` | string | Tesseract language actually used |
+| `dpi` | number | Effective rasterization DPI |
+| `pagesOCRed` | number | Number of pages processed |
+| `extractedText` | string (optional) | Plain text recognized by OCR, pages concatenated in output-PDF page order and separated by form-feed (`\f`, U+000C). Pages where OCR failed (the original image is embedded instead) contribute an empty slot, so form-feed positions always align with PDF page breaks. Capped at 512 KB; omitted when no text was recognized. |
+| `textTruncated` | boolean (optional) | Present (`true`) only when `extractedText` was cut at the 512 KB cap. |
+
+```json
+{
+  "status": "completed",
+  "metadata": {
+    "language": "eng",
+    "dpi": 300,
+    "pagesOCRed": 3,
+    "extractedText": "Page one text...\fPage two text...\fPage three text..."
+  }
+}
+```
+
+**Note:** `extractedText` and `textTruncated` are returned only by the single-job `GET /api/optimize-pdf/ocr-pdf/{id}`; job list and history endpoints omit them to keep list payloads small (see [Jobs API](jobs-api.md)).
 
 ---
 
@@ -429,7 +432,7 @@ Bake annotations and form-field appearance streams into the page content so the 
 | fileName | string | Output file name |
 | fileSize | string | Human-readable file size |
 | failureReason | string | Error message (if failed) |
-| metadata | object | Job metadata including options |
+| metadata | object | Job metadata including options; for `ocr-pdf` also `language`, `dpi`, `pagesOCRed`, and (single-job GET only) `extractedText` / `textTruncated` |
 | createdAt | string | ISO 8601 timestamp |
 | updatedAt | string | ISO 8601 timestamp |
 | completedAt | string | ISO 8601 timestamp |

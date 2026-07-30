@@ -44,8 +44,15 @@ curl -X POST http://localhost/api/optimize-pdf/repair-pdf \
 Adds a searchable text layer to scanned PDFs using Tesseract OCR.
 
 **Options:**
-- `language`: OCR language code (default: `eng`). Requested language is resolved against the languages actually installed (`tesseract --list-langs`); if the pack is missing it falls back to `eng` (then the first available), so a missing language pack never fails the job.
-- `dpi`: Resolution for conversion (default: `300`). The effective DPI is automatically capped so the longest edge of a rendered page stays within `OCR_MAX_IMAGE_DIM` pixels (default `10000`) — this prevents oversized rasters (e.g. large banner PDFs) from making Tesseract/pdfcpu fail. The size bound wins over resolution, so very large pages may render below the requested DPI.
+- `language`: OCR language code (default: `eng`). job-service rejects anything outside `en`/`eng` at job creation (the runtime image ships only the English tesseract pack — see `handlers/tool_options.go` in job-service). As defense-in-depth the worker still resolves the language against what is actually installed (`tesseract --list-langs`); if a pack is missing it falls back to `eng` (then the first available), so a missing language pack never fails the job.
+- `dpi`: Resolution for conversion (default: `150`, from `OCR_DEFAULT_DPI`). job-service accepts 72–600 at job creation. The effective DPI is additionally capped so the longest edge of a rendered page stays within `OCR_MAX_IMAGE_DIM` pixels (default `10000`) — this prevents oversized rasters (e.g. large banner PDFs) from making Tesseract/pdfcpu fail. The size bound wins over resolution, so very large pages may render below the requested DPI.
+
+**Job metadata:** on success the worker returns metadata that job-service stores on the job row (`metadata` jsonb):
+- `language` (string), `dpi` (number), `pagesOCRed` (number) — as before.
+- `extractedText` (string, optional): the plain text tesseract recognized, produced as a per-page `.txt` sidecar (`tesseract ... pdf txt`) alongside each searchable page. Pages are concatenated in merged-PDF page order, separated by form-feed (`\f`); a fallback page (tesseract failed, raw image embedded) contributes an empty slot so page-break positions stay aligned with the output PDF. Omitted entirely when no page produced any text.
+- `textTruncated` (boolean, optional): present (`true`) only when `extractedText` hit the 512 KB cap (`ocrTextCapBytes`, rune-safe truncation — never splits a UTF-8 sequence).
+
+The sidecar exists because a job has exactly one output file and the searchable PDF claims it — text rides on job metadata instead. job-service strips `extractedText`/`textTruncated` from job LIST responses (the single-job GET keeps them); see `docs/developer/services/job-service.md`.
 
 **Example:**
 ```bash
@@ -126,8 +133,8 @@ AUTH_GUEST_SUFFIX="jobs"
 AUTH_DENYLIST_ENABLED="true"
 
 # OCR
-OCR_DEFAULT_LANGUAGE="eng"  # tesseract language code (639-2/T). Per-job options.language accepts ISO 639-1 (e.g. "en","de") — mapped to tesseract codes; unmapped values pass through, falling back to "eng"
-OCR_DEFAULT_DPI="300"       # rasterization DPI for OCR; overridable per-job via options.dpi
+OCR_DEFAULT_LANGUAGE="eng"  # tesseract language code (639-2/T). The worker maps ISO 639-1 → tesseract codes and falls back to "eng" for unmapped/uninstalled values, but job-service already rejects anything outside en/eng at job creation (image ships English only)
+OCR_DEFAULT_DPI="150"       # rasterization DPI for OCR (compose default 150); overridable per-job via options.dpi (job-service accepts 72–600)
 OCR_MAX_WORKERS=""         # OCR page-pool cap; unset = min(NumCPU,4). Auto-sized by deploy.sh's 70% budget (see below); pin only to override
 OCR_MAX_IMAGE_DIM="10000"  # max px for the longest edge of a rasterized OCR page; effective DPI is capped to keep images within this bound so oversized pages don't fail tesseract
 ```
@@ -312,16 +319,17 @@ sequenceDiagram
 
     W->>Pool: Launch parallel OCR (capped at NumCPU, max 4)
     par Parallel OCR
-        Pool->>TS: tesseract page_1.png ... pdf
-        Pool->>TS: tesseract page_2.png ... pdf
-        Pool->>TS: tesseract page_N.png ... pdf
+        Pool->>TS: tesseract page_1.png ... pdf txt
+        Pool->>TS: tesseract page_2.png ... pdf txt
+        Pool->>TS: tesseract page_N.png ... pdf txt
     end
-    TS-->>FS: page_N.pdf (searchable PDF pages)
+    TS-->>FS: page_N.pdf (searchable PDF pages) + page_N.txt (text sidecars)
 
     W->>PC: Merge all page PDFs into final output
     PC-->>FS: scratch/out/output.pdf (searchable PDF)
-    W->>FS: Cleanup temporary PNG and individual PDF files
-    W-->>W: Return outputPath = scratch/out/output.pdf (then uploaded to outputs bucket)
+    W->>W: collectOCRText: concatenate .txt sidecars in page order (\f-separated, 512 KB cap)
+    W->>FS: Cleanup temporary PNG, PDF, and TXT files
+    W-->>W: Return outputPath + metadata (extractedText / textTruncated when text was produced)
 ```
 
 ### Compress PDF Flow
@@ -458,9 +466,11 @@ Uses Ghostscript to rebuild the PDF:
 ### OCR PDF
 Multi-step process:
 1. Convert PDF pages to PNG images (pdftoppm)
-2. Run Tesseract OCR on pages **in parallel** (errgroup worker pool, capped at `min(NumCPU, 4)`)
-3. Generate searchable PDF pages
-4. Merge all pages into final PDF (pdfcpu)
+2. Run Tesseract OCR on pages **in parallel** (errgroup worker pool, capped at `min(NumCPU, 4)`) with output configs `pdf txt` — each page yields a searchable PDF plus a plain-text `.txt` sidecar
+3. Merge all page PDFs into the final PDF (pdfcpu)
+4. `collectOCRText` concatenates the `.txt` sidecars in merged-PDF page order (form-feed-separated, 512 KB rune-safe cap) into the `extractedText` metadata key (+ `textTruncated: true` if capped). Fallback pages contribute an empty slot so page breaks stay aligned.
+
+`collectOCRText` is intentionally duplicated in `organize-pdf/processing/processing_scan.go` (§1 no-shared-code); both copies carry sync NOTEs.
 
 ### Flatten PDF
 Uses Ghostscript to re-distill the PDF through the `pdfwrite` device with `-dPreserveAnnots=false -dPrinted`:

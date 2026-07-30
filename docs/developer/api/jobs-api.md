@@ -77,6 +77,7 @@ options: <stringified JSON>
 | Status | Code | Description |
 |--------|------|-------------|
 | 400 | INVALID_INPUT | Missing fields, unknown tool, MIME mismatch |
+| 400 | INVALID_OPTIONS | `options` fails the per-tool schema (`scan-to-pdf`, `pdf-metadata`, `ocr-pdf`) |
 | 400 | TOO_MANY_FILES | More files than the user's plan permits |
 | 401 | UNAUTHORIZED | Auth required for non-guest tools |
 | 413 | FILE_TOO_LARGE | File exceeds the plan's max-file-size |
@@ -106,6 +107,8 @@ List jobs created by the current user (or guest) for a specific tool, paginated.
 
 Guest callers see only jobs associated with their `guest_token`. Authenticated users see jobs owned by their `userId` for the given tool.
 
+**Metadata scrub:** list rows omit the bulky OCR metadata keys `extractedText` and `textTruncated` (the OCR extracted-text sidecar can be hundreds of KB per job). All other metadata keys are returned unchanged. Fetch the single job (`GET /api/<group>/:tool/:id`) to get the full metadata.
+
 ---
 
 ## GET /api/&lt;group&gt;/:tool/:id
@@ -114,7 +117,7 @@ Fetch a single job by ID. Auth must match (job owner or guest token holder).
 
 ### Response — 200 OK
 
-Same envelope as `POST` above, with `data` containing one Job object.
+Same envelope as `POST` above, with `data` containing one Job object. Unlike the list and history endpoints, this response carries the **full** job metadata — including `extractedText` / `textTruncated` for OCR jobs (`ocr-pdf`, `scan-to-pdf` with `ocr: true`).
 
 ### Errors
 
@@ -171,6 +174,8 @@ Paginated history across **all** tools for the **authenticated user**. Guest cal
   "meta": { "page": 1, "limit": 25, "total": 0 }
 }
 ```
+
+Like the per-tool list, history rows omit the OCR metadata keys `extractedText` and `textTruncated`; use the single-job GET for the full metadata.
 
 ### Errors
 

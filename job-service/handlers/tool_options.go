@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -105,9 +106,60 @@ func validateToolOptions(toolType string, raw string) error {
 		return validateScanOptions(raw)
 	case "pdf-metadata":
 		return validateMetadataOptions(raw)
+	case "ocr-pdf":
+		return validateOcrOptions(raw)
 	default:
 		return nil
 	}
+}
+
+var (
+	// ocrLanguages is the ocr-pdf language allowlist — a TRUST BOUNDARY like
+	// scanLanguages: the value reaches a tesseract command line, and only packs
+	// installed in the optimize-pdf image can be satisfied. That image ships
+	// English ONLY today; extend this set together with its Dockerfile when
+	// more packs land. The worker's own wider map would silently degrade
+	// unknown languages to eng — rejecting here keeps the contract honest.
+	ocrLanguages = map[string]bool{"": true, "en": true, "eng": true}
+)
+
+// OCR render-DPI bounds. Below 72 tesseract accuracy collapses; above 600 a
+// single page rasterizes into hundreds of MB. The worker additionally clamps
+// DPI down against page dimensions — this is the coarse public-boundary gate.
+const (
+	minOcrDpi = 72
+	maxOcrDpi = 600
+)
+
+// ocrOptionsPayload mirrors the ocr-pdf options contract (worker copy reads
+// the same keys in optimize-pdf/processing/processing_free.go — duplicated by
+// design, no shared DTOs). Dpi stays raw because clients send both 300 and
+// "300" (the worker's optionString coerces the same way).
+type ocrOptionsPayload struct {
+	Language string          `json:"language"`
+	Dpi      json.RawMessage `json:"dpi"`
+}
+
+// validateOcrOptions is the hard gate for ocr-pdf options: language feeds a
+// subprocess argument (allowlist), dpi bounds worker memory (range check).
+func validateOcrOptions(raw string) error {
+	var opts ocrOptionsPayload
+	if err := json.Unmarshal([]byte(raw), &opts); err != nil {
+		return fmt.Errorf("options must be a valid JSON object")
+	}
+	if !ocrLanguages[strings.ToLower(strings.TrimSpace(opts.Language))] {
+		return fmt.Errorf("unsupported OCR language %q — supported: eng", opts.Language)
+	}
+	if dpiStr := strings.Trim(strings.TrimSpace(string(opts.Dpi)), `"`); dpiStr != "" && dpiStr != "null" {
+		dpi, err := strconv.Atoi(dpiStr)
+		if err != nil {
+			return fmt.Errorf("dpi must be a whole number")
+		}
+		if dpi < minOcrDpi || dpi > maxOcrDpi {
+			return fmt.Errorf("dpi must be between %d and %d", minOcrDpi, maxOcrDpi)
+		}
+	}
+	return nil
 }
 
 // validateMetadataOptions is the hard gate for pdf-metadata options: the

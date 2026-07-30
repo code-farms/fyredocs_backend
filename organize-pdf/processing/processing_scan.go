@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
@@ -325,11 +326,12 @@ func importConfigForPageSize(pageSize, margin string) (*pdfcpu.Import, error) {
 // which is why the client bakes EXIF orientation into pixels before upload — this
 // code ignores EXIF, so a rotation left in metadata would misalign every crop.
 // Pages without a complete corner set are used whole rather than skipped.
-func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, options map[string]interface{}) error {
+// The returned metadata is nil unless OCR ran (extractedText sidecar).
+func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, options map[string]interface{}) (map[string]interface{}, error) {
 	slog.Info("converting images to PDF (scan-to-pdf)", "count", len(inputPaths))
 
 	if len(inputPaths) == 0 {
-		return fmt.Errorf("no input images provided")
+		return nil, fmt.Errorf("no input images provided")
 	}
 
 	opts := parseScanOptions(options)
@@ -338,13 +340,13 @@ func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, opti
 	if needsPreprocessing(opts) {
 		scratchDir, err := os.MkdirTemp("", "pdf-scan-*")
 		if err != nil {
-			return fmt.Errorf("failed to create scratch dir: %w", err)
+			return nil, fmt.Errorf("failed to create scratch dir: %w", err)
 		}
 		defer os.RemoveAll(scratchDir)
 
 		paths, err = preprocessScanImages(ctx, inputPaths, opts, scratchDir)
 		if err != nil {
-			return fmt.Errorf("scan preprocessing: %w", err)
+			return nil, fmt.Errorf("scan preprocessing: %w", err)
 		}
 
 		if opts.OCR {
@@ -354,10 +356,10 @@ func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, opti
 
 		imp, err := importConfigForPageSize(opts.PageSize, opts.Margin)
 		if err != nil {
-			return fmt.Errorf("page size config: %w", err)
+			return nil, fmt.Errorf("page size config: %w", err)
 		}
 		conf := model.NewDefaultConfiguration()
-		return api.ImportImagesFile(paths, outputPath, imp, conf)
+		return nil, api.ImportImagesFile(paths, outputPath, imp, conf)
 	}
 
 	if opts.OCR {
@@ -366,29 +368,34 @@ func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, opti
 
 	imp, err := importConfigForPageSize(opts.PageSize, opts.Margin)
 	if err != nil {
-		return fmt.Errorf("page size config: %w", err)
+		return nil, fmt.Errorf("page size config: %w", err)
 	}
 	conf := model.NewDefaultConfiguration()
-	return api.ImportImagesFile(paths, outputPath, imp, conf)
+	return nil, api.ImportImagesFile(paths, outputPath, imp, conf)
 }
 
 // scanToPDFWithOCR renders each image to a searchable PDF via tesseract and
 // merges the results. Page size options do not apply on this path —
-// tesseract emits pages matching the image dimensions.
-func scanToPDFWithOCR(ctx context.Context, inputPaths []string, outputPath string, lang string) error {
+// tesseract emits pages matching the image dimensions. The returned metadata
+// carries the extractedText sidecar (a job has one output file — the PDF —
+// so text rides on job metadata; job-service scrubs it from LIST responses).
+func scanToPDFWithOCR(ctx context.Context, inputPaths []string, outputPath string, lang string) (map[string]interface{}, error) {
 	slog.Info("converting images to searchable PDF using OCR", "language", lang)
 
 	if _, err := exec.LookPath("tesseract"); err != nil {
-		return fmt.Errorf("OCR requires tesseract to be installed")
+		return nil, fmt.Errorf("OCR requires tesseract to be installed")
 	}
 
 	tempDir, err := os.MkdirTemp("", "pdf-ocr-*")
 	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
+		return nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
 
 	pdfFiles := make([]string, len(inputPaths))
+	// Per-page .txt sidecars, page-order indexed; fallback and PDF passthrough
+	// pages leave their slot empty so page breaks stay positionally aligned.
+	txtFiles := make([]string, len(inputPaths))
 	for i, imgPath := range inputPaths {
 		// PDFs pass through OCR untouched (already document-form inputs).
 		if strings.EqualFold(filepath.Ext(imgPath), ".pdf") {
@@ -400,21 +407,72 @@ func scanToPDFWithOCR(ctx context.Context, inputPaths []string, outputPath strin
 		nameWithoutExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 		outputBase := filepath.Join(tempDir, fmt.Sprintf("ocr_%d_%s", i, nameWithoutExt))
 
-		cmd := exec.CommandContext(ctx, "tesseract", imgPath, outputBase, "-l", lang, "pdf")
+		cmd := exec.CommandContext(ctx, "tesseract", imgPath, outputBase, "-l", lang, "pdf", "txt")
 		if err := cmd.Run(); err != nil {
 			slog.Warn("OCR failed, falling back to non-OCR", "image", imgPath, "error", err)
 			pdfFile := outputBase + ".pdf"
 			if err := api.ImportImagesFile([]string{imgPath}, pdfFile, nil, nil); err != nil {
-				return fmt.Errorf("failed to process image %s: %w", imgPath, err)
+				return nil, fmt.Errorf("failed to process image %s: %w", imgPath, err)
 			}
 			pdfFiles[i] = pdfFile
 		} else {
 			pdfFiles[i] = outputBase + ".pdf"
+			txtFiles[i] = outputBase + ".txt"
+		}
+	}
+
+	metadata := map[string]interface{}{}
+	if text, truncated := collectOCRText(txtFiles, ocrTextCapBytes); text != "" {
+		metadata["extractedText"] = text
+		if truncated {
+			metadata["textTruncated"] = true
 		}
 	}
 
 	if len(pdfFiles) == 1 {
-		return copyFile(pdfFiles[0], outputPath)
+		return metadata, copyFile(pdfFiles[0], outputPath)
 	}
-	return api.MergeCreateFile(pdfFiles, outputPath, false, nil)
+	return metadata, api.MergeCreateFile(pdfFiles, outputPath, false, nil)
+}
+
+// ocrTextCapBytes bounds the extracted-text sidecar stored in job metadata.
+// 512 KB of UTF-8 is ~100+ dense pages — beyond it the text is truncated and
+// flagged, never dropped.
+const ocrTextCapBytes = 512 * 1024
+
+// collectOCRText concatenates per-page tesseract .txt sidecars in page order,
+// form-feed-separated so page boundaries survive. Empty/missing entries (OCR
+// fallback or PDF-passthrough pages) contribute an empty page, keeping
+// positions aligned with the merged PDF. Returns "" when no page produced text.
+// NOTE: duplicated in optimize-pdf/processing/processing_free.go by design
+// (§1 no-shared-code) — keep the two in sync.
+func collectOCRText(txtPaths []string, capBytes int) (string, bool) {
+	pages := make([]string, len(txtPaths))
+	hasText := false
+	for i, p := range txtPaths {
+		if p == "" {
+			continue
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			slog.Warn("could not read OCR text sidecar", "path", p, "error", err)
+			continue
+		}
+		pages[i] = strings.TrimRight(string(data), " \t\n\f")
+		if pages[i] != "" {
+			hasText = true
+		}
+	}
+	if !hasText {
+		return "", false
+	}
+	text := strings.Join(pages, "\f")
+	if len(text) <= capBytes {
+		return text, false
+	}
+	cut := capBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut], true
 }
