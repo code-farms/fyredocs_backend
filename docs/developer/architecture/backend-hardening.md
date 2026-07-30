@@ -381,6 +381,39 @@ degraded.
 
 ---
 
+### 3.22 Public Share-Redeem Endpoint Defenses `Design`
+
+Share links (Phase 6) add the platform's first deliberately unauthenticated data
+endpoint, `GET /share/:token`. It ships defended by design rather than patched
+after review:
+
+- **Hashed tokens.** The redeem token is 256 bits (32 random bytes, base64url);
+  only its SHA-256 is stored (`shares.token_hash`), so a database leak exposes
+  no redeemable links. The raw token appears exactly once, in the create
+  response's URL.
+- **Dedicated rate limiter.** The endpoint gets its own per-IP bucket
+  (`ratelimit:shareredeem`, `RATE_LIMIT_SHARE_REDEEM`, default 30/window)
+  instead of sharing the job-create limiter — it is enumerable in principle, so
+  its throttle must not be loosened by (or loosen) anything else.
+- **Uniform 404s.** Unknown, expired, and revoked tokens answer identically —
+  no oracle distinguishing "never existed" from "was here, now revoked".
+  Revocation likewise folds ownership into the UPDATE's WHERE clause and
+  answers 404 (never 403) for someone else's share.
+- **Fail-closed content gates.** Share creation allowlists both extension and
+  sniffed MIME type (documents/images/text/zip/html only — executables
+  refused), and redeems force `Content-Disposition: attachment` via a 5-minute
+  presigned URL.
+- **Scoped auth bypass.** The gateway skips verification only for the
+  `/share/` and `/api/v1/share/` prefixes via the new `PublicPrefixes` option
+  (`shared/authverify`); entries end with `/` so `/shares` and everything else
+  stays authenticated.
+
+**Files:** `job-service/handlers/shares.go`, `job-service/routes/upload_routes.go`,
+`job-service/internal/cleanup/cleanup.go`, `shared/authverify/middleware_http.go`,
+`api-gateway/main.go`.
+
+---
+
 ## 4. Planned Changes (Not Yet Implemented)
 
 ### 4.1 Database Migrations Tool

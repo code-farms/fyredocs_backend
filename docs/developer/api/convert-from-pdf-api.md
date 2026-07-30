@@ -13,7 +13,7 @@ Convert PDF files to various document formats.
 | `pdf-to-word` | `pdf-to-docx` | `.docx` | pdf2docx (primary) → LibreOffice writer_pdf_import (fallback) |
 | `pdf-to-excel` | `pdf-to-xlsx` | `.xlsx` | LibreOffice Calc |
 | `pdf-to-ppt` | `pdf-to-powerpoint`, `pdf-to-pptx` | `.pptx` | image-based: pdftoppm + pptx builder (one slide per page; not editable text) |
-| `pdf-to-image` | `pdf-to-img` | `.png` (single page) or `.zip` (multi-page) | Poppler `pdftoppm` |
+| `pdf-to-image` | `pdf-to-img` | `.png`/`.jpg`/`.tif` (single page) or `.zip` (multi-page) — see [options](#pdf-to-image) | Poppler `pdftoppm` |
 | `pdf-to-html` | — | `.zip` (HTML + images) | Poppler `pdftohtml` |
 | `pdf-to-text` | `pdf-to-txt` | `.txt` | Poppler `pdftotext` |
 | `pdf-to-pdfa` | — | `.pdf` (PDF/A-2b) | Ghostscript |
@@ -97,6 +97,7 @@ options: {}
 | Status | Code | Description |
 |--------|------|-------------|
 | 400 | INVALID_INPUT | Invalid tool or file is not a PDF |
+| 400 | INVALID_OPTIONS | `options` fails the tool's schema — for `pdf-to-image`: `format` outside `png`/`jpg`/`jpeg`/`tiff`, non-integer `dpi`, or `dpi` outside 72–600 |
 | 401 | UNAUTHORIZED | Not authenticated |
 | 404 | NOT_FOUND | Upload not found |
 
@@ -231,7 +232,8 @@ Binary file with appropriate headers based on tool:
 | pdf-to-word | application/vnd.openxmlformats-officedocument.wordprocessingml.document | .docx |
 | pdf-to-excel | application/vnd.openxmlformats-officedocument.spreadsheetml.sheet | .xlsx |
 | pdf-to-ppt | application/vnd.openxmlformats-officedocument.presentationml.presentation | .pptx |
-| pdf-to-image | application/zip | .zip |
+| pdf-to-image (multi-page) | application/zip | .zip |
+| pdf-to-image (single page) | image/png, image/jpeg, or image/tiff per the `format` option | .png / .jpg / .tif |
 | pdf-to-html | application/zip | .zip |
 | pdf-to-text | text/plain | .txt |
 | pdf-to-pdfa | application/pdf | .pdf |
@@ -341,18 +343,35 @@ Converts PDF to Microsoft PowerPoint format.
 
 ### pdf-to-image
 
-Converts each PDF page to a PNG image.
+Converts each PDF page to an image — PNG by default, JPEG or TIFF via options.
 
-**Output:** `.zip` containing PNG images
+**Output:** single-page PDF → one bare image file (`.png` / `.jpg` / `.tif`); multi-page PDF → `.zip` containing one image per page
 
 **Conversion Engine:** pdftoppm (Poppler)
 
-**Output Structure:**
+**Options** (all optional, validated at job creation — violations return `400 INVALID_OPTIONS`):
+
+| Option | Values | Default | Description |
+|--------|--------|---------|-------------|
+| `format` | `png`, `jpg`, `jpeg`, `tiff` (case-insensitive) | `png` | Output image format. `jpg`/`jpeg` produce `.jpg` files; `tiff` produces `.tif`. |
+| `dpi` | whole number 72–600, JSON number or string (`300` or `"300"`) | `150` | Render resolution. The worker may cap the effective DPI further on very large pages so the longest rendered edge stays within `IMAGE_MAX_IMAGE_DIM` pixels (default 10000). |
+
+**Example request body:**
+```json
+{
+  "uploadId": "550e8400-e29b-41d4-a716-446655440000",
+  "options": { "format": "jpg", "dpi": "300" }
+}
+```
+
+**Output naming:** the download filename keeps the input base name with the output extension — `report.pdf` → `report.png` / `report.jpg` / `report.tif` (single page) or `report.zip` (multi-page). The download's Content-Type follows the actual extension (`image/png`, `image/jpeg`, `image/tiff`, or `application/zip`).
+
+**Output Structure (multi-page, e.g. `format=jpg`):**
 ```
 output.zip
-├── page_1.png
-├── page_2.png
-├── page_3.png
+├── page-01.jpg
+├── page-02.jpg
+├── page-03.jpg
 └── ...
 ```
 

@@ -23,8 +23,9 @@ The Job Service is the central orchestration service for all file processing ope
 7. **Guest Job Tracking** -- Manage guest tokens in Redis to allow guest users to track their jobs
 8. **Tool-to-Service Routing** -- Use a centralized `ToolServiceMap` to dispatch jobs to the correct worker service
 9. **MIME-Type Validation** -- Validate uploaded file content types using `http.DetectContentType()` over the object's first 512 bytes (read via a ranged GET) against an allowlist per tool category (pdf, word, excel, ppt, image)
-10. **Per-Tool Options Validation** -- Validate tool-specific `options` payloads against a schema at the public boundary (currently `scan-to-pdf`, `pdf-metadata`, and `ocr-pdf`); rejections return 400 `INVALID_OPTIONS`
+10. **Per-Tool Options Validation** -- Validate tool-specific `options` payloads against a schema at the public boundary (currently `scan-to-pdf`, `pdf-metadata`, `ocr-pdf`, and `pdf-to-image`); rejections return 400 `INVALID_OPTIONS`
 11. **Edge Detection Relay** -- `POST /api/organize-pdf/detect-edges` peeks at a completed image upload (without consuming it) and synchronously relays detection to organize-pdf's internal endpoint for the mobile scanner UI
+12. **Share Links** -- Turn a completed presigned upload into an expiring public download link (`POST /api/share`), serve the public redeem redirect (`GET /share/:token`), and support owner revocation (`DELETE /api/share/:id`); tokens are stored hashed, expired/revoked shares are reaped by the cleanup sweep
 
 ## Presigned Upload Protocol
 
@@ -79,13 +80,14 @@ Job Service :8081  (control plane only — no file bytes)
 | `handlers/jobs.go` | Job CRUD, presigned download redirect, job history |
 | `handlers/sse.go` | SSE endpoint for real-time job status updates via NATS JetStream |
 | `handlers/uploads.go` | Presigned multipart upload protocol (init, parts, complete, status, abort, 410 chunk stub) |
-| `handlers/tool_options.go` | Per-tool options schema validation (`validateToolOptions`; currently scan-to-pdf, pdf-metadata, and ocr-pdf) |
+| `handlers/tool_options.go` | Per-tool options schema validation (`validateToolOptions`; currently scan-to-pdf, pdf-metadata, ocr-pdf, and pdf-to-image) |
+| `handlers/shares.go` | Share links: create (consumes an upload, mints a hashed token), public redeem (302 to presigned URL), owner revoke |
 | `handlers/detect.go` | `DetectEdges` — synchronous relay to organize-pdf `/internal/v1/detect-edges` |
 | `handlers/storage.go` | `ObjectStore` interface (narrow slice of `shared/storage.Client`) + boot-time injection |
 | `handlers/auth.go` | Extract authenticated user ID from auth context |
 | `internal/routing/routing.go` | `ToolServiceMap` -- single source of truth for tool-to-service mapping |
-| `internal/models/` | GORM models for `ProcessingJob` and `FileMetadata` |
-| `internal/cleanup/` | Sweep logic for the in-process cleanup loop (expired jobs, upload state, stale multiparts, backfill). Joined on shutdown so an in-flight sweep finishes instead of being abandoned mid-transaction |
+| `internal/models/` | GORM models for `ProcessingJob`, `FileMetadata`, and `Share` |
+| `internal/cleanup/` | Sweep logic for the in-process cleanup loop (expired jobs, expired/revoked shares, upload state, stale multiparts, backfill). Joined on shutdown so an in-flight sweep finishes instead of being abandoned mid-transaction |
 | `internal/ttlcache/` | Bounded, TTL-expiring generic cache backing the download-path `FileMetadata` lookup |
 | `routes/upload_routes.go` | Gin route registration with rate limiting |
 | `middleware/` | Rate limiting middleware |
@@ -99,9 +101,10 @@ The TTL sweep runs **in-process** inside the API binary (started from `main.go` 
 Every `CLEANUP_INTERVAL` (compose sets 5m; code fallback 15m), under a Redis `SETNX` lock (`cleanup-worker:lock`, 10-min TTL, so at most one sweeper runs per tick even with multiple replicas):
 
 1. **Expired job cleanup** — delete `processing_jobs` rows past `expires_at` (batch 100) and `RemoveObject` their input/output objects; TTLs per plan: `GUEST_JOB_TTL` 30m / `FREE_JOB_TTL` 7d / `PRO_JOB_TTL` 30d.
-2. **Expired upload-session reap** — Redis `upload:*` state older than 2 × `UPLOAD_TTL`: `DEL` state, `AbortMultipart`, `RemoveObject` if the object was never consumed by a job.
-3. **Stale multipart abort** — incomplete multipart uploads older than `MULTIPART_ABORT_TTL` (24h). This is the sole reclaim mechanism; there are **no bucket lifecycle rules**.
-4. **Expiry backfill** — set `expires_at = created_at + FREE_JOB_TTL` on legacy authenticated jobs where it is `NULL`.
+2. **Expired share cleanup** (`cleanupExpiredShares`) — delete `shares` rows past `expires_at` **or** with `revoked_at` set (batch 100), removing each share's owned object under `shares/{id}/...` in the outputs bucket first. Same ordering discipline as jobs: objects **before** rows, so a mid-sweep crash leaves a row the next sweep retries idempotently rather than an unreferenced object billed forever.
+3. **Expired upload-session reap** — Redis `upload:*` state older than 2 × `UPLOAD_TTL`: `DEL` state, `AbortMultipart`, `RemoveObject` if the object was never consumed by a job.
+4. **Stale multipart abort** — incomplete multipart uploads older than `MULTIPART_ABORT_TTL` (24h). This is the sole reclaim mechanism; there are **no bucket lifecycle rules**.
+5. **Expiry backfill** — set `expires_at = created_at + FREE_JOB_TTL` on legacy authenticated jobs where it is `NULL`.
 
 Operational notes:
 - `CLEANUP_ENABLED=false` opts a replica out of sweeping entirely (the Redis lock already dedupes; the flag is the explicit off-switch for extra replicas or local runs).
@@ -152,7 +155,7 @@ These are registered under `/api/convert-from-pdf`, `/api/convert-to-pdf`, `/api
 | DELETE | `/api/{category}/:tool/:id` | `DeleteJobByID` | Delete job rows and remove its objects from the buckets |
 | GET | `/api/{category}/:tool/:id/download` | `DownloadJobFile` | 302 redirect to a 5-minute presigned GET URL (attachment disposition) |
 
-`DownloadJobFile` performs the usual ownership checks (user ID or guest token) and the `status == completed` check **before** presigning. The Location URL carries `response-content-disposition: attachment; filename=...` (built with `mime.FormatMediaType`) and `response-content-type` overrides so object storage serves the file with the correct headers. Jobs whose output predates the S3 migration (FileMetadata.Path is an absolute disk path starting with `/`) return 404 "download link has expired". The `FileMetadata` lookup is served from a bounded in-process cache (`internal/ttlcache`, 30-minute TTL, 10k entries) rather than an unbounded `sync.Map`: jobs reaped by the retention sweep never pass through `DeleteJobByID`, so a delete hook alone would leak entries on long-lived replicas. `DeleteJobByID` still evicts explicitly so a re-created job cannot read stale output metadata.
+`DownloadJobFile` performs the usual ownership checks (user ID or guest token) and the `status == completed` check **before** presigning. The Location URL carries `response-content-disposition: attachment; filename=...` (built with `mime.FormatMediaType`) and `response-content-type` overrides so object storage serves the file with the correct headers. For tools whose output extension varies at runtime (pdf-to-image: bare image for a single page vs. ZIP for multi-page), `resolveOutputExt` reads the worker-reported `outputExt` from job metadata and maps `.png` → `image/png`, `.jpg`/`.jpeg` → `image/jpeg`, and `.tif`/`.tiff` → `image/tiff` (previously TIFF outputs would have been mislabeled as zip), falling back to the tool default otherwise. Jobs whose output predates the S3 migration (FileMetadata.Path is an absolute disk path starting with `/`) return 404 "download link has expired". The `FileMetadata` lookup is served from a bounded in-process cache (`internal/ttlcache`, 30-minute TTL, 10k entries) rather than an unbounded `sync.Map`: jobs reaped by the retention sweep never pass through `DeleteJobByID`, so a delete hook alone would leak entries on long-lived replicas. `DeleteJobByID` still evicts explicitly so a re-created job cannot read stale output metadata.
 
 Where `{category}` is one of: `convert-from-pdf`, `convert-to-pdf`, `organize-pdf`, `optimize-pdf`.
 
@@ -188,9 +191,47 @@ Corners are normalized `0..1` against the decoded pixel grid. When no document i
 | `DETECTION_UNAVAILABLE` | 502 | organize-pdf down, 5xx, or 15s timeout |
 | `RATE_LIMIT_EXCEEDED` | 429 | More than `RATE_LIMIT_DETECT` requests per IP per window |
 
+### Share Links
+
+Expiring public download links for user files, owned end-to-end by job-service (`handlers/shares.go`, migration `internal/migrations/00002_shares.sql`).
+
+| Method | Path | Handler | Auth | Description |
+|--------|------|---------|------|-------------|
+| POST | `/api/share` | `CreateShare` | User **or guest** | Turn a completed presigned upload into an expiring public link (201; per-IP `RATE_LIMIT_JOB_CREATE` limiter — shares share the jobcreate bucket) |
+| GET | `/share/:token` | `RedeemShare` | **None (public)** | 302 to a 5-minute presigned download; own per-IP limiter `RATE_LIMIT_SHARE_REDEEM` (default 30/window, key `ratelimit:shareredeem`) |
+| DELETE | `/api/share/:id` | `RevokeShare` | Authenticated owner only | Revoke a link early (guest shares carry no user and simply expire) |
+
+**Create flow** (`POST /api/share` with `{uploadId, expiresIn}`):
+
+1. `expiresIn` must be one of `1h`, `24h`, `7d` (default `24h`); anything else is 400 `INVALID_INPUT`.
+2. The upload is consumed through the normal `consumeUpload` path under the `"share"` pseudo-tool, which applies the shareable-type gates: an **extension allowlist** (pdf, png/jpg/jpeg/webp/tif/tiff, txt, zip, html, doc/docx, xls/xlsx, ppt/pptx, odt/ods/odp — deliberately **not fail-open**; executables and unknown types are refused even though redeems force attachment disposition) plus the usual 512-byte **MIME sniff** against the `"share"` allowlist (documents, OpenDocument, images incl. `image/tiff`, `text/plain`, `text/html`, zip).
+3. The object is **server-side copied** (`CopyObject`, no bytes through the service) from the uploads bucket to the outputs bucket under `shares/{shareId}/{fileName}` — detaching it from the upload (and any job-TTL) lifecycle; the share owns that object until the cleanup sweep reaps it.
+4. A **256-bit token** is minted (32 random bytes, base64url). Only its **SHA-256 hex** is stored (`shares.token_hash`); the raw token appears exactly once, inside the returned `url`, and is never recoverable afterwards.
+5. The DB row is created (guests allowed — `user_id` stays NULL); on DB failure the copied object is rolled back. The upload session is then released, like job creation does.
+6. Response: 201 Created envelope with `{id, fileName, contentType, fileSize, expiresAt, downloadCount, createdAt, url}` where `url` is `{SHARE_BASE_URL}/share/{token}` (request `Host` fallback in dev).
+
+**Redeem flow** (`GET /share/:token`, public — the token IS the credential):
+
+- Registered **outside** `/api` and listed in the gateway's `PublicPrefixes`, so a recipient's stale `access_token` cookie can never 401 a share link.
+- A cheap token shape check (length 40–64) rejects garbage before hashing; the lookup is by `token_hash` only.
+- Unknown, **expired**, and **revoked** tokens all answer an identical 404 ("This share link is invalid or has expired.") — no oracle distinguishing them.
+- On success: `download_count` is incremented best-effort (a lost increment never fails a download), then 302 to a 5-minute presigned GET with `attachment` Content-Disposition (and the stored Content-Type), mirroring job downloads.
+
+**Revoke flow** (`DELETE /api/share/:id`): requires authentication (401 for guests); ownership is folded into the UPDATE's WHERE clause, so someone else's share (or an already-revoked/unknown id) answers 404 — never 403, no existence oracle. Revocation sets `revoked_at`; the object is removed by the next cleanup sweep.
+
+**Share errors:**
+
+| Error Code | HTTP Status | Condition |
+|------------|-------------|-----------|
+| `INVALID_INPUT` | 400 | Bad body, invalid `expiresIn`, unknown/incomplete `uploadId`, non-shareable extension or MIME type, invalid share id (revoke) |
+| `AUTH_UNAUTHORIZED` | 401 | Revoke attempted without authentication |
+| `NOT_FOUND` | 404 | Redeem: token unknown/expired/revoked (uniform). Revoke: share not found or not owned by the caller |
+| `RATE_LIMIT_EXCEEDED` | 429 | Create: `RATE_LIMIT_JOB_CREATE` exceeded. Redeem: `RATE_LIMIT_SHARE_REDEEM` exceeded |
+| `SERVER_ERROR` | 500 | Object copy, token mint, DB write, or presign failure |
+
 ### Per-Tool Options Validation
 
-`CreateJobFromTool` calls `validateToolOptions(toolType, options)` (`handlers/tool_options.go`) **before** `consumeUpload`. Options were historically an opaque passthrough; scan-to-pdf was the first tool with a schema'd payload, pdf-metadata the second, ocr-pdf the third. Tools without a schema (and empty options) pass through unchanged; job-service owns its own copy of the shape — no shared DTOs across services. Workers still re-clamp defensively on their side (a bad enum never fails a job downstream).
+`CreateJobFromTool` calls `validateToolOptions(toolType, options)` (`handlers/tool_options.go`) **before** `consumeUpload`. Options were historically an opaque passthrough; scan-to-pdf was the first tool with a schema'd payload, pdf-metadata the second, ocr-pdf the third, pdf-to-image the fourth. Tools without a schema (and empty options) pass through unchanged; job-service owns its own copy of the shape — no shared DTOs across services. Workers still re-clamp defensively on their side (a bad enum never fails a job downstream).
 
 **scan-to-pdf schema** (all fields optional; unknown fields ignored for forward compatibility; string enums case-insensitive):
 
@@ -211,6 +252,13 @@ Corners are normalized `0..1` against the decoded pixel grid. When no document i
 |-------|------|
 | `language` | whitelist: `""`, `en`, `eng` (case-insensitive). The allowlist is a trust boundary — the value reaches a tesseract command line, and the optimize-pdf image ships only the English pack today. Extend this set together with the optimize-pdf Dockerfile when more packs land; rejecting here is deliberate because the worker's wider language map would otherwise silently degrade unknown languages to `eng`. |
 | `dpi` | optional; JSON number or string (clients send both `300` and `"300"`); must be a whole number in `[72, 600]` (below 72 tesseract accuracy collapses; above 600 a single page rasterizes into hundreds of MB — the worker further clamps DPI against page dimensions) |
+
+**pdf-to-image schema** (`validatePdfToImageOptions`; all fields optional; alias `pdf-to-img` is normalized first):
+
+| Field | Rule |
+|-------|------|
+| `format` | whitelist: `""`, `png`, `jpg`, `jpeg`, `tiff` (case-insensitive; default `png`). The allowlist is a trust boundary — the value selects a `pdftoppm` flag on the worker command line. The worker keeps its own copy of the map (`convert-from-pdf/processing/processing_free.go`); duplicated by design. |
+| `dpi` | optional; JSON number or string (clients send both `300` and `"300"`); must be a whole number in `[72, 600]` (default 150; below 72 output is unusable, above 600 pages rasterize into hundreds of MB — uncompressed TIFF being the worst case). The worker additionally caps the effective DPI against page dimensions (`IMAGE_MAX_IMAGE_DIM`) — this is the coarse public-boundary gate. |
 
 **pdf-metadata schema** (options required — at least one of the four fields must be present):
 
@@ -381,6 +429,31 @@ CREATE TABLE file_metadata (
 CREATE INDEX idx_file_metadata_job_id ON file_metadata(job_id);
 ```
 
+### shares
+
+Added by migration `00002_shares.sql` (Phase 6). A share **owns** its object in the outputs bucket (`shares/{id}/...` keys) — unlike job outputs, the bytes are copied out of the upload lifecycle at creation and swept by the cleanup pass when the share expires or is revoked. Only the SHA-256 hash of the redeem token is stored; the token itself is returned once at creation.
+
+```sql
+CREATE TABLE shares (
+    id             UUID PRIMARY KEY,             -- UUIDv7 (time-ordered)
+    token_hash     TEXT        NOT NULL,         -- hex SHA-256 of the redeem token (raw token never stored)
+    object_key     TEXT        NOT NULL,         -- shares/{id}/{fileName} in the outputs bucket
+    file_name      TEXT        NOT NULL,
+    content_type   TEXT        NULL,
+    file_size      BIGINT      NOT NULL DEFAULT 0,
+    user_id        UUID        NULL,             -- NULL for guest shares (expire only, never revocable)
+    expires_at     TIMESTAMPTZ NOT NULL,         -- 1h / 24h / 7d from creation
+    revoked_at     TIMESTAMPTZ NULL,             -- set by owner revoke; swept like expiry
+    download_count BIGINT      NOT NULL DEFAULT 0, -- best-effort increment on redeem
+    created_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes
+CREATE UNIQUE INDEX idx_shares_token_hash ON shares(token_hash);
+CREATE INDEX idx_shares_expires_at ON shares(expires_at);
+CREATE INDEX idx_shares_user_id ON shares(user_id);
+```
+
 ### Redis Keys
 
 | Key Pattern | Type | TTL | Purpose |
@@ -392,6 +465,7 @@ CREATE INDEX idx_file_metadata_job_id ON file_metadata(job_id);
 | `ratelimit:upload:<ip>` | ZSet | Rate limit window | Upload rate limit counter |
 | `ratelimit:jobcreate:<ip>` | ZSet | Rate limit window | Job-creation rate limit counter (`RATE_LIMIT_JOB_CREATE`, default 20/min) |
 | `ratelimit:detect:<ip>` | ZSet | Rate limit window | Detect-edges rate limit counter (`RATE_LIMIT_DETECT`, default 60/window) |
+| `ratelimit:shareredeem:<ip>` | ZSet | Rate limit window | Public share-redeem rate limit counter (`RATE_LIMIT_SHARE_REDEEM`, default 30/window) |
 | `idempotency:<key>` | String | 10 minutes | Maps idempotency key to job ID for deduplication |
 
 ## Sequence Diagrams
@@ -565,6 +639,51 @@ sequenceDiagram
     JS-->>C: 200 {jobs}
 ```
 
+### Share Link Flow (create → redeem → revoke)
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant R2 as Recipient
+    participant GW as API Gateway
+    participant JS as Job Service
+    participant DB as PostgreSQL
+    participant S3 as MinIO / S3
+
+    C->>GW: POST /api/share {uploadId, expiresIn:"24h"}
+    GW->>JS: Proxy (auth or guest — both allowed)
+    JS->>JS: consumeUpload("share", uploadId) — extension allowlist + MIME sniff (NOT fail-open)
+    JS->>JS: Mint 256-bit token; store only SHA-256(token)
+    JS->>S3: CopyObject uploads/<uploadId>/<file> → outputs shares/<shareId>/<file> (server-side)
+    JS->>DB: INSERT shares (token_hash, object_key, expires_at, user_id NULL for guests)
+    JS->>JS: releaseUpload(uploadId)
+    JS-->>C: 201 {id, fileName, expiresAt, ..., url:"<SHARE_BASE_URL>/share/<token>"}
+    Note over C: The raw token appears only in this one response.
+
+    R2->>GW: GET /share/<token> (no auth — PublicPrefixes skips verification)
+    GW->>JS: Proxy (per-IP RATE_LIMIT_SHARE_REDEEM)
+    JS->>DB: SELECT shares WHERE token_hash = SHA-256(token)
+    alt unknown / expired / revoked
+        JS-->>R2: 404 (identical for all three — no oracle)
+    else valid
+        JS->>DB: UPDATE download_count + 1 (best-effort)
+        JS->>JS: PresignGet(outputs, shares/<id>/<file>, 5m, attachment disposition)
+        JS-->>R2: 302 Location: presigned URL
+        R2->>S3: GET presigned URL
+        S3-->>R2: 200 [file bytes] Content-Disposition: attachment
+    end
+
+    C->>GW: DELETE /api/share/<shareId> (authenticated owner)
+    GW->>JS: Proxy
+    JS->>DB: UPDATE shares SET revoked_at=now() WHERE id=? AND user_id=? AND revoked_at IS NULL
+    alt 0 rows (not owner / unknown / already revoked)
+        JS-->>C: 404 (never 403 — no existence oracle)
+    else revoked
+        JS-->>C: 200 {id}
+    end
+    Note over JS,S3: Cleanup sweep reaps expired/revoked shares:<br/>RemoveObject shares/<id>/... BEFORE deleting rows.
+```
+
 ## Error Flows
 
 ### Job Creation Errors
@@ -577,7 +696,7 @@ sequenceDiagram
 | `INVALID_INPUT` | 400 | File type mismatch for tool (e.g., non-PDF for pdf-to-word) |
 | `INVALID_INPUT` | 400 | File MIME content type (sniffed from the object's first 512 bytes) does not match the expected type for the tool |
 | `INVALID_INPUT` | 400 | Uploaded object missing from the uploads bucket (upload never completed) |
-| `INVALID_OPTIONS` | 400 | `options` payload fails the per-tool schema (scan-to-pdf: bad JSON, non-whitelisted language/pageSize/enhance/margin, >50 pages entries, invalid rotation, partial corners, coordinates outside [0,1]; pdf-metadata: missing options, none of title/author/subject/keywords present, a field >512 chars after trimming, or NUL bytes; ocr-pdf: bad JSON, language outside `en`/`eng`, non-integer dpi, or dpi outside 72–600) |
+| `INVALID_OPTIONS` | 400 | `options` payload fails the per-tool schema (scan-to-pdf: bad JSON, non-whitelisted language/pageSize/enhance/margin, >50 pages entries, invalid rotation, partial corners, coordinates outside [0,1]; pdf-metadata: missing options, none of title/author/subject/keywords present, a field >512 chars after trimming, or NUL bytes; ocr-pdf: bad JSON, language outside `en`/`eng`, non-integer dpi, or dpi outside 72–600; pdf-to-image: bad JSON, format outside `png`/`jpg`/`jpeg`/`tiff`, non-integer dpi, or dpi outside 72–600) |
 | `FILE_TOO_LARGE` | 413 | File size exceeds plan limit from `X-User-Plan-Max-File-MB` (direct multipart path; default 10 MB) |
 | `TOO_MANY_FILES` | 400 | Number of files exceeds plan limit from `X-User-Plan-Max-Files` (default 5 files) |
 | `RATE_LIMIT_EXCEEDED` | 429 | More than `RATE_LIMIT_JOB_CREATE` job creations per IP per window |
@@ -662,7 +781,9 @@ The service fails fast at boot if object storage is misconfigured or the buckets
 | `RATE_LIMIT_UPLOAD` | `30` | Upload-endpoint rate limit per IP per window |
 | `RATE_LIMIT_JOB_CREATE` | `20` | Job-creation rate limit per IP per window |
 | `RATE_LIMIT_DETECT` | `60` | Detect-edges rate limit per IP per window |
+| `RATE_LIMIT_SHARE_REDEEM` | `30` | Public share-redeem (`GET /share/:token`) rate limit per IP per window — its own bucket because the endpoint is unauthenticated and enumerable in principle |
 | `RATE_LIMIT_WINDOW` | `60s` | Rate limit time window |
+| `SHARE_BASE_URL` | `""` | Public origin minted share URLs are built against (e.g. `https://fyredocs.example.com`). Authoritative when set; falls back to the request `Host` (dev only — assumes the gateway forwards it). Set in `deployment/docker-compose.yml` |
 | `ORGANIZE_PDF_URL` | `http://organize-pdf:8084` | Base URL for the synchronous detect-edges relay to organize-pdf |
 | `INTERNAL_API_TOKEN` | `""` | Mesh-wide shared secret sent as `X-Internal-Token` on internal calls to organize-pdf. Required in production (organize-pdf fails closed without it) |
 | `TRUSTED_PROXIES` | `127.0.0.1,::1` | Trusted proxy IP addresses |

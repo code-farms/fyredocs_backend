@@ -11,7 +11,7 @@ The Convert From PDF service converts PDF files to other formats including image
 
 ## Responsibilities
 
-1. **PDF to Image** - Convert PDF pages to PNG images
+1. **PDF to Image** - Convert PDF pages to PNG (default), JPEG, or TIFF images at a client-selectable DPI
 2. **PDF to Office** - Convert PDF to Word/Excel/PowerPoint formats
 3. **PDF to LibreOffice** - Convert PDF to ODT/ODS/ODP (OpenDocument) formats
 4. **PDF to HTML** - Convert PDF to HTML format
@@ -36,7 +36,7 @@ convert-from-pdf worker
   ├─ Download inputs: S3 uploads bucket keys (payload.inputPaths) → <scratch>/in/
   │  (download failure → recoverable, NAK + backoff)
   ├─ Run processing.ProcessFile() on local files, output to <scratch>/out:
-  │     ├─ pdf-to-image      → pdftoppm (Poppler) → single PNG or ZIP
+  │     ├─ pdf-to-image      → pdftoppm (Poppler; format png/jpg/tiff + dpi options) → single image or ZIP
   │     ├─ pdf-to-word/docx  → pdf2docx (primary) → LibreOffice writer_pdf_import (fallback)
   │     ├─ pdf-to-excel/xlsx → pdfplumber+openpyxl (scripts/pdf_to_xlsx.py): tables→sheets, text fallback
   │     ├─ pdf-to-ppt/pptx   → image-based: rasterize all pages in one pdftoppm call → embed as one slide per image
@@ -66,8 +66,8 @@ Inputs and outputs live in S3-compatible object storage (MinIO in compose), not 
 
 | Tool | Input | Output | Implementation | Status |
 |------|-------|--------|----------------|--------|
-| `pdf-to-image` | .pdf | .png (single page) or .zip (multi-page PNGs) | pdftoppm (Poppler) | ✅ Implemented |
-| `pdf-to-img` | .pdf | .png (single page) or .zip (multi-page PNGs) | pdftoppm (Poppler) | ✅ Alias |
+| `pdf-to-image` | .pdf | .png/.jpg/.tif (single page) or .zip (multi-page) — format + dpi options | pdftoppm (Poppler) | ✅ Implemented |
+| `pdf-to-img` | .pdf | .png/.jpg/.tif (single page) or .zip (multi-page) — format + dpi options | pdftoppm (Poppler) | ✅ Alias |
 | `pdf-to-word` | .pdf | .docx | pdf2docx (primary) → LibreOffice Writer (fallback) | ✅ Implemented |
 | `pdf-to-docx` | .pdf | .docx | pdf2docx (primary) → LibreOffice Writer (fallback) | ✅ Alias |
 | `pdf-to-excel` | .pdf | .xlsx | pdfplumber + openpyxl (tables→sheets, text fallback) | ✅ Implemented |
@@ -167,29 +167,41 @@ Deletes the job and its associated files.
 
 ### pdf-to-image / pdf-to-img
 
-Converts PDF pages to PNG images.
+Converts PDF pages to images — PNG by default, JPEG or TIFF via the `format` option — at a client-selectable render DPI.
 
 **Input**: `.pdf`
-**Output**: Single-page PDF → `.png` file directly; Multi-page PDF → `.zip` containing PNG files (one per page)
-**Implementation**: Poppler (pdftoppm)
+**Output**: Single-page PDF → one bare image file (`.png` / `.jpg` / `.tif`); Multi-page PDF → `.zip` containing one image per page (unchanged behavior)
+**Implementation**: Poppler (pdftoppm), single invocation for all pages
 
-**Output Format** (multi-page):
+**Options** (all optional; job-service rejects invalid values with 400 `INVALID_OPTIONS` at the public boundary — `validatePdfToImageOptions` in `job-service/handlers/tool_options.go` — and the worker re-clamps defensively in `parsePdfToImageOptions`):
+
+| Option | Values | Default | Notes |
+|--------|--------|---------|-------|
+| `format` | `png`, `jpg`, `jpeg`, `tiff` | `png` | Allowlist is a trust boundary — it selects a pdftoppm flag (`-png` / `-jpeg` / `-tiff`). `jpg` and `jpeg` both emit `.jpg`; `tiff` emits `.tif`. Unknown values degrade to PNG in the worker (job-service already rejected them for external callers). |
+| `dpi` | 72–600, JSON number or string (`300` or `"300"`) | 150 | Render resolution. The worker clamps out-of-range values into [72, 600]. |
+
+**DPI safety clamp**: before rendering, the worker reads the first page's media-box size via `pdfinfo` and caps the effective DPI with `computeSafeDPI` so the longest page edge stays within `IMAGE_MAX_IMAGE_DIM` pixels (default 10000) — a large page at high DPI (uncompressed TIFF is the worst case) cannot exhaust memory. Same clamping semantics as optimize-pdf's OCR path (`ocrMaxImageDim`/`computeSafeDPI`), duplicated by design (no shared code across services). Errors reading page dimensions are non-fatal (requested DPI is used).
+
+The output path's extension is reported back through job metadata (`outputExt`), which job-service's `resolveOutputExt` maps to the download's Content-Type (`image/png`, `image/jpeg`, `image/tiff`, or `application/zip`).
+
+**Output Format** (multi-page, e.g. `format=jpg`):
 ```
 output.zip
-├── page_001-1.png
-├── page_002-1.png
-└── page_003-1.png
+├── page-01.jpg
+├── page-02.jpg
+└── page-03.jpg
 ```
 
 **Output Format** (single-page):
 ```
-output.png
+output.png    (or output.jpg / output.tif per the format option)
 ```
 
 **Example**:
 ```bash
 curl -X POST http://localhost/api/convert-from-pdf/pdf-to-image \
-  -F "file=@document.pdf"
+  -F "file=@document.pdf" \
+  -F 'options={"format":"jpg","dpi":"300"}'
 ```
 
 ---
@@ -429,6 +441,7 @@ curl -X POST http://localhost/api/convert-from-pdf/pdf-to-odp \
 | `MAX_RETRIES` | `3` | Max retry attempts for failed jobs |
 | `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing (currently honoured via NATS `AckWait` rather than a context deadline in code) |
 | `WORKER_CONCURRENCY` | `2` | Max concurrent jobs processed in parallel (semaphore-bounded goroutines; one slow conversion no longer blocks the rest) |
+| `IMAGE_MAX_IMAGE_DIM` | `10000` | pdf-to-image: longest allowed edge (pixels) of a rendered page. The effective render DPI is capped against the page's media-box size (`computeSafeDPI`) so oversized renders cannot exhaust memory |
 | `RESULT_CACHE_TTL_SECONDS` | `3600` | Lifetime of result-cache entries. Keep ≤ outputs bucket TTL. `0` disables caching. |
 | `PROGRESS_DB_MIN_DELTA` | `10` | Min percent jump before a progress update is persisted to the DB (throttles writes; `internal/worker/progress.go`) |
 | `PROGRESS_DB_MIN_INTERVAL` | `10s` | Min time between persisted progress updates, regardless of delta |
@@ -645,14 +658,21 @@ sequenceDiagram
 sequenceDiagram
     participant W as Worker
     participant FS as File System
+    participant PI as pdfinfo (Poppler)
     participant PP as pdftoppm (Poppler)
 
-    W->>FS: Read input PDF
-    W->>PP: pdftoppm -png input.pdf output_prefix
-    PP-->>FS: page_001-1.png, page_002-1.png, ...
-    W->>FS: Create ZIP archive from PNG files
-    W->>FS: Write output.zip to output directory
-    W-->>W: Return outputPath = output.zip
+    W->>W: parsePdfToImageOptions(options) → format flag (-png/-jpeg/-tiff), ext, dpi (clamped 72–600, default 150)
+    W->>PI: pdfinfo input.pdf → page size (pts)
+    W->>W: computeSafeDPI(page size, dpi, IMAGE_MAX_IMAGE_DIM) — cap so longest edge ≤ 10000 px
+    W->>PP: pdftoppm <format flag> -r <dpi> input.pdf page
+    PP-->>FS: page-01.<ext>, page-02.<ext>, ... (zero-padded, page order)
+    alt single-page PDF
+        W->>FS: Copy the one image to output.<ext> (.png/.jpg/.tif)
+        W-->>W: Return outputPath = output.<ext>
+    else multi-page PDF
+        W->>FS: Create ZIP archive from the page images
+        W-->>W: Return outputPath = output.zip
+    end
 ```
 
 ### PDF-to-Office Conversion Detail

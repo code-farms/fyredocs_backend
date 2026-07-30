@@ -41,7 +41,7 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 
 	switch toolType {
 	case "pdf-to-image", "pdf-to-img":
-		outputPath, err = pdfToImages(ctx, inputPaths[0], outputDir, outputFileName)
+		outputPath, err = pdfToImages(ctx, inputPaths[0], outputDir, outputFileName, options)
 	case "pdf-to-pdfa":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = pdfToPdfa(ctx, inputPaths[0], outputPath)

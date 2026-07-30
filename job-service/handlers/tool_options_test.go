@@ -189,3 +189,41 @@ func TestValidateOcrOptionsEmptyRaw(t *testing.T) {
 		t.Errorf("empty options must pass for ocr-pdf: %v", err)
 	}
 }
+
+// TestValidatePdfToImageOptions verifies the pdf-to-image trust boundary:
+// format selects a pdftoppm flag on the worker command line (allowlist), and
+// dpi bounds worker memory (uncompressed TIFF is the worst case).
+func TestValidatePdfToImageOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr string
+	}{
+		{"empty object", `{}`, ""},
+		{"png", `{"format":"png"}`, ""},
+		{"jpg", `{"format":"jpg"}`, ""},
+		{"jpeg alias", `{"format":"JPEG"}`, ""},
+		{"tiff", `{"format":"tiff","dpi":"300"}`, ""},
+		{"unknown format", `{"format":"bmp"}`, "unsupported image format"},
+		{"crafted format", `{"format":"png -r 99999"}`, "unsupported image format"},
+		{"dpi as number", `{"dpi":150}`, ""},
+		{"dpi below floor", `{"dpi":"71"}`, "between 72 and 600"},
+		{"dpi above ceiling", `{"dpi":601}`, "between 72 and 600"},
+		{"dpi not numeric", `{"dpi":"max"}`, "whole number"},
+		{"not json", `[]`, "valid JSON"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateToolOptions("pdf-to-image", tt.raw)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}

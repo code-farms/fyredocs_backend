@@ -81,6 +81,8 @@ tags:
     description: Compress, repair, OCR, and flatten PDF files
   - name: Jobs
     description: Cross-tool job history and real-time status updates for authenticated users
+  - name: Share Links
+    description: Expiring public download links for uploaded files (job-service) — create/revoke under /api/share, public redeem at /share/{token}
   - name: Admin Analytics
     description: Admin dashboard metrics (requires super-admin role via JWT authentication)
   - name: Documents
@@ -1966,6 +1968,159 @@ paths:
           description: Bad request (missing job ID)
 
   # ==========================================================================
+  # Share Links
+  # ==========================================================================
+  /api/share:
+    post:
+      tags: [Share Links]
+      summary: Create a share link from a completed upload
+      description: |
+        Turns a **completed** presigned upload into an expiring public download
+        link. The upload is consumed: its object is server-side copied into
+        the outputs bucket under `shares/{id}/...` (detaching it from the
+        upload lifecycle) and the upload session is released.
+
+        Shareable file types are allowlisted by extension AND content sniff
+        (NOT fail-open — executables and unknown types are refused):
+        pdf, png/jpg/jpeg/webp/tif/tiff, txt, zip, html, doc/docx, xls/xlsx,
+        ppt/pptx, odt/ods/odp.
+
+        A 256-bit redeem token is minted; only its SHA-256 hash is stored.
+        **The raw token appears exactly once, inside the returned `url`** — it
+        is never recoverable afterwards.
+
+        Guests may create shares (the share then has no owner and cannot be
+        revoked — it simply expires). Rate-limited per IP by the job-creation
+        limiter (RATE_LIMIT_JOB_CREATE).
+      operationId: createShare
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+        - GuestToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateShareRequest"
+      responses:
+        "201":
+          description: Share link created — the raw token is inside `data.url` and is shown only once
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Share"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /share/{token}:
+    get:
+      tags: [Share Links]
+      summary: Redeem a share link (public)
+      description: |
+        **Public — no authentication.** The 256-bit token in the path is the
+        credential; the gateway skips token verification for the `/share/`
+        prefix so a recipient's stale access_token cookie can never 401 a
+        share link. Note the path is `/share/{token}`, NOT `/api/share/...`.
+
+        Looks the token up by its SHA-256 hash and answers **302** to a
+        5-minute presigned object-storage URL with
+        `Content-Disposition: attachment`, so a browser hitting the share URL
+        downloads the file directly. The share's download counter is
+        incremented best-effort.
+
+        Unknown, expired, and revoked tokens all answer an **identical 404**
+        — the endpoint deliberately leaks nothing. Rate-limited per IP by its
+        own limiter (RATE_LIMIT_SHARE_REDEEM, default 30/window) because the
+        endpoint is unauthenticated.
+      operationId: redeemShare
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: The raw redeem token from the share URL (base64url, 43 chars for a 256-bit token)
+          schema:
+            type: string
+            minLength: 40
+            maxLength: 64
+      responses:
+        "302":
+          description: Redirect to a presigned download URL (expires in 5 minutes, attachment disposition)
+          headers:
+            Location:
+              schema:
+                type: string
+                example: "http://localhost/outputs/shares/<shareId>/report.pdf?response-content-disposition=attachment%3B%20filename%3D%22report.pdf%22&X-Amz-Signature=..."
+        "404":
+          description: Share link invalid, expired, or revoked (all three answer identically — no oracle)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIResponse"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/share/{id}:
+    delete:
+      tags: [Share Links]
+      summary: Revoke a share link (owner only)
+      description: |
+        Revokes a share link early — the link 404s on redeem immediately and
+        the stored object is reaped by the next cleanup sweep. Requires
+        authentication and ownership: the `id` is the share ID from the create
+        response (not the token). A share owned by someone else, unknown, or
+        already revoked answers 404 (never 403 — no existence oracle). Guest
+        shares have no owner and cannot be revoked; they expire on schedule.
+      operationId: revokeShare
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The share ID (UUID) returned at creation
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Share link revoked
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
   # Admin Analytics
   # ==========================================================================
   /api/dashboard:
@@ -3432,6 +3587,37 @@ components:
         language: eng
         dpi: 300
 
+    PdfToImageOptions:
+      type: object
+      description: |
+        Options for pdf-to-image / pdf-to-img jobs (all fields optional).
+        Validated by job-service at job creation — violations return
+        400 INVALID_OPTIONS. The worker re-clamps defensively and may cap the
+        effective DPI further against the page dimensions so the longest
+        rendered edge stays within IMAGE_MAX_IMAGE_DIM pixels (default 10000).
+        Single-page PDFs return the bare image (.png/.jpg/.tif); multi-page
+        PDFs return a ZIP of one image per page.
+      properties:
+        format:
+          type: string
+          enum: [png, jpg, jpeg, tiff]
+          default: png
+          description: |
+            Output image format (case-insensitive). jpg and jpeg both produce
+            .jpg files; tiff produces .tif. The allowlist is a trust boundary
+            — the value selects a pdftoppm flag on the worker command line.
+        dpi:
+          type: integer
+          minimum: 72
+          maximum: 600
+          default: 150
+          description: |
+            Render resolution. Accepted as a JSON number or a numeric string
+            ("300"); must be a whole number between 72 and 600.
+      example:
+        format: jpg
+        dpi: 300
+
     # -- Job Schemas --
     CreateJobRequest:
       type: object
@@ -3459,6 +3645,8 @@ components:
             creation; violations return 400 INVALID_OPTIONS).
             For ocr-pdf: see the OcrPdfOptions schema (validated at job
             creation; violations return 400 INVALID_OPTIONS).
+            For pdf-to-image: see the PdfToImageOptions schema (validated at
+            job creation; violations return 400 INVALID_OPTIONS).
             For watermark-pdf:
               - type: "text" | "image" (default: "text")
               - text: string (watermark text, used when type=text)
@@ -3564,6 +3752,77 @@ components:
                 it as the `X-Guest-Token` header on subsequent requests (polling,
                 download, delete). Only present when the job is created by a guest.
               example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+
+    # -- Share Link Schemas --
+    CreateShareRequest:
+      type: object
+      required: [uploadId]
+      description: Request body for creating a share link from a completed presigned upload
+      properties:
+        uploadId:
+          type: string
+          format: uuid
+          description: ID of a completed presigned upload session. The upload is consumed — its object is copied out and the session released.
+        expiresIn:
+          type: string
+          enum: [1h, 24h, 7d]
+          default: 24h
+          description: Lifetime of the share link
+      example:
+        uploadId: "550e8400-e29b-41d4-a716-446655440000"
+        expiresIn: 24h
+
+    Share:
+      type: object
+      description: |
+        A share link. The redeem token is NOT a field — it appears exactly
+        once, embedded in `url` on the create response, and only its SHA-256
+        hash is stored server-side. `url` is built against SHARE_BASE_URL
+        (request-Host fallback in dev).
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Share ID (used for DELETE /api/share/{id}, not for redeeming)
+          example: "0198c9a1-73f2-7cde-9a3b-1f2e3d4c5b6a"
+        fileName:
+          type: string
+          description: Sanitized original file name (used as the download filename on redeem)
+          example: report.pdf
+        contentType:
+          type: string
+          nullable: true
+          description: Content type derived from the file extension (null when unknown)
+          example: application/pdf
+        fileSize:
+          type: integer
+          format: int64
+          description: File size in bytes
+          example: 2456789
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the link stops resolving (1h/24h/7d after creation)
+        revokedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set when the owner revoked the link early
+        downloadCount:
+          type: integer
+          format: int64
+          description: Number of successful redeems (incremented best-effort)
+          example: 0
+        createdAt:
+          type: string
+          format: date-time
+        url:
+          type: string
+          description: |
+            The full public share URL, containing the raw redeem token —
+            returned ONLY on the create response and never recoverable
+            afterwards.
+          example: "http://localhost/share/3q2xkJv0aB1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uVwXY"
 
   # ---------------------------------------------------------------------------
   # Reusable Responses

@@ -104,12 +104,30 @@ func SetupRouter(r *gin.Engine) {
 		optimizePdf.DELETE("/:tool/:id", handlers.DeleteJobByID)
 		optimizePdf.GET("/:tool/:id/download", handlers.DownloadJobFile)
 
+		// Share links: create consumes an upload (authenticated or guest);
+		// revoke is owner-only. The PUBLIC redeem lives outside /api below.
+		shares := api.Group("/share")
+		shares.POST("", jobCreateLimiter.RateLimitByIP(), handlers.CreateShare)
+		shares.DELETE("/:id", handlers.RevokeShare)
+
 		api.GET("/jobs/history", authverify.RequireAuthenticatedGin(), handlers.GetJobHistory)
 		// Super-admin only (enforced in the handler via X-User-Role): re-dispatch
 		// dead-lettered worker jobs from JOBS_DLQ.
 		api.POST("/jobs/dlq/redrive", authverify.RequireAuthenticatedGin(), handlers.RedriveDLQ)
 		api.GET("/jobs/:id/events", handlers.SSEJobUpdates)
 	}
+
+	// PUBLIC share-link redeem — no auth by design (the token IS the
+	// credential: 256-bit, stored hashed). Unauthenticated and enumerable in
+	// principle, so it gets its own tight rate limit; the gateway must list
+	// /share in its public paths.
+	shareRedeemLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
+		RedisClient: redisstore.Client,
+		KeyPrefix:   "ratelimit:shareredeem",
+		MaxRequests: config.GetEnvInt("RATE_LIMIT_SHARE_REDEEM", 30),
+		Window:      window,
+	})
+	r.GET("/share/:token", shareRedeemLimiter.RateLimitByIP(), handlers.RedeemShare)
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.String(200, "ok")

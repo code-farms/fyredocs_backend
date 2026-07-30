@@ -79,7 +79,7 @@ sequenceDiagram
 
     GW->>JS: POST /api/&lt;group&gt;/:tool {uploadIds, options} · Idempotency-Key?
     JS->>JS: GinAuth · normalize tool · routing.ServiceForTool · per-IP RATE_LIMIT_JOB_CREATE
-    JS->>JS: validateToolOptions(tool, options) — 400 INVALID_OPTIONS (scan-to-pdf + pdf-metadata + ocr-pdf schemas)
+    JS->>JS: validateToolOptions(tool, options) — 400 INVALID_OPTIONS (scan-to-pdf + pdf-metadata + ocr-pdf + pdf-to-image schemas)
 
     alt Idempotency-Key cache hit
         JS->>Redis: GET idempotency:&lt;key&gt;
@@ -254,6 +254,68 @@ sequenceDiagram
     JS->>PG: DELETE file_metadata · DELETE processing_jobs
     JS->>Redis: SREM guest:&lt;token&gt;:jobs &lt;jobId&gt; (best-effort)
     JS-->>GW: 200 / 204
+```
+
+## Share Links — Create · Redeem (public) · Revoke
+
+`POST /api/share` consumes a completed upload (extension + MIME-sniff
+allowlist, NOT fail-open) and mints a 256-bit token stored only as its
+SHA-256. `GET /share/:token` is **public** — outside `/api`, listed in the
+gateway's `PublicPrefixes`, with its own per-IP `RATE_LIMIT_SHARE_REDEEM`
+limiter (default 30/window). Expired, revoked, and unknown tokens all 404
+identically.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Recipient
+    participant GW as api-gateway
+    participant JS as job-service
+    participant Redis
+    participant PG as PostgreSQL
+    participant S3 as MinIO/S3
+
+    Client->>GW: POST /api/share {uploadId, expiresIn:"1h"|"24h"|"7d" (default 24h)}
+    GW->>JS: Proxy (user or guest — both allowed) · per-IP RATE_LIMIT_JOB_CREATE
+    JS->>Redis: HGETALL upload:&lt;uploadId&gt; (consumeUpload "share" pseudo-tool)
+    JS->>S3: StatObject + GetObjectRange(0,512) — extension allowlist + MIME sniff (NOT fail-open, executables refused)
+    JS->>JS: newShareToken() — 32 random bytes, base64url · store SHA-256 only
+    JS->>S3: CopyObject uploads/&lt;uploadId&gt;/&lt;file&gt; → outputs shares/&lt;shareId&gt;/&lt;file&gt; (server-side)
+    JS->>PG: INSERT shares (token_hash, object_key, expires_at, user_id NULL for guests)
+    alt DB insert fails
+        JS->>S3: RemoveObject shares/&lt;shareId&gt;/&lt;file&gt; (rollback)
+        JS-->>Client: 500 SERVER_ERROR
+    else
+        JS->>Redis: releaseUpload — DEL upload:&lt;uploadId&gt;
+        JS-->>Client: 201 {id, fileName, contentType, fileSize, expiresAt, downloadCount, createdAt, url}
+        Note over Client: url = SHARE_BASE_URL/share/&lt;token&gt; — the raw token's ONE appearance
+    end
+
+    Recipient->>GW: GET /share/&lt;token&gt; (no auth)
+    GW->>GW: PublicPrefixes "/share/" — skip token verification
+    GW->>JS: Proxy · per-IP RATE_LIMIT_SHARE_REDEEM (ratelimit:shareredeem)
+    JS->>JS: token shape check (len 40–64) → SHA-256
+    JS->>PG: SELECT shares WHERE token_hash=?
+    alt unknown OR expired OR revoked
+        JS-->>Recipient: 404 (identical for all three — no oracle)
+    else valid
+        JS->>PG: UPDATE download_count+1 (best-effort)
+        JS->>JS: PresignGet(outputs, shares/&lt;id&gt;/&lt;file&gt;, 5m, attachment disposition + content-type)
+        JS-->>Recipient: 302 Location: presigned URL
+        Recipient->>S3: GET presigned URL
+        S3-->>Recipient: 200 [bytes] Content-Disposition: attachment
+    end
+
+    Client->>GW: DELETE /api/share/&lt;shareId&gt; (authenticated owner; 401 for guests)
+    GW->>JS: Proxy
+    JS->>PG: UPDATE shares SET revoked_at=now() WHERE id=? AND user_id=? AND revoked_at IS NULL
+    alt 0 rows (unknown / not owner / already revoked)
+        JS-->>Client: 404 (never 403 — no existence oracle)
+    else
+        JS-->>Client: 200 {id}
+    end
+
+    Note over JS,S3: Cleanup sweep (cleanupExpiredShares, in RunSweep): shares past expires_at OR revoked —<br/>RemoveObject shares/&lt;id&gt;/... BEFORE deleting rows (idempotent retry on crash).
 ```
 
 ## SSE — Real-Time Job Updates

@@ -42,6 +42,10 @@ type HTTPMiddlewareOptions struct {
 	// stale access_token cookie is present. This prevents an authentication
 	// deadlock where expired cookies block login/signup/refresh endpoints.
 	PublicPaths []string
+	// PublicPrefixes extends PublicPaths for routes with variable segments
+	// (e.g. "/share/" for /share/:token, where the token IS the credential).
+	// Entries should end with "/" so "/share/x" matches but "/shares" doesn't.
+	PublicPrefixes []string
 }
 
 // HTTPAuthMiddleware is the net/http counterpart to GinAuthMiddleware, used by
@@ -78,6 +82,12 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 			if _, ok := publicSet[strings.TrimRight(r.URL.Path, "/")]; ok {
 				next.ServeHTTP(w, SetRequestAuth(r, guestPlanContext()))
 				return
+			}
+			for _, prefix := range options.PublicPrefixes {
+				if strings.HasPrefix(r.URL.Path, prefix) {
+					next.ServeHTTP(w, SetRequestAuth(r, guestPlanContext()))
+					return
+				}
 			}
 
 			if options.TrustGatewayHeaders {

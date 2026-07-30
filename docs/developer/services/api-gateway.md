@@ -46,6 +46,8 @@ Telemetry → Metrics → Request-ID → SecurityHeaders
             ├─ /api/upload/*                                → JOB_SERVICE_URL   (rewritten to /api/uploads/*)
             ├─ /api/jobs/*                                  → JOB_SERVICE_URL
             ├─ /api/{convert-from,convert-to,organize,optimize}-pdf/* → JOB_SERVICE_URL
+            ├─ /api/share/*                                 → JOB_SERVICE_URL   (share create/revoke)
+            ├─ /share/*                                     → JOB_SERVICE_URL   (PUBLIC share redeem — auth skipped)
             ├─ /api/{documents,folders,tags,exports}/*      → DOCUMENT_SERVICE_URL
             ├─ /api/orgs/*                                  → USER_SERVICE_URL
             ├─ /api/notifications/*                         → NOTIFICATION_SERVICE_URL
@@ -68,6 +70,8 @@ All `/api/*` traffic is proxied to **job-service**. Workers are not exposed publ
 | `/api/convert-to-pdf/*` | `JOB_SERVICE_URL` | Office/Image → PDF |
 | `/api/organize-pdf/*` | `JOB_SERVICE_URL` | Merge, split, rotate, watermark, sign, etc. |
 | `/api/optimize-pdf/*` | `JOB_SERVICE_URL` | Compress, repair, OCR |
+| `/api/share/*` | `JOB_SERVICE_URL` | Share-link create (`POST /api/share`) and revoke (`DELETE /api/share/:id`) — authenticated or guest |
+| `/share/*` | `JOB_SERVICE_URL` | **PUBLIC** share-link redeem (`GET /share/:token`) — auth verification skipped via `PublicPrefixes` (the 256-bit token in the path is the credential) |
 | `/api/documents/*` | `DOCUMENT_SERVICE_URL` | Document library CRUD |
 | `/api/folders/*` | `DOCUMENT_SERVICE_URL` | Folder tree |
 | `/api/tags/*` | `DOCUMENT_SERVICE_URL` | Tags |
@@ -219,6 +223,8 @@ The following paths skip authentication (`PublicPaths` in [shared/authverify](..
 - `/auth/refresh` - Refresh-token rotation (the cookie itself is the credential)
 - `/auth/plans` - Public plan listing
 - OPTIONS requests (CORS preflight)
+
+`PublicPaths` is an exact-match set. Routes with a variable segment use the companion **`PublicPrefixes`** option (`shared/authverify` `HTTPMiddlewareOptions`): any path starting with a listed prefix skips token verification and is treated as guest. The gateway registers `/share/` and `/api/v1/share/` so a share-link redeem (`GET /share/:token`) can never 401 on a recipient's stale `access_token` cookie — the 256-bit token in the path is the credential. Entries end with `/` so `/share/x` matches but `/shares` does not.
 
 ## CORS Configuration
 
@@ -623,6 +629,7 @@ The following paths skip JWT authentication:
 - `/auth/signup` -- User registration
 - `/auth/login` -- User login
 - `/auth/plans` -- Public plan listing
+- `/share/*` (and `/api/v1/share/*`) -- Public share-link redeem, via `PublicPrefixes` (the token in the path is the credential)
 - `OPTIONS` requests -- CORS preflight
 
 ### Backend Service Failure Handling

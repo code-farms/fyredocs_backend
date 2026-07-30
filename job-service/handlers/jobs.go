@@ -63,6 +63,20 @@ var allowedMIMETypes = map[string][]string{
 	"odt":   {"application/vnd.oasis.opendocument.text", "application/zip"},
 	"ods":   {"application/vnd.oasis.opendocument.spreadsheet", "application/zip"},
 	"odp":   {"application/vnd.oasis.opendocument.presentation", "application/zip"},
+	// "share" is the pseudo-tool used by share-link creation (shares.go), not
+	// a routable tool: any document type the platform handles, plus plain
+	// text (DetectContentType reports text with a charset suffix).
+	"share": {
+		"application/pdf",
+		"application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		"application/vnd.oasis.opendocument.text", "application/vnd.oasis.opendocument.spreadsheet",
+		"application/vnd.oasis.opendocument.presentation",
+		"application/zip",
+		"image/png", "image/jpeg", "image/webp", "image/tiff",
+		"text/plain; charset=utf-8", "text/html; charset=utf-8",
+	},
 }
 
 // UploadJobRequest is the job-creation payload. It accepts either a single
@@ -1108,6 +1122,8 @@ func resolveOutputExt(metadata datatypes.JSON, defaultExt string, defaultCT stri
 		return ".png", "image/png"
 	case ".jpg", ".jpeg":
 		return ext, "image/jpeg"
+	case ".tif", ".tiff":
+		return ext, "image/tiff"
 	default:
 		return defaultExt, defaultCT
 	}
@@ -1198,6 +1214,12 @@ func validateFileType(toolType string, fileName string) error {
 		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" && ext != ".pdf" {
 			return fmt.Errorf("only image or PDF files are supported for this tool")
 		}
+	case "share":
+		// Pseudo-tool for share-link creation (shares.go): every document type
+		// the platform's library holds — NOT arbitrary content (no executables).
+		if !shareFileExts[ext] {
+			return fmt.Errorf("this file type cannot be shared")
+		}
 	case "word-to-pdf", "word-to-odt":
 		if ext != ".doc" && ext != ".docx" {
 			return fmt.Errorf("only Word files are supported")
@@ -1243,6 +1265,8 @@ func mimeCategory(toolType string) string {
 		return "pdf"
 	case "scan-to-pdf":
 		return "image"
+	case "share":
+		return "share"
 	case "word-to-pdf", "word-to-odt":
 		return "word"
 	case "excel-to-pdf", "excel-to-ods":
