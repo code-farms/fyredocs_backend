@@ -69,9 +69,43 @@ func RunSweep(ctx context.Context, store ObjectStore) {
 	defer releaseCleanupLock(token)
 
 	cleanupExpiredJobs(ctx, store)
+	cleanupExpiredShares(ctx, store)
 	cleanupUploadState(ctx, store)
 	abortStaleMultipartUploads(ctx, store)
 	backfillExpiry(ctx)
+}
+
+// cleanupExpiredShares reaps share links past expiry or revoked, along with
+// the objects they own under shares/ in the outputs bucket. Same ordering
+// discipline as jobs: objects BEFORE rows, so a mid-sweep crash leaves a row
+// the next sweep retries idempotently (missing object is not an error) rather
+// than an unreferenced object billed forever.
+func cleanupExpiredShares(ctx context.Context, store ObjectStore) {
+	now := time.Now().UTC()
+	for {
+		var shares []models.Share
+		if err := models.DB.Where("expires_at <= ? OR revoked_at IS NOT NULL", now).
+			Limit(100).Find(&shares).Error; err != nil {
+			slog.Error("cleanup shares query failed", "error", err)
+			return
+		}
+		if len(shares) == 0 {
+			return
+		}
+
+		ids := make([]uuid.UUID, len(shares))
+		for i, s := range shares {
+			ids[i] = s.ID
+			if err := store.RemoveObject(ctx, store.BucketOutputs(), s.ObjectKey); err != nil {
+				slog.Warn("failed to remove share object", "key", s.ObjectKey, "error", err)
+			}
+		}
+		if err := models.DB.Where("id IN ?", ids).Delete(&models.Share{}).Error; err != nil {
+			slog.Error("failed to batch-delete shares", "error", err)
+			return
+		}
+		slog.Info("cleaned up expired shares", "count", len(shares))
+	}
 }
 
 // releaseCleanupLock deletes the sweep lock only when the stored token still

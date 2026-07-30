@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost` (the Caddy edge; the api-gateway is internal-only)
 
-The job-service exposes job creation, listing, retrieval, deletion, downloads, history, and a Server-Sent Events stream. Jobs are scoped under tool-group prefixes (`/api/<group>/:tool/...`) — there is no generic `/api/jobs/:jobId` resource. The history and SSE endpoints are the only routes under the bare `/api/jobs` namespace.
+The job-service exposes job creation, listing, retrieval, deletion, downloads, history, a Server-Sent Events stream, and share links. Jobs are scoped under tool-group prefixes (`/api/<group>/:tool/...`) — there is no generic `/api/jobs/:jobId` resource. The history and SSE endpoints are the only routes under the bare `/api/jobs` namespace. Share links live under `/api/share` (create/revoke) plus the public redeem route `GET /share/:token` outside `/api`.
 
 Authentication options:
 - Authenticated user — `access_token` cookie or `Authorization: Bearer <jwt>`
@@ -77,7 +77,7 @@ options: <stringified JSON>
 | Status | Code | Description |
 |--------|------|-------------|
 | 400 | INVALID_INPUT | Missing fields, unknown tool, MIME mismatch |
-| 400 | INVALID_OPTIONS | `options` fails the per-tool schema (`scan-to-pdf`, `pdf-metadata`, `ocr-pdf`) |
+| 400 | INVALID_OPTIONS | `options` fails the per-tool schema (`scan-to-pdf`, `pdf-metadata`, `ocr-pdf`, `pdf-to-image`) |
 | 400 | TOO_MANY_FILES | More files than the user's plan permits |
 | 401 | UNAUTHORIZED | Auth required for non-guest tools |
 | 413 | FILE_TOO_LARGE | File exceeds the plan's max-file-size |
@@ -223,6 +223,110 @@ If the underlying NATS stream is unavailable:
 event: error
 data: {"message":"event stream unavailable"}
 ```
+
+---
+
+## Share Links
+
+Turn an uploaded file into an expiring public download link. The file is uploaded through the normal [presigned upload protocol](./upload-api.md) first; `POST /api/share` then consumes the completed upload. Sharing is open to authenticated users **and guests** (guest shares cannot be revoked — they simply expire).
+
+Shareable file types (extension allowlist + content sniff — **not** fail-open; executables and unknown types are refused): `.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.tif`, `.tiff`, `.txt`, `.zip`, `.html`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.odt`, `.ods`, `.odp`.
+
+### POST /api/share
+
+Create a share link from a completed upload. Rate-limited per IP by the job-creation limiter (`RATE_LIMIT_JOB_CREATE`).
+
+**Request:**
+
+```json
+{
+  "uploadId": "0c2b1c9e-...-uuid",
+  "expiresIn": "24h"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `uploadId` | Yes | ID of a **completed** presigned upload. The upload is consumed (its session is released; the bytes are server-side copied out of the uploads bucket). |
+| `expiresIn` | No | One of `1h`, `24h`, `7d`. Default `24h`. |
+
+**Response — 201 Created:**
+
+```json
+{
+  "success": true,
+  "message": "Share link created",
+  "data": {
+    "id": "0198c9a1-73f2-7cde-9a3b-1f2e3d4c5b6a",
+    "fileName": "report.pdf",
+    "contentType": "application/pdf",
+    "fileSize": 2456789,
+    "expiresAt": "2026-08-01T10:30:00Z",
+    "revokedAt": null,
+    "downloadCount": 0,
+    "createdAt": "2026-07-31T10:30:00Z",
+    "url": "https://fyredocs.example.com/share/3q2xkJv0aB...43-char-token"
+  }
+}
+```
+
+The **raw redeem token appears only in this one response** (inside `url`) — the server stores only its SHA-256 hash, so a lost URL cannot be recovered; mint a new share instead. The URL origin comes from `SHARE_BASE_URL` (request `Host` fallback in dev).
+
+**Errors:**
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 400 | INVALID_INPUT | Bad body, `expiresIn` not in `1h`/`24h`/`7d`, unknown or incomplete `uploadId`, file type not shareable (extension or sniffed MIME) |
+| 429 | RATE_LIMIT_EXCEEDED | Job-creation limiter exceeded |
+| 500 | SERVER_ERROR | Object copy / token mint / DB write failure |
+
+### GET /share/:token
+
+**Public** — no authentication (the gateway skips verification for `/share/`; the 256-bit token in the path is the credential). Note the path: `/share/...`, **not** `/api/share/...`.
+
+Responds **302** with `Location` set to a 5-minute presigned download URL that forces `Content-Disposition: attachment` — a browser hitting the share URL downloads the file directly. The share's `downloadCount` is incremented (best-effort).
+
+Rate-limited per IP by its own limiter (`RATE_LIMIT_SHARE_REDEEM`, default 30/window) since the endpoint is unauthenticated.
+
+**Errors:**
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 404 | NOT_FOUND | Token unknown, expired, or revoked — all three answer identically ("This share link is invalid or has expired.") so the endpoint leaks nothing |
+| 429 | RATE_LIMIT_EXCEEDED | More than `RATE_LIMIT_SHARE_REDEEM` redeems per IP per window |
+| 500 | SERVER_ERROR | Presign failure |
+
+### DELETE /api/share/:id
+
+Revoke a share link early. **Owner-only**: requires authentication, and the `id` (from the create response — not the token) must belong to the caller. A revoked link 404s on redeem immediately; the stored object is reaped by the next cleanup sweep. Guest-created shares have no owner and cannot be revoked — they expire on schedule.
+
+**Response — 200 OK:**
+
+```json
+{
+  "success": true,
+  "message": "Share link revoked",
+  "data": { "id": "0198c9a1-73f2-7cde-9a3b-1f2e3d4c5b6a" }
+}
+```
+
+**Errors:**
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 400 | INVALID_INPUT | `id` is not a UUID |
+| 401 | AUTH_UNAUTHORIZED | Not authenticated (guests cannot revoke) |
+| 404 | NOT_FOUND | Share not found, already revoked, **or owned by someone else** (never 403 — no existence oracle) |
+| 500 | SERVER_ERROR | DB failure |
+
+### Share lifecycle
+
+```
+created ──(expiresAt reached)──> expired ──(cleanup sweep)──> object + row deleted
+   └──(owner DELETE)──> revoked ──(cleanup sweep)──> object + row deleted
+```
+
+Expired and revoked shares are reaped by job-service's in-process cleanup loop (objects before rows, idempotent across retries).
 
 ---
 

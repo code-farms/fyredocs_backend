@@ -127,6 +127,17 @@ func (f *fakeStore) RemoveObject(_ context.Context, bucket, key string) error {
 	return nil
 }
 
+func (f *fakeStore) CopyObject(_ context.Context, srcBucket, srcKey, dstBucket, dstKey string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	data, ok := f.objects[objKey(srcBucket, srcKey)]
+	if !ok {
+		return fmt.Errorf("fakeStore: copy source %s/%s not found", srcBucket, srcKey)
+	}
+	f.objects[objKey(dstBucket, dstKey)] = append([]byte(nil), data...)
+	return nil
+}
+
 func (f *fakeStore) PresignGet(_ context.Context, bucket, key string, _ time.Duration, reqParams url.Values) (string, error) {
 	return fmt.Sprintf("http://minio.test/%s/%s?%s", bucket, key, reqParams.Encode()), nil
 }

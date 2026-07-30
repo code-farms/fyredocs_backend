@@ -179,6 +179,19 @@ func main() {
 			targetURL:      jobServiceURL,
 		},
 		{
+			// Share-link create/revoke (authenticated or guest).
+			prefix:         "/api/share",
+			targetBasePath: "/api/share",
+			targetURL:      jobServiceURL,
+		},
+		{
+			// PUBLIC share-link redeem — the token in the path is the
+			// credential; auth is skipped via PublicPrefixes below.
+			prefix:         "/share",
+			targetBasePath: "/share",
+			targetURL:      jobServiceURL,
+		},
+		{
 			prefix:         "/api/documents",
 			targetBasePath: "/api/documents",
 			targetURL:      documentServiceURL,
@@ -262,11 +275,14 @@ func main() {
 	}
 
 	authMiddleware := authverify.HTTPAuthMiddleware(authverify.HTTPMiddlewareOptions{
-		Verifier:    verifier,
-		GuestStore:  guestStore,
+		Verifier:   verifier,
+		GuestStore: guestStore,
 		// Both the legacy and the /api/v1 spelling: PublicPaths is an exact-match
 		// set, so a v1 login would otherwise be blocked by its own stale cookie.
 		PublicPaths: publicAuthPaths(),
+		// Share-link redeems must never 401 on a recipient's stale cookie —
+		// the 256-bit token in the path is the credential.
+		PublicPrefixes: []string{"/share/", apiVersionPrefix + "/share/"},
 		ResolvePlan: func(r *http.Request, authCtx *authverify.AuthContext) {
 			info := plancache.GetPlanInfo(r.Context(), redisClient, authCtx.UserID)
 			authCtx.Plan = info.Plan

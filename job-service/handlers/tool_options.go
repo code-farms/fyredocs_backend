@@ -108,9 +108,57 @@ func validateToolOptions(toolType string, raw string) error {
 		return validateMetadataOptions(raw)
 	case "ocr-pdf":
 		return validateOcrOptions(raw)
+	case "pdf-to-image":
+		// normalizeToolType folds the pdf-to-img alias before this runs.
+		return validatePdfToImageOptions(raw)
 	default:
 		return nil
 	}
+}
+
+var (
+	// pdfImageFormats is the pdf-to-image format allowlist — a TRUST BOUNDARY:
+	// the value selects a pdftoppm flag on the worker command line. The worker
+	// keeps its own copy (convert-from-pdf/processing/processing_free.go);
+	// duplicated by design, keep in sync.
+	pdfImageFormats = map[string]bool{"": true, "png": true, "jpg": true, "jpeg": true, "tiff": true}
+)
+
+// Render-DPI bounds for pdf-to-image; same rationale as the OCR bounds (below
+// 72 output is unusable, above 600 pages rasterize into hundreds of MB —
+// uncompressed TIFF being the worst case).
+const (
+	minPdfImageDpi = 72
+	maxPdfImageDpi = 600
+)
+
+// pdfToImageOptionsPayload mirrors the pdf-to-image options contract. Dpi
+// stays raw because clients send both 300 and "300".
+type pdfToImageOptionsPayload struct {
+	Format string          `json:"format"`
+	Dpi    json.RawMessage `json:"dpi"`
+}
+
+// validatePdfToImageOptions is the hard gate for pdf-to-image options:
+// format feeds a subprocess flag (allowlist), dpi bounds worker memory.
+func validatePdfToImageOptions(raw string) error {
+	var opts pdfToImageOptionsPayload
+	if err := json.Unmarshal([]byte(raw), &opts); err != nil {
+		return fmt.Errorf("options must be a valid JSON object")
+	}
+	if !pdfImageFormats[strings.ToLower(strings.TrimSpace(opts.Format))] {
+		return fmt.Errorf("unsupported image format %q — supported: png, jpg, tiff", opts.Format)
+	}
+	if dpiStr := strings.Trim(strings.TrimSpace(string(opts.Dpi)), `"`); dpiStr != "" && dpiStr != "null" {
+		dpi, err := strconv.Atoi(dpiStr)
+		if err != nil {
+			return fmt.Errorf("dpi must be a whole number")
+		}
+		if dpi < minPdfImageDpi || dpi > maxPdfImageDpi {
+			return fmt.Errorf("dpi must be between %d and %d", minPdfImageDpi, maxPdfImageDpi)
+		}
+	}
+	return nil
 }
 
 var (

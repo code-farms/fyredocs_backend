@@ -20,6 +20,7 @@ type ObjectStore interface {
 	GetObjectRange(ctx context.Context, bucket, key string, offset, length int64) ([]byte, error)
 	StatObject(ctx context.Context, bucket, key string) (storage.ObjectInfo, error)
 	RemoveObject(ctx context.Context, bucket, key string) error
+	CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error
 	PresignGet(ctx context.Context, bucket, key string, expiry time.Duration, reqParams url.Values) (string, error)
 	CreateMultipart(ctx context.Context, bucket, key, contentType string) (string, error)
 	PresignUploadPart(ctx context.Context, bucket, key, s3UploadID string, partNumber int, expiry time.Duration) (string, error)

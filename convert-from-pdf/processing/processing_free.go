@@ -3,12 +3,14 @@ package processing
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,11 +20,149 @@ import (
 // ProgressFunc reports progress as a percentage (0-100).
 type ProgressFunc func(percent int)
 
-// pdfToImages converts a PDF to PNG images. For single-page PDFs the output
-// is a single PNG file; for multi-page PDFs the output is a ZIP of PNGs.
-// It returns the actual output path (which may end in .png or .zip).
-func pdfToImages(ctx context.Context, inputPath string, outputDir string, baseName string) (string, error) {
-	slog.Info("converting PDF to images", "input", inputPath)
+// pdfImageFormats maps the public `format` option to pdftoppm's flag and the
+// output extension. A TRUST BOUNDARY like the OCR language allowlist: only
+// mapped values ever reach the command line; anything else falls back to PNG.
+// job-service validates the same set at the public boundary (tool_options.go)
+// — this is defence in depth, duplicated by design (§1 no shared DTOs).
+var pdfImageFormats = map[string]struct{ flag, ext string }{
+	"":     {"-png", ".png"},
+	"png":  {"-png", ".png"},
+	"jpg":  {"-jpeg", ".jpg"},
+	"jpeg": {"-jpeg", ".jpg"},
+	"tiff": {"-tiff", ".tif"},
+}
+
+// Render DPI bounds for pdf-to-image; job-service rejects out-of-range values
+// at the boundary, the worker re-clamps defensively.
+const (
+	pdfImageDefaultDPI = 150
+	pdfImageMinDPI     = 72
+	pdfImageMaxDPI     = 600
+)
+
+// pdfImageOptionString reads a string option, coercing JSON numbers so a
+// client sending {"dpi": 300} works the same as {"dpi": "300"}.
+func pdfImageOptionString(options map[string]interface{}, key string) string {
+	v, ok := options[key]
+	if !ok || v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return strings.Trim(string(b), `"`)
+}
+
+// parsePdfToImageOptions resolves {format, dpi} with safe defaults. Invalid
+// values degrade rather than fail — job-service already rejected them for
+// external callers.
+func parsePdfToImageOptions(options map[string]interface{}) (flag string, ext string, dpi int) {
+	format := strings.ToLower(strings.TrimSpace(pdfImageOptionString(options, "format")))
+	spec, ok := pdfImageFormats[format]
+	if !ok {
+		spec = pdfImageFormats["png"]
+	}
+
+	dpi = pdfImageDefaultDPI
+	if raw := pdfImageOptionString(options, "dpi"); raw != "" {
+		if parsed, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+			dpi = parsed
+		}
+	}
+	if dpi < pdfImageMinDPI {
+		dpi = pdfImageMinDPI
+	}
+	if dpi > pdfImageMaxDPI {
+		dpi = pdfImageMaxDPI
+	}
+	return spec.flag, spec.ext, dpi
+}
+
+// imageMaxDim bounds the longest edge of a rendered page in pixels so a large
+// page at high DPI (especially uncompressed TIFF) cannot exhaust memory.
+// NOTE: mirrors optimize-pdf's ocrMaxImageDim/computeSafeDPI pair (duplicated
+// by design, §1 no-shared-code) — keep the clamping semantics in sync.
+func imageMaxDim() int {
+	const def = 10000
+	if v := os.Getenv("IMAGE_MAX_IMAGE_DIM"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// computeSafeDPI returns a render resolution keeping the longest page edge
+// within maxDim pixels, never exceeding requestedDPI (pts/72 * dpi = pixels).
+// NOTE: duplicated from optimize-pdf/processing/processing_free.go by design.
+func computeSafeDPI(widthPts, heightPts float64, requestedDPI, maxDim int) int {
+	longest := widthPts
+	if heightPts > longest {
+		longest = heightPts
+	}
+	if longest <= 0 || maxDim <= 0 {
+		return requestedDPI
+	}
+
+	fitDPI := int(float64(maxDim) * 72.0 / longest)
+	if fitDPI >= requestedDPI {
+		return requestedDPI
+	}
+	if fitDPI < 1 {
+		return 1
+	}
+	return fitDPI
+}
+
+// pdfPageDimensions returns the first page's media-box size in PDF points via
+// `pdfinfo` (poppler-utils). Used only to bound render DPI; errors non-fatal.
+// NOTE: duplicated from optimize-pdf/processing/processing_free.go by design.
+func pdfPageDimensions(ctx context.Context, inputPath string) (float64, float64, error) {
+	out, err := exec.CommandContext(ctx, "pdfinfo", inputPath).Output()
+	if err != nil {
+		return 0, 0, fmt.Errorf("pdfinfo failed: %w", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(line, "Page size:") {
+			continue
+		}
+		// Example: "Page size:      1224 x 1584 pts (letter)"
+		rest := strings.TrimSpace(strings.TrimPrefix(line, "Page size:"))
+		fields := strings.Fields(rest)
+		if len(fields) < 3 || fields[1] != "x" {
+			break
+		}
+		w, errW := strconv.ParseFloat(fields[0], 64)
+		h, errH := strconv.ParseFloat(fields[2], 64)
+		if errW != nil || errH != nil {
+			break
+		}
+		return w, h, nil
+	}
+	return 0, 0, fmt.Errorf("could not parse page size from pdfinfo output")
+}
+
+// pdfToImages converts a PDF to images (PNG default; JPG/TIFF via the format
+// option) at the requested DPI. Single-page PDFs return the bare image;
+// multi-page PDFs return a ZIP. It returns the actual output path — the
+// extension is the only channel job-service uses to name the download.
+func pdfToImages(ctx context.Context, inputPath string, outputDir string, baseName string, options map[string]interface{}) (string, error) {
+	formatFlag, ext, dpi := parsePdfToImageOptions(options)
+	slog.Info("converting PDF to images", "input", inputPath, "format", formatFlag, "dpi", dpi)
+
+	// Cap the effective DPI against page size so oversized renders can't
+	// exhaust memory (uncompressed TIFF is the worst case).
+	if w, h, err := pdfPageDimensions(ctx, inputPath); err == nil {
+		if safe := computeSafeDPI(w, h, dpi, imageMaxDim()); safe != dpi {
+			slog.Info("capping render DPI to bound image size", "requested", dpi, "using", safe)
+			dpi = safe
+		}
+	}
 
 	tempDir, err := os.MkdirTemp("", "pdf-images-*")
 	if err != nil {
@@ -38,25 +178,25 @@ func pdfToImages(ctx context.Context, inputPath string, outputDir string, baseNa
 	// Convert all pages in a single pdftoppm invocation — spawning one process
 	// per page dominated conversion time on large PDFs. pdftoppm zero-pads the
 	// page index, so the globs below stay in page order.
-	cmd := exec.CommandContext(ctx, "pdftoppm", "-png", inputPath, filepath.Join(tempDir, "page"))
+	cmd := exec.CommandContext(ctx, "pdftoppm", formatFlag, "-r", strconv.Itoa(dpi), inputPath, filepath.Join(tempDir, "page"))
 	if err := cmd.Run(); err != nil {
 		slog.ErrorContext(ctx, "pdftoppm failed", "error", err, "op", "pdftoppm.render")
 		return "", fmt.Errorf("PDF to image conversion requires pdftoppm (poppler-utils): %w", err)
 	}
 
-	// Single-page PDF: return the PNG directly instead of wrapping in ZIP.
+	// Single-page PDF: return the image directly instead of wrapping in ZIP.
 	if pdfCtx.PageCount == 1 {
-		pngFiles, _ := filepath.Glob(filepath.Join(tempDir, "*.png"))
-		if len(pngFiles) == 1 {
-			outputPath := filepath.Join(outputDir, baseName+".png")
-			if err := copyFile(pngFiles[0], outputPath); err != nil {
+		imageFiles, _ := filepath.Glob(filepath.Join(tempDir, "*"+ext))
+		if len(imageFiles) == 1 {
+			outputPath := filepath.Join(outputDir, baseName+ext)
+			if err := copyFile(imageFiles[0], outputPath); err != nil {
 				return "", fmt.Errorf("failed to copy single page image: %w", err)
 			}
 			return outputPath, nil
 		}
 	}
 
-	// Multi-page PDF: ZIP all PNGs.
+	// Multi-page PDF: ZIP all page images.
 	outputPath := filepath.Join(outputDir, baseName+".zip")
 	return outputPath, zipDirectory(tempDir, outputPath)
 }

@@ -33,7 +33,7 @@ graph TB
         subgraph Processing["processing package"]
             PROC["ProcessFile(toolType, ...)"]
 
-            PDF_IMG["pdftoppm (Poppler)<br/>→ PNG or ZIP of PNGs"]
+            PDF_IMG["pdftoppm (Poppler)<br/>format png/jpg/tiff · dpi 72–600 (DPI capped vs page size)<br/>→ single image or ZIP"]
             PDF2DOCX["pdf2docx (Python primary)"]
             LO_DOCX_FALLBACK["LibreOffice writer_pdf_import<br/>(fallback for pdf-to-word)"]
             LO_XLSX["LibreOffice → xlsx"]
