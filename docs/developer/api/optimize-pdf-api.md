@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost` (the Caddy edge; the api-gateway is internal-only)
 
-Optimize PDF files - compress, repair, and add OCR text layers.
+Optimize PDF files - compress, repair, add OCR text layers, and flatten annotations/forms.
 
 ---
 
@@ -13,6 +13,7 @@ Optimize PDF files - compress, repair, and add OCR text layers.
 | `compress-pdf` | Reduce PDF file size |
 | `repair-pdf` | Fix corrupted or damaged PDFs |
 | `ocr-pdf` | Add searchable text layer to scanned PDFs |
+| `flatten-pdf` | Bake annotations and form fields into page content |
 
 ---
 
@@ -385,6 +386,34 @@ German OCR with higher DPI:
 | 600 | Very high quality, detailed documents |
 
 **Note:** Higher DPI improves accuracy but increases processing time.
+
+---
+
+### flatten-pdf
+
+Bake annotations and form-field appearance streams into the page content so the PDF looks the same everywhere and is no longer editable as a form.
+
+**Input:** Single PDF file
+
+**Output:** Flattened PDF
+
+**Conversion Engine:** Ghostscript (`pdfwrite` re-distillation with `-dPreserveAnnots=false -dPrinted`)
+
+**Options:** None
+
+**Request Example:**
+```json
+{
+  "uploadId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**What it does:**
+- Merges annotation appearance streams into the page content
+- Renders filled form-field values as static page content
+- Keeps text vector and searchable (no rasterization)
+
+**Note:** Form fields without appearance streams (rare `NeedAppearances` documents) render nothing after flattening. A Ghostscript error fails the job with the standard failure flow.
 
 ---
 

@@ -8,7 +8,7 @@ Manipulate and organize PDF files - merge, split, reorder pages, and more.
 
 ## Supported Tools
 
-13 tools — see `organize-pdf/main.go:59` `AllowedTools` for the canonical list.
+14 tools — see `organize-pdf/main.go:59` `AllowedTools` for the canonical list.
 
 | Tool | Description |
 |------|-------------|
@@ -25,6 +25,7 @@ Manipulate and organize PDF files - merge, split, reorder pages, and more.
 | `sign-pdf` | Stamp a signature image on a chosen page |
 | `edit-pdf` | Add free-form text annotations |
 | `add-page-numbers` | Add page-number stamps |
+| `pdf-metadata` | Set document metadata (title, author, subject, keywords) |
 
 ---
 
@@ -107,7 +108,7 @@ Content-Type: application/json
 | Status | Code | Description |
 |--------|------|-------------|
 | 400 | INVALID_INPUT | Invalid tool, options, or file type |
-| 400 | INVALID_OPTIONS | Options payload fails the per-tool schema (scan-to-pdf) |
+| 400 | INVALID_OPTIONS | Options payload fails the per-tool schema (scan-to-pdf, pdf-metadata) |
 | 401 | UNAUTHORIZED | Not authenticated |
 | 404 | NOT_FOUND | Upload not found |
 
@@ -276,6 +277,7 @@ GET /api/organize-pdf/{tool}/{jobId}/download
 | sign-pdf | application/pdf | Single PDF with signature stamp |
 | edit-pdf | application/pdf | Single PDF with text annotations |
 | add-page-numbers | application/pdf | Single PDF with page numbers |
+| pdf-metadata | application/pdf | Single PDF with updated metadata |
 
 ### Errors
 
@@ -536,6 +538,7 @@ Convert images to a PDF document, with optional per-page perspective correction 
 | language | string | `"eng"` | OCR language — one of `eng`, `deu`, `fra`, `spa`, `hin` |
 | pageSize | string | `"auto"` | PDF page size — `""`/`"auto"` (page = image size), `"a4"`, `"letter"`, `"id"` (ISO ID-1 card, 85.6×54 mm). **Ignored when `ocr=true`** (Tesseract emits image-sized pages) |
 | enhance | string | — | `""`/`"none"`, `"grayscale"`, `"bw"` (adaptive-threshold scan look), `"color-boost"` |
+| margin | string | — | White margin around the image — `""`/`"none"`, `"small"`, `"normal"`, `"large"` (pdfcpu import scale `1.0`/`0.95`/`0.9`/`0.85` relative). **Only applies with a fixed `pageSize`** (`a4`, `letter`, `id`); with `"auto"` (or on the OCR path) it is accepted but ignored with a worker warning |
 | pages | array | — | Per-page directives, **index-aligned with `uploadIds`** (max 50 entries); each entry optional |
 | pages[i].corners | object | — | Normalized document quad to perspective-warp: `tl`/`tr`/`br`/`bl`, each `{x, y}` in `[0, 1]`. All four corners or omitted. Get suggested corners from `POST /api/organize-pdf/detect-edges` |
 | pages[i].rotation | integer | 0 | Clockwise rotation applied after the warp — `0`, `90`, `180`, or `270` |
@@ -552,6 +555,7 @@ Convert images to a PDF document, with optional per-page perspective correction 
     "language": "eng",
     "pageSize": "a4",
     "enhance": "bw",
+    "margin": "normal",
     "pages": [
       {
         "corners": {
@@ -648,6 +652,49 @@ Adds page-number stamps to every page.
 | format | string | No | e.g., `"%d / %d"` (current / total) |
 | fontSize | number | No | Default 10 |
 | color | string (hex) | No | Default `#000000` |
+
+---
+
+### pdf-metadata
+
+Sets document metadata (the PDF Info dictionary — Title, Author, Subject, Keywords).
+
+**Input:** Single PDF file
+
+**Output:** PDF with updated metadata
+
+**Conversion Engine:** pdfcpu (`AddPropertiesFile` writes the Info dictionary)
+
+**Options** (required — at least one of the four fields must be present; validated at job creation, violations return 400 `INVALID_OPTIONS`):
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| title | string | No* | Document title — ≤ 512 characters after trimming, no NUL bytes |
+| author | string | No* | Document author — same constraints |
+| subject | string | No* | Document subject — same constraints |
+| keywords | string | No* | Document keywords — same constraints |
+
+*At least one of `title`, `author`, `subject`, or `keywords` is required.
+
+**Request Example:**
+```json
+{
+  "uploadId": "upload-id",
+  "options": {
+    "title": "My Doc",
+    "author": "Me",
+    "subject": "Docs",
+    "keywords": "a, b"
+  }
+}
+```
+
+**Errors:**
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 400 | INVALID_OPTIONS | Options missing, none of the four fields present, a field longer than 512 characters after trimming, or a field containing NUL bytes |
+| — | (job failed) | Encrypted input PDFs fail during processing with pdfcpu's error |
 
 ---
 

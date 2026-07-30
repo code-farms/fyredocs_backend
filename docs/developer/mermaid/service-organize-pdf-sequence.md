@@ -143,7 +143,7 @@ sequenceDiagram
     participant PG as PostgreSQL
     participant S3 as MinIO / S3
 
-    NATS->>Worker: Fetch message<br/>{toolType: "scan-to-pdf", inputPaths: [image keys], options: {ocr, language, pageSize, enhance, pages[]}}
+    NATS->>Worker: Fetch message<br/>{toolType: "scan-to-pdf", inputPaths: [image keys], options: {ocr, language, pageSize, enhance, margin, pages[]}}
 
     Worker->>PG: SET status=processing, progress=20
     Worker->>S3: Download image keys → scratch/in
@@ -164,9 +164,9 @@ sequenceDiagram
     end
 
     alt ocr=false
-        Processing->>PC: pdfcpu ImportImagesFile with page-size config<br/>(form:A4 / form:Letter / dim:243 153pt for id · auto = nil)
+        Processing->>PC: pdfcpu ImportImagesFile with page-size config<br/>(form:A4 / form:Letter / dim:243 153pt for id · auto = nil ·<br/>margin = relative scale 1.0/0.95/0.9/0.85 on fixed forms only, ignored + warn on auto)
     else ocr=true
-        Processing->>PC: tesseract -l &lt;language&gt; → searchable PDF<br/>(pageSize IGNORED — image-sized pages)
+        Processing->>PC: tesseract -l &lt;language&gt; → searchable PDF<br/>(pageSize and margin IGNORED — image-sized pages)
     end
 
     PC-->>Worker: scratch/out/&lt;jobId&gt;.pdf
@@ -222,7 +222,7 @@ sequenceDiagram
     Main->>NATS: natsconn.Connect()
     Main->>NATS: EnsureStreams()
 
-    Main->>Worker: go worker.Run(ctx, WorkerConfig{<br/>  ServiceName: "organize-pdf",<br/>  AllowedTools: 13 tools — merge-pdf · split-pdf · remove-pages · extract-pages ·<br/>  organize-pdf · scan-to-pdf · rotate-pdf · watermark-pdf · protect-pdf ·<br/>  unlock-pdf · sign-pdf · edit-pdf · add-page-numbers<br/>})
+    Main->>Worker: go worker.Run(ctx, WorkerConfig{<br/>  ServiceName: "organize-pdf",<br/>  AllowedTools: 14 tools — merge-pdf · split-pdf · remove-pages · extract-pages ·<br/>  organize-pdf · scan-to-pdf · rotate-pdf · watermark-pdf · protect-pdf ·<br/>  unlock-pdf · sign-pdf · edit-pdf · add-page-numbers · pdf-metadata<br/>})
 
     Main->>Gin: Setup /healthz, /readyz, /metrics
     Main->>Gin: ListenAndServe(:8084)

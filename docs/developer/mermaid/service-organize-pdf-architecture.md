@@ -50,6 +50,7 @@ graph TB
             SIGN["sign-pdf<br/>(image stamp)"]
             EDIT["edit-pdf<br/>(text stamp)"]
             PAGENO["add-page-numbers"]
+            METADATA["pdf-metadata<br/>(Info dictionary)"]
         end
 
         subgraph Models["internal/models"]
@@ -77,6 +78,7 @@ graph TB
     PROC --> SIGN
     PROC --> EDIT
     PROC --> PAGENO
+    PROC --> METADATA
 
     DISPATCH -->|Update status| DB_CONN
     DISPATCH -->|"jobs.events.&lt;jobId&gt;.{processing,completed,failed}"| EVENTS["JOBS_EVENTS"]
@@ -99,7 +101,7 @@ graph TB
 
 ## Allowed Tool Types
 
-The whitelist in `main.go:59` is the authoritative source — 13 tools.
+The whitelist in `main.go:59` is the authoritative source — 14 tools.
 
 ```mermaid
 graph LR
@@ -123,6 +125,10 @@ graph LR
     subgraph Encryption["Encryption"]
         L["protect-pdf"]
         M["unlock-pdf"]
+    end
+
+    subgraph Metadata["Metadata"]
+        N["pdf-metadata"]
     end
 ```
 

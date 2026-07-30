@@ -3061,7 +3061,7 @@
                 },
                 {
                   "key": "options",
-                  "value": "{\"ocr\":true,\"language\":\"eng\",\"pageSize\":\"a4\",\"enhance\":\"bw\",\"pages\":[{\"corners\":{\"tl\":{\"x\":0.04,\"y\":0.06},\"tr\":{\"x\":0.97,\"y\":0.05},\"br\":{\"x\":0.96,\"y\":0.95},\"bl\":{\"x\":0.05,\"y\":0.94}},\"rotation\":90}]}",
+                  "value": "{\"ocr\":true,\"language\":\"eng\",\"pageSize\":\"a4\",\"enhance\":\"bw\",\"margin\":\"normal\",\"pages\":[{\"corners\":{\"tl\":{\"x\":0.04,\"y\":0.06},\"tr\":{\"x\":0.97,\"y\":0.05},\"br\":{\"x\":0.96,\"y\":0.95},\"bl\":{\"x\":0.05,\"y\":0.94}},\"rotation\":90}]}",
                   "type": "text"
                 }
               ]
@@ -3077,7 +3077,7 @@
                 "scan-to-pdf"
               ]
             },
-            "description": "Convert images to PDF with the full scanner options: OCR (Tesseract, languages eng/deu/fra/spa/hin), pageSize (auto/a4/letter/id — ignored when ocr=true), enhance (none/grayscale/bw/color-boost), and per-page corners (normalized 0..1 perspective-warp quad, e.g. from Detect Edges) + rotation (0/90/180/270, clockwise, applied after the warp). pages[] is index-aligned with the input files. All options are optional and validated at job creation (400 INVALID_OPTIONS)."
+            "description": "Convert images to PDF with the full scanner options: OCR (Tesseract, languages eng/deu/fra/spa/hin), pageSize (auto/a4/letter/id — ignored when ocr=true), enhance (none/grayscale/bw/color-boost), margin (none/small/normal/large — white margin via relative import scale 1.0/0.95/0.9/0.85; only applies with a fixed pageSize a4/letter/id, ignored with a worker warning on auto or the OCR path), and per-page corners (normalized 0..1 perspective-warp quad, e.g. from Detect Edges) + rotation (0/90/180/270, clockwise, applied after the warp). pages[] is index-aligned with the input files. All options are optional and validated at job creation (400 INVALID_OPTIONS)."
           },
           "response": [
             {
@@ -3100,7 +3100,7 @@
                     },
                     {
                       "key": "options",
-                      "value": "{\"ocr\":true,\"language\":\"eng\",\"pageSize\":\"a4\",\"enhance\":\"bw\",\"pages\":[{\"corners\":{\"tl\":{\"x\":0.04,\"y\":0.06},\"tr\":{\"x\":0.97,\"y\":0.05},\"br\":{\"x\":0.96,\"y\":0.95},\"bl\":{\"x\":0.05,\"y\":0.94}},\"rotation\":90}]}",
+                      "value": "{\"ocr\":true,\"language\":\"eng\",\"pageSize\":\"a4\",\"enhance\":\"bw\",\"margin\":\"normal\",\"pages\":[{\"corners\":{\"tl\":{\"x\":0.04,\"y\":0.06},\"tr\":{\"x\":0.97,\"y\":0.05},\"br\":{\"x\":0.96,\"y\":0.95},\"bl\":{\"x\":0.05,\"y\":0.94}},\"rotation\":90}]}",
                       "type": "text"
                     }
                   ]
@@ -3209,6 +3209,89 @@
                 }
               ],
               "body": "{\n  \"success\": true,\n  \"message\": \"Edges detected\",\n  \"data\": {\n    \"corners\": {\n      \"tl\": {\"x\": 0.04, \"y\": 0.06},\n      \"tr\": {\"x\": 0.97, \"y\": 0.05},\n      \"br\": {\"x\": 0.96, \"y\": 0.95},\n      \"bl\": {\"x\": 0.05, \"y\": 0.94}\n    },\n    \"confidence\": 0.83,\n    \"width\": 3024,\n    \"height\": 4032\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Set PDF Metadata",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "pm.test(\"Response indicates success\", function() {",
+                  "    pm.expect(response.success).to.eql(true);",
+                  "});",
+                  "if (response.data && response.data.id) {",
+                  "    pm.environment.set('job_id', response.data.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uploadId\": \"{{upload_id}}\",\n  \"options\": {\n    \"title\": \"My Doc\",\n    \"author\": \"Me\",\n    \"subject\": \"Docs\",\n    \"keywords\": \"a, b\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/organize-pdf/pdf-metadata",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "organize-pdf",
+                "pdf-metadata"
+              ]
+            },
+            "description": "Set document metadata (the PDF Info dictionary) via pdfcpu AddPropertiesFile. Options are REQUIRED: at least one of title/author/subject/keywords, each a string of at most 512 characters after trimming with no NUL bytes — validated at job creation (400 INVALID_OPTIONS). Encrypted PDFs fail with pdfcpu's error."
+          },
+          "response": [
+            {
+              "name": "201 - Job Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"uploadId\": \"{{upload_id}}\",\n  \"options\": {\n    \"title\": \"My Doc\",\n    \"author\": \"Me\",\n    \"subject\": \"Docs\",\n    \"keywords\": \"a, b\"\n  }\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/api/organize-pdf/pdf-metadata",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "organize-pdf",
+                    "pdf-metadata"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"message\": \"Organization job created\",\n  \"data\": {\n    \"id\": \"job_abc123\",\n    \"tool\": \"pdf-metadata\",\n    \"status\": \"pending\",\n    \"createdAt\": \"2026-03-03T12:00:00Z\"\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
             }
           ]
         },
@@ -3710,6 +3793,89 @@
                 }
               ],
               "body": "{\n  \"success\": true,\n  \"message\": \"Optimization job created\",\n  \"data\": {\n    \"id\": \"job_abc123\",\n    \"tool\": \"ocr-pdf\",\n    \"status\": \"pending\",\n    \"createdAt\": \"2026-03-03T12:00:00Z\"\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Flatten PDF",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const response = pm.response.json();",
+                  "pm.test(\"Response indicates success\", function() {",
+                  "    pm.expect(response.success).to.eql(true);",
+                  "});",
+                  "if (response.data && response.data.id) {",
+                  "    pm.environment.set('job_id', response.data.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uploadId\": \"{{upload_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/optimize-pdf/flatten-pdf",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "optimize-pdf",
+                "flatten-pdf"
+              ]
+            },
+            "description": "Bake annotations and form-field appearance streams into the page content (Ghostscript pdfwrite re-distillation with -dPreserveAnnots=false -dPrinted). Text stays vector and searchable. No options. Caveat: form fields without appearance streams (rare NeedAppearances documents) render nothing after flattening."
+          },
+          "response": [
+            {
+              "name": "201 - Job Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"uploadId\": \"{{upload_id}}\"\n}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/api/optimize-pdf/flatten-pdf",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "optimize-pdf",
+                    "flatten-pdf"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"message\": \"Optimization job created\",\n  \"data\": {\n    \"id\": \"job_abc123\",\n    \"tool\": \"flatten-pdf\",\n    \"status\": \"pending\",\n    \"createdAt\": \"2026-03-03T12:00:00Z\"\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
             }
           ]
         },

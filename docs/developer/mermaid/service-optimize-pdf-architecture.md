@@ -32,6 +32,7 @@ graph TB
             COMPRESS["compress-pdf<br/>Reduce file size"]
             REPAIR["repair-pdf<br/>Fix corrupted PDFs"]
             OCR["ocr-pdf<br/>Add text layer via OCR"]
+            FLATTEN["flatten-pdf<br/>Bake annotations/forms"]
         end
 
         subgraph Models["internal/models"]
@@ -48,6 +49,7 @@ graph TB
     PROC --> COMPRESS
     PROC --> REPAIR
     PROC --> OCR
+    PROC --> FLATTEN
     PROC --> STORE
 
     DISPATCH -->|Update status| DB_CONN
@@ -68,6 +70,7 @@ graph LR
         A["compress-pdf<br/>Reduce PDF file size<br/>with quality options"]
         B["repair-pdf<br/>Fix corrupted or<br/>malformed PDF files"]
         C["ocr-pdf<br/>Add searchable text layer<br/>to scanned PDFs"]
+        D["flatten-pdf<br/>Bake annotations and forms<br/>into page content"]
     end
 ```
 

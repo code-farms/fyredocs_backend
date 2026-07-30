@@ -48,11 +48,13 @@ func TestServiceForTool(t *testing.T) {
 		{"sign-pdf", "organize-pdf"},
 		{"edit-pdf", "organize-pdf"},
 		{"add-page-numbers", "organize-pdf"},
+		{"pdf-metadata", "organize-pdf"},
 
 		// optimize-pdf (heavy processing)
 		{"compress-pdf", "optimize-pdf"},
 		{"repair-pdf", "optimize-pdf"},
 		{"ocr-pdf", "optimize-pdf"},
+		{"flatten-pdf", "optimize-pdf"},
 
 		// unknown
 		{"unknown-tool", ""},

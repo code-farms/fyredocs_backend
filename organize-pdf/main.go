@@ -99,6 +99,7 @@ func main() {
 				"sign-pdf":         true,
 				"edit-pdf":         true,
 				"add-page-numbers": true,
+				"pdf-metadata":     true,
 			},
 			Process:     processFunc,
 			JS:          natsconn.JS,

@@ -68,6 +68,7 @@ type ScanOptions struct {
 	Language string     `json:"language"`
 	PageSize string     `json:"pageSize"` // "", auto, a4, letter, id
 	Enhance  string     `json:"enhance"`  // "", none, grayscale, bw, color-boost
+	Margin   string     `json:"margin"`   // "", none, small, normal, large
 	Pages    []ScanPage `json:"pages"`
 }
 
@@ -109,6 +110,21 @@ func parseScanOptions(options map[string]interface{}) ScanOptions {
 	default:
 		slog.Warn("unknown enhance mode; skipping enhancement", "enhance", opts.Enhance)
 		opts.Enhance = ""
+	}
+
+	opts.Margin = strings.ToLower(strings.TrimSpace(opts.Margin))
+	switch opts.Margin {
+	case "", "none", "small", "normal", "large":
+	default:
+		slog.Warn("unknown margin; ignoring", "margin", opts.Margin)
+		opts.Margin = ""
+	}
+	// Margins are implemented as an import scale on a FIXED page form; with
+	// auto sizing the page IS the image and there is nothing to inset against
+	// (pdfcpu defaults any non-empty descriptor to A4). Degrade, don't fail.
+	if opts.Margin != "" && opts.Margin != "none" && (opts.PageSize == "" || opts.PageSize == "auto") {
+		slog.Warn("margin requires a fixed pageSize (a4/letter/id); ignoring", "margin", opts.Margin)
+		opts.Margin = ""
 	}
 
 	for i := range opts.Pages {
@@ -262,21 +278,40 @@ func preprocessScanImages(ctx context.Context, inputPaths []string, opts ScanOpt
 	return processed, nil
 }
 
+// marginScale maps the margin preset to a pdfcpu relative-scale token: the
+// image is centered on the page form, so scaling it down leaves an even
+// border. NOTE: the preset names are validated in
+// job-service/handlers/tool_options.go — keep both lists in sync.
+func marginScale(margin string) string {
+	switch strings.ToLower(strings.TrimSpace(margin)) {
+	case "small":
+		return "0.95"
+	case "normal":
+		return "0.9"
+	case "large":
+		return "0.85"
+	default:
+		return "1.0"
+	}
+}
+
 // importConfigForPageSize builds the pdfcpu import config for the requested
-// output page size. auto/empty keeps the current behavior (page = image
-// dimensions). Unknown values degrade to auto — job-service already rejected
-// them for external callers.
-func importConfigForPageSize(pageSize string) (*pdfcpu.Import, error) {
+// output page size and margin preset. auto/empty keeps the current behavior
+// (page = image dimensions; margin cannot apply — see parseScanOptions).
+// Unknown values degrade to auto — job-service already rejected them for
+// external callers.
+func importConfigForPageSize(pageSize, margin string) (*pdfcpu.Import, error) {
+	scale := marginScale(margin)
 	switch strings.ToLower(strings.TrimSpace(pageSize)) {
 	case "", "auto":
 		return nil, nil
 	case "a4":
-		return api.Import("form:A4, pos:c, sc:1.0 rel", types.POINTS)
+		return api.Import(fmt.Sprintf("form:A4, pos:c, sc:%s rel", scale), types.POINTS)
 	case "letter":
-		return api.Import("form:Letter, pos:c, sc:1.0 rel", types.POINTS)
+		return api.Import(fmt.Sprintf("form:Letter, pos:c, sc:%s rel", scale), types.POINTS)
 	case "id":
 		// ISO ID-1 card: 85.6 × 54 mm = 242.6 × 153.1 points.
-		return api.Import("dim:243 153, pos:c, sc:1.0 rel", types.POINTS)
+		return api.Import(fmt.Sprintf("dim:243 153, pos:c, sc:%s rel", scale), types.POINTS)
 	default:
 		return nil, nil
 	}
@@ -317,7 +352,7 @@ func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, opti
 			return scanToPDFWithOCR(ctx, paths, outputPath, tesseractLang(opts.Language))
 		}
 
-		imp, err := importConfigForPageSize(opts.PageSize)
+		imp, err := importConfigForPageSize(opts.PageSize, opts.Margin)
 		if err != nil {
 			return fmt.Errorf("page size config: %w", err)
 		}
@@ -329,7 +364,7 @@ func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, opti
 		return scanToPDFWithOCR(ctx, paths, outputPath, tesseractLang(opts.Language))
 	}
 
-	imp, err := importConfigForPageSize(opts.PageSize)
+	imp, err := importConfigForPageSize(opts.PageSize, opts.Margin)
 	if err != nil {
 		return fmt.Errorf("page size config: %w", err)
 	}

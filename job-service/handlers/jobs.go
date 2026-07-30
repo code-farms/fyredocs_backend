@@ -1154,7 +1154,7 @@ func validateFileType(toolType string, fileName string) error {
 		"merge-pdf", "split-pdf", "compress-pdf",
 		"rotate-pdf", "remove-pages", "extract-pages", "organize-pdf",
 		"watermark-pdf", "protect-pdf", "unlock-pdf", "sign-pdf", "edit-pdf",
-		"add-page-numbers", "repair-pdf", "ocr-pdf", "ocr":
+		"add-page-numbers", "repair-pdf", "ocr-pdf", "ocr", "flatten-pdf", "pdf-metadata":
 		if !isPDF {
 			return fmt.Errorf("only PDF files are supported for this tool")
 		}
@@ -1203,7 +1203,7 @@ func mimeCategory(toolType string) string {
 		"merge-pdf", "split-pdf", "compress-pdf",
 		"rotate-pdf", "remove-pages", "extract-pages", "organize-pdf",
 		"watermark-pdf", "protect-pdf", "unlock-pdf", "sign-pdf", "edit-pdf",
-		"add-page-numbers", "repair-pdf", "ocr-pdf", "ocr":
+		"add-page-numbers", "repair-pdf", "ocr-pdf", "ocr", "flatten-pdf", "pdf-metadata":
 		return "pdf"
 	case "scan-to-pdf":
 		return "image"

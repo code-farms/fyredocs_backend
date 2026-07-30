@@ -63,11 +63,13 @@ var ToolServiceMap = map[string]string{
 	"sign-pdf":         "organize-pdf",
 	"edit-pdf":         "organize-pdf",
 	"add-page-numbers": "organize-pdf",
+	"pdf-metadata":     "organize-pdf",
 
 	// optimize-pdf tools (heavy Ghostscript/Tesseract processing)
 	"compress-pdf": "optimize-pdf",
 	"repair-pdf":   "optimize-pdf",
 	"ocr-pdf":      "optimize-pdf",
+	"flatten-pdf":  "optimize-pdf",
 }
 
 // ServiceForTool returns the processing service name for the given tool type.

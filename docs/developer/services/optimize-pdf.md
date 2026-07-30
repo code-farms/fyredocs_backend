@@ -1,6 +1,6 @@
 # Optimize PDF Service
 
-PDF optimization microservice providing compression, repair, and OCR capabilities.
+PDF optimization microservice providing compression, repair, OCR, and flattening capabilities.
 
 ## Overview
 
@@ -9,8 +9,8 @@ PDF optimization microservice providing compression, repair, and OCR capabilitie
 | Port | 8085 |
 | Route Prefix | `/api/optimize-pdf` |
 | Bus | NATS JetStream — pulls from `jobs.dispatch.optimize-pdf` (durable consumer), publishes events to `jobs.events.<jobId>.*`, DLQ `jobs.dlq.optimize-pdf` |
-| Engines | Ghostscript (`compress-pdf`, `repair-pdf`), Tesseract + Poppler `pdftoppm` (`ocr-pdf`) |
-| Allowed tools | `compress-pdf`, `repair-pdf`, `ocr-pdf` (3 — see `optimize-pdf/main.go:59`) |
+| Engines | Ghostscript (`compress-pdf`, `repair-pdf`, `flatten-pdf`), Tesseract + Poppler `pdftoppm` (`ocr-pdf`) |
+| Allowed tools | `compress-pdf`, `repair-pdf`, `ocr-pdf`, `flatten-pdf` (4 — see `optimize-pdf/main.go:59`) |
 
 ## Supported Operations
 
@@ -52,6 +52,19 @@ Adds a searchable text layer to scanned PDFs using Tesseract OCR.
 curl -X POST http://localhost/api/optimize-pdf/ocr-pdf \
   -F "files=@scanned-document.pdf" \
   -F 'options={"language":"eng","dpi":"300"}'
+```
+
+### 4. Flatten PDF (`flatten-pdf`)
+Bakes annotations and form-field appearance streams into the page content so the PDF renders identically everywhere and can no longer be edited as a form. Implemented as a Ghostscript `pdfwrite` re-distillation with `-dPreserveAnnots=false -dPrinted` — appearance streams are merged into the page content while text stays vector and searchable (no rasterization).
+
+**Options:** none.
+
+**Known caveat:** form fields that lack appearance streams (rare `NeedAppearances` documents, where the viewer is expected to generate them) render nothing after flattening.
+
+**Example:**
+```bash
+curl -X POST http://localhost/api/optimize-pdf/flatten-pdf \
+  -F "files=@form-document.pdf"
 ```
 
 ## API Endpoints
@@ -174,6 +187,7 @@ Caching is **best-effort**: any cache-path error (Redis down, stat/copy failure,
 │ │  - Compress │ │
 │ │  - Repair   │ │
 │ │  - OCR      │ │
+│ │  - Flatten  │ │
 │ └──────┬──────┘ │
 │        │        │
 │ ┌──────▼──────┐ │
@@ -261,6 +275,8 @@ sequenceDiagram
         W->>T: pdftoppm (PDF to images)
         W->>T: tesseract (OCR each image to PDF)
         W->>T: pdfcpu merge (combine pages)
+    else flatten-pdf
+        W->>T: gs pdfwrite -dPreserveAnnots=false -dPrinted (bake annotations/forms)
     end
 
     alt Processing succeeds
@@ -384,8 +400,8 @@ Example — logged (raw): `[TIMEOUT] context deadline exceeded`; shown to the us
 |------------|-----------------|----------|-------|
 | Invalid tool type | All | Reject, status=failed | No |
 | Input file missing | All | status=failed | No |
-| Corrupted PDF | compress, repair | Tool returns error, status=failed | No |
-| Ghostscript failure | repair-pdf | status=failed with stderr | No |
+| Corrupted PDF | compress, repair, flatten | Tool returns error, status=failed | No |
+| Ghostscript failure | repair-pdf, flatten-pdf | status=failed with stderr | No |
 | Tesseract not installed | ocr-pdf | status=failed | No |
 | Invalid language code | ocr-pdf | Fallback to "eng" or status=failed | No |
 | No text found by OCR | ocr-pdf | Returns PDF anyway (empty text layer) | No |
@@ -445,6 +461,14 @@ Multi-step process:
 2. Run Tesseract OCR on pages **in parallel** (errgroup worker pool, capped at `min(NumCPU, 4)`)
 3. Generate searchable PDF pages
 4. Merge all pages into final PDF (pdfcpu)
+
+### Flatten PDF
+Uses Ghostscript to re-distill the PDF through the `pdfwrite` device with `-dPreserveAnnots=false -dPrinted`:
+1. Reads the input PDF
+2. Renders annotation and form-field appearance streams into the page content streams
+3. Outputs a flattened PDF — text remains vector and searchable; nothing is rasterized
+
+Any Ghostscript error follows the standard job failure path (status=failed). Fields without appearance streams (`NeedAppearances` documents) render nothing — see the caveat above.
 
 ## tmpfs capacity guard
 

@@ -79,7 +79,7 @@ sequenceDiagram
 
     GW->>JS: POST /api/&lt;group&gt;/:tool {uploadIds, options} · Idempotency-Key?
     JS->>JS: GinAuth · normalize tool · routing.ServiceForTool · per-IP RATE_LIMIT_JOB_CREATE
-    JS->>JS: validateToolOptions(tool, options) — 400 INVALID_OPTIONS (scan-to-pdf schema)
+    JS->>JS: validateToolOptions(tool, options) — 400 INVALID_OPTIONS (scan-to-pdf + pdf-metadata schemas)
 
     alt Idempotency-Key cache hit
         JS->>Redis: GET idempotency:&lt;key&gt;
