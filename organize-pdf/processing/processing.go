@@ -113,6 +113,9 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	case "add-page-numbers":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = addPageNumbers(inputPaths[0], outputPath, options)
+	case "pdf-metadata":
+		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
+		err = setPDFMetadata(inputPaths[0], outputPath, options)
 	default:
 		err = fmt.Errorf("unsupported tool type: %s", toolType)
 	}

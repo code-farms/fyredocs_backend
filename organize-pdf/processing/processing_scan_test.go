@@ -102,13 +102,13 @@ func TestTesseractLang(t *testing.T) {
 
 func TestImportConfigForPageSize(t *testing.T) {
 	for _, size := range []string{"", "auto", "AUTO", "weird"} {
-		imp, err := importConfigForPageSize(size)
+		imp, err := importConfigForPageSize(size, "")
 		if err != nil || imp != nil {
 			t.Errorf("pageSize %q: want nil config, got %v (err %v)", size, imp, err)
 		}
 	}
 
-	a4, err := importConfigForPageSize("a4")
+	a4, err := importConfigForPageSize("a4", "")
 	if err != nil || a4 == nil {
 		t.Fatalf("a4 config: %v", err)
 	}
@@ -116,17 +116,74 @@ func TestImportConfigForPageSize(t *testing.T) {
 		t.Errorf("a4 config: %+v", a4)
 	}
 
-	letter, err := importConfigForPageSize("letter")
+	letter, err := importConfigForPageSize("letter", "")
 	if err != nil || letter == nil || letter.PageSize != "Letter" {
 		t.Fatalf("letter config: %+v (err %v)", letter, err)
 	}
 
-	id, err := importConfigForPageSize("id")
+	id, err := importConfigForPageSize("id", "")
 	if err != nil || id == nil || id.PageDim == nil {
 		t.Fatalf("id config: %+v (err %v)", id, err)
 	}
 	if id.PageDim.Width < 240 || id.PageDim.Width > 246 {
 		t.Errorf("id width = %f, want ≈243pt", id.PageDim.Width)
+	}
+}
+
+// TestImportConfigMargins verifies the margin presets translate to the
+// relative import scale that leaves an even border on the fixed page form.
+func TestImportConfigMargins(t *testing.T) {
+	small, err := importConfigForPageSize("a4", "small")
+	if err != nil || small == nil {
+		t.Fatalf("a4+small: %v", err)
+	}
+	if small.Scale < 0.949 || small.Scale > 0.951 || small.ScaleAbs {
+		t.Errorf("a4+small scale = %f (abs %v), want 0.95 relative", small.Scale, small.ScaleAbs)
+	}
+
+	large, err := importConfigForPageSize("letter", "large")
+	if err != nil || large == nil {
+		t.Fatalf("letter+large: %v", err)
+	}
+	if large.Scale < 0.849 || large.Scale > 0.851 {
+		t.Errorf("letter+large scale = %f, want 0.85", large.Scale)
+	}
+
+	// Margin with auto sizing has no page form to inset against — nil config.
+	if imp, err := importConfigForPageSize("auto", "normal"); err != nil || imp != nil {
+		t.Errorf("auto+normal: want nil config, got %+v (err %v)", imp, err)
+	}
+
+	// Unknown margin degrades to full scale.
+	none, err := importConfigForPageSize("a4", "gigantic")
+	if err != nil || none == nil {
+		t.Fatalf("a4+gigantic: %v", err)
+	}
+	if none.Scale < 0.999 || none.Scale > 1.001 {
+		t.Errorf("unknown margin scale = %f, want 1.0", none.Scale)
+	}
+}
+
+// TestParseScanOptionsMargin verifies the worker's defensive margin clamping:
+// bad values and margin-with-auto both degrade to "no margin", never a
+// failed job.
+func TestParseScanOptionsMargin(t *testing.T) {
+	opts := parseScanOptions(map[string]interface{}{"pageSize": "a4", "margin": "SMALL"})
+	if opts.Margin != "small" {
+		t.Errorf("margin = %q, want small", opts.Margin)
+	}
+	opts = parseScanOptions(map[string]interface{}{"pageSize": "a4", "margin": "huge"})
+	if opts.Margin != "" {
+		t.Errorf("unknown margin = %q, want cleared", opts.Margin)
+	}
+	// Margin without a fixed page size cannot apply.
+	opts = parseScanOptions(map[string]interface{}{"margin": "normal"})
+	if opts.Margin != "" {
+		t.Errorf("margin with auto pageSize = %q, want cleared", opts.Margin)
+	}
+	opts = parseScanOptions(map[string]interface{}{"pageSize": "letter", "margin": "none"})
+	if opts.Margin != "none" {
+		t.Errorf("margin none = %q, want preserved", opts.Margin)
 	}
 }
 

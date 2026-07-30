@@ -78,7 +78,7 @@ tags:
   - name: Organize PDF
     description: Merge, split, reorder, and organize PDF pages
   - name: Optimize PDF
-    description: Compress, repair, and OCR PDF files
+    description: Compress, repair, OCR, and flatten PDF files
   - name: Jobs
     description: Cross-tool job history and real-time status updates for authenticated users
   - name: Admin Analytics
@@ -154,7 +154,8 @@ x-path-tool-organize: &toolOrganizeParam
       - sign-pdf
       - edit-pdf
       - add-page-numbers
-  description: The PDF organization tool to use (13 tools — see organize-pdf/main.go AllowedTools)
+      - pdf-metadata
+  description: The PDF organization tool to use (14 tools — see organize-pdf/main.go AllowedTools)
 
 x-path-tool-optimize: &toolOptimizeParam
   name: tool
@@ -162,7 +163,7 @@ x-path-tool-optimize: &toolOptimizeParam
   required: true
   schema:
     type: string
-    enum: [compress-pdf, repair-pdf, ocr-pdf]
+    enum: [compress-pdf, repair-pdf, ocr-pdf, flatten-pdf]
   description: The PDF optimization tool to use
 
 x-path-job-id: &jobIdParam
@@ -1462,9 +1463,11 @@ paths:
         an `uploadId` from a completed presigned multipart upload.
 
         For `scan-to-pdf`, `options` follows the `ScanToPdfOptions` schema
-        (perspective-warp corners, rotation, enhancement, page size, OCR
-        language). The schema is validated at job creation — violations return
-        400 with error code `INVALID_OPTIONS`.
+        (perspective-warp corners, rotation, enhancement, page size, margin,
+        OCR language). For `pdf-metadata`, `options` follows the
+        `PdfMetadataOptions` schema and is REQUIRED (at least one of
+        title/author/subject/keywords). Both schemas are validated at job
+        creation — violations return 400 with error code `INVALID_OPTIONS`.
       operationId: createOrganizePdfJob
       security:
         - BearerAuth: []
@@ -1640,7 +1643,7 @@ paths:
       tags: [Optimize PDF]
       summary: Create an optimize-pdf job
       description: |
-        Creates a new job to optimize a PDF (compress, repair, or OCR).
+        Creates a new job to optimize a PDF (compress, repair, OCR, or flatten).
         Accepts multipart file upload or JSON body with `uploadId`.
       operationId: createOptimizePdfJob
       security:
@@ -3299,6 +3302,15 @@ components:
           type: string
           enum: ["", none, grayscale, bw, color-boost]
           description: Image enhancement; "bw" applies an adaptive-threshold scan look
+        margin:
+          type: string
+          enum: ["", none, small, normal, large]
+          description: |
+            White margin around the image on the page (pdfcpu import scale
+            1.0/0.95/0.9/0.85 relative). Only applies with a fixed pageSize
+            (a4/letter/id) — with "auto" (or on the OCR path) the value is
+            accepted but IGNORED with a worker warning. Unknown values are
+            rejected at job creation (400 INVALID_OPTIONS).
         pages:
           type: array
           maxItems: 50
@@ -3318,6 +3330,7 @@ components:
         language: eng
         pageSize: a4
         enhance: bw
+        margin: normal
         pages:
           - corners:
               tl: { x: 0.04, y: 0.06 }
@@ -3347,6 +3360,37 @@ components:
           description: Decoded image height in pixels
           example: 4032
 
+    PdfMetadataOptions:
+      type: object
+      description: |
+        Options for pdf-metadata jobs — at least one of the four fields is
+        required. Each value must be ≤ 512 characters after trimming and must
+        not contain NUL bytes. Validated by job-service at job creation —
+        violations return 400 INVALID_OPTIONS. Encrypted input PDFs fail
+        during processing with pdfcpu's error.
+      properties:
+        title:
+          type: string
+          maxLength: 512
+          description: Document title (at least one of the four fields required)
+        author:
+          type: string
+          maxLength: 512
+          description: Document author (at least one of the four fields required)
+        subject:
+          type: string
+          maxLength: 512
+          description: Document subject (at least one of the four fields required)
+        keywords:
+          type: string
+          maxLength: 512
+          description: Document keywords (at least one of the four fields required)
+      example:
+        title: My Doc
+        author: Me
+        subject: Docs
+        keywords: a, b
+
     # -- Job Schemas --
     CreateJobRequest:
       type: object
@@ -3368,6 +3412,9 @@ components:
           description: |
             Tool-specific options (varies by tool type).
             For scan-to-pdf: see the ScanToPdfOptions schema (validated at job
+            creation; violations return 400 INVALID_OPTIONS).
+            For pdf-metadata: see the PdfMetadataOptions schema (REQUIRED — at
+            least one of title/author/subject/keywords; validated at job
             creation; violations return 400 INVALID_OPTIONS).
             For watermark-pdf:
               - type: "text" | "image" (default: "text")

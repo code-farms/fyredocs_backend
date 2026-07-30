@@ -1,6 +1,6 @@
 # Organize-PDF Service
 
-A microservice for PDF organization operations including merging, splitting, removing/extracting pages, reordering, and scanning documents to PDF.
+A microservice for PDF organization operations including merging, splitting, removing/extracting pages, reordering, scanning documents to PDF, and editing document metadata.
 
 ## Overview
 
@@ -134,11 +134,13 @@ Converts images to PDF (similar to scanning documents), with optional per-page p
 | `pages` | array | — | — | Per-page directives, **index-aligned with `uploadIds`**; each entry optional |
 | `pages[i].corners` | object | — | `{tl,tr,br,bl}` each `{x,y}` in `[0,1]` | Normalized document quad to perspective-warp; all four corners or omitted |
 | `pages[i].rotation` | integer | `0` | `0`, `90`, `180`, `270` | Clockwise rotation, applied after the warp |
+| `margin` | string | none | `""`, `none`, `small`, `normal`, `large` | White margin around the image on **fixed page sizes only** (`a4`/`letter`/`id`); maps to pdfcpu import scale `1.0`/`0.95`/`0.9`/`0.85` relative on the fixed page form |
 
-Per-image preprocessing pipeline (`processing/processing_scan.go`): decode (jpeg/png/webp, ≤ 50 MP) → if corners present: validate + perspective-warp via the pure-Go homography in `internal/imaging` → rotate → enhance → re-encode (PNG for `bw`, JPEG quality 92 otherwise) → pdfcpu `ImportImagesFile` with the page-size import config (`form:A4` / `form:Letter` / `dim:243 153`pt for `id`; `auto` = nil).
+Per-image preprocessing pipeline (`processing/processing_scan.go`): decode (jpeg/png/webp, ≤ 50 MP) → if corners present: validate + perspective-warp via the pure-Go homography in `internal/imaging` → rotate → enhance → re-encode (PNG for `bw`, JPEG quality 92 otherwise) → pdfcpu `ImportImagesFile` with the page-size import config (`form:A4` / `form:Letter` / `dim:243 153`pt for `id`; `auto` = nil; `margin` appends `sc:<factor> rel` to the fixed-form config).
 
 **Caveats:**
 - **OCR path ignores `pageSize`** — Tesseract emits image-sized pages.
+- **`margin` only applies with a fixed `pageSize`** (`a4`/`letter`/`id`) — the scale factor is relative to the fixed page form. With `pageSize: auto` (or on the OCR path) `margin` is accepted but **ignored** with a worker `slog.Warn` (degrade-don't-fail). Unknown `margin` values are rejected by job-service at job creation (400 `INVALID_OPTIONS`).
 - **EXIF contract:** Go image decoding ignores EXIF orientation. `corners` and `rotation` are relative to the **decoded pixel grid**; clients must bake EXIF orientation into the pixels before upload.
 - Options are validated by job-service at job creation (400 `INVALID_OPTIONS`); the worker re-clamps defensively and never fails a job on a bad enum value — it degrades to the default with a `slog.Warn`.
 
@@ -148,7 +150,7 @@ curl -X POST http://localhost/api/organize-pdf/scan-to-pdf \
   -H "Authorization: Bearer $TOKEN" \
   -F "files=@scan1.jpg" \
   -F "files=@scan2.jpg" \
-  -F 'options={"ocr":true,"language":"eng","pageSize":"a4","enhance":"bw","pages":[{"corners":{"tl":{"x":0.04,"y":0.06},"tr":{"x":0.97,"y":0.05},"br":{"x":0.96,"y":0.95},"bl":{"x":0.05,"y":0.94}},"rotation":90}]}'
+  -F 'options={"ocr":true,"language":"eng","pageSize":"a4","enhance":"bw","margin":"normal","pages":[{"corners":{"tl":{"x":0.04,"y":0.06},"tr":{"x":0.97,"y":0.05},"br":{"x":0.96,"y":0.95},"bl":{"x":0.05,"y":0.94}},"rotation":90}]}'
 ```
 
 ### 8. Watermark PDF
@@ -228,6 +230,29 @@ Adds page-number stamps to every page.
 - `format`: e.g. `"%d / %d"` (current / total)
 - `fontSize` / `color`
 
+### 14. Set PDF Metadata
+
+Sets document metadata (the PDF Info dictionary) via pdfcpu `AddPropertiesFile`.
+
+**Tool:** `pdf-metadata`
+**Input:** Single PDF file
+**Output:** PDF with updated Info dictionary
+**Options** (required — at least one of the four must be present):
+- `title`: document title (string, ≤512 chars after trimming, no NUL bytes)
+- `author`: document author (same constraints)
+- `subject`: document subject (same constraints)
+- `keywords`: document keywords (same constraints)
+
+Options are validated by job-service at job creation (400 `INVALID_OPTIONS` when empty, over-length, or containing NUL bytes). Encrypted PDFs fail with pdfcpu's error.
+
+**Example:**
+```bash
+curl -X POST http://localhost/api/organize-pdf/pdf-metadata \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "files=@document.pdf" \
+  -F 'options={"title":"My Doc","author":"Me","subject":"Docs","keywords":"a, b"}'
+```
+
 ## API Endpoints
 
 All endpoints follow RESTful conventions:
@@ -239,7 +264,7 @@ POST /api/organize-pdf/:tool
 Creates a new processing job for the specified tool.
 
 **Parameters:**
-- `:tool` — One of: `merge-pdf`, `split-pdf`, `rotate-pdf`, `remove-pages`, `extract-pages`, `organize-pdf`, `scan-to-pdf`, `watermark-pdf`, `protect-pdf`, `unlock-pdf`, `sign-pdf`, `edit-pdf`, `add-page-numbers` (13 total — see `main.go:59` `AllowedTools`)
+- `:tool` — One of: `merge-pdf`, `split-pdf`, `rotate-pdf`, `remove-pages`, `extract-pages`, `organize-pdf`, `scan-to-pdf`, `watermark-pdf`, `protect-pdf`, `unlock-pdf`, `sign-pdf`, `edit-pdf`, `add-page-numbers`, `pdf-metadata` (14 total — see `main.go:59` `AllowedTools`)
 - Form data: `files` (multipart/form-data) **or** JSON body with `uploadId`/`uploadIds`
 - Form data: `options` (JSON string, optional, tool-specific)
 
@@ -717,6 +742,8 @@ sequenceDiagram
         W->>PC: pdfcpu text stamp at coordinates
     else add-page-numbers
         W->>PC: pdfcpu add page numbers (per template)
+    else pdf-metadata
+        W->>PC: pdfcpu AddPropertiesFile (write Info dictionary)
     end
 
     alt Processing succeeds
@@ -824,6 +851,7 @@ sequenceDiagram
 | Page number out of bounds | split, remove, extract, organize | status=failed | No |
 | Missing required option | remove, extract, organize | status=failed, "missing X option" | No |
 | Empty merge (no files) | merge-pdf | status=failed, "no files" | No |
+| Encrypted input PDF | pdf-metadata | pdfcpu returns error, status=failed | No |
 | Disk full | All | status=failed | No |
 | Worker crash | All | NATS redelivery (MaxDeliver) | Yes |
 | Database failure | All | Message not acked, NATS redelivery | Yes |
@@ -863,7 +891,6 @@ When retries are exhausted (MaxDeliver reached), the failed job payload is publi
 - Page thumbnails for preview
 - Batch processing for multiple documents
 - Additional OCR language packs beyond eng/deu/fra/spa/hin
-- PDF metadata editing
 - Watermarking support
 - PDF compression options
 

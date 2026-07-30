@@ -23,7 +23,7 @@ The Job Service is the central orchestration service for all file processing ope
 7. **Guest Job Tracking** -- Manage guest tokens in Redis to allow guest users to track their jobs
 8. **Tool-to-Service Routing** -- Use a centralized `ToolServiceMap` to dispatch jobs to the correct worker service
 9. **MIME-Type Validation** -- Validate uploaded file content types using `http.DetectContentType()` over the object's first 512 bytes (read via a ranged GET) against an allowlist per tool category (pdf, word, excel, ppt, image)
-10. **Per-Tool Options Validation** -- Validate tool-specific `options` payloads against a schema at the public boundary (currently `scan-to-pdf`); rejections return 400 `INVALID_OPTIONS`
+10. **Per-Tool Options Validation** -- Validate tool-specific `options` payloads against a schema at the public boundary (currently `scan-to-pdf` and `pdf-metadata`); rejections return 400 `INVALID_OPTIONS`
 11. **Edge Detection Relay** -- `POST /api/organize-pdf/detect-edges` peeks at a completed image upload (without consuming it) and synchronously relays detection to organize-pdf's internal endpoint for the mobile scanner UI
 
 ## Presigned Upload Protocol
@@ -79,7 +79,7 @@ Job Service :8081  (control plane only — no file bytes)
 | `handlers/jobs.go` | Job CRUD, presigned download redirect, job history |
 | `handlers/sse.go` | SSE endpoint for real-time job status updates via NATS JetStream |
 | `handlers/uploads.go` | Presigned multipart upload protocol (init, parts, complete, status, abort, 410 chunk stub) |
-| `handlers/tool_options.go` | Per-tool options schema validation (`validateToolOptions`; currently scan-to-pdf) |
+| `handlers/tool_options.go` | Per-tool options schema validation (`validateToolOptions`; currently scan-to-pdf and pdf-metadata) |
 | `handlers/detect.go` | `DetectEdges` — synchronous relay to organize-pdf `/internal/v1/detect-edges` |
 | `handlers/storage.go` | `ObjectStore` interface (narrow slice of `shared/storage.Client`) + boot-time injection |
 | `handlers/auth.go` | Extract authenticated user ID from auth context |
@@ -120,8 +120,8 @@ The `routing.go` file contains the centralized mapping from tool types to their 
 |---------|-------|
 | `convert-from-pdf` | pdf-to-word, pdf-to-docx, pdf-to-excel, pdf-to-xlsx, pdf-to-powerpoint, pdf-to-ppt, pdf-to-pptx, pdf-to-image, pdf-to-img, pdf-to-html, pdf-to-text, pdf-to-txt, pdf-to-pdfa, pdf-to-odt, pdf-to-ods, pdf-to-odp |
 | `convert-to-pdf` | word-to-pdf, excel-to-pdf, powerpoint-to-pdf, ppt-to-pdf, html-to-pdf, image-to-pdf, img-to-pdf |
-| `organize-pdf` | merge-pdf, split-pdf, rotate-pdf, remove-pages, extract-pages, organize-pdf, scan-to-pdf, watermark-pdf, protect-pdf, unlock-pdf, sign-pdf, edit-pdf, add-page-numbers |
-| `optimize-pdf` | compress-pdf, repair-pdf, ocr-pdf |
+| `organize-pdf` | merge-pdf, split-pdf, rotate-pdf, remove-pages, extract-pages, organize-pdf, scan-to-pdf, watermark-pdf, protect-pdf, unlock-pdf, sign-pdf, edit-pdf, add-page-numbers, pdf-metadata |
+| `optimize-pdf` | compress-pdf, repair-pdf, ocr-pdf, flatten-pdf |
 
 The mapping in `routing.go` is the only authoritative source — these tables in docs are kept in sync, but **always cross-check against `internal/routing/routing.go` and each worker's `main.go` `AllowedTools` if there is any doubt.**
 
@@ -190,7 +190,7 @@ Corners are normalized `0..1` against the decoded pixel grid. When no document i
 
 ### Per-Tool Options Validation
 
-`CreateJobFromTool` calls `validateToolOptions(toolType, options)` (`handlers/tool_options.go`) **before** `consumeUpload`. Options were historically an opaque passthrough; scan-to-pdf is the first tool with a schema'd payload. Tools without a schema (and empty options) pass through unchanged; job-service owns its own copy of the shape — no shared DTOs across services. Workers still re-clamp defensively on their side (a bad enum never fails a job downstream).
+`CreateJobFromTool` calls `validateToolOptions(toolType, options)` (`handlers/tool_options.go`) **before** `consumeUpload`. Options were historically an opaque passthrough; scan-to-pdf was the first tool with a schema'd payload, pdf-metadata is the second. Tools without a schema (and empty options) pass through unchanged; job-service owns its own copy of the shape — no shared DTOs across services. Workers still re-clamp defensively on their side (a bad enum never fails a job downstream).
 
 **scan-to-pdf schema** (all fields optional; unknown fields ignored for forward compatibility; string enums case-insensitive):
 
@@ -200,9 +200,19 @@ Corners are normalized `0..1` against the decoded pixel grid. When no document i
 | `language` | whitelist: `eng`, `deu`, `fra`, `spa`, `hin` |
 | `pageSize` | whitelist: `""`, `auto`, `a4`, `letter`, `id` |
 | `enhance` | whitelist: `""`, `none`, `grayscale`, `bw`, `color-boost` |
+| `margin` | whitelist: `""`, `none`, `small`, `normal`, `large` (only takes effect with `pageSize` `a4`/`letter`/`id`; the worker ignores it with a warning on `auto` and on the OCR path) |
 | `pages` | max 50 entries (index-aligned with `uploadIds`) |
 | `pages[i].rotation` | one of `0`, `90`, `180`, `270` |
 | `pages[i].corners` | all four of `tl`/`tr`/`br`/`bl` or omitted; each with numeric `x`,`y` in `[0, 1]` |
+
+**pdf-metadata schema** (options required — at least one of the four fields must be present):
+
+| Field | Rule |
+|-------|------|
+| `title` | string, ≤512 chars after trimming, no NUL bytes |
+| `author` | string, ≤512 chars after trimming, no NUL bytes |
+| `subject` | string, ≤512 chars after trimming, no NUL bytes |
+| `keywords` | string, ≤512 chars after trimming, no NUL bytes |
 
 Any violation (including unparseable JSON) is rejected with 400 `INVALID_OPTIONS`.
 
@@ -558,7 +568,7 @@ sequenceDiagram
 | `INVALID_INPUT` | 400 | File type mismatch for tool (e.g., non-PDF for pdf-to-word) |
 | `INVALID_INPUT` | 400 | File MIME content type (sniffed from the object's first 512 bytes) does not match the expected type for the tool |
 | `INVALID_INPUT` | 400 | Uploaded object missing from the uploads bucket (upload never completed) |
-| `INVALID_OPTIONS` | 400 | `options` payload fails the per-tool schema (scan-to-pdf: bad JSON, non-whitelisted language/pageSize/enhance, >50 pages entries, invalid rotation, partial corners, coordinates outside [0,1]) |
+| `INVALID_OPTIONS` | 400 | `options` payload fails the per-tool schema (scan-to-pdf: bad JSON, non-whitelisted language/pageSize/enhance/margin, >50 pages entries, invalid rotation, partial corners, coordinates outside [0,1]; pdf-metadata: missing options, none of title/author/subject/keywords present, a field >512 chars after trimming, or NUL bytes) |
 | `FILE_TOO_LARGE` | 413 | File size exceeds plan limit from `X-User-Plan-Max-File-MB` (direct multipart path; default 10 MB) |
 | `TOO_MANY_FILES` | 400 | Number of files exceeds plan limit from `X-User-Plan-Max-Files` (default 5 files) |
 | `RATE_LIMIT_EXCEEDED` | 429 | More than `RATE_LIMIT_JOB_CREATE` job creations per IP per window |

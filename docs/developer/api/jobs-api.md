@@ -268,10 +268,10 @@ Workers also emit `jobs.events.<jobId>.progress` events while running. These are
 `word-to-pdf`, `ppt-to-pdf` (alias `powerpoint-to-pdf`), `excel-to-pdf`, `html-to-pdf`, `image-to-pdf` (alias `img-to-pdf`)
 
 ### `/api/organize-pdf/:tool`
-`merge-pdf`, `split-pdf`, `remove-pages`, `extract-pages`, `organize-pdf`, `scan-to-pdf`, `rotate-pdf`, `watermark-pdf`, `protect-pdf`, `unlock-pdf`, `sign-pdf`, `edit-pdf`, `add-page-numbers`
+`merge-pdf`, `split-pdf`, `remove-pages`, `extract-pages`, `organize-pdf`, `scan-to-pdf`, `rotate-pdf`, `watermark-pdf`, `protect-pdf`, `unlock-pdf`, `sign-pdf`, `edit-pdf`, `add-page-numbers`, `pdf-metadata`
 
 ### `/api/optimize-pdf/:tool`
-`compress-pdf`, `repair-pdf`, `ocr-pdf`
+`compress-pdf`, `repair-pdf`, `ocr-pdf`, `flatten-pdf`
 
 ---
 

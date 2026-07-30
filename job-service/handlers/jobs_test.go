@@ -186,6 +186,12 @@ func TestValidateFileType(t *testing.T) {
 		// Case insensitive extension
 		{"accepts uppercase .PDF", "pdf-to-word", "doc.PDF", false},
 		{"accepts uppercase .DOCX", "word-to-pdf", "file.DOCX", false},
+
+		// Phase 4 additions
+		{"flatten-pdf accepts PDF", "flatten-pdf", "form.pdf", false},
+		{"flatten-pdf rejects Word", "flatten-pdf", "form.docx", true},
+		{"pdf-metadata accepts PDF", "pdf-metadata", "doc.pdf", false},
+		{"pdf-metadata rejects image", "pdf-metadata", "doc.png", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -414,6 +420,8 @@ func TestMimeCategory(t *testing.T) {
 		{"odt-to-pdf", "odt"},
 		{"ods-to-pdf", "ods"},
 		{"odp-to-pdf", "odp"},
+		{"flatten-pdf", "pdf"},
+		{"pdf-metadata", "pdf"},
 		{"unknown-tool", ""},
 	}
 	for _, tt := range tests {

@@ -180,12 +180,14 @@ graph LR
         C5["rotate-pdf · watermark-pdf"]
         C6["protect-pdf · unlock-pdf · sign-pdf"]
         C7["edit-pdf · add-page-numbers"]
+        C8["pdf-metadata"]
     end
 
     subgraph optimize-pdf
         D1["compress-pdf"]
         D2["repair-pdf"]
         D3["ocr-pdf"]
+        D4["flatten-pdf"]
     end
 
     ROUTER["routing.ServiceForTool()"] --> convert-from-pdf & convert-to-pdf & organize-pdf & optimize-pdf

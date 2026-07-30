@@ -29,7 +29,16 @@ var (
 	// scanEnhance is the allowlist of image-enhancement modes implemented in the
 	// imaging package. "" and "none" both mean no enhancement.
 	scanEnhance = map[string]bool{"": true, "none": true, "grayscale": true, "bw": true, "color-boost": true}
+	// scanMargins is the allowlist of page-margin presets. The worker maps each
+	// to a pdfcpu import scale; margins only take effect with a fixed pageSize
+	// (a4/letter/id) — with "auto" the worker accepts and ignores the value.
+	scanMargins = map[string]bool{"": true, "none": true, "small": true, "normal": true, "large": true}
 )
+
+// maxMetadataFieldLen caps each pdf-metadata Info-dict entry (bytes,
+// post-trim). The values land verbatim inside the output PDF; the cap bounds
+// document bloat from a hostile payload rather than any pdfcpu limit.
+const maxMetadataFieldLen = 512
 
 // scanOptionsPayload mirrors the scan-to-pdf options contract. job-service
 // owns its own copy of the shape (no shared DTOs across services). Unknown
@@ -39,7 +48,19 @@ type scanOptionsPayload struct {
 	Language string            `json:"language"`
 	PageSize string            `json:"pageSize"`
 	Enhance  string            `json:"enhance"`
+	Margin   string            `json:"margin"`
 	Pages    []scanPagePayload `json:"pages"`
+}
+
+// metadataOptionsPayload mirrors the pdf-metadata options contract (the
+// worker's copy lives in organize-pdf/processing/processing_metadata.go —
+// duplicated by design, no shared DTOs across services). Pointers so "absent"
+// is distinguishable from "explicitly empty".
+type metadataOptionsPayload struct {
+	Title    *string `json:"title"`
+	Author   *string `json:"author"`
+	Subject  *string `json:"subject"`
+	Keywords *string `json:"keywords"`
 }
 
 // scanPagePayload is one page of a scan job: the crop quad and rotation the user
@@ -69,17 +90,63 @@ type scanPointPayload struct {
 }
 
 // validateToolOptions checks the options payload for tools with a defined
-// schema. Empty options and tools without a schema pass through unchanged.
+// schema. Empty options and tools without a schema pass through unchanged —
+// except pdf-metadata, whose entire purpose is its options: absent options
+// would otherwise fail only inside the worker, after the upload is consumed.
 func validateToolOptions(toolType string, raw string) error {
 	if strings.TrimSpace(raw) == "" {
+		if toolType == "pdf-metadata" {
+			return fmt.Errorf("pdf-metadata requires options with at least one of: title, author, subject, keywords")
+		}
 		return nil
 	}
 	switch toolType {
 	case "scan-to-pdf":
 		return validateScanOptions(raw)
+	case "pdf-metadata":
+		return validateMetadataOptions(raw)
 	default:
 		return nil
 	}
+}
+
+// validateMetadataOptions is the hard gate for pdf-metadata options: the
+// values are written verbatim into the output PDF's Info dictionary, so this
+// bounds size and rejects NUL bytes (which PDF string literals cannot carry
+// safely through every reader) at the public boundary.
+func validateMetadataOptions(raw string) error {
+	var opts metadataOptionsPayload
+	if err := json.Unmarshal([]byte(raw), &opts); err != nil {
+		return fmt.Errorf("options must be a valid JSON object")
+	}
+
+	fields := map[string]*string{
+		"title":    opts.Title,
+		"author":   opts.Author,
+		"subject":  opts.Subject,
+		"keywords": opts.Keywords,
+	}
+	nonEmpty := 0
+	for name, value := range fields {
+		if value == nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(*value)
+		if trimmed == "" {
+			continue
+		}
+		if len(trimmed) > maxMetadataFieldLen {
+			return fmt.Errorf("%s exceeds the maximum length of %d characters", name, maxMetadataFieldLen)
+		}
+		if strings.ContainsRune(trimmed, '\x00') {
+			return fmt.Errorf("%s contains invalid characters", name)
+		}
+		nonEmpty++
+	}
+	if nonEmpty == 0 {
+		return fmt.Errorf("pdf-metadata requires options with at least one of: title, author, subject, keywords")
+	}
+	return nil
 }
 
 // validateScanOptions is the hard validation gate for scan-to-pdf options.
@@ -103,6 +170,9 @@ func validateScanOptions(raw string) error {
 	}
 	if enhance := strings.ToLower(strings.TrimSpace(opts.Enhance)); !scanEnhance[enhance] {
 		return fmt.Errorf("unsupported enhance mode %q — supported: none, grayscale, bw, color-boost", opts.Enhance)
+	}
+	if margin := strings.ToLower(strings.TrimSpace(opts.Margin)); !scanMargins[margin] {
+		return fmt.Errorf("unsupported margin %q — supported: none, small, normal, large", opts.Margin)
 	}
 
 	if len(opts.Pages) > maxScanPages {

@@ -209,6 +209,61 @@ func repairPDF(ctx context.Context, inputPath string, outputPath string) error {
 	return nil
 }
 
+// buildFlattenArgs returns the Ghostscript arguments that bake annotation and
+// form-field appearance streams into page content. -dPreserveAnnots=false is
+// the flattening switch; -dPrinted makes annotations render their PRINT
+// appearance, so hidden/no-print annotations are correctly excluded rather
+// than baked in.
+func buildFlattenArgs(outputPath, inputPath string) []string {
+	return []string{
+		"-dNOPAUSE",
+		"-dBATCH",
+		"-dSAFER",
+		"-sDEVICE=pdfwrite",
+		"-dCompatibilityLevel=1.4",
+		"-dPreserveAnnots=false",
+		"-dPrinted",
+		"-dDetectDuplicateImages=true",
+		"-dCompressFonts=true",
+		fmt.Sprintf("-sOutputFile=%s", outputPath),
+		inputPath,
+	}
+}
+
+// flattenPDF re-distills a PDF through pdfwrite with annotation preservation
+// disabled, so filled form data and markup become immutable page content
+// while text stays vector/searchable. Deliberately NOT the rasterize route:
+// rendering pages to images would destroy selection and balloon file size.
+// Known limit: a form field with no appearance stream (rare NeedAppearances
+// documents) renders nothing rather than its value.
+func flattenPDF(ctx context.Context, inputPath string, outputPath string) error {
+	slog.Info("flattening PDF using Ghostscript", "input", inputPath)
+
+	gsPath, err := findGhostscript()
+	if err != nil {
+		return err
+	}
+
+	args := buildFlattenArgs(outputPath, inputPath)
+
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, gsPath, args...)
+	cmd.Stderr = &stderr
+	cmd.Stdout = io.Discard
+
+	if err := cmd.Run(); err != nil {
+		slog.ErrorContext(ctx, "ghostscript flatten failed", "error", err, "op", "ghostscript.flatten", "stderr", stderr.String())
+		return fmt.Errorf("ghostscript flatten failed: %w", err)
+	}
+
+	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+		return fmt.Errorf("flatten failed: output file not created")
+	}
+
+	slog.Info("PDF flatten complete", "output", outputPath)
+	return nil
+}
+
 // findGhostscript locates the Ghostscript binary, trying the Linux names first
 // and then the Windows ones so a developer on Windows can run the tool locally
 // even though production is Alpine.

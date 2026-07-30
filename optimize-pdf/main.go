@@ -83,10 +83,14 @@ func main() {
 		defer close(workerDone)
 		worker.Run(ctx, worker.WorkerConfig{
 			ServiceName: "optimize-pdf",
+			// NOTE: must stay in sync with the optimize-pdf block of
+			// job-service/internal/routing/routing.go — a tool routed here but
+			// absent from this map is NAK'd by the worker.
 			AllowedTools: map[string]bool{
 				"compress-pdf": true,
 				"repair-pdf":   true,
 				"ocr-pdf":      true,
+				"flatten-pdf":  true,
 			},
 			Process:     processFunc,
 			JS:          natsconn.JS,
