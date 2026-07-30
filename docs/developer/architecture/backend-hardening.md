@@ -337,7 +337,10 @@ fixed; the rest are tracked as a ranked backlog (see production-readiness.md §5
 - **OCR language whitelist (I1) `Low`.** The `language` OCR option could reach
   `tesseract -l` verbatim when the language probe failed; it is now mapped and
   whitelisted (`sanitizeOCRLanguage`), defaulting unknown values to `eng`.
-  `optimize-pdf/processing/processing_free.go`.
+  `optimize-pdf/processing/processing_free.go`. job-service now also validates
+  ocr-pdf `language` (allowlist `en`/`eng`) and `dpi` (72–600) at the public
+  boundary (`validateOcrOptions`, `job-service/handlers/tool_options.go`),
+  rejecting with 400 `INVALID_OPTIONS` before a job is created.
 
 **Tests:** `sse_test.go`, `change_plan_test.go`, `upload_claim_test.go`,
 `internal/cleanup/lock_test.go`, `uploads_test.go`, `optimize-pdf/processing/ocr_language_test.go`.

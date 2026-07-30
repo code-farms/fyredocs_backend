@@ -3077,7 +3077,7 @@
                 "scan-to-pdf"
               ]
             },
-            "description": "Convert images to PDF with the full scanner options: OCR (Tesseract, languages eng/deu/fra/spa/hin), pageSize (auto/a4/letter/id — ignored when ocr=true), enhance (none/grayscale/bw/color-boost), margin (none/small/normal/large — white margin via relative import scale 1.0/0.95/0.9/0.85; only applies with a fixed pageSize a4/letter/id, ignored with a worker warning on auto or the OCR path), and per-page corners (normalized 0..1 perspective-warp quad, e.g. from Detect Edges) + rotation (0/90/180/270, clockwise, applied after the warp). pages[] is index-aligned with the input files. All options are optional and validated at job creation (400 INVALID_OPTIONS)."
+            "description": "Convert images to PDF with the full scanner options: OCR (Tesseract, languages eng/deu/fra/spa/hin), pageSize (auto/a4/letter/id — ignored when ocr=true), enhance (none/grayscale/bw/color-boost), margin (none/small/normal/large — white margin via relative import scale 1.0/0.95/0.9/0.85; only applies with a fixed pageSize a4/letter/id, ignored with a worker warning on auto or the OCR path), and per-page corners (normalized 0..1 perspective-warp quad, e.g. from Detect Edges) + rotation (0/90/180/270, clockwise, applied after the warp). pages[] is index-aligned with the input files. All options are optional and validated at job creation (400 INVALID_OPTIONS). When ocr=true and text was recognized, the completed job's metadata carries extractedText (plain text, pages in output-PDF order separated by form-feed \\f, capped at 512 KB) and textTruncated: true only if the cap was hit — returned only by the single-job GET; list and history responses omit them."
           },
           "response": [
             {
@@ -3749,7 +3749,7 @@
                 "ocr-pdf"
               ]
             },
-            "description": "Add searchable text layer to scanned PDFs using Tesseract OCR. Options: language (default: eng), dpi (default: 300)"
+            "description": "Add searchable text layer to scanned PDFs using Tesseract OCR. Options (validated at job creation, 400 INVALID_OPTIONS on violation): language (\"en\"/\"eng\" only — the worker image ships only the English tesseract pack today; the allowlist grows when more packs are added), dpi (whole number 72–600, JSON number or string; server default 150 via OCR_DEFAULT_DPI). The completed job's metadata carries language, dpi, pagesOCRed, and — when text was recognized — extractedText (plain text, pages in output-PDF order separated by form-feed \\f, capped at 512 KB) plus textTruncated: true only if the cap was hit. extractedText/textTruncated are returned only by the single-job GET — list and history responses omit them."
           },
           "response": [
             {
@@ -3793,6 +3793,34 @@
                 }
               ],
               "body": "{\n  \"success\": true,\n  \"message\": \"Optimization job created\",\n  \"data\": {\n    \"id\": \"job_abc123\",\n    \"tool\": \"ocr-pdf\",\n    \"status\": \"pending\",\n    \"createdAt\": \"2026-03-03T12:00:00Z\"\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+            },
+            {
+              "name": "200 - Completed Job (GET /api/optimize-pdf/ocr-pdf/{{job_id}}) with extractedText",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/optimize-pdf/ocr-pdf/{{job_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "optimize-pdf",
+                    "ocr-pdf",
+                    "{{job_id}}"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"message\": \"Job loaded successfully\",\n  \"data\": {\n    \"id\": \"job_abc123\",\n    \"userId\": null,\n    \"toolType\": \"ocr-pdf\",\n    \"status\": \"completed\",\n    \"progress\": 100,\n    \"fileName\": \"scanned-document.pdf\",\n    \"fileSize\": 2456789,\n    \"failureReason\": null,\n    \"metadata\": {\n      \"language\": \"eng\",\n      \"dpi\": 300,\n      \"pagesOCRed\": 3,\n      \"extractedText\": \"Invoice #2041\\nTotal due: $42.00\\fPage two text...\\fPage three text...\"\n    },\n    \"createdAt\": \"2026-03-03T12:00:00Z\",\n    \"updatedAt\": \"2026-03-03T12:00:45Z\",\n    \"completedAt\": \"2026-03-03T12:00:45Z\",\n    \"expiresAt\": null,\n    \"outputFileName\": \"scanned-document.pdf\"\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
             }
           ]
         },

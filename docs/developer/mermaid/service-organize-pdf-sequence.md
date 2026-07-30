@@ -166,12 +166,13 @@ sequenceDiagram
     alt ocr=false
         Processing->>PC: pdfcpu ImportImagesFile with page-size config<br/>(form:A4 / form:Letter / dim:243 153pt for id · auto = nil ·<br/>margin = relative scale 1.0/0.95/0.9/0.85 on fixed forms only, ignored + warn on auto)
     else ocr=true
-        Processing->>PC: tesseract -l &lt;language&gt; → searchable PDF<br/>(pageSize and margin IGNORED — image-sized pages)
+        Processing->>PC: tesseract -l &lt;language&gt; pdf txt → searchable page PDF + .txt sidecar<br/>(pageSize and margin IGNORED — image-sized pages)
+        Processing->>Processing: collectOCRText: concat .txt sidecars in page order<br/>(\f-separated, 512 KB cap) → Metadata {extractedText?, textTruncated?}
     end
 
     PC-->>Worker: scratch/out/&lt;jobId&gt;.pdf
     Worker->>S3: Upload outputs bucket jobs/&lt;jobId&gt;/&lt;jobId&gt;.pdf
-    Worker->>PG: Record output (object key + uploaded size), SET status=completed
+    Worker->>PG: Record output (object key + uploaded size), merge OCR metadata if any, SET status=completed<br/>(extractedText is scrubbed from LIST responses by job-service)
     Worker->>NATS: ACK
 ```
 

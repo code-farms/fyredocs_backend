@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"golang.org/x/sync/errgroup"
@@ -530,6 +531,10 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 	workers := ocrMaxWorkers()
 
 	pdfFiles := make([]string, len(imageFiles))
+	// Per-page plain-text sidecars (tesseract's `txt` output config). Indexed
+	// by page so the concatenated text follows merged-PDF page order, not
+	// goroutine completion order; a fallback page leaves its slot empty.
+	txtFiles := make([]string, len(imageFiles))
 	var mu sync.Mutex // guards slog calls for cleaner output
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(workers)
@@ -549,7 +554,7 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 				imgPath,
 				outputBase,
 				"-l", language,
-				"pdf",
+				"pdf", "txt",
 			)
 			if err := cmd.Run(); err != nil {
 				slog.Warn("OCR failed for page, falling back", "page", i+1, "error", err)
@@ -560,6 +565,7 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 				pdfFiles[i] = pdfFile
 			} else {
 				pdfFiles[i] = outputBase + ".pdf"
+				txtFiles[i] = outputBase + ".txt"
 			}
 			return nil
 		})
@@ -584,7 +590,59 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 		"dpi":        dpi,
 		"pagesOCRed": len(imageFiles),
 	}
+	// The extracted text rides back on the job's metadata jsonb — a job has
+	// exactly one output file, and the searchable PDF claims it. The cap keeps
+	// the jsonb (and every GET /:tool/:id response) bounded; job-service scrubs
+	// this key from LIST responses.
+	if text, truncated := collectOCRText(txtFiles, ocrTextCapBytes); text != "" {
+		metadata["extractedText"] = text
+		if truncated {
+			metadata["textTruncated"] = true
+		}
+	}
 
 	slog.Info("OCR complete", "pagesProcessed", len(imageFiles), "language", language)
 	return metadata, nil
+}
+
+// ocrTextCapBytes bounds the extracted-text sidecar stored in job metadata.
+// 512 KB of UTF-8 is ~100+ dense pages — beyond it the text is truncated and
+// flagged, never dropped.
+const ocrTextCapBytes = 512 * 1024
+
+// collectOCRText concatenates per-page tesseract .txt sidecars in page order,
+// form-feed-separated so page boundaries survive. Empty/missing entries (OCR
+// fallback pages) contribute an empty page, keeping positions aligned with the
+// merged PDF. Returns "" when no page produced any text.
+// NOTE: duplicated in organize-pdf/processing/processing_scan.go by design
+// (§1 no-shared-code) — keep the two in sync.
+func collectOCRText(txtPaths []string, capBytes int) (string, bool) {
+	pages := make([]string, len(txtPaths))
+	hasText := false
+	for i, p := range txtPaths {
+		if p == "" {
+			continue
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			slog.Warn("could not read OCR text sidecar", "path", p, "error", err)
+			continue
+		}
+		pages[i] = strings.TrimRight(string(data), " \t\n\f")
+		if pages[i] != "" {
+			hasText = true
+		}
+	}
+	if !hasText {
+		return "", false
+	}
+	text := strings.Join(pages, "\f")
+	if len(text) <= capBytes {
+		return text, false
+	}
+	cut := capBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut], true
 }

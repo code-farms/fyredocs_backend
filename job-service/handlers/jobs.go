@@ -997,13 +997,49 @@ func toJobResponse(job models.ProcessingJob) jobResponse {
 	return jobResponse{ProcessingJob: job, OutputFileName: name}
 }
 
-// toJobResponses maps toJobResponse over a slice, preserving order.
+// toJobResponses maps toJobResponse over a slice, preserving order. List
+// rows are scrubbed of bulky metadata (the OCR extracted-text sidecar can be
+// hundreds of KB per job) — the single-job GET keeps the full metadata.
 func toJobResponses(jobs []models.ProcessingJob) []jobResponse {
 	out := make([]jobResponse, len(jobs))
 	for i, j := range jobs {
-		out[i] = toJobResponse(j)
+		out[i] = toJobResponse(scrubForList(j))
 	}
 	return out
+}
+
+// jobListScrubKeys are metadata keys served only on single-job GETs.
+var jobListScrubKeys = []string{"extractedText", "textTruncated"}
+
+// scrubForList returns the job with the scrub keys removed from a COPY of its
+// metadata. The job arrives by value, but Metadata is a shared byte slice —
+// it is re-marshaled rather than edited in place so the caller's row (and any
+// ORM-cached state) is never mutated. On any parse error the row passes
+// through unchanged: scrubbing is a payload-size optimization, not a gate.
+func scrubForList(job models.ProcessingJob) models.ProcessingJob {
+	if len(job.Metadata) == 0 {
+		return job
+	}
+	var meta map[string]interface{}
+	if err := json.Unmarshal(job.Metadata, &meta); err != nil {
+		return job
+	}
+	found := false
+	for _, k := range jobListScrubKeys {
+		if _, ok := meta[k]; ok {
+			delete(meta, k)
+			found = true
+		}
+	}
+	if !found {
+		return job
+	}
+	scrubbed, err := json.Marshal(meta)
+	if err != nil {
+		return job
+	}
+	job.Metadata = datatypes.JSON(scrubbed)
+	return job
 }
 
 // outputFileName derives the download filename and Content-Type for a job's

@@ -23,7 +23,7 @@ The Job Service is the central orchestration service for all file processing ope
 7. **Guest Job Tracking** -- Manage guest tokens in Redis to allow guest users to track their jobs
 8. **Tool-to-Service Routing** -- Use a centralized `ToolServiceMap` to dispatch jobs to the correct worker service
 9. **MIME-Type Validation** -- Validate uploaded file content types using `http.DetectContentType()` over the object's first 512 bytes (read via a ranged GET) against an allowlist per tool category (pdf, word, excel, ppt, image)
-10. **Per-Tool Options Validation** -- Validate tool-specific `options` payloads against a schema at the public boundary (currently `scan-to-pdf` and `pdf-metadata`); rejections return 400 `INVALID_OPTIONS`
+10. **Per-Tool Options Validation** -- Validate tool-specific `options` payloads against a schema at the public boundary (currently `scan-to-pdf`, `pdf-metadata`, and `ocr-pdf`); rejections return 400 `INVALID_OPTIONS`
 11. **Edge Detection Relay** -- `POST /api/organize-pdf/detect-edges` peeks at a completed image upload (without consuming it) and synchronously relays detection to organize-pdf's internal endpoint for the mobile scanner UI
 
 ## Presigned Upload Protocol
@@ -79,7 +79,7 @@ Job Service :8081  (control plane only — no file bytes)
 | `handlers/jobs.go` | Job CRUD, presigned download redirect, job history |
 | `handlers/sse.go` | SSE endpoint for real-time job status updates via NATS JetStream |
 | `handlers/uploads.go` | Presigned multipart upload protocol (init, parts, complete, status, abort, 410 chunk stub) |
-| `handlers/tool_options.go` | Per-tool options schema validation (`validateToolOptions`; currently scan-to-pdf and pdf-metadata) |
+| `handlers/tool_options.go` | Per-tool options schema validation (`validateToolOptions`; currently scan-to-pdf, pdf-metadata, and ocr-pdf) |
 | `handlers/detect.go` | `DetectEdges` — synchronous relay to organize-pdf `/internal/v1/detect-edges` |
 | `handlers/storage.go` | `ObjectStore` interface (narrow slice of `shared/storage.Client`) + boot-time injection |
 | `handlers/auth.go` | Extract authenticated user ID from auth context |
@@ -190,7 +190,7 @@ Corners are normalized `0..1` against the decoded pixel grid. When no document i
 
 ### Per-Tool Options Validation
 
-`CreateJobFromTool` calls `validateToolOptions(toolType, options)` (`handlers/tool_options.go`) **before** `consumeUpload`. Options were historically an opaque passthrough; scan-to-pdf was the first tool with a schema'd payload, pdf-metadata is the second. Tools without a schema (and empty options) pass through unchanged; job-service owns its own copy of the shape — no shared DTOs across services. Workers still re-clamp defensively on their side (a bad enum never fails a job downstream).
+`CreateJobFromTool` calls `validateToolOptions(toolType, options)` (`handlers/tool_options.go`) **before** `consumeUpload`. Options were historically an opaque passthrough; scan-to-pdf was the first tool with a schema'd payload, pdf-metadata the second, ocr-pdf the third. Tools without a schema (and empty options) pass through unchanged; job-service owns its own copy of the shape — no shared DTOs across services. Workers still re-clamp defensively on their side (a bad enum never fails a job downstream).
 
 **scan-to-pdf schema** (all fields optional; unknown fields ignored for forward compatibility; string enums case-insensitive):
 
@@ -204,6 +204,13 @@ Corners are normalized `0..1` against the decoded pixel grid. When no document i
 | `pages` | max 50 entries (index-aligned with `uploadIds`) |
 | `pages[i].rotation` | one of `0`, `90`, `180`, `270` |
 | `pages[i].corners` | all four of `tl`/`tr`/`br`/`bl` or omitted; each with numeric `x`,`y` in `[0, 1]` |
+
+**ocr-pdf schema** (`validateOcrOptions`; all fields optional):
+
+| Field | Rule |
+|-------|------|
+| `language` | whitelist: `""`, `en`, `eng` (case-insensitive). The allowlist is a trust boundary — the value reaches a tesseract command line, and the optimize-pdf image ships only the English pack today. Extend this set together with the optimize-pdf Dockerfile when more packs land; rejecting here is deliberate because the worker's wider language map would otherwise silently degrade unknown languages to `eng`. |
+| `dpi` | optional; JSON number or string (clients send both `300` and `"300"`); must be a whole number in `[72, 600]` (below 72 tesseract accuracy collapses; above 600 a single page rasterizes into hundreds of MB — the worker further clamps DPI against page dimensions) |
 
 **pdf-metadata schema** (options required — at least one of the four fields must be present):
 
@@ -219,6 +226,8 @@ Any violation (including unparseable JSON) is rejected with 400 `INVALID_OPTIONS
 ### Job API Response
 
 All job endpoints (`CreateJobFromTool`, `GetJobByID`, `GetJobsByTool`, `GetJobHistory`) return a `jobResponse` wrapper that includes the original `ProcessingJob` fields plus a computed `outputFileName` field. This field contains the expected output file name with the correct extension for the tool type (e.g., `"photo.pdf"` for an image-to-pdf job with input `"photo.jpeg"`, or `"report.docx"` for pdf-to-word). Frontend clients should use `outputFileName` for display and download naming.
+
+**List-response metadata scrub:** the list endpoints (`GetJobsByTool` — `GET /api/{category}/:tool` — and `GetJobHistory` — `GET /api/jobs/history`) strip the bulky OCR keys `extractedText` and `textTruncated` from each row's `metadata` via `scrubForList` (`handlers/jobs.go`); the extracted-text sidecar can be hundreds of KB per job and would bloat paginated list payloads. The single-job `GET /api/{category}/:tool/:id` returns the full metadata. Scrubbing is copy-on-write — the metadata is re-marshaled rather than edited in place, so the DB row (and any ORM-cached state) is never mutated — and on any metadata parse error the row passes through unchanged (scrubbing is a payload-size optimization, not a gate).
 
 ### History Endpoint
 
@@ -568,7 +577,7 @@ sequenceDiagram
 | `INVALID_INPUT` | 400 | File type mismatch for tool (e.g., non-PDF for pdf-to-word) |
 | `INVALID_INPUT` | 400 | File MIME content type (sniffed from the object's first 512 bytes) does not match the expected type for the tool |
 | `INVALID_INPUT` | 400 | Uploaded object missing from the uploads bucket (upload never completed) |
-| `INVALID_OPTIONS` | 400 | `options` payload fails the per-tool schema (scan-to-pdf: bad JSON, non-whitelisted language/pageSize/enhance/margin, >50 pages entries, invalid rotation, partial corners, coordinates outside [0,1]; pdf-metadata: missing options, none of title/author/subject/keywords present, a field >512 chars after trimming, or NUL bytes) |
+| `INVALID_OPTIONS` | 400 | `options` payload fails the per-tool schema (scan-to-pdf: bad JSON, non-whitelisted language/pageSize/enhance/margin, >50 pages entries, invalid rotation, partial corners, coordinates outside [0,1]; pdf-metadata: missing options, none of title/author/subject/keywords present, a field >512 chars after trimming, or NUL bytes; ocr-pdf: bad JSON, language outside `en`/`eng`, non-integer dpi, or dpi outside 72–600) |
 | `FILE_TOO_LARGE` | 413 | File size exceeds plan limit from `X-User-Plan-Max-File-MB` (direct multipart path; default 10 MB) |
 | `TOO_MANY_FILES` | 400 | Number of files exceeds plan limit from `X-User-Plan-Max-Files` (default 5 files) |
 | `RATE_LIMIT_EXCEEDED` | 429 | More than `RATE_LIMIT_JOB_CREATE` job creations per IP per window |

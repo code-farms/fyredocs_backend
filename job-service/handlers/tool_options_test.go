@@ -140,3 +140,52 @@ func TestValidateMetadataOptionsEmptyRaw(t *testing.T) {
 		t.Error("blank options for pdf-metadata must be rejected")
 	}
 }
+
+// TestValidateOcrOptions verifies the ocr-pdf trust boundary: language feeds
+// a tesseract command line (allowlist — English only until the optimize-pdf
+// image ships more packs), and dpi bounds worker memory. Both 300 and "300"
+// must parse, matching the worker's optionString coercion.
+func TestValidateOcrOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr string
+	}{
+		{"empty object", `{}`, ""},
+		{"eng", `{"language":"eng"}`, ""},
+		{"iso en", `{"language":"en"}`, ""},
+		{"case and space folded", `{"language":" ENG "}`, ""},
+		{"uninstalled pack rejected", `{"language":"spa"}`, "unsupported OCR language"},
+		{"crafted language rejected", `{"language":"eng -c foo"}`, "unsupported OCR language"},
+		{"dpi as string", `{"dpi":"300"}`, ""},
+		{"dpi as number", `{"dpi":300}`, ""},
+		{"dpi empty string is absent", `{"dpi":""}`, ""},
+		{"dpi below floor", `{"dpi":71}`, "between 72 and 600"},
+		{"dpi above ceiling", `{"dpi":"601"}`, "between 72 and 600"},
+		{"dpi not a number", `{"dpi":"lots"}`, "whole number"},
+		{"not json", `nope`, "valid JSON"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateToolOptions("ocr-pdf", tt.raw)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateOcrOptionsEmptyRaw pins that absent options stay valid for
+// ocr-pdf (defaults: eng, worker-side DPI default).
+func TestValidateOcrOptionsEmptyRaw(t *testing.T) {
+	if err := validateToolOptions("ocr-pdf", ""); err != nil {
+		t.Errorf("empty options must pass for ocr-pdf: %v", err)
+	}
+}

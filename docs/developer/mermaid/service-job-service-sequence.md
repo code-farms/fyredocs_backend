@@ -79,7 +79,7 @@ sequenceDiagram
 
     GW->>JS: POST /api/&lt;group&gt;/:tool {uploadIds, options} · Idempotency-Key?
     JS->>JS: GinAuth · normalize tool · routing.ServiceForTool · per-IP RATE_LIMIT_JOB_CREATE
-    JS->>JS: validateToolOptions(tool, options) — 400 INVALID_OPTIONS (scan-to-pdf + pdf-metadata schemas)
+    JS->>JS: validateToolOptions(tool, options) — 400 INVALID_OPTIONS (scan-to-pdf + pdf-metadata + ocr-pdf schemas)
 
     alt Idempotency-Key cache hit
         JS->>Redis: GET idempotency:&lt;key&gt;
@@ -195,6 +195,7 @@ sequenceDiagram
         JS->>Redis: SMEMBERS guest:&lt;token&gt;:jobs
         JS->>PG: SELECT WHERE id IN (...) AND tool_type=:tool AND user_id IS NULL ORDER BY created_at DESC
     end
+    JS->>JS: scrubForList per row — strip metadata.extractedText / textTruncated<br/>(copy-on-write; single-job GET keeps full metadata)
     JS-->>GW: 200 {jobs[], meta:{page, limit}}
 ```
 
@@ -209,6 +210,7 @@ sequenceDiagram
     GW->>JS: GET /api/jobs/history?limit=&page=
     JS->>JS: RequireAuthenticatedGin (401 if guest)
     JS->>PG: SELECT processing_jobs WHERE user_id=:uid ORDER BY created_at DESC LIMIT/OFFSET
+    JS->>JS: scrubForList per row — strip metadata.extractedText / textTruncated
     JS-->>GW: 200 {jobs[], meta}
 ```
 
