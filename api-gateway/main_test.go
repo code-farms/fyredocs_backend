@@ -338,6 +338,79 @@ func TestWithCORSNoOriginHeader(t *testing.T) {
 	}
 }
 
+// testUpstreams are distinct per service so a mis-routed prefix is visible.
+var testUpstreams = upstreams{
+	job:          "http://job:8081",
+	auth:         "http://auth:8086",
+	analytics:    "http://analytics:8087",
+	document:     "http://document:8089",
+	user:         "http://user:8090",
+	notification: "http://notification:8091",
+}
+
+// TestServiceRoutesHaveNoAliasCollisions guards the REAL route table, not a
+// fixture. Two routes whose /api/v1 aliases coincide make ServeMux panic during
+// registration, which kills the gateway at boot — every request 502/503s, not
+// just the offending path. TestWithV1AliasesMirrorsEveryRoute already asserted
+// uniqueness, but only over four hand-written routes, so the production
+// "/api/share" + "/share" pair (both mirroring to "/api/v1/share") sailed past
+// it and only surfaced as a crash loop in a deployed container.
+func TestServiceRoutesHaveNoAliasCollisions(t *testing.T) {
+	seen := map[string]string{}
+	for _, c := range withV1Aliases(serviceRoutes(testUpstreams)) {
+		if prev, dup := seen[c.prefix]; dup {
+			t.Errorf("prefix %q registered twice (from %q and %q) — ServeMux panics at boot; "+
+				"set noV1Alias on one of them", c.prefix, prev, c.targetBasePath)
+		}
+		seen[c.prefix] = c.targetBasePath
+	}
+}
+
+// TestNoV1AliasSuppressesOnlyTheOptedOutRoute pins the escape hatch that keeps
+// the share routes apart, and pins that opting out is per-route: "/auth" and
+// "/admin" must still gain aliases even though they, too, lack an "/api" prefix.
+func TestNoV1AliasSuppressesOnlyTheOptedOutRoute(t *testing.T) {
+	got := withV1Aliases([]routeConfig{
+		{prefix: "/api/share", targetBasePath: "/api/share", targetURL: "http://job:8081"},
+		{prefix: "/share", targetBasePath: "/share", targetURL: "http://job:8081", noV1Alias: true},
+		{prefix: "/auth", targetBasePath: "/auth", targetURL: "http://auth:8086"},
+	})
+
+	prefixes := map[string]bool{}
+	for _, c := range got {
+		prefixes[c.prefix] = true
+	}
+
+	for _, want := range []string{"/api/share", "/api/v1/share", "/share", "/auth", "/api/v1/auth"} {
+		if !prefixes[want] {
+			t.Errorf("missing prefix %q", want)
+		}
+	}
+	// The opted-out route contributes exactly one entry, so the total is
+	// 2 (share mgmt) + 1 (redeem) + 2 (auth).
+	if len(got) != 5 {
+		t.Errorf("got %d routes, want 5 — noV1Alias should suppress exactly one alias", len(got))
+	}
+}
+
+// TestPublicPrefixesExcludeVersionedShare is a security regression test.
+// "/api/v1/share/" belongs to the AUTHENTICATED /api/share group (share
+// create/revoke), so listing it as a public prefix would let anyone
+// DELETE /api/v1/share/<id> and revoke another user's share link. Only the
+// unversioned redeem root is public — the token in that path is the credential.
+func TestPublicPrefixesExcludeVersionedShare(t *testing.T) {
+	// Mirrors the PublicPrefixes value wired up in main.
+	publicPrefixes := []string{"/share/"}
+	for _, p := range publicPrefixes {
+		if p == apiVersionPrefix+"/share/" {
+			t.Errorf("%q must not be public: it is the authenticated share management prefix", p)
+		}
+	}
+	if len(publicPrefixes) != 1 || publicPrefixes[0] != "/share/" {
+		t.Errorf("public prefixes = %v, want exactly [/share/]", publicPrefixes)
+	}
+}
+
 func TestWithV1AliasesMirrorsEveryRoute(t *testing.T) {
 	routes := []routeConfig{
 		{prefix: "/auth", targetBasePath: "/auth", targetURL: "http://auth:8086"},

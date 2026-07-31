@@ -30,6 +30,39 @@ prefix matched and re-roots the request under the upstream's base path, exactly
 as before. A route and its alias share one circuit breaker (same upstream) but
 have their own proxy instance (each strips its own prefix).
 
+### The one exception: public share links
+
+`withV1Aliases` builds the alias as `"/api/v1" + strings.TrimPrefix(prefix, "/api")`.
+`TrimPrefix` is a no-op on a prefix that does not start with `/api` — deliberately,
+so `/auth` mirrors to `/api/v1/auth`. The consequence is that a `/x` route and an
+`/api/x` route generate the **same** alias:
+
+```
+/api/share   →   /api/v1/share      (authenticated create / revoke)
+/share       →   /api/v1/share      (public redeem)   << collision
+```
+
+`http.ServeMux` panics on a duplicate pattern during registration, which kills the
+gateway at boot — every request 502s, not just that path. So the public redeem
+route sets `noV1Alias: true` and is reachable **only** at the unversioned root:
+
+```
+/share/{token}   →   job-service   GET /share/{token}     (public, no v1 form)
+/api/v1/share    →   job-service   /api/share             (authenticated)
+```
+
+Share links are short and unversioned by design, so nothing is lost. Two rules
+follow, both covered by tests in `api-gateway/main_test.go`:
+
+- Adding a route whose prefix omits `/api` while an `/api`-prefixed sibling exists
+  requires `noV1Alias` on one of them. `TestServiceRoutesHaveNoAliasCollisions`
+  asserts this against the real table (`serviceRoutes`) — not a fixture, which is
+  how this collision originally shipped.
+- `/api/v1/share/` must never appear in the gateway's `PublicPrefixes`: it belongs
+  to the authenticated management group, so making it public would allow
+  `DELETE /api/v1/share/{id}` without a token. `TestPublicPrefixesExcludeVersionedShare`
+  pins that.
+
 ## Clients
 
 Both first-party clients build every URL through one function, so the switch is
