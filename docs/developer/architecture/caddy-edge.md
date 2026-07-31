@@ -17,6 +17,50 @@ gateway's CPU. Config: [`deployment/caddy/Caddyfile`](../../../deployment/caddy/
 4. **API proxying** — forwards `/api/* /auth/* /admin/* /healthz` to
    `api-gateway:8080` on the internal network.
 
+### Why this is a separate container, not part of api-gateway
+
+The recurring cost-cutting question is whether the edge can be folded into
+`api-gateway`, since both are reverse proxies. It cannot, and there is nothing to
+gain by trying:
+
+- **Object bytes must not share the gateway's CPU.** Responsibility 3 streams
+  presigned uploads and downloads — multi-MB bodies, constantly, for a PDF service.
+  `api-gateway` deliberately never sees them (see the comment above its `mux`
+  construction in `api-gateway/main.go`); merging would put file bandwidth in direct
+  contention with API routing in one process and one cgroup.
+- **It is the only container publishing host ports.** `80`/`443` terminate here and
+  nothing else declares `ports:` at all — the port-exposure invariant in
+  [compose-files.md](./compose-files.md#port-exposure-invariant). Merging would move
+  a public listener into a service that currently has none.
+- **TLS/ACME and static file serving** would become the Go gateway's problem, both of
+  which Caddy does for free.
+- **There is no memory to reclaim.** Measured steady state is **~16 MiB.**
+
+### Memory footprint
+
+`CADDY_MEM_LIMIT` defaults to **128M** — roughly 8× the observed idle figure. It is
+not trimmed closer because idle is the wrong number to size against: `reverse_proxy`
+streams rather than buffering whole bodies, so usage does not scale with file *size*,
+but it does scale with **concurrent transfers**, which is precisely this service's
+traffic pattern. Raise `CADDY_MEM_LIMIT` on a busier edge rather than editing compose.
+
+Caddy sits in `deploy.sh`'s **reserved OS/edge headroom**, not the
+`RESOURCE_BUDGET_PCT` project budget that covers the other services — so it does not
+appear in the budget table's `TOTAL`. That is intentional, and
+`./deployment/deploy.sh --dry-run` now prints it explicitly so the figures reconcile:
+
+```
+  TOTAL                       3126m     6.31   (Σ ≤ budget)
+
+  Reserved (outside the 80% cap):    784m
+    caddy                      128m   edge: TLS, SPA, object-byte streaming
+    OS / page cache            656m   burst headroom
+```
+
+`TOTAL` + `Reserved` equals `Host available`. Before that line existed, summing the
+table against `docker stats` left an unexplained ~256 MB gap with no indication it was
+deliberate.
+
 ## Topology
 
 ```mermaid

@@ -384,7 +384,15 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${CADDY_MEM_LIMIT:-256M}
+          # 128M, not 256M: measured 16.5 MiB at idle. Not trimmed further
+          # because idle proves little here — `reverse_proxy` streams rather
+          # than buffering whole bodies, so this does not scale with FILE size,
+          # but it does scale with CONCURRENT transfers, and that is exactly this
+          # service's traffic (parallel multi-MB PDF uploads/downloads). Raise
+          # CADDY_MEM_LIMIT on a busier edge rather than editing this.
+          # Sits in deploy.sh's reserved OS/edge headroom, not the project
+          # budget — `deploy.sh --dry-run` prints it under "Reserved".
+          memory: ${CADDY_MEM_LIMIT:-128M}
           cpus: "${CADDY_CPU_LIMIT:-1.0}"
         reservations:
           memory: ${CADDY_MEM_RESERVATION:-64M}

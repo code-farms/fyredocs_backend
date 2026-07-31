@@ -505,6 +505,25 @@ compute_resource_budget() {
     printf "  %-22s %9sm %5d.%02d   (Σ ≤ budget)\n" "TOTAL" "$mem_sum" \
         "$((cpu_sum_h/100))" "$((cpu_sum_h%100))"
 
+    # Spell out the 100-PCT% the table does NOT cover, and what lives there.
+    # Without this the table looks like the whole story: summing it against
+    # `docker stats` leaves an unexplained ~256 MB (caddy), and the only hint
+    # that the gap is intentional is a source comment above. Printing it means
+    # TOTAL + reserved == "Host available", so the numbers close.
+    local MEM_RESERVE=$(( MEM_TOTAL_MB - MEM_BUDGET ))
+    # Read the same variable compose interpolates, so this line cannot claim a
+    # cap different from the one actually applied. Strip the M/m suffix for the
+    # arithmetic below; default matches docker-compose.yml's own fallback.
+    local caddy_cap="${CADDY_MEM_LIMIT:-128M}"
+    local caddy_mb="${caddy_cap%[Mm]}"
+    case "$caddy_mb" in *[!0-9]*|"") caddy_mb=128 ;; esac   # non-numeric (e.g. "1G") → skip math
+    local os_mb=$(( MEM_RESERVE - caddy_mb ))
+    echo ""
+    printf "  Reserved (outside the %d%% cap): %6sm\n" "$PCT" "$MEM_RESERVE"
+    printf "    %-20s %9sm   %s\n" "caddy" "$caddy_mb" \
+        "edge: TLS, SPA, object-byte streaming"
+    printf "    %-20s %9sm   %s\n" "OS / page cache" "$os_mb" "burst headroom"
+
     # --- pools derived from each worker's SCALED caps ---
     # Pool COUNT is bounded by memory (so it can't OOM its own container) and by
     # a CPU "slots" allowance of ~2 per allocated core (workers are partly
