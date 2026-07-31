@@ -44,6 +44,12 @@ type routeConfig struct {
 	// work identically; they only advertise themselves as deprecated via
 	// response headers. See withV1Aliases.
 	deprecated bool
+	// noV1Alias suppresses the /api/v1 mirror for this route. Set it only when
+	// the generated alias would COLLIDE with another route's: withV1Aliases
+	// strips a leading "/api", so "/api/share" and "/share" both mirror to
+	// "/api/v1/share" and ServeMux panics at boot on the duplicate pattern —
+	// taking the whole gateway down, not just that route.
+	noV1Alias bool
 }
 
 // apiVersionPrefix is the canonical versioned root. Every public route is
@@ -70,12 +76,139 @@ func withV1Aliases(routes []routeConfig) []routeConfig {
 		legacy.deprecated = true
 		out = append(out, legacy)
 
+		// Routes that opt out keep only their unversioned prefix — see
+		// noV1Alias. Note TrimPrefix is a no-op on a prefix that does not start
+		// with "/api" (that is deliberate: "/auth" must mirror to
+		// "/api/v1/auth"), which is exactly why a "/x" route collides with an
+		// "/api/x" one.
+		if cfg.noV1Alias {
+			continue
+		}
 		alias := cfg
 		alias.deprecated = false
 		alias.prefix = apiVersionPrefix + strings.TrimPrefix(cfg.prefix, "/api")
 		out = append(out, alias)
 	}
 	return out
+}
+
+// upstreams carries the resolved service base URLs for serviceRoutes. A struct
+// rather than six positional strings: they are all the same type, so a
+// transposed pair would compile silently and mis-route a whole service.
+type upstreams struct {
+	job          string
+	auth         string
+	analytics    string
+	document     string
+	user         string
+	notification string
+}
+
+// serviceRoutes is the gateway's complete public route table, extracted from
+// main so tests can assert on it directly. That matters: two routes whose
+// /api/v1 aliases collide make ServeMux panic at boot and take the entire
+// gateway down, and a table living inside main() is unreachable from a test —
+// which is exactly how the "/api/share" vs "/share" collision shipped.
+// See TestServiceRoutesHaveNoAliasCollisions.
+func serviceRoutes(u upstreams) []routeConfig {
+	return []routeConfig{
+		{
+			prefix:         "/auth",
+			targetBasePath: "/auth",
+			targetURL:      u.auth,
+		},
+		{
+			prefix:         "/api/upload",
+			targetBasePath: "/api/uploads",
+			targetURL:      u.job,
+		},
+		{
+			prefix:         "/api/convert-from-pdf",
+			targetBasePath: "/api/convert-from-pdf",
+			targetURL:      u.job,
+		},
+		{
+			prefix:         "/api/convert-to-pdf",
+			targetBasePath: "/api/convert-to-pdf",
+			targetURL:      u.job,
+		},
+		{
+			prefix:         "/api/organize-pdf",
+			targetBasePath: "/api/organize-pdf",
+			targetURL:      u.job,
+		},
+		{
+			prefix:         "/api/optimize-pdf",
+			targetBasePath: "/api/optimize-pdf",
+			targetURL:      u.job,
+		},
+		{
+			prefix:         "/api/jobs",
+			targetBasePath: "/api/jobs",
+			targetURL:      u.job,
+		},
+		{
+			// Share-link create/revoke (authenticated or guest).
+			prefix:         "/api/share",
+			targetBasePath: "/api/share",
+			targetURL:      u.job,
+		},
+		{
+			// PUBLIC share-link redeem — the token in the path is the
+			// credential; auth is skipped via PublicPrefixes below.
+			//
+			// noV1Alias: the mirror would be "/api/v1/share", which "/api/share"
+			// above already owns. Share links are deliberately short and
+			// unversioned, so the redeem keeps only this root prefix. Upstream is
+			// job-service's root GET /share/:token (job-service/routes/
+			// upload_routes.go), which is a different handler from the
+			// /api/share create/revoke group — they cannot share one prefix.
+			prefix:         "/share",
+			targetBasePath: "/share",
+			targetURL:      u.job,
+			noV1Alias:      true,
+		},
+		{
+			prefix:         "/api/documents",
+			targetBasePath: "/api/documents",
+			targetURL:      u.document,
+		},
+		{
+			prefix:         "/api/folders",
+			targetBasePath: "/api/folders",
+			targetURL:      u.document,
+		},
+		{
+			prefix:         "/api/tags",
+			targetBasePath: "/api/tags",
+			targetURL:      u.document,
+		},
+		{
+			prefix:         "/api/exports",
+			targetBasePath: "/api/exports",
+			targetURL:      u.document,
+		},
+		{
+			prefix:         "/api/orgs",
+			targetBasePath: "/api/orgs",
+			targetURL:      u.user,
+		},
+		{
+			prefix:         "/api/notifications",
+			targetBasePath: "/api/notifications",
+			targetURL:      u.notification,
+		},
+		{
+			prefix:         "/admin",
+			targetBasePath: "/admin",
+			targetURL:      u.analytics,
+		},
+		{
+			prefix:         "/api/dashboard",
+			targetBasePath: "/api/dashboard",
+			targetURL:      u.analytics,
+		},
+	}
 }
 
 // main boots the single public entry point: authentication, rate limiting, circuit breaking, and reverse proxying.
@@ -142,96 +275,14 @@ func main() {
 	userServiceURL := config.GetEnv("USER_SERVICE_URL", "http://user-service:8090")
 	notificationServiceURL := config.GetEnv("NOTIFICATION_SERVICE_URL", "http://notification-service:8091")
 
-	routes := []routeConfig{
-		{
-			prefix:         "/auth",
-			targetBasePath: "/auth",
-			targetURL:      authServiceURL,
-		},
-		{
-			prefix:         "/api/upload",
-			targetBasePath: "/api/uploads",
-			targetURL:      jobServiceURL,
-		},
-		{
-			prefix:         "/api/convert-from-pdf",
-			targetBasePath: "/api/convert-from-pdf",
-			targetURL:      jobServiceURL,
-		},
-		{
-			prefix:         "/api/convert-to-pdf",
-			targetBasePath: "/api/convert-to-pdf",
-			targetURL:      jobServiceURL,
-		},
-		{
-			prefix:         "/api/organize-pdf",
-			targetBasePath: "/api/organize-pdf",
-			targetURL:      jobServiceURL,
-		},
-		{
-			prefix:         "/api/optimize-pdf",
-			targetBasePath: "/api/optimize-pdf",
-			targetURL:      jobServiceURL,
-		},
-		{
-			prefix:         "/api/jobs",
-			targetBasePath: "/api/jobs",
-			targetURL:      jobServiceURL,
-		},
-		{
-			// Share-link create/revoke (authenticated or guest).
-			prefix:         "/api/share",
-			targetBasePath: "/api/share",
-			targetURL:      jobServiceURL,
-		},
-		{
-			// PUBLIC share-link redeem — the token in the path is the
-			// credential; auth is skipped via PublicPrefixes below.
-			prefix:         "/share",
-			targetBasePath: "/share",
-			targetURL:      jobServiceURL,
-		},
-		{
-			prefix:         "/api/documents",
-			targetBasePath: "/api/documents",
-			targetURL:      documentServiceURL,
-		},
-		{
-			prefix:         "/api/folders",
-			targetBasePath: "/api/folders",
-			targetURL:      documentServiceURL,
-		},
-		{
-			prefix:         "/api/tags",
-			targetBasePath: "/api/tags",
-			targetURL:      documentServiceURL,
-		},
-		{
-			prefix:         "/api/exports",
-			targetBasePath: "/api/exports",
-			targetURL:      documentServiceURL,
-		},
-		{
-			prefix:         "/api/orgs",
-			targetBasePath: "/api/orgs",
-			targetURL:      userServiceURL,
-		},
-		{
-			prefix:         "/api/notifications",
-			targetBasePath: "/api/notifications",
-			targetURL:      notificationServiceURL,
-		},
-		{
-			prefix:         "/admin",
-			targetBasePath: "/admin",
-			targetURL:      analyticsServiceURL,
-		},
-		{
-			prefix:         "/api/dashboard",
-			targetBasePath: "/api/dashboard",
-			targetURL:      analyticsServiceURL,
-		},
-	}
+	routes := serviceRoutes(upstreams{
+		job:          jobServiceURL,
+		auth:         authServiceURL,
+		analytics:    analyticsServiceURL,
+		document:     documentServiceURL,
+		user:         userServiceURL,
+		notification: notificationServiceURL,
+	})
 
 	mux := http.NewServeMux()
 	registerServiceRoutes(mux, withV1Aliases(routes))
@@ -282,7 +333,13 @@ func main() {
 		PublicPaths: publicAuthPaths(),
 		// Share-link redeems must never 401 on a recipient's stale cookie —
 		// the 256-bit token in the path is the credential.
-		PublicPrefixes: []string{"/share/", apiVersionPrefix + "/share/"},
+		//
+		// ONLY the unversioned "/share/" is public. "/api/v1/share/" must NOT be
+		// listed: that prefix belongs to the AUTHENTICATED /api/share group
+		// (share create/revoke), so making it public would let anyone
+		// DELETE /api/v1/share/<id> and revoke another user's share link. The
+		// redeem route carries noV1Alias for the same reason — see the route table.
+		PublicPrefixes: []string{"/share/"},
 		ResolvePlan: func(r *http.Request, authCtx *authverify.AuthContext) {
 			info := plancache.GetPlanInfo(r.Context(), redisClient, authCtx.UserID)
 			authCtx.Plan = info.Plan

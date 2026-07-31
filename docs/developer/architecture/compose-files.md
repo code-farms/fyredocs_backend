@@ -76,7 +76,40 @@ COMPOSE_PROFILES= ./deployment/deploy.sh
 
 # start the monitoring stack standalone against an already-running core stack:
 docker compose -f deployment/docker-compose.yml --env-file .env --profile observability up -d
+
+# stop ONLY the monitoring stack (see the warning about `down` below):
+docker compose -f deployment/docker-compose.yml --env-file .env --profile observability stop
 ```
+
+### On a small host, `COMPOSE_PROFILES=` is the normal command
+
+`deploy.sh` refuses the profile when the host is under `OBSERVABILITY_MIN_HOST_MB`
+(default 8192):
+
+```
+✗ Host has 3918 MB RAM; the observability profile needs at least 8192 MB.
+```
+
+That figure comes from `docker info .MemTotal` — on Docker Desktop it is the **VM's
+allocation, not physical RAM**. An 8 GB Mac reports ~3.9 GB, and clearing an 8192 MB
+floor would mean handing Docker 8 GB of 8 GB. So on a laptop
+`COMPOSE_PROFILES= ./deployment/deploy.sh` is the routine invocation, not a
+workaround — the floor is sized for the VPS-40 (48 GB). `OBSERVABILITY_FORCE=1`
+overrides it, but the six containers reserve **2304 MB of limits** that the
+resource budget does not account for, so forcing it on a 4 GB VM over-commits the
+box: expect OOM-killed containers and a wedged Docker daemon under load.
+
+### `down` is not how you stop just the monitoring stack
+
+`docker compose down` removes **every** container in the project, profiled or not —
+it is not scoped to the profile you pass. Use `--profile observability stop` (above)
+to leave the app stack running.
+
+The opposite trap: turning the profile *off* only stops `deploy.sh` from **starting**
+those containers. Compose does not treat a profile-disabled service as an orphan, so
+`up -d --remove-orphans` leaves ones from an earlier deploy running — unmanaged and
+outside the budget. `deploy.sh` now warns when it finds observability containers
+running on a host below the floor; if you see that warning, stop them.
 
 Config lives in `deployment/{otel-collector,tempo,prometheus,loki,alloy,grafana}/`
 (mounted read-only). Grafana (`http://127.0.0.1:3000`), Prometheus
@@ -110,9 +143,15 @@ docker compose -f deployment/docker-compose-notification-service.yml --env-file 
 
 ```bash
 for f in deployment/docker-compose*.yml; do
-  docker compose -f "$f" --env-file .env config -q || echo "FAIL $f"
+  PRIVATE_BIND_ADDR="${PRIVATE_BIND_ADDR:-10.0.0.1}" \
+    docker compose -f "$f" --env-file .env config -q || echo "FAIL $f"
 done
 ```
+
+`PRIVATE_BIND_ADDR` must be supplied or `docker-compose.data.yml` always reports
+`FAIL` — it requires the variable with **no default** by design (an unset value
+fails the run instead of binding `0.0.0.0` and exposing an unauthenticated NATS),
+so validating it on a single-host box needs any placeholder IP.
 
 ## Port-exposure invariant
 

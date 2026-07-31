@@ -416,14 +416,52 @@ compute_resource_budget() {
     # Observability RAM floor: below this the six extra containers squeeze the
     # app services into caps they cannot actually run in. Fail loudly instead of
     # shipping a box that will OOM under load.
+    #
+    # NOTE the floor is compared against `docker info .MemTotal` — on Docker
+    # Desktop that is the VM's allocation, NOT physical RAM. An 8 GB Mac reports
+    # ~3.9 GB here and can never clear the 8192 default, so on such a host
+    # `COMPOSE_PROFILES= ./deployment/deploy.sh` is the normal invocation rather
+    # than a workaround. The floor targets a real VPS.
+    local OBS_FLOOR="${OBSERVABILITY_MIN_HOST_MB:-8192}"
     case "${COMPOSE_PROFILES:-}" in
         *observability*)
-            local OBS_FLOOR="${OBSERVABILITY_MIN_HOST_MB:-8192}"
             if [ "$MEM_TOTAL_MB" -lt "$OBS_FLOOR" ] && [ "${OBSERVABILITY_FORCE:-0}" != "1" ]; then
                 print_error "Host has ${MEM_TOTAL_MB} MB RAM; the observability profile needs at least ${OBS_FLOOR} MB."
                 print_error "Disable it:  COMPOSE_PROFILES= ./deployment/deploy.sh"
                 print_error "Or override: OBSERVABILITY_FORCE=1 (or lower OBSERVABILITY_MIN_HOST_MB)"
                 exit 1
+            fi
+            ;;
+        *)
+            # Profile is OFF — but that only stops us STARTING those containers.
+            # Compose does not treat a profile-disabled service as an orphan, so
+            # ones started by an earlier deploy keep running, unmanaged and
+            # OUTSIDE the budget computed below. Observed on an 8 GB Mac: the six
+            # containers held 2304 MB of limits on top of the 3126 MB the app
+            # services claim, in a 3918 MB VM — ~139% committed, which is how a
+            # deploy can report success on a box that then OOM-kills db-backup
+            # and wedges the Docker daemon. Warn; don't stop them, since killing
+            # containers nobody asked us to touch is not this script's call.
+            if [ "$MEM_TOTAL_MB" -lt "$OBS_FLOOR" ]; then
+                # -f/--env-file explicitly: COMPOSE_FILE and COMPOSE_ENV_FILES are
+                # not exported until well after this function runs (the earlier
+                # exports live inside do_rollback), so a bare `docker compose`
+                # here finds no compose file, prints nothing, and the check
+                # silently never fires.
+                local obs_running
+                obs_running=$(docker compose -f "$ROLE_COMPOSE" --env-file "$ROOT_DIR/.env" \
+                    --profile observability ps -q \
+                    otel-collector tempo prometheus loki alloy grafana 2>/dev/null | grep -c . || true)
+                if [ "${obs_running:-0}" -gt 0 ]; then
+                    print_warning "observability is OFF for this deploy, but ${obs_running} of its container(s) are still RUNNING."
+                    print_warning "  This host (${MEM_TOTAL_MB} MB) is below the ${OBS_FLOOR} MB floor, and they sit OUTSIDE"
+                    print_warning "  the ${PCT}% budget below — the box stays over-committed until they stop."
+                    # No trailing backslash: print_warning uses `echo -e`, so a line
+                    # ending in \ escapes the colour reset and leaks a literal \033[0m.
+                    print_warning "  Stop them:"
+                    print_warning "    docker compose -f deployment/docker-compose.yml --env-file .env --profile observability stop"
+                    print_warning "  (\`docker compose down\` would remove the WHOLE stack, not just these.)"
+                fi
             fi
             ;;
     esac
