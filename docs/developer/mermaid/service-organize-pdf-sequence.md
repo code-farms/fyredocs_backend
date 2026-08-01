@@ -253,7 +253,7 @@ sequenceDiagram
     alt watermark-pdf
         Proc->>PC: pdfcpu add text or image watermark (position, opacity, fontSize, color)
     else sign-pdf
-        Proc->>PC: pdfcpu image stamp on selected page (decode base64 → temp PNG)
+        Proc->>PC: pdfcpu image stamp on selected page (decode base64 data URL → temp .png/.jpg, extension from mime prefix)
     else edit-pdf
         Proc->>PC: pdfcpu text stamp at (x,y) on page
     else add-page-numbers

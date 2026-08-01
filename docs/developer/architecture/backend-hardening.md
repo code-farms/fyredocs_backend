@@ -341,6 +341,16 @@ fixed; the rest are tracked as a ranked backlog (see production-readiness.md §5
   ocr-pdf `language` (allowlist `en`/`eng`) and `dpi` (72–600) at the public
   boundary (`validateOcrOptions`, `job-service/handlers/tool_options.go`),
   rejecting with 400 `INVALID_OPTIONS` before a job is created.
+- **sign-pdf signature bound (I2) `Low`.** sign-pdf `options` were entirely
+  unvalidated at the public boundary — `signatureData` was unbounded
+  attacker-controlled base64 written to disk and handed to pdfcpu's image
+  decoder. job-service now requires options and validates them
+  (`validateSignOptions`, `job-service/handlers/tool_options.go`):
+  `signatureData` must be a `data:image/png;base64,`/`data:image/jpeg;base64,`
+  data URL with a decoded size ≤256 KB (bounded from the base64 length before
+  decoding, then base64-validated), `position` is allowlisted against the
+  worker's pdfcpu anchors, and `page` must be a whole number ≥0 — rejecting
+  with 400 `INVALID_OPTIONS` before a job is created.
 
 **Tests:** `sse_test.go`, `change_plan_test.go`, `upload_claim_test.go`,
 `internal/cleanup/lock_test.go`, `uploads_test.go`, `optimize-pdf/processing/ocr_language_test.go`.

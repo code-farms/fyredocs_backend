@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -99,6 +100,9 @@ func validateToolOptions(toolType string, raw string) error {
 		if toolType == "pdf-metadata" {
 			return fmt.Errorf("pdf-metadata requires options with at least one of: title, author, subject, keywords")
 		}
+		if toolType == "sign-pdf" {
+			return fmt.Errorf("sign-pdf requires options with signatureData")
+		}
 		return nil
 	}
 	switch toolType {
@@ -111,9 +115,71 @@ func validateToolOptions(toolType string, raw string) error {
 	case "pdf-to-image":
 		// normalizeToolType folds the pdf-to-img alias before this runs.
 		return validatePdfToImageOptions(raw)
+	case "sign-pdf":
+		return validateSignOptions(raw)
 	default:
 		return nil
 	}
+}
+
+var (
+	// signPositions is the pdfcpu anchor allowlist the worker's posMap accepts
+	// (organize-pdf/processing/processing_edit.go signPDF — duplicated by
+	// design, keep in sync). "" means the worker default (br).
+	signPositions = map[string]bool{"": true, "bc": true, "bl": true, "br": true, "tc": true, "tl": true, "tr": true, "c": true}
+)
+
+// maxSignatureBytes caps the DECODED signature image. A bounds-cropped drawn
+// signature is a few KB; 256 KB leaves generous headroom while keeping the
+// base64 payload well inside the gateway's 1 MiB JSON body cap.
+const maxSignatureBytes = 256 * 1024
+
+// signOptionsPayload mirrors the sign-pdf options contract (worker copy in
+// organize-pdf/processing/processing_edit.go — duplicated by design). Page
+// stays raw because clients send both 3 and "3"; 0/absent means last page.
+type signOptionsPayload struct {
+	SignatureData string          `json:"signatureData"`
+	Position      string          `json:"position"`
+	Page          json.RawMessage `json:"page"`
+}
+
+// validateSignOptions is the hard gate for sign-pdf options: signatureData is
+// attacker-controlled base64 that gets written to disk and handed to pdfcpu's
+// image decoder, so it is bounded and prefix-checked here; position feeds a
+// pdfcpu description string (allowlist).
+func validateSignOptions(raw string) error {
+	var opts signOptionsPayload
+	if err := json.Unmarshal([]byte(raw), &opts); err != nil {
+		return fmt.Errorf("options must be a valid JSON object")
+	}
+	data := strings.TrimSpace(opts.SignatureData)
+	if data == "" {
+		return fmt.Errorf("sign-pdf requires options with signatureData")
+	}
+	prefix, payload, found := strings.Cut(data, ",")
+	if !found || (!strings.HasPrefix(prefix, "data:image/png;base64") && !strings.HasPrefix(prefix, "data:image/jpeg;base64")) {
+		return fmt.Errorf("signatureData must be a base64 data URL of type image/png or image/jpeg")
+	}
+	// base64 length bounds the decoded size without decoding: 4 chars ≈ 3 bytes.
+	if len(payload)/4*3 > maxSignatureBytes {
+		return fmt.Errorf("signature image exceeds the maximum size of %d KB", maxSignatureBytes/1024)
+	}
+	if _, err := base64.StdEncoding.DecodeString(payload); err != nil {
+		return fmt.Errorf("signatureData is not valid base64")
+	}
+	if !signPositions[strings.ToLower(strings.TrimSpace(opts.Position))] {
+		return fmt.Errorf("unsupported position %q — supported: tl, tc, tr, c, bl, bc, br", opts.Position)
+	}
+	if pageStr := strings.Trim(strings.TrimSpace(string(opts.Page)), `"`); pageStr != "" && pageStr != "null" {
+		page, err := strconv.Atoi(pageStr)
+		if err != nil {
+			return fmt.Errorf("page must be a whole number")
+		}
+		if page < 0 {
+			return fmt.Errorf("page must be 0 (last page) or a positive page number")
+		}
+	}
+	return nil
 }
 
 var (
