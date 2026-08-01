@@ -1468,8 +1468,10 @@ paths:
         (perspective-warp corners, rotation, enhancement, page size, margin,
         OCR language). For `pdf-metadata`, `options` follows the
         `PdfMetadataOptions` schema and is REQUIRED (at least one of
-        title/author/subject/keywords). Both schemas are validated at job
-        creation — violations return 400 with error code `INVALID_OPTIONS`.
+        title/author/subject/keywords). For `sign-pdf`, `options` follows the
+        `SignPdfOptions` schema and is REQUIRED (`signatureData` data URL).
+        All three schemas are validated at job creation — violations return
+        400 with error code `INVALID_OPTIONS`.
       operationId: createOrganizePdfJob
       security:
         - BearerAuth: []
@@ -3618,6 +3620,43 @@ components:
         format: jpg
         dpi: 300
 
+    SignPdfOptions:
+      type: object
+      required: [signatureData]
+      description: |
+        Options for sign-pdf jobs (REQUIRED — the tool is meaningless without
+        a signature image). Validated by job-service at job creation —
+        violations return 400 INVALID_OPTIONS. The stamp is a VISUAL signature
+        only: it does not create a cryptographic PDF signature and proves
+        nothing about authenticity.
+      properties:
+        signatureData:
+          type: string
+          pattern: '^data:image/(png|jpeg);base64,'
+          description: |
+            Signature image as a data:image/png;base64, or
+            data:image/jpeg;base64, data URL. The decoded image must be
+            256 KB or smaller — the payload is attacker-controlled base64
+            that is written to disk and handed to pdfcpu's image decoder in
+            the organize-pdf worker, so it is bounded and prefix-gated at the
+            public boundary. WebP is not accepted for signatures.
+        position:
+          type: string
+          enum: [bc, bl, br, tc, tl, tr, c]
+          default: br
+          description: pdfcpu page anchor for the stamp (case-insensitive).
+        page:
+          type: integer
+          minimum: 0
+          default: 0
+          description: |
+            1-indexed page to stamp. 0 (or absent) means the LAST page.
+            Accepted as a JSON number or a numeric string ("3").
+      example:
+        signatureData: data:image/png;base64,iVBORw0KGgo...
+        position: br
+        page: 1
+
     # -- Job Schemas --
     CreateJobRequest:
       type: object
@@ -3647,6 +3686,9 @@ components:
             creation; violations return 400 INVALID_OPTIONS).
             For pdf-to-image: see the PdfToImageOptions schema (validated at
             job creation; violations return 400 INVALID_OPTIONS).
+            For sign-pdf: see the SignPdfOptions schema (REQUIRED —
+            signatureData png/jpeg data URL, decoded size ≤256 KB; validated
+            at job creation; violations return 400 INVALID_OPTIONS).
             For watermark-pdf:
               - type: "text" | "image" (default: "text")
               - text: string (watermark text, used when type=text)

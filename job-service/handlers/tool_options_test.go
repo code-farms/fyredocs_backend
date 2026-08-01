@@ -227,3 +227,60 @@ func TestValidatePdfToImageOptions(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateSignOptions verifies the sign-pdf trust boundary: signatureData
+// is attacker-controlled base64 written to disk and decoded by pdfcpu, so the
+// gate bounds size, requires a png/jpeg data-URL, and allowlists the anchor.
+func TestValidateSignOptions(t *testing.T) {
+	tinyPng := `{"signatureData":"data:image/png;base64,iVBORw0KGgo="}`
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr string
+	}{
+		{"minimal png", tinyPng, ""},
+		{"jpeg allowed", `{"signatureData":"data:image/jpeg;base64,aGVsbG8="}`, ""},
+		{"anchor + page string", `{"signatureData":"data:image/png;base64,aGVsbG8=","position":"tl","page":"3"}`, ""},
+		{"page number zero (last page)", `{"signatureData":"data:image/png;base64,aGVsbG8=","page":0}`, ""},
+		{"missing signature", `{"position":"br"}`, "requires options with signatureData"},
+		{"webp rejected", `{"signatureData":"data:image/webp;base64,aGVsbG8="}`, "image/png or image/jpeg"},
+		{"raw base64 without prefix", `{"signatureData":"aGVsbG8="}`, "image/png or image/jpeg"},
+		{"bad base64", `{"signatureData":"data:image/png;base64,%%%%"}`, "not valid base64"},
+		{"unknown anchor", `{"signatureData":"data:image/png;base64,aGVsbG8=","position":"top-left"}`, "unsupported position"},
+		{"negative page", `{"signatureData":"data:image/png;base64,aGVsbG8=","page":-2}`, "0 (last page) or a positive"},
+		{"page garbage", `{"signatureData":"data:image/png;base64,aGVsbG8=","page":"three"}`, "whole number"},
+		{"not json", `nope`, "valid JSON"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateToolOptions("sign-pdf", tt.raw)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateSignOptionsSizeCap pins the decoded-size bound: an oversized
+// signature must be rejected without decoding it.
+func TestValidateSignOptionsSizeCap(t *testing.T) {
+	big := strings.Repeat("A", (maxSignatureBytes/3*4)+8)
+	raw := `{"signatureData":"data:image/png;base64,` + big + `"}`
+	if err := validateToolOptions("sign-pdf", raw); err == nil || !strings.Contains(err.Error(), "maximum size") {
+		t.Errorf("oversized signature not rejected: %v", err)
+	}
+}
+
+// TestValidateSignOptionsEmptyRaw pins that absent options fail: the tool is
+// useless without a signature (pdf-metadata precedent).
+func TestValidateSignOptionsEmptyRaw(t *testing.T) {
+	if err := validateToolOptions("sign-pdf", ""); err == nil {
+		t.Error("empty options for sign-pdf must be rejected")
+	}
+}

@@ -536,7 +536,7 @@
         "forgot-password"
        ]
       },
-      "description": "Request a password reset link. Always returns 200 — the response is identical whether or not the email is registered. Rate-limited 3/min per IP. When RESEND_API_KEY is unset on the server, the link is logged via slog instead of emailed."
+      "description": "Request a password reset link. Always returns 200 \u2014 the response is identical whether or not the email is registered. Rate-limited 3/min per IP. When RESEND_API_KEY is unset on the server, the link is logged via slog instead of emailed."
      },
      "response": []
     },
@@ -654,7 +654,7 @@
   },
   {
    "name": "2. File Upload",
-   "description": "Presigned S3 multipart upload protocol. File bytes go browser → object storage directly via presigned URLs; the API only brokers the session. Flow: init → PUT each part to its presigned URL (collect ETags) → complete → use uploadId in a job-creation request.",
+   "description": "Presigned S3 multipart upload protocol. File bytes go browser \u2192 object storage directly via presigned URLs; the API only brokers the session. Flow: init \u2192 PUT each part to its presigned URL (collect ETags) \u2192 complete \u2192 use uploadId in a job-creation request.",
    "item": [
     {
      "name": "Initialize Upload",
@@ -985,7 +985,7 @@
         "{{upload_id}}"
        ]
       },
-      "description": "Cancel an in-progress upload: aborts the S3 multipart upload (freeing stored parts) and clears the session. Idempotent — returns 204 even for unknown/expired sessions."
+      "description": "Cancel an in-progress upload: aborts the S3 multipart upload (freeing stored parts) and clears the session. Idempotent \u2014 returns 204 even for unknown/expired sessions."
      },
      "response": [
       {
@@ -3097,7 +3097,7 @@
         "scan-to-pdf"
        ]
       },
-      "description": "Convert images to PDF with the full scanner options: OCR (Tesseract, languages eng/deu/fra/spa/hin), pageSize (auto/a4/letter/id — ignored when ocr=true), enhance (none/grayscale/bw/color-boost), margin (none/small/normal/large — white margin via relative import scale 1.0/0.95/0.9/0.85; only applies with a fixed pageSize a4/letter/id, ignored with a worker warning on auto or the OCR path), and per-page corners (normalized 0..1 perspective-warp quad, e.g. from Detect Edges) + rotation (0/90/180/270, clockwise, applied after the warp). pages[] is index-aligned with the input files. All options are optional and validated at job creation (400 INVALID_OPTIONS). When ocr=true and text was recognized, the completed job's metadata carries extractedText (plain text, pages in output-PDF order separated by form-feed \\f, capped at 512 KB) and textTruncated: true only if the cap was hit — returned only by the single-job GET; list and history responses omit them."
+      "description": "Convert images to PDF with the full scanner options: OCR (Tesseract, languages eng/deu/fra/spa/hin), pageSize (auto/a4/letter/id \u2014 ignored when ocr=true), enhance (none/grayscale/bw/color-boost), margin (none/small/normal/large \u2014 white margin via relative import scale 1.0/0.95/0.9/0.85; only applies with a fixed pageSize a4/letter/id, ignored with a worker warning on auto or the OCR path), and per-page corners (normalized 0..1 perspective-warp quad, e.g. from Detect Edges) + rotation (0/90/180/270, clockwise, applied after the warp). pages[] is index-aligned with the input files. All options are optional and validated at job creation (400 INVALID_OPTIONS). When ocr=true and text was recognized, the completed job's metadata carries extractedText (plain text, pages in output-PDF order separated by form-feed \\f, capped at 512 KB) and textTruncated: true only if the cap was hit \u2014 returned only by the single-job GET; list and history responses omit them."
      },
      "response": [
       {
@@ -3191,7 +3191,7 @@
         "detect-edges"
        ]
       },
-      "description": "Detect the document quad in a completed image upload (mobile scanner assist). The upload is peeked at, not consumed — the same uploadId stays valid for the subsequent Scan to PDF job. Corners are normalized 0..1 against the decoded pixel grid and can be passed into scan-to-pdf options.pages[i].corners. When no document is found, full-image corners with confidence 0 are returned (still 200). Rate-limited per IP (RATE_LIMIT_DETECT, default 60/window). Errors: 400 INVALID_INPUT (unknown uploadId or PDF upload), 422 relayed upstream code (e.g. UNDECODABLE_IMAGE, IMAGE_TOO_LARGE), 502 DETECTION_UNAVAILABLE."
+      "description": "Detect the document quad in a completed image upload (mobile scanner assist). The upload is peeked at, not consumed \u2014 the same uploadId stays valid for the subsequent Scan to PDF job. Corners are normalized 0..1 against the decoded pixel grid and can be passed into scan-to-pdf options.pages[i].corners. When no document is found, full-image corners with confidence 0 are returned (still 200). Rate-limited per IP (RATE_LIMIT_DETECT, default 60/window). Errors: 400 INVALID_INPUT (unknown uploadId or PDF upload), 422 relayed upstream code (e.g. UNDECODABLE_IMAGE, IMAGE_TOO_LARGE), 502 DETECTION_UNAVAILABLE."
      },
      "response": [
       {
@@ -3274,7 +3274,7 @@
         "pdf-metadata"
        ]
       },
-      "description": "Set document metadata (the PDF Info dictionary) via pdfcpu AddPropertiesFile. Options are REQUIRED: at least one of title/author/subject/keywords, each a string of at most 512 characters after trimming with no NUL bytes — validated at job creation (400 INVALID_OPTIONS). Encrypted PDFs fail with pdfcpu's error."
+      "description": "Set document metadata (the PDF Info dictionary) via pdfcpu AddPropertiesFile. Options are REQUIRED: at least one of title/author/subject/keywords, each a string of at most 512 characters after trimming with no NUL bytes \u2014 validated at job creation (400 INVALID_OPTIONS). Encrypted PDFs fail with pdfcpu's error."
      },
      "response": [
       {
@@ -3312,6 +3312,89 @@
         }
        ],
        "body": "{\n  \"success\": true,\n  \"message\": \"Organization job created\",\n  \"data\": {\n    \"id\": \"job_abc123\",\n    \"tool\": \"pdf-metadata\",\n    \"status\": \"pending\",\n    \"createdAt\": \"2026-03-03T12:00:00Z\"\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+      }
+     ]
+    },
+    {
+     "name": "Sign PDF",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "exec": [
+         "const response = pm.response.json();",
+         "pm.test(\"Response indicates success\", function() {",
+         "    pm.expect(response.success).to.eql(true);",
+         "});",
+         "if (response.data && response.data.id) {",
+         "    pm.environment.set('job_id', response.data.id);",
+         "}"
+        ],
+        "type": "text/javascript"
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       }
+      ],
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"uploadId\": \"{{upload_id}}\",\n  \"options\": {\"signatureData\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\",\"position\":\"br\",\"page\":1}\n}"
+      },
+      "url": {
+       "raw": "{{base_url}}/api/organize-pdf/sign-pdf",
+       "host": [
+        "{{base_url}}"
+       ],
+       "path": [
+        "api",
+        "organize-pdf",
+        "sign-pdf"
+       ]
+      },
+      "description": "Stamp a signature image onto a chosen page (visual signature only \u2014 NOT a cryptographic PDF signature; it proves nothing about authenticity). Options are REQUIRED and validated at job creation (400 INVALID_OPTIONS): signatureData must be a data:image/png;base64, or data:image/jpeg;base64, data URL whose decoded size is at most 256 KB (WebP is not accepted); position is a pdfcpu anchor \u2014 bc/bl/br/tc/tl/tr/c, default br; page is a whole number \u2265 0 (number or string), where 0 or absent means the LAST page. Violations: missing/empty options, bad JSON, missing signatureData, wrong data-URL prefix, oversized or invalid base64, unknown position, or negative/non-integer page."
+     },
+     "response": [
+      {
+       "name": "201 - Job Created",
+       "originalRequest": {
+        "method": "POST",
+        "header": [
+         {
+          "key": "Content-Type",
+          "value": "application/json"
+         }
+        ],
+        "body": {
+         "mode": "raw",
+         "raw": "{\n  \"uploadId\": \"{{upload_id}}\",\n  \"options\": {\"signatureData\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\",\"position\":\"br\",\"page\":1}\n}"
+        },
+        "url": {
+         "raw": "{{base_url}}/api/organize-pdf/sign-pdf",
+         "host": [
+          "{{base_url}}"
+         ],
+         "path": [
+          "api",
+          "organize-pdf",
+          "sign-pdf"
+         ]
+        }
+       },
+       "status": "Created",
+       "code": 201,
+       "header": [
+        {
+         "key": "Content-Type",
+         "value": "application/json"
+        }
+       ],
+       "body": "{\n  \"success\": true,\n  \"message\": \"Organization job created\",\n  \"data\": {\n    \"id\": \"job_abc123\",\n    \"tool\": \"sign-pdf\",\n    \"status\": \"pending\",\n    \"createdAt\": \"2026-03-03T12:00:00Z\"\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
       }
      ]
     },
@@ -3769,7 +3852,7 @@
         "ocr-pdf"
        ]
       },
-      "description": "Add searchable text layer to scanned PDFs using Tesseract OCR. Options (validated at job creation, 400 INVALID_OPTIONS on violation): language (\"en\"/\"eng\" only — the worker image ships only the English tesseract pack today; the allowlist grows when more packs are added), dpi (whole number 72–600, JSON number or string; server default 150 via OCR_DEFAULT_DPI). The completed job's metadata carries language, dpi, pagesOCRed, and — when text was recognized — extractedText (plain text, pages in output-PDF order separated by form-feed \\f, capped at 512 KB) plus textTruncated: true only if the cap was hit. extractedText/textTruncated are returned only by the single-job GET — list and history responses omit them."
+      "description": "Add searchable text layer to scanned PDFs using Tesseract OCR. Options (validated at job creation, 400 INVALID_OPTIONS on violation): language (\"en\"/\"eng\" only \u2014 the worker image ships only the English tesseract pack today; the allowlist grows when more packs are added), dpi (whole number 72\u2013600, JSON number or string; server default 150 via OCR_DEFAULT_DPI). The completed job's metadata carries language, dpi, pagesOCRed, and \u2014 when text was recognized \u2014 extractedText (plain text, pages in output-PDF order separated by form-feed \\f, capped at 512 KB) plus textTruncated: true only if the cap was hit. extractedText/textTruncated are returned only by the single-job GET \u2014 list and history responses omit them."
      },
      "response": [
       {

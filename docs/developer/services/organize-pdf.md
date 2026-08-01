@@ -197,15 +197,30 @@ Removes the password from an encrypted PDF.
 
 ### 11. Sign PDF
 
-Stamps a signature image onto a specific page.
+Stamps a signature image onto a specific page. This is a **visual signature only** —
+it does not create a cryptographic PDF signature, so it proves nothing about
+authenticity.
 
 **Tool:** `sign-pdf`
 **Input:** Single PDF file
-**Output:** PDF with image stamp
+**Output:** PDF with image stamp (scalefactor 0.25, opacity 1, no rotation)
 **Options:**
-- `imageData`: base64 data URL of the signature image
-- `page`: 1-indexed page number (default 1)
-- `position`: `"top-left"`, `"top-right"`, `"bottom-left"`, `"bottom-right"`, `"center"` (default)
+- `signatureData`: required; `data:image/png;base64,` or `data:image/jpeg;base64,` data URL of the signature image, decoded size ≤256 KB
+- `page`: 1-indexed page number; `0` or absent means the **last** page
+- `position`: pdfcpu anchor — `bc`, `bl`, `br` (default), `tc`, `tl`, `tr`, `c`
+
+Options are validated by job-service at job creation (`validateSignOptions` in
+`job-service/handlers/tool_options.go`, 400 `INVALID_OPTIONS`): options are required,
+`signatureData` is bounded and mime-prefix-gated, `position` allowlisted, `page` a
+whole number ≥0. The worker re-checks defensively (missing `signatureData` fails the
+job; an unknown position degrades to `br`) — defence in depth, not the primary gate.
+
+The signature data URL is written to a temp file by the shared
+`decodeDataURLImage()` helper (`processing/processing_edit.go`), which is also used
+by image watermarks. The file extension is derived from the mime prefix (`.png` /
+`.jpg`) so the filename and pdfcpu's content sniffing agree — previously every
+signature landed on disk as `.png`, silently mislabeling JPEG payloads. webp remains
+watermark-only (the helper's `allowWebp` flag is false on the sign path).
 
 The pdfcpu watermark description is built by `signatureWatermarkDesc()` using the
 unambiguous `scalefactor` key (the abbreviated `sc` prefix is rejected by pdfcpu as an

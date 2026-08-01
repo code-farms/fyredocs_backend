@@ -108,7 +108,7 @@ Content-Type: application/json
 | Status | Code | Description |
 |--------|------|-------------|
 | 400 | INVALID_INPUT | Invalid tool, options, or file type |
-| 400 | INVALID_OPTIONS | Options payload fails the per-tool schema (scan-to-pdf, pdf-metadata) |
+| 400 | INVALID_OPTIONS | Options payload fails the per-tool schema (scan-to-pdf, pdf-metadata, sign-pdf) |
 | 401 | UNAUTHORIZED | Not authenticated |
 | 404 | NOT_FOUND | Upload not found |
 
@@ -638,13 +638,17 @@ Removes the password from an encrypted PDF.
 
 ### sign-pdf
 
-Stamps an image onto a chosen page.
+Stamps a signature image onto a chosen page. This is a **visual signature only** — it does not create a cryptographic PDF signature and proves nothing about authenticity.
+
+**Options** (required — validated at job creation, violations return 400 `INVALID_OPTIONS`):
 
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
-| imageData | string (data URL) | Yes | Base64 image (PNG/JPEG/WebP) |
-| page | integer | No | 1-indexed page number (default `1`) |
-| position | string | No | `top-left`, `top-right`, `bottom-left`, `bottom-right`, `center` (default) |
+| signatureData | string (data URL) | Yes | `data:image/png;base64,` or `data:image/jpeg;base64,` data URL. Decoded size must be ≤256 KB (WebP is not accepted for signatures) |
+| page | integer or string | No | 1-indexed page number, ≥0; `0` or absent means the **last** page. Both `1` and `"1"` are accepted |
+| position | string | No | pdfcpu anchor: `bc`, `bl`, `br` (default), `tc`, `tl`, `tr`, `c` (case-insensitive) |
+
+**Validation errors** (400 `INVALID_OPTIONS`): options absent or empty; unparseable JSON; `signatureData` missing or empty; data URL prefix not `image/png`/`image/jpeg` base64; decoded size over 256 KB; payload not valid base64; `position` outside the anchor list; `page` not a whole number or negative.
 
 ---
 

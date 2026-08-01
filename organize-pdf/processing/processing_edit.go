@@ -117,26 +117,37 @@ func watermarkPDFText(inputPath, outputPath string, options map[string]interface
 // watermarkPDFImage stamps a user-supplied image across pages. The image is
 // itself an untrusted upload, so it is handled as a file path rather than being
 // decoded here.
+// decodeDataURLImage writes a data-URL image ("data:image/png;base64,…") into
+// dir and returns the file path. The extension comes from the mime prefix so
+// the filename and pdfcpu's content sniffing agree — signPDF previously wrote
+// every payload as .png, silently mislabeling JPEG signatures. webp is only
+// offered where the caller's pdfcpu path accepts it (watermarks).
+func decodeDataURLImage(dataURL, dir, baseName string, allowWebp bool) (string, error) {
+	parts := strings.SplitN(dataURL, ",", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid image data format")
+	}
+	imgBytes, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("failed to decode image data: %w", err)
+	}
+	ext := ".png"
+	if strings.Contains(parts[0], "jpeg") || strings.Contains(parts[0], "jpg") {
+		ext = ".jpg"
+	} else if allowWebp && strings.Contains(parts[0], "webp") {
+		ext = ".webp"
+	}
+	path := filepath.Join(dir, baseName+ext)
+	if err := os.WriteFile(path, imgBytes, 0600); err != nil {
+		return "", fmt.Errorf("failed to write image: %w", err)
+	}
+	return path, nil
+}
+
 func watermarkPDFImage(inputPath, outputPath string, options map[string]interface{}, position string, opacity float64, rotation int) error {
 	imageData, ok := optionString(options, "imageData")
 	if !ok || imageData == "" {
 		return fmt.Errorf("missing watermark image data")
-	}
-
-	parts := strings.SplitN(imageData, ",", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid watermark image data format")
-	}
-	imgBytes, err := base64.StdEncoding.DecodeString(parts[1])
-	if err != nil {
-		return fmt.Errorf("failed to decode watermark image: %w", err)
-	}
-
-	ext := ".png"
-	if strings.Contains(parts[0], "jpeg") || strings.Contains(parts[0], "jpg") {
-		ext = ".jpg"
-	} else if strings.Contains(parts[0], "webp") {
-		ext = ".webp"
 	}
 
 	tempDir, err := os.MkdirTemp("", "pdf-watermark-*")
@@ -145,9 +156,9 @@ func watermarkPDFImage(inputPath, outputPath string, options map[string]interfac
 	}
 	defer os.RemoveAll(tempDir)
 
-	imgPath := filepath.Join(tempDir, "watermark"+ext)
-	if err := os.WriteFile(imgPath, imgBytes, 0600); err != nil {
-		return fmt.Errorf("failed to write watermark image: %w", err)
+	imgPath, err := decodeDataURLImage(imageData, tempDir, "watermark", true)
+	if err != nil {
+		return fmt.Errorf("watermark image: %w", err)
 	}
 
 	scale := 0.3
@@ -316,24 +327,17 @@ func signPDF(inputPath string, outputPath string, options map[string]interface{}
 		return fmt.Errorf("missing signature data")
 	}
 
-	parts := strings.SplitN(signatureData, ",", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid signature data format")
-	}
-	imgBytes, err := base64.StdEncoding.DecodeString(parts[1])
-	if err != nil {
-		return fmt.Errorf("failed to decode signature image: %w", err)
-	}
-
 	tempDir, err := os.MkdirTemp("", "pdf-sign-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	sigPath := filepath.Join(tempDir, "signature.png")
-	if err := os.WriteFile(sigPath, imgBytes, 0600); err != nil {
-		return fmt.Errorf("failed to write signature image: %w", err)
+	// png/jpeg only (no webp): job-service's validateSignOptions enforces the
+	// same prefix set at the public boundary — defence in depth.
+	sigPath, err := decodeDataURLImage(signatureData, tempDir, "signature", false)
+	if err != nil {
+		return fmt.Errorf("signature image: %w", err)
 	}
 
 	ctx, err := api.ReadContextFile(inputPath)

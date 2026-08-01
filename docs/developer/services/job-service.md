@@ -23,7 +23,7 @@ The Job Service is the central orchestration service for all file processing ope
 7. **Guest Job Tracking** -- Manage guest tokens in Redis to allow guest users to track their jobs
 8. **Tool-to-Service Routing** -- Use a centralized `ToolServiceMap` to dispatch jobs to the correct worker service
 9. **MIME-Type Validation** -- Validate uploaded file content types using `http.DetectContentType()` over the object's first 512 bytes (read via a ranged GET) against an allowlist per tool category (pdf, word, excel, ppt, image)
-10. **Per-Tool Options Validation** -- Validate tool-specific `options` payloads against a schema at the public boundary (currently `scan-to-pdf`, `pdf-metadata`, `ocr-pdf`, and `pdf-to-image`); rejections return 400 `INVALID_OPTIONS`
+10. **Per-Tool Options Validation** -- Validate tool-specific `options` payloads against a schema at the public boundary (currently `scan-to-pdf`, `pdf-metadata`, `ocr-pdf`, `pdf-to-image`, and `sign-pdf`); rejections return 400 `INVALID_OPTIONS`
 11. **Edge Detection Relay** -- `POST /api/organize-pdf/detect-edges` peeks at a completed image upload (without consuming it) and synchronously relays detection to organize-pdf's internal endpoint for the mobile scanner UI
 12. **Share Links** -- Turn a completed presigned upload into an expiring public download link (`POST /api/share`), serve the public redeem redirect (`GET /share/:token`), and support owner revocation (`DELETE /api/share/:id`); tokens are stored hashed, expired/revoked shares are reaped by the cleanup sweep
 
@@ -80,7 +80,7 @@ Job Service :8081  (control plane only — no file bytes)
 | `handlers/jobs.go` | Job CRUD, presigned download redirect, job history |
 | `handlers/sse.go` | SSE endpoint for real-time job status updates via NATS JetStream |
 | `handlers/uploads.go` | Presigned multipart upload protocol (init, parts, complete, status, abort, 410 chunk stub) |
-| `handlers/tool_options.go` | Per-tool options schema validation (`validateToolOptions`; currently scan-to-pdf, pdf-metadata, ocr-pdf, and pdf-to-image) |
+| `handlers/tool_options.go` | Per-tool options schema validation (`validateToolOptions`; currently scan-to-pdf, pdf-metadata, ocr-pdf, pdf-to-image, and sign-pdf) |
 | `handlers/shares.go` | Share links: create (consumes an upload, mints a hashed token), public redeem (302 to presigned URL), owner revoke |
 | `handlers/detect.go` | `DetectEdges` — synchronous relay to organize-pdf `/internal/v1/detect-edges` |
 | `handlers/storage.go` | `ObjectStore` interface (narrow slice of `shared/storage.Client`) + boot-time injection |
@@ -231,7 +231,7 @@ Expiring public download links for user files, owned end-to-end by job-service (
 
 ### Per-Tool Options Validation
 
-`CreateJobFromTool` calls `validateToolOptions(toolType, options)` (`handlers/tool_options.go`) **before** `consumeUpload`. Options were historically an opaque passthrough; scan-to-pdf was the first tool with a schema'd payload, pdf-metadata the second, ocr-pdf the third, pdf-to-image the fourth. Tools without a schema (and empty options) pass through unchanged; job-service owns its own copy of the shape — no shared DTOs across services. Workers still re-clamp defensively on their side (a bad enum never fails a job downstream).
+`CreateJobFromTool` calls `validateToolOptions(toolType, options)` (`handlers/tool_options.go`) **before** `consumeUpload`. Options were historically an opaque passthrough; scan-to-pdf was the first tool with a schema'd payload, pdf-metadata the second, ocr-pdf the third, pdf-to-image the fourth, sign-pdf the fifth. Tools without a schema (and empty options) pass through unchanged; job-service owns its own copy of the shape — no shared DTOs across services. Workers still re-clamp defensively on their side (a bad enum never fails a job downstream).
 
 **scan-to-pdf schema** (all fields optional; unknown fields ignored for forward compatibility; string enums case-insensitive):
 
@@ -268,6 +268,14 @@ Expiring public download links for user files, owned end-to-end by job-service (
 | `author` | string, ≤512 chars after trimming, no NUL bytes |
 | `subject` | string, ≤512 chars after trimming, no NUL bytes |
 | `keywords` | string, ≤512 chars after trimming, no NUL bytes |
+
+**sign-pdf schema** (`validateSignOptions`; options required — the tool is meaningless without a signature image, and absent options would otherwise fail only inside the worker after the upload is consumed):
+
+| Field | Rule |
+|-------|------|
+| `signatureData` | required; a `data:image/png;base64,` or `data:image/jpeg;base64,` data URL. The decoded size must be ≤256 KB — the bound is checked from the base64 length *without* decoding (4 chars ≈ 3 bytes), then the payload is base64-validated. `signatureData` is attacker-controlled base64 that gets written to disk and handed to pdfcpu's image decoder in the organize-pdf worker; a drawn signature cropped to its bounds is a few KB, so 256 KB leaves generous headroom while keeping the base64 payload well inside the gateway's 1 MiB JSON body cap. |
+| `position` | optional; whitelist: `""`, `bc`, `bl`, `br`, `tc`, `tl`, `tr`, `c` (case-insensitive; `""` means the worker default `br`). Mirrors the worker's pdfcpu anchor map (`organize-pdf/processing/processing_edit.go` `signPDF` — duplicated by design, keep in sync). |
+| `page` | optional; JSON number or string (clients send both `3` and `"3"`); must be a whole number ≥0. `0`/absent means the last page. |
 
 Any violation (including unparseable JSON) is rejected with 400 `INVALID_OPTIONS`.
 
@@ -696,7 +704,7 @@ sequenceDiagram
 | `INVALID_INPUT` | 400 | File type mismatch for tool (e.g., non-PDF for pdf-to-word) |
 | `INVALID_INPUT` | 400 | File MIME content type (sniffed from the object's first 512 bytes) does not match the expected type for the tool |
 | `INVALID_INPUT` | 400 | Uploaded object missing from the uploads bucket (upload never completed) |
-| `INVALID_OPTIONS` | 400 | `options` payload fails the per-tool schema (scan-to-pdf: bad JSON, non-whitelisted language/pageSize/enhance/margin, >50 pages entries, invalid rotation, partial corners, coordinates outside [0,1]; pdf-metadata: missing options, none of title/author/subject/keywords present, a field >512 chars after trimming, or NUL bytes; ocr-pdf: bad JSON, language outside `en`/`eng`, non-integer dpi, or dpi outside 72–600; pdf-to-image: bad JSON, format outside `png`/`jpg`/`jpeg`/`tiff`, non-integer dpi, or dpi outside 72–600) |
+| `INVALID_OPTIONS` | 400 | `options` payload fails the per-tool schema (scan-to-pdf: bad JSON, non-whitelisted language/pageSize/enhance/margin, >50 pages entries, invalid rotation, partial corners, coordinates outside [0,1]; pdf-metadata: missing options, none of title/author/subject/keywords present, a field >512 chars after trimming, or NUL bytes; ocr-pdf: bad JSON, language outside `en`/`eng`, non-integer dpi, or dpi outside 72–600; pdf-to-image: bad JSON, format outside `png`/`jpg`/`jpeg`/`tiff`, non-integer dpi, or dpi outside 72–600; sign-pdf: missing options, bad JSON, missing/empty `signatureData`, a data URL that is not `image/png`/`image/jpeg` base64, decoded size >256 KB, invalid base64, non-whitelisted position, non-integer page, or page <0) |
 | `FILE_TOO_LARGE` | 413 | File size exceeds plan limit from `X-User-Plan-Max-File-MB` (direct multipart path; default 10 MB) |
 | `TOO_MANY_FILES` | 400 | Number of files exceeds plan limit from `X-User-Plan-Max-Files` (default 5 files) |
 | `RATE_LIMIT_EXCEEDED` | 429 | More than `RATE_LIMIT_JOB_CREATE` job creations per IP per window |
