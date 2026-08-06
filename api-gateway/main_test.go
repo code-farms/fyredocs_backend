@@ -6,10 +6,13 @@ package main
 
 import (
 	"bytes"
-	"fyredocs/shared/circuitbreaker"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"fyredocs/shared/circuitbreaker"
 )
 
 func TestCorsAllowOrigin(t *testing.T) {
@@ -555,4 +558,66 @@ func TestPublicAuthPathsCoverBothRoots(t *testing.T) {
 // circuitBreakerForTest returns a fresh breaker so tests never share trip state.
 func circuitBreakerForTest() *circuitbreaker.TwoStep {
 	return circuitbreaker.NewTwoStep("test")
+}
+
+// TestBuildFlagsPayload pins the fail-open contract: the flags endpoint must
+// serve a valid envelope no matter what FEATURE_FLAGS_JSON contains — a
+// config typo degrades to empty flags (app code defaults), never an error.
+func TestBuildFlagsPayload(t *testing.T) {
+	tests := []struct {
+		name      string
+		raw       string
+		wantFlags string
+	}{
+		{"empty env", "", `{}`},
+		{"valid object", `{"onDevicePdfRenderer":false}`, `{"onDevicePdfRenderer":false}`},
+		{"invalid json degrades to empty", `{nope`, `{}`},
+		{"non-object degrades to empty", `[1,2]`, `{}`},
+		{"whitespace only", "   ", `{}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var envelope struct {
+				Success bool `json:"success"`
+				Data    struct {
+					Flags json.RawMessage `json:"flags"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(buildFlagsPayload(tt.raw), &envelope); err != nil {
+				t.Fatalf("payload is not valid JSON: %v", err)
+			}
+			if !envelope.Success {
+				t.Error("envelope must report success")
+			}
+			var got, want any
+			if err := json.Unmarshal(envelope.Data.Flags, &got); err != nil {
+				t.Fatalf("flags not valid JSON: %v", err)
+			}
+			if err := json.Unmarshal([]byte(tt.wantFlags), &want); err != nil {
+				t.Fatal(err)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Errorf("flags = %s, want %s", envelope.Data.Flags, tt.wantFlags)
+			}
+		})
+	}
+}
+
+// TestPublicAuthPathsIncludesFlags pins that the flags endpoint bypasses
+// token verification — a stale cookie must never block the kill-switch read.
+func TestPublicAuthPathsIncludesFlags(t *testing.T) {
+	paths := publicAuthPaths()
+	want := []string{"/api/config/flags", "/api/v1/config/flags"}
+	for _, w := range want {
+		found := false
+		for _, p := range paths {
+			if p == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("publicAuthPaths missing %q", w)
+		}
+	}
 }

@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -322,6 +323,22 @@ func main() {
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	})
 
+	// Feature flags (Phase 10): a read-only, env-driven kill switch the
+	// mobile app polls at boot. Served by the gateway itself — flipping a
+	// flag fleet-wide is an env edit + restart, never an app-store release.
+	// The payload parses ONCE at boot: serving a per-request parse would turn
+	// an env typo into a per-request error instead of one loud boot log.
+	flagsPayload := buildFlagsPayload(os.Getenv("FEATURE_FLAGS_JSON"))
+	flagsHandler := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Clients may cache briefly; the app also caches on-device.
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(flagsPayload)
+	}
+	mux.HandleFunc("/api/config/flags", flagsHandler)
+	mux.HandleFunc(apiVersionPrefix+"/config/flags", flagsHandler)
+
 	// Warn about insecure CORS configuration
 	credentialsEnabled := strings.EqualFold(corsAllowCredentials, "true")
 	for _, origin := range corsOrigins {
@@ -488,11 +505,40 @@ func registerServiceRoutes(mux *http.ServeMux, routes []routeConfig) {
 // out of logging back in.
 func publicAuthPaths() []string {
 	legacy := []string{"/auth/login", "/auth/signup", "/auth/refresh", "/auth/plans"}
-	paths := make([]string, 0, len(legacy)*2)
+	paths := make([]string, 0, len(legacy)*2+2)
 	for _, p := range legacy {
 		paths = append(paths, p, apiVersionPrefix+p)
 	}
+	// Feature flags resolve PRE-auth (guests included) and a stale cookie
+	// must never block them — the app's kill-switch read has to always work.
+	paths = append(paths, "/api/config/flags", apiVersionPrefix+"/config/flags")
 	return paths
+}
+
+// buildFlagsPayload renders the standard response envelope around the
+// FEATURE_FLAGS_JSON env object. Invalid or empty JSON degrades to an empty
+// flag map (the app falls back to its code defaults) with one boot-time log —
+// a config typo must never take the endpoint down.
+func buildFlagsPayload(raw string) []byte {
+	flags := json.RawMessage(`{}`)
+	trimmed := strings.TrimSpace(raw)
+	if trimmed != "" {
+		var probe map[string]any
+		if err := json.Unmarshal([]byte(trimmed), &probe); err != nil {
+			slog.Warn("FEATURE_FLAGS_JSON is not a JSON object — serving empty flags", "error", err)
+		} else {
+			flags = json.RawMessage(trimmed)
+		}
+	}
+	payload, err := json.Marshal(map[string]any{
+		"success": true,
+		"message": "Feature flags",
+		"data":    map[string]any{"flags": flags},
+	})
+	if err != nil {
+		return []byte(`{"success":true,"message":"Feature flags","data":{"flags":{}}}`)
+	}
+	return payload
 }
 
 // deprecationHeadersEnabled reports whether legacy (unversioned) routes should
