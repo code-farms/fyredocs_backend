@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost` (the Caddy edge; the api-gateway is internal-only)
 
-The job-service exposes job creation, listing, retrieval, deletion, downloads, history, a Server-Sent Events stream, and share links. Jobs are scoped under tool-group prefixes (`/api/<group>/:tool/...`) — there is no generic `/api/jobs/:jobId` resource. The history and SSE endpoints are the only routes under the bare `/api/jobs` namespace. Share links live under `/api/share` (create/revoke) plus the public redeem route `GET /share/:token` outside `/api`.
+The job-service exposes job creation, listing, retrieval, deletion, downloads, history, a Server-Sent Events stream, share links, and document backups. Jobs are scoped under tool-group prefixes (`/api/<group>/:tool/...`) — there is no generic `/api/jobs/:jobId` resource. The history and SSE endpoints are the only routes under the bare `/api/jobs` namespace. Share links live under `/api/share` (create/revoke) plus the public redeem route `GET /share/:token` outside `/api`. Document backups live under `/api/backup`.
 
 Authentication options:
 - Authenticated user — `access_token` cookie or `Authorization: Bearer <jwt>`
@@ -327,6 +327,62 @@ created ──(expiresAt reached)──> expired ──(cleanup sweep)──> ob
 ```
 
 Expired and revoked shares are reaped by job-service's in-process cleanup loop (objects before rows, idempotent across retries).
+
+---
+
+## Document Backups
+
+Turn an uploaded file into a **durable** object under the caller's own `backups/` prefix — the byte half of "back up to cloud". The file is uploaded through the normal [presigned upload protocol](./upload-api.md) first; `POST /api/backup` then consumes the completed upload. The returned `storageKey` is registered with document-service (`POST /api/documents` with `storagePath`), which owns the object from then on: it enforces that a `backups/` key belongs to the caller, serves downloads (`GET /api/documents/:id/download`), and deletes the object when the document is purged. Job-service's cleanup sweeps never touch `backups/` objects.
+
+Backupable file types are the same allowlist as shares (extension + content sniff — not fail-open): `.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.tif`, `.tiff`, `.txt`, `.zip`, `.html`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.odt`, `.ods`, `.odp`.
+
+### POST /api/backup
+
+**Authentication required** — guests get 401 (backups are account-backed by definition; guest bytes have nowhere to be restored to). Rate-limited per IP by the job-creation limiter (`RATE_LIMIT_JOB_CREATE`).
+
+**Request:**
+
+```json
+{
+  "uploadId": "0c2b1c9e-...-uuid",
+  "fileName": "tax-return-2026.pdf"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `uploadId` | Yes | ID of a **completed** presigned upload. The upload is consumed (its session is released; the bytes are server-side copied out of the uploads bucket). |
+| `fileName` | No | Name for the stored object. Sanitized; falls back to the upload's original file name when omitted or empty. |
+
+**Response — 201 Created:**
+
+```json
+{
+  "success": true,
+  "message": "Backup stored",
+  "data": {
+    "storageKey": "backups/550e8400-e29b-41d4-a716-446655440000/0198c9a1-73f2-7cde-9a3b-1f2e3d4c5b6a/tax-return-2026.pdf",
+    "fileName": "tax-return-2026.pdf",
+    "fileSize": 2456789,
+    "contentType": "application/pdf"
+  }
+}
+```
+
+The key shape is `backups/{userId}/{uuid}/{fileName}`: the `userId` segment is what document-service validates ownership against when you register the document; the UUID segment keeps same-named backups from colliding. Register it next:
+
+```
+POST /api/documents  { "name": "tax-return-2026.pdf", "storagePath": "<storageKey>", "fileSize": 2456789, ... }
+```
+
+**Errors:**
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 400 | INVALID_INPUT | Bad body, unknown or incomplete `uploadId`, file type not backupable (extension or sniffed MIME), no usable file name |
+| 401 | AUTH_UNAUTHORIZED | Not authenticated (guests cannot back up) |
+| 429 | RATE_LIMIT_EXCEEDED | Job-creation limiter exceeded |
+| 500 | SERVER_ERROR | Object storage unavailable or the server-side copy failed |
 
 ---
 

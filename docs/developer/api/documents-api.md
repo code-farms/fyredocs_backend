@@ -20,8 +20,12 @@ List documents for the caller.
 | `tagId` | Filter by attached tag |
 | `q` | Full-text search over name + extracted content (`websearch_to_tsquery`) |
 | `trashed` | `true` returns the Trash view (soft-deleted only) |
+| `updatedSince` | RFC3339 timestamp — only rows with `updatedAt` strictly after it (delta sync). Invalid values are **400 INVALID_INPUT**, not ignored |
+| `sort` | `updated` orders by `updatedAt` descending (default: `createdAt` descending) — page in modification order for sync |
 | `orgId` | Org-scope the listing (viewer+) |
 | `page`, `limit` | Paging; `limit` max 100 |
+
+Delta-sync clients combine both: `GET /api/documents?updatedSince=2026-08-01T00:00:00Z&sort=updated`.
 
 **200 OK** — returns `data: [document]` and `meta: {page, limit, total}`.
 
@@ -76,10 +80,24 @@ Create a document (metadata only; bytes live in object storage).
 | organizationId | string(uuid) | No | Org-scope the doc (editor+) |
 | fileType, mimeType, storagePath, status, metadata | — | No | Metadata fields |
 
+**storagePath rules:** keys under the `backups/` prefix must sit under the caller's **own** `backups/{userId}/` prefix — this is the `storageKey` returned by job-service's [`POST /api/backup`](./jobs-api.md#document-backups), whose keys embed the owner's user id. A `backups/` key belonging to another account is **400 INVALID_INPUT** ("storagePath does not belong to this account"). All other shapes (job output keys, empty) pass through unvalidated as before.
+
 **201 Created** — `data: {document}`.
 
 ### GET /api/documents/:id
 Get one owned document (with tags). `orgId` optional (viewer+). **200 OK** / **404 NOT_FOUND**.
+
+### GET /api/documents/:id/download
+Download the document's stored bytes. `orgId` optional (viewer+). Responds **302** with `Location` set to a **5-minute presigned GET** on object storage that forces `Content-Disposition: attachment; filename="<name>.<fileType>"` (and the stored `mimeType` when set) — the browser fetches the bytes straight from storage via the Caddy edge, not through the service.
+
+Only documents with a `storagePath` have bytes here (documents registered from a backup, or finalized from a job with an output key). Job-era rows without one answer 404 — fall back to the job download route (`GET /api/<group>/:tool/:id/download`).
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 302 | — | `Location`: presigned download URL (5-minute expiry, attachment disposition) |
+| 400 | INVALID_ID | `id` is not a UUID |
+| 404 | NOT_FOUND | Document not found, not owned, or has no stored file (`storagePath` empty) |
+| 500 | SERVER_ERROR | Downloads unavailable (object storage unconfigured) or presign failure |
 
 ### PATCH /api/documents/:id
 Update `name`, `folderId` (empty string moves to root), `status`, `metadata`. `orgId` optional (editor+). At least one field required (`400 NO_CHANGES` otherwise).
@@ -92,6 +110,8 @@ Restore a soft-deleted document. **200 OK** / **404 NOT_FOUND** (not in Trash).
 
 ### DELETE /api/documents/:id/permanent
 Hard-delete the document and its tag associations. **200 OK**.
+
+When the document's `storagePath` starts with `backups/`, the purge **also deletes the storage object** — this is the only deletion path for backup bytes (job-service's cleanup sweeps deliberately never touch `backups/`). The row is deleted first; object removal is best-effort (a storage failure is logged, never a request failure).
 
 ### POST /api/documents/:id/tags
 Attach a tag. Body: `{ "tagId": "018f..." }`. **200 OK** / **404 TAG_NOT_FOUND**.

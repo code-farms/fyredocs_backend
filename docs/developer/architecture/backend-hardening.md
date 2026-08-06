@@ -424,6 +424,26 @@ after review:
 
 ---
 
+
+### 3.23 Object Storage At-Rest Encryption (SSE-S3) `High`
+
+Until Phase 22, every object in MinIO (uploads, job outputs, shares, backups)
+sat on disk in plaintext. Backups made this permanent user data, so at-rest
+encryption became table stakes:
+
+- MinIO now boots with its **embedded single-key KMS** when
+  `MINIO_KMS_SECRET_KEY` is set (deployment/docker-compose.yml). Generate the
+  key once (`cat /dev/urandom | head -c 32 | base64`) and treat rotation as a
+  migration — existing objects stay sealed under the key that wrote them.
+- `minio-init` runs `mc encrypt set sse-s3` on BOTH buckets, so every new
+  object is sealed server-side transparently; presigned URLs and clients are
+  unaffected.
+- Scope honesty: SSE-S3 protects the DISK (stolen volume, discarded drive),
+  not against an operator with MinIO credentials. True end-to-end encryption
+  is deferred until the mobile runtime has a real KDF for cross-device
+  passphrase-derived keys (it has AES-GCM but only SHA-2 digests).
+- Dev stacks without the env var skip encryption entirely and keep working.
+
 ## 4. Planned Changes (Not Yet Implemented)
 
 ### 4.1 Database Migrations Tool
@@ -558,3 +578,4 @@ Benefits: failed dispatch doesn't lose uploads, same file can be processed with 
 | Low | Routing test fix | Done (3.19) |
 | Critical/High | Security audit remediation | Done (3.20) |
 | High | Config security (JWT secret + production guard) | Done (3.21) |
+| High | Object storage at-rest encryption (SSE-S3) | Done (3.23) |

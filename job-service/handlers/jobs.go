@@ -1220,6 +1220,12 @@ func validateFileType(toolType string, fileName string) error {
 		if !shareFileExts[ext] {
 			return fmt.Errorf("this file type cannot be shared")
 		}
+	case "backup":
+		// Pseudo-tool for document backups (backups.go): same library-type
+		// allowlist as shares — a backup is the user's own library file.
+		if !shareFileExts[ext] {
+			return fmt.Errorf("this file type cannot be backed up")
+		}
 	case "word-to-pdf", "word-to-odt":
 		if ext != ".doc" && ext != ".docx" {
 			return fmt.Errorf("only Word files are supported")
@@ -1266,6 +1272,9 @@ func mimeCategory(toolType string) string {
 	case "scan-to-pdf":
 		return "image"
 	case "share":
+		return "share"
+	case "backup":
+		// Backups sniff against the same content union as shares.
 		return "share"
 	case "word-to-pdf", "word-to-odt":
 		return "word"

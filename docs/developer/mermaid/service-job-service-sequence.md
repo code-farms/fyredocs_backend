@@ -378,3 +378,27 @@ sequenceDiagram
     JS->>JS: findExistingJobForUploads → J1
     JS-->>Client: 201 J1 (idempotent)
 ```
+
+## Document Backup — Copy an Upload into the Caller's backups/ Prefix (Phase 22)
+
+```mermaid
+sequenceDiagram
+    participant Client as Mobile App
+    participant GW as API Gateway
+    participant JS as job-service
+    participant S3 as MinIO/S3
+    participant DS as document-service
+
+    Note over Client: bytes already uploaded via the presigned protocol
+    Client->>GW: POST /api/backup {uploadId, fileName}
+    GW->>JS: (auth REQUIRED — guests 401)
+    JS->>JS: consumeUpload("backup") — Stat size, sniff MIME (share union)
+    JS->>S3: CopyObject uploads/{key} → outputs/backups/{userId}/{uuid}/{name}
+    S3-->>JS: copied (server-side, no bytes through the service)
+    JS->>JS: releaseUpload (free the Redis slot)
+    JS-->>Client: 201 {storageKey, fileName, fileSize, contentType}
+    Note over Client,DS: client registers the row next:
+    Client->>DS: POST /api/documents {storagePath: storageKey, ...}
+    Note over JS,S3: backups/ objects are swept by NO job/share cleanup —
+    Note over JS,S3: document-service deletes the object on document purge
+```

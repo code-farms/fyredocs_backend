@@ -21,6 +21,7 @@ import (
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/redisstore"
 	"fyredocs/shared/response"
+	"fyredocs/shared/storage"
 	"fyredocs/shared/telemetry"
 
 	"document-service/handlers"
@@ -66,6 +67,16 @@ func main() {
 	if err != nil {
 		slog.Error("failed to start finalize subscriber", "error", err)
 		os.Exit(1)
+	}
+
+	// Object storage (Phase 9): presigns document downloads and deletes backup
+	// objects on purge. NON-fatal when unconfigured — document CRUD must keep
+	// working; only the download endpoint degrades (503) and purges leak the
+	// object (logged). job-service keeps owning the upload protocol.
+	if objStore, storageErr := storage.NewFromEnv(); storageErr != nil {
+		slog.Warn("object storage unavailable — document downloads disabled", "error", storageErr)
+	} else {
+		handlers.SetObjectStore(objStore)
 	}
 
 	var denylist authverify.TokenDenylist

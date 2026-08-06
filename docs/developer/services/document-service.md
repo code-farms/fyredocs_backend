@@ -5,15 +5,26 @@ Owns the **persistent document library**: documents (metadata for files stored i
 
 The service stores **metadata only**; file bytes live in object storage (referenced by `storage_path`). It is read/write scoped to the authenticated user.
 
+Since Phase 9 (cloud backup & sync) the service also owns the **document-side lifecycle of backup bytes**: it serves presigned downloads for stored documents, enforces the `backups/{userId}/` ownership contract on registration, deletes the backup object when a document is purged, and exposes delta-sync listing (`updatedSince` + `sort=updated`) for sync clients. The upload PROTOCOL (presigned multipart, `POST /api/backup`) stays in job-service.
+
 ## Design Constraints
 - Independent microservice: own Postgres schema, own module (`document-service`), no cross-service DB access or shared models (per repo `CLAUDE.md`).
 - Stateless: identity comes from the `AuthContext` resolved by the auth middleware, which **verifies the JWT locally** (`AUTH_TRUST_GATEWAY_HEADERS=false`). No session state.
 - Standard response envelope (`shared/response`): `{success, message, data, error, meta}`.
 
 ## Internal Architecture
-- `main.go` — config/logger/telemetry init, DB connect + migrate, gin with metrics/trace/request-id middleware, `/metrics`, graceful shutdown. Port `8089` (env `PORT`).
+- `main.go` — config/logger/telemetry init, DB connect + migrate, gin with metrics/trace/request-id middleware, `/metrics`, graceful shutdown. Port `8089` (env `PORT`). Also initializes the **object-storage client** (Phase 9) — see below.
 - `routes/routes.go` — health + the `/api` group guarded by `RequireUser()`.
-- `handlers/` — `auth.go` (identity + RBAC helpers), `documents.go`, `folders.go`, `tags.go`, `exports.go`, `hints.go` (workspace hints), `health.go`.
+- `handlers/` — `auth.go` (identity + RBAC helpers), `documents.go`, `folders.go`, `tags.go`, `exports.go`, `hints.go` (workspace hints), `health.go`, `storage.go` (the `ObjectStore` interface + boot-time injection).
+
+### Object storage client (Phase 9)
+
+`main.go` calls `shared/storage.NewFromEnv()` at boot and injects the client via `handlers.SetObjectStore`. Two deliberate design points:
+
+- **Utility package, not shared business logic.** `shared/storage` is a utility package by charter (it "carries NO business logic"), so importing it here does not breach the no-shared-business-logic rule — the same way every worker imports it. The upload protocol (multipart presign, MIME sniff, the `/api/backup` copy) remains job-service's alone; document-service only presigns GETs and removes backup objects.
+- **NON-fatal when unconfigured.** Unlike job-service (which fails fast without S3), a missing/invalid S3 config here logs a warning and boots anyway: document CRUD must never depend on storage availability. With a nil store, `GET /api/documents/:id/download` degrades to a 500 `SERVER_ERROR` ("Downloads are unavailable") and a purge deletes the row but leaks the object (logged with the key for manual reclaim).
+
+`handlers/storage.go` defines the narrow `ObjectStore` interface this service actually uses — `BucketOutputs()`, `PresignGet(...)`, `RemoveObject(...)` — so tests inject a fake and the handler surface cannot quietly grow storage dependencies.
 - `internal/models/` — `database.go` (Connect/Migrate), `document.go`, `folder.go`, `tag.go`, `export.go`, `jobhint.go`.
 - `subscriber/subscriber.go` — **NATS is a hard dependency** (`main.go` fails fast if the connection or subscriber start fails). A durable JetStream consumer `document-job-events` on the `JOBS_EVENTS` stream (filter `jobs.events.>`, `DeliverNew`, explicit ack) finalizes every `JobCompleted` event for an authenticated user into a `documents` row — the server-side counterpart to direct creation, so any completed job becomes a library document regardless of client. Finalize is idempotent via a partial unique index on `(user_id, source_job_id)` (soft-deleted docs are not resurrected), and files the document into an org workspace when a `JobWorkspaceHint` exists.
 
@@ -26,13 +37,14 @@ All `/api/*` routes require a verified caller and are scoped to that user. Reach
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/documents` | List documents. Filters: `status`, `folderId`, `tagId`, full-text `q`, `trashed=true` (Trash view); paging `page`/`limit` (max 100). Returns `meta` with page/limit/total. |
-| POST | `/api/documents` | Create a document (metadata). Body: `name` (required), `folderId?`, `fileType?`, `mimeType?`, `fileSize?`, `storagePath?`, `status?`, `metadata?`. |
+| GET | `/api/documents` | List documents. Filters: `status`, `folderId`, `tagId`, full-text `q`, `trashed=true` (Trash view), `updatedSince` (RFC3339 — delta sync); `sort=updated` orders by `updated_at DESC`; paging `page`/`limit` (max 100). Returns `meta` with page/limit/total. |
+| POST | `/api/documents` | Create a document (metadata). Body: `name` (required), `folderId?`, `fileType?`, `mimeType?`, `fileSize?`, `storagePath?`, `status?`, `metadata?`. `storagePath` under `backups/` must sit under the caller's own `backups/{userId}/` prefix (400 otherwise). |
 | GET | `/api/documents/:id` | Get one owned document (with tags). |
+| GET | `/api/documents/:id/download` | 302 to a 5-minute presigned GET for the document's stored bytes (attachment disposition). 404 when the row has no `storage_path`; 500 `SERVER_ERROR` when storage is unconfigured. |
 | PATCH | `/api/documents/:id` | Update `name`/`folderId`/`status`/`metadata`. Empty `folderId` moves to root. |
 | DELETE | `/api/documents/:id` | Soft-delete (move to Trash). |
 | POST | `/api/documents/:id/restore` | Restore a soft-deleted document from Trash. |
-| DELETE | `/api/documents/:id/permanent` | Permanently delete (hard delete + tag associations). |
+| DELETE | `/api/documents/:id/permanent` | Permanently delete (hard delete + tag associations). Also deletes the storage object when `storage_path` starts with `backups/` — nothing else sweeps those objects. |
 | POST | `/api/documents/:id/tags` | Attach a tag. Body: `tagId`. |
 | DELETE | `/api/documents/:id/tags/:tagId` | Detach a tag. |
 | POST | `/api/documents/workspace-hint` | Record that a job should finalize into an org workspace (editor+ verified via user-service). Body: `jobId`, `organizationId` (empty clears the hint → personal). Consumed and cleared by the finalize subscriber on completion. |
@@ -55,6 +67,20 @@ All `/api/*` routes require a verified caller and are scoped to that user. Reach
 - An export waits up to `EXPORT_QUEUE_WAIT` (default `30s`) for a slot; if none frees up it fails with a **retryable** message (the client can re-queue).
 - The document query backing an export is capped at `EXPORT_MAX_ROWS` (default `50000`) rows.
 
+### Cloud backup & sync (Phase 9)
+
+**storagePath ownership contract (`POST /api/documents`).** `storagePathAllowed` (`handlers/documents.go`) reserves the `backups/` key prefix for job-service's backup endpoint, whose keys embed the OWNER's user id (`backups/{userId}/{uuid}/{fileName}`). A caller may only register keys under their own `backups/{callerUserId}/` prefix — anything else under `backups/` is 400 `INVALID_INPUT` ("storagePath does not belong to this account"). Every other storagePath shape (job outputs, empty) passes through unvalidated, exactly as before, for web-app compatibility.
+
+**Download (`GET /api/documents/:id/download`).** Ownership + org scoped like every document read (viewer+ when org-scoped). Rows without a `storage_path` — job-era documents whose bytes live behind the job download route and may have expired — answer 404 and the client falls back to the job route. Otherwise the handler 302s to a **5-minute presigned GET** on the outputs bucket with `response-content-disposition: attachment; filename="<name>.<fileType>"` (and `response-content-type` when `mime_type` is set) — the same presign window job downloads use. A nil object store answers 500 `SERVER_ERROR` ("Downloads are unavailable").
+
+**Purge deletes backup bytes (`DELETE /api/documents/:id/permanent`).** The row is fetched first, then deleted, then — when `storage_path` starts with `backups/` — the object is removed from the outputs bucket. Ordering is deliberate: the row is the source of truth and goes first; object removal is **best-effort** (a failure or nil store logs the leaked key via `documents.purge.remove_object` / `documents.purge.storage_unavailable` rather than failing the request). This purge is the ONLY deletion path for `backups/` objects — job-service's cleanup sweeps deliberately never touch them.
+
+**Delta sync (`GET /api/documents`).** Two additions for sync clients:
+- `updatedSince=<RFC3339>` filters to rows with `updated_at > t`. Invalid values are **rejected with 400** rather than ignored — a sync client that silently full-listed would re-download everything.
+- `sort=updated` orders by `updated_at DESC` (default remains `created_at DESC`), so clients page in modification order.
+
+Both are backed by the `(user_id, updated_at DESC)` index from migration `00003_updated_at_index.sql` — without it every sync poll would be a per-user sequential scan.
+
 ### Schema migrations
 
 The schema is applied by **versioned SQL migrations** embedded in the binary
@@ -65,7 +91,7 @@ Postgres advisory lock and recorded in `goose_db_version_document_service`). GOR
 See [schema-migrations.md](../architecture/schema-migrations.md).
 
 ## DB Schema (own Postgres)
-- **documents**: id (uuid v7), user_id, organization_id?, folder_id?, name, file_type, mime_type, file_size, storage_path, thumbnail_path, status (`uploaded|processing|ready|failed`), source_job_id? (links a doc finalized from a completed job), extracted_content, metadata (jsonb), uploaded_at?, processed_at?, created_at, updated_at, deleted_at (soft delete). Plus a generated `search_vector tsvector` over name+extracted_content with a GIN index. Indexes: `(user_id, created_at)`, `(user_id, status, created_at)`, GIN on `search_vector`, and a **partial unique index on `(user_id, source_job_id)`** that makes finalize idempotent.
+- **documents**: id (uuid v7), user_id, organization_id?, folder_id?, name, file_type, mime_type, file_size, storage_path, thumbnail_path, status (`uploaded|processing|ready|failed`), source_job_id? (links a doc finalized from a completed job), extracted_content, metadata (jsonb), uploaded_at?, processed_at?, created_at, updated_at, deleted_at (soft delete). Plus a generated `search_vector tsvector` over name+extracted_content with a GIN index. Indexes: `(user_id, created_at)`, `(user_id, status, created_at)`, GIN on `search_vector`, a **partial unique index on `(user_id, source_job_id)`** that makes finalize idempotent, and `idx_documents_user_updated` on `(user_id, updated_at DESC)` (migration `00003_updated_at_index.sql`, Phase 9) backing the `updatedSince` filter and `sort=updated` ordering.
 - **folders**: id, user_id, parent_id? (self-ref tree), name, created_at, updated_at, deleted_at.
 - **tags**: id, user_id, name, color, created_at. Unique `(user_id, name)`.
 - **document_tags**: many2many join (document_id, tag_id), managed by GORM.
@@ -96,6 +122,11 @@ Search: `search_vector @@ websearch_to_tsquery('english', q)` (pluggable behind 
 | AUTH_DENYLIST_ENABLED | true | Check revoked tokens against Redis |
 | AUTH_TRUST_GATEWAY_HEADERS | false | Believe upstream `X-User-*` instead of verifying. **Keep false** — see Authentication. |
 | INTERNAL_API_TOKEN | — | Shared secret sent to user-service's `/internal/v1` membership lookup (fails closed when unset) |
+| S3_ENDPOINT | minio:9000 | Object storage for document downloads and backup-object deletion on purge (Phase 9). **Non-fatal when unset**: CRUD keeps working, downloads answer 500 `SERVER_ERROR`, purges leak the object (logged) |
+| S3_PUBLIC_ENDPOINT | falls back to `S3_ENDPOINT` | Origin presigned download URLs are signed against (the Caddy edge / public origin) |
+| S3_ACCESS_KEY / S3_SECRET_KEY | — | Same scoped app credentials job-service uses (created by minio-init) |
+| S3_USE_SSL | false | TLS to the internal endpoint |
+| S3_BUCKET_UPLOADS / S3_BUCKET_OUTPUTS | uploads / outputs | Bucket names; only outputs is read here (backup keys and job outputs live there) |
 | TRUSTED_PROXIES | — | Trusted proxy CIDRs |
 | OTEL_EXPORTER_OTLP_ENDPOINT | — | OpenTelemetry collector |
 

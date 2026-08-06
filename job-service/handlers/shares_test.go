@@ -93,3 +93,35 @@ func TestShareMIMEGate(t *testing.T) {
 		t.Error("executable content must be rejected")
 	}
 }
+
+// TestBackupPseudoTool pins the backup gates: same library-type allowlist as
+// shares, same MIME sniff category.
+func TestBackupPseudoTool(t *testing.T) {
+	if err := validateFileType("backup", "doc.pdf"); err != nil {
+		t.Errorf("pdf must be backupable: %v", err)
+	}
+	if err := validateFileType("backup", "tool.exe"); err == nil {
+		t.Error("executables must not be backupable")
+	}
+	if got := mimeCategory("backup"); got != "share" {
+		t.Errorf("mimeCategory(backup) = %q, want share (same content union)", got)
+	}
+}
+
+// TestContentTypeForBackup pins the ext → content-type mapping the app uses
+// when registering the document row.
+func TestContentTypeForBackup(t *testing.T) {
+	cases := map[string]string{
+		"a.pdf":        "application/pdf",
+		"b.PNG":        "image/png",
+		"c.jpeg":       "image/jpeg",
+		"notes.txt":    "text/plain",
+		"noextension":  "application/octet-stream",
+		"weird.xyz123": "application/octet-stream",
+	}
+	for name, want := range cases {
+		if got := contentTypeForBackup(name); got != want {
+			t.Errorf("contentTypeForBackup(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
