@@ -110,6 +110,11 @@ func SetupRouter(r *gin.Engine) {
 		shares.POST("", jobCreateLimiter.RateLimitByIP(), handlers.CreateShare)
 		shares.DELETE("/:id", handlers.RevokeShare)
 
+		// Document backups (Phase 9): copy an upload into the caller's
+		// durable backups/ prefix. Account-backed — auth enforced in-handler
+		// too, but the middleware gives the clean 401.
+		api.POST("/backup", authverify.RequireAuthenticatedGin(), jobCreateLimiter.RateLimitByIP(), handlers.CreateBackup)
+
 		api.GET("/jobs/history", authverify.RequireAuthenticatedGin(), handlers.GetJobHistory)
 		// Super-admin only (enforced in the handler via X-User-Role): re-dispatch
 		// dead-lettered worker jobs from JOBS_DLQ.

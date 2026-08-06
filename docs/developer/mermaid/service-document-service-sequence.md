@@ -126,3 +126,39 @@ sequenceDiagram
     GW->>DS: Proxy
     DS-->>Client: 200 (artifact bytes from exports.content)
 ```
+
+## Download Document Bytes (Phase 22)
+
+```mermaid
+sequenceDiagram
+    participant Client as Mobile App
+    participant DS as document-service
+    participant S3 as MinIO/S3
+
+    Client->>DS: GET /api/documents/:id/download (auth + org scope)
+    DS->>DS: load row (ownership scoped)
+    alt StoragePath empty (job-era row)
+        DS-->>Client: 404 — client falls back to the job download route
+    else has stored bytes
+        DS->>S3: PresignGet(outputs, storagePath, 5min, attachment)
+        DS-->>Client: 302 → presigned URL
+        Client->>S3: GET (direct, bytes never transit the service)
+    end
+```
+
+## Purge Document — Backup Object Cleanup (Phase 22)
+
+```mermaid
+sequenceDiagram
+    participant Client as Mobile App
+    participant DS as document-service
+    participant S3 as MinIO/S3
+
+    Client->>DS: DELETE /api/documents/:id/permanent
+    DS->>DS: hard-delete row (Unscoped) — row is truth
+    alt storagePath under backups/
+        DS->>S3: RemoveObject(outputs, storagePath)
+        Note over DS,S3: best-effort — a failure logs and leaks the object,<br/>never fails the purge
+    end
+    DS-->>Client: 200
+```

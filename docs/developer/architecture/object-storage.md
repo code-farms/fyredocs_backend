@@ -170,3 +170,20 @@ single env file `deploy.sh` loads).
 - [API Gateway](../services/api-gateway.md) — internal API routing (no object bytes)
 - [Job Service](../services/job-service.md#background-cleanup-loop) — in-process cleanup: object deletion phases
 - [System overview diagram](../mermaid/system-overview.md)
+
+## At-Rest Encryption (Phase 22)
+
+Both buckets are encrypted with **SSE-S3** backed by MinIO's embedded
+single-key KMS when `MINIO_KMS_SECRET_KEY` is set — see
+`deployment/docker-compose.yml` (minio + minio-init services) and
+backend-hardening.md §3.23 for scope and key-rotation caveats. Unset (dev),
+the stack runs keyless and unencrypted exactly as before.
+
+## Key Prefixes
+
+| Prefix | Owner | Lifecycle |
+|---|---|---|
+| `uploads/{uploadId}/…` | job-service upload protocol | consumed by jobs/shares/backups; stale state swept |
+| `outputs/{jobId}/…` (job outputs) | job-service | TTL sweep per plan (`cleanupExpiredJobs`) |
+| `shares/{shareId}/…` | job-service share links | swept on share expiry/revoke (`cleanupExpiredShares`) |
+| `backups/{userId}/{uuid}/…` | document-service documents | deleted when the registered document is purged — NO sweep touches these |

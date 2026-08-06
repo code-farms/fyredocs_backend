@@ -26,6 +26,7 @@ The Job Service is the central orchestration service for all file processing ope
 10. **Per-Tool Options Validation** -- Validate tool-specific `options` payloads against a schema at the public boundary (currently `scan-to-pdf`, `pdf-metadata`, `ocr-pdf`, `pdf-to-image`, and `sign-pdf`); rejections return 400 `INVALID_OPTIONS`
 11. **Edge Detection Relay** -- `POST /api/organize-pdf/detect-edges` peeks at a completed image upload (without consuming it) and synchronously relays detection to organize-pdf's internal endpoint for the mobile scanner UI
 12. **Share Links** -- Turn a completed presigned upload into an expiring public download link (`POST /api/share`), serve the public redeem redirect (`GET /share/:token`), and support owner revocation (`DELETE /api/share/:id`); tokens are stored hashed, expired/revoked shares are reaped by the cleanup sweep
+13. **Document Backups (Phase 9)** -- Turn a completed presigned upload into a durable object under the caller's `backups/{userId}/...` prefix (`POST /api/backup`, authenticated only); the returned storage key is registered with document-service, which owns the object's lifecycle from then on
 
 ## Presigned Upload Protocol
 
@@ -82,6 +83,7 @@ Job Service :8081  (control plane only — no file bytes)
 | `handlers/uploads.go` | Presigned multipart upload protocol (init, parts, complete, status, abort, 410 chunk stub) |
 | `handlers/tool_options.go` | Per-tool options schema validation (`validateToolOptions`; currently scan-to-pdf, pdf-metadata, ocr-pdf, pdf-to-image, and sign-pdf) |
 | `handlers/shares.go` | Share links: create (consumes an upload, mints a hashed token), public redeem (302 to presigned URL), owner revoke |
+| `handlers/backups.go` | Document backups (Phase 9): `CreateBackup` consumes an upload via the `"backup"` pseudo-tool and server-side-copies it to `backups/{userId}/{uuid}/{fileName}` |
 | `handlers/detect.go` | `DetectEdges` — synchronous relay to organize-pdf `/internal/v1/detect-edges` |
 | `handlers/storage.go` | `ObjectStore` interface (narrow slice of `shared/storage.Client`) + boot-time injection |
 | `handlers/auth.go` | Extract authenticated user ID from auth context |
@@ -107,6 +109,7 @@ Every `CLEANUP_INTERVAL` (compose sets 5m; code fallback 15m), under a Redis `SE
 5. **Expiry backfill** — set `expires_at = created_at + FREE_JOB_TTL` on legacy authenticated jobs where it is `NULL`.
 
 Operational notes:
+- **`backups/` objects are never swept** (Phase 9): document backups under `backups/{userId}/...` in the outputs bucket sit outside every phase above — no job row, no share row, and no upload session references them once created. Their deletion belongs to document-service's purge endpoint (see [Document Backups](#document-backups-phase-9)).
 - `CLEANUP_ENABLED=false` opts a replica out of sweeping entirely (the Redis lock already dedupes; the flag is the explicit off-switch for extra replicas or local runs).
 - Idempotent by design: a missing object or unknown multipart upload counts as success; anything missed in one cycle is retried on the next.
 - Fail-safe delete rule: an upload object is only removed if provably unreferenced by `file_metadata`; on a DB error it is kept.
@@ -228,6 +231,37 @@ Expiring public download links for user files, owned end-to-end by job-service (
 | `NOT_FOUND` | 404 | Redeem: token unknown/expired/revoked (uniform). Revoke: share not found or not owned by the caller |
 | `RATE_LIMIT_EXCEEDED` | 429 | Create: `RATE_LIMIT_JOB_CREATE` exceeded. Redeem: `RATE_LIMIT_SHARE_REDEEM` exceeded |
 | `SERVER_ERROR` | 500 | Object copy, token mint, DB write, or presign failure |
+
+### Document Backups (Phase 9)
+
+The byte half of "back up to cloud" (`handlers/backups.go`). The metadata half — registering, listing, syncing, downloading, and purging the backed-up document — belongs to **document-service**.
+
+| Method | Path | Handler | Auth | Description |
+|--------|------|---------|------|-------------|
+| POST | `/api/backup` | `CreateBackup` | **Authenticated only** (`RequireAuthenticatedGin` — 401 for guests) | Copy a completed presigned upload into the caller's durable `backups/` prefix (201; per-IP `RATE_LIMIT_JOB_CREATE` limiter — backups share the jobcreate bucket) |
+
+Auth is required by definition: backups are account-backed (guest bytes have nowhere to be restored to). The gateway proxies `/api/backup` → job-service.
+
+**Create flow** (`POST /api/backup` with `{uploadId, fileName}`):
+
+1. The upload is consumed through the normal `consumeUpload` path under the `"backup"` pseudo-tool, which applies the **same gates as shares** (`validateFileType` + `mimeCategory` in `handlers/jobs.go`): the share extension allowlist (a backup is the user's own library file) plus the usual 512-byte MIME sniff against the `"share"` content union.
+2. `fileName` is sanitized; when empty it falls back to the upload's original name (400 if both are empty).
+3. The object is **server-side copied** (`CopyObject`, no bytes through the service) from the uploads bucket to the outputs bucket under `backups/{userId}/{uuid}/{fileName}` — the `userId` segment is what document-service validates ownership against; the UUIDv7 segment keeps same-named backups from colliding.
+4. The upload session is released (same as jobs and shares).
+5. Response: 201 Created envelope with `{storageKey, fileName, fileSize, contentType}` (`contentType` derived from the extension).
+
+The client then registers the document with document-service (`POST /api/documents` with `storagePath: <storageKey>`); document-service rejects `backups/` keys that do not sit under the caller's own `backups/{userId}/` prefix.
+
+**Lifecycle ownership — deliberately NOT swept here:** `backups/` objects are excluded from every job-service cleanup: no job TTL, no share reap, no upload-session sweep touches them. The object is deleted exactly once — by **document-service** when the registered document is purged (`DELETE /api/documents/:id/permanent`). A backup object never registered as a document is the client's bug to avoid; job-service will not reclaim it.
+
+**Backup errors:**
+
+| Error Code | HTTP Status | Condition |
+|------------|-------------|-----------|
+| `INVALID_INPUT` | 400 | Bad body, unknown/incomplete `uploadId`, non-backupable extension or MIME type, no usable file name |
+| `AUTH_UNAUTHORIZED` | 401 | Not authenticated (guests cannot back up) |
+| `RATE_LIMIT_EXCEEDED` | 429 | `RATE_LIMIT_JOB_CREATE` exceeded |
+| `SERVER_ERROR` | 500 | Object storage unavailable or the server-side copy failed |
 
 ### Per-Tool Options Validation
 

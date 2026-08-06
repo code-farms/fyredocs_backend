@@ -154,6 +154,12 @@ func serviceRoutes(u upstreams) []routeConfig {
 			targetURL:      u.job,
 		},
 		{
+			// Document backups (Phase 9): byte path lives in job-service.
+			prefix:         "/api/backup",
+			targetBasePath: "/api/backup",
+			targetURL:      u.job,
+		},
+		{
 			// PUBLIC share-link redeem — the token in the path is the
 			// credential; auth is skipped via PublicPrefixes below.
 			//

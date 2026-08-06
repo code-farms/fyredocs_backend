@@ -9,9 +9,12 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -104,6 +107,19 @@ func ListDocuments(c *gin.Context) {
 	folder := strings.TrimSpace(c.Query("folderId"))
 	tagID := strings.TrimSpace(c.Query("tagId"))
 	search := strings.TrimSpace(c.Query("q"))
+	// Delta-sync support (Phase 9): only rows touched after this instant.
+	// Invalid values are rejected rather than ignored — a sync client that
+	// silently full-lists would re-download everything.
+	var updatedSince *time.Time
+	if raw := strings.TrimSpace(c.Query("updatedSince")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			response.BadRequest(c, response.CodeInvalidInput, "updatedSince must be an RFC3339 timestamp.")
+			return
+		}
+		updatedSince = &parsed
+	}
+	sortUpdated := c.Query("sort") == "updated"
 
 	// buildQuery returns a fresh, fully-filtered query. Each call builds an
 	// independent *gorm.DB statement, so the count and the page fetch can run
@@ -133,6 +149,9 @@ func ListDocuments(c *gin.Context) {
 		if search != "" {
 			q = q.Where("documents.search_vector @@ websearch_to_tsquery('english', ?)", search)
 		}
+		if updatedSince != nil {
+			q = q.Where("documents.updated_at > ?", *updatedSince)
+		}
 		return q
 	}
 
@@ -152,7 +171,12 @@ func ListDocuments(c *gin.Context) {
 	}()
 	go func() {
 		defer wg.Done()
-		listErr = buildQuery().Preload("Tags").Order("documents.created_at DESC").Limit(limit).Offset(offset).Find(&docs).Error
+		order := "documents.created_at DESC"
+		if sortUpdated {
+			// Delta-sync clients page in modification order (Phase 9).
+			order = "documents.updated_at DESC"
+		}
+		listErr = buildQuery().Preload("Tags").Order(order).Limit(limit).Offset(offset).Find(&docs).Error
 	}()
 	wg.Wait()
 	if listErr != nil {
@@ -211,6 +235,10 @@ func CreateDocument(c *gin.Context) {
 	if status == "" {
 		status = models.StatusUploaded
 	}
+	if !storagePathAllowed(req.StoragePath, uid) {
+		response.BadRequest(c, response.CodeInvalidInput, "storagePath does not belong to this account.")
+		return
+	}
 	doc := models.Document{
 		UserID:         uid,
 		OrganizationID: orgID,
@@ -249,6 +277,70 @@ func GetDocument(c *gin.Context) {
 		return
 	}
 	response.OK(c, "Document retrieved", doc)
+}
+
+// storagePathAllowed enforces storagePath hygiene (Phase 9): the backups/
+// prefix is reserved for job-service's backup endpoint, whose keys embed the
+// OWNER's user id — a caller may only register keys under their own prefix.
+// Every other shape (job outputs, empty) passes through unvalidated, exactly
+// as before, for web-app compatibility.
+func storagePathAllowed(path string, uid uuid.UUID) bool {
+	if !strings.HasPrefix(path, "backups/") {
+		return true
+	}
+	return strings.HasPrefix(path, "backups/"+uid.String()+"/")
+}
+
+// downloadURLExpiry matches job-service's presign window: long enough to
+// follow a redirect, short enough that a leaked URL is useless.
+const downloadURLExpiry = 5 * time.Minute
+
+// DownloadDocument 302s to a presigned GET for the document's stored bytes
+// (Phase 9). Only rows with a StoragePath have bytes here — job-era rows
+// (bytes behind the job download route, possibly expired) 404 and the client
+// falls back to the job route.
+func DownloadDocument(c *gin.Context) {
+	uid, _ := userID(c)
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		response.BadRequest(c, response.CodeInvalidID, "Invalid document id.")
+		return
+	}
+	orgID, ok := resolveOrg(c, c.Query("orgId"), "viewer")
+	if !ok {
+		return
+	}
+	var doc models.Document
+	if err := scopeOwned(models.DB, uid, orgID).Where("id = ?", id).First(&doc).Error; err != nil {
+		response.NotFound(c, response.CodeNotFound, "Document not found.")
+		return
+	}
+	if strings.TrimSpace(doc.StoragePath) == "" {
+		response.NotFound(c, response.CodeNotFound, "This document has no stored file.")
+		return
+	}
+	if objStore == nil {
+		response.InternalError(c, response.CodeServerError, "Downloads are unavailable. Please try again later.")
+		return
+	}
+
+	fileName := doc.Name
+	if doc.FileType != "" && !strings.HasSuffix(strings.ToLower(fileName), "."+strings.ToLower(doc.FileType)) {
+		fileName += "." + doc.FileType
+	}
+	params := url.Values{}
+	params.Set("response-content-disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+	if doc.MimeType != "" {
+		params.Set("response-content-type", doc.MimeType)
+	}
+	presigned, err := objStore.PresignGet(c.Request.Context(), objStore.BucketOutputs(), doc.StoragePath,
+		downloadURLExpiry, params)
+	if err != nil {
+		response.InternalErrorf(c, response.CodeServerError, "Could not prepare the download. Please try again.", err,
+			"op", "documents.presign", "docId", id)
+		return
+	}
+	c.Redirect(302, presigned)
 }
 
 // updateDocumentReq is the patch body. Pointer fields distinguish "omitted" from
@@ -399,6 +491,13 @@ func PurgeDocument(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// Fetch first: purge must also delete backup BYTES (backups/ objects are
+	// swept by nothing else — job-service's cleanups deliberately skip them).
+	var doc models.Document
+	if err := scopeOwned(models.DB.Unscoped(), uid, orgID).Where("id = ?", id).First(&doc).Error; err != nil {
+		response.NotFound(c, response.CodeNotFound, "Document not found.")
+		return
+	}
 	res := scopeOwned(models.DB.Unscoped(), uid, orgID).Where("id = ?", id).Delete(&models.Document{})
 	if res.Error != nil {
 		response.InternalErrorf(c, "PURGE_FAILED", "Could not permanently delete document.", res.Error,
@@ -408,6 +507,14 @@ func PurgeDocument(c *gin.Context) {
 	if res.RowsAffected == 0 {
 		response.NotFound(c, response.CodeNotFound, "Document not found.")
 		return
+	}
+	if strings.HasPrefix(doc.StoragePath, "backups/") {
+		if objStore == nil {
+			logger.LogWarn(c.Request.Context(), "documents.purge.storage_unavailable", nil, "docId", id, "key", doc.StoragePath)
+		} else if err := objStore.RemoveObject(c.Request.Context(), objStore.BucketOutputs(), doc.StoragePath); err != nil {
+			// Row is gone (truth); a leaked object is logged, not fatal.
+			logger.LogWarn(c.Request.Context(), "documents.purge.remove_object", err, "docId", id, "key", doc.StoragePath)
+		}
 	}
 	if err := models.DB.Exec("DELETE FROM document_tags WHERE document_id = ?", id).Error; err != nil {
 		logger.LogWarn(c.Request.Context(), "db.document_tags.purge", err, "docId", id)

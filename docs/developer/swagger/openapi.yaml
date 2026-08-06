@@ -83,6 +83,8 @@ tags:
     description: Cross-tool job history and real-time status updates for authenticated users
   - name: Share Links
     description: Expiring public download links for uploaded files (job-service) — create/revoke under /api/share, public redeem at /share/{token}
+  - name: Backups
+    description: Document backups (job-service) — copy a completed upload into the caller's durable backups/ prefix; the returned storage key is registered with document-service
   - name: Admin Analytics
     description: Admin dashboard metrics (requires super-admin role via JWT authentication)
   - name: Documents
@@ -2123,6 +2125,64 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   # ==========================================================================
+  # Document Backups (Phase 9)
+  # ==========================================================================
+  /api/backup:
+    post:
+      tags: [Backups]
+      summary: Back up a completed upload to durable storage
+      description: |
+        Copies a **completed** presigned upload into the caller's durable
+        `backups/{userId}/{uuid}/{fileName}` prefix in the outputs bucket
+        (server-side copy — no bytes through the service). The upload is
+        consumed and its session released.
+
+        **Authentication required** — guests get 401 (backups are
+        account-backed by definition). Rate-limited per IP by the job-creation
+        limiter (RATE_LIMIT_JOB_CREATE).
+
+        Backupable file types are the same allowlist as shares (extension AND
+        content sniff — NOT fail-open): pdf, png/jpg/jpeg/webp/tif/tiff, txt,
+        zip, html, doc/docx, xls/xlsx, ppt/pptx, odt/ods/odp.
+
+        Register the returned `storageKey` with document-service
+        (`POST /api/documents` with `storagePath`) — document-service enforces
+        that a `backups/` key sits under the caller's own prefix, serves
+        downloads via `GET /api/documents/{id}/download`, and deletes the
+        object when the document is purged. Job-service's cleanup sweeps never
+        touch `backups/` objects.
+      operationId: createBackup
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBackupRequest"
+      responses:
+        "201":
+          description: Backup stored — register `data.storageKey` with document-service next
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/BackupResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
   # Admin Analytics
   # ==========================================================================
   /api/dashboard:
@@ -2717,6 +2777,8 @@ paths:
         - { name: tagId, in: query, schema: { type: string, format: uuid } }
         - { name: q, in: query, description: Full-text search (name + extracted content), schema: { type: string } }
         - { name: trashed, in: query, description: "true returns the Trash view", schema: { type: boolean } }
+        - { name: updatedSince, in: query, description: "Delta sync: only rows updated strictly after this instant. Invalid values are 400, not ignored.", schema: { type: string, format: date-time } }
+        - { name: sort, in: query, description: "updated orders by updatedAt DESC (default: createdAt DESC) — modification order for sync clients", schema: { type: string, enum: [updated] } }
         - { name: orgId, in: query, description: Org-scope the listing (viewer+), schema: { type: string, format: uuid } }
         - { name: page, in: query, schema: { type: integer, default: 1 } }
         - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
@@ -2743,12 +2805,12 @@ paths:
                 fileType: { type: string }
                 mimeType: { type: string }
                 fileSize: { type: integer, format: int64 }
-                storagePath: { type: string }
+                storagePath: { type: string, description: "Object key of the document's bytes. Keys under backups/ must sit under the caller's own backups/{userId}/ prefix (the storageKey returned by POST /api/backup) — 400 otherwise. Other shapes pass through unvalidated." }
                 status: { type: string }
                 metadata: { type: object }
       responses:
         "201": { description: Document created, content: { application/json: { schema: { $ref: "#/components/schemas/APIResponse" } } } }
-        "400": { description: Validation error }
+        "400": { description: "Validation error (including a backups/ storagePath not owned by the caller)" }
   /api/documents/{id}:
     parameters:
       - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2787,6 +2849,31 @@ paths:
       responses:
         "200": { description: Deleted }
         "404": { description: Not found }
+  /api/documents/{id}/download:
+    get:
+      tags: [Documents]
+      summary: Download the document's stored bytes
+      description: |
+        302 to a 5-minute presigned GET on object storage with
+        `Content-Disposition: attachment` (and the stored mimeType when set) —
+        the browser fetches the bytes straight from storage, not through the
+        service. Only documents with a `storagePath` have bytes here; job-era
+        rows without one answer 404 (fall back to the job download route).
+      operationId: downloadDocument
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: orgId, in: query, description: Org scope (viewer+), schema: { type: string, format: uuid } }
+      responses:
+        "302":
+          description: Redirect to a presigned download URL (5-minute expiry, attachment disposition)
+          headers:
+            Location:
+              schema:
+                type: string
+                example: "http://localhost/outputs/backups/<userId>/<uuid>/invoice.pdf?response-content-disposition=attachment%3B%20filename%3D%22invoice.pdf%22&X-Amz-Signature=..."
+        "404": { description: Document not found, not owned, or has no stored file }
+        "500": { description: Downloads unavailable (object storage unconfigured) or presign failure }
   /api/documents/{id}/restore:
     post:
       tags: [Documents]
@@ -2801,6 +2888,11 @@ paths:
     delete:
       tags: [Documents]
       summary: Permanently delete a document
+      description: |
+        Hard delete (row + tag associations). When `storagePath` starts with
+        `backups/` the storage object is also deleted (best-effort, row first)
+        — this purge is the only deletion path for backup bytes; job-service's
+        cleanup sweeps never touch backups/.
       operationId: purgeDocument
       security: [{ BearerAuth: [] }, { CookieAuth: [] }]
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -3865,6 +3957,49 @@ components:
             returned ONLY on the create response and never recoverable
             afterwards.
           example: "http://localhost/share/3q2xkJv0aB1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uVwXY"
+
+    CreateBackupRequest:
+      type: object
+      required: [uploadId]
+      description: Request body for backing up a completed presigned upload
+      properties:
+        uploadId:
+          type: string
+          format: uuid
+          description: ID of a completed presigned upload session. The upload is consumed — its object is copied out and the session released.
+        fileName:
+          type: string
+          description: Name for the stored object. Sanitized; falls back to the upload's original file name when omitted or empty.
+      example:
+        uploadId: "550e8400-e29b-41d4-a716-446655440000"
+        fileName: "tax-return-2026.pdf"
+
+    BackupResponse:
+      type: object
+      description: |
+        The stored backup. `storageKey` has the shape
+        `backups/{userId}/{uuid}/{fileName}` — the userId segment is what
+        document-service validates ownership against when the key is
+        registered as a document's storagePath; the uuid segment keeps
+        same-named backups from colliding.
+      properties:
+        storageKey:
+          type: string
+          description: Object key in the outputs bucket — register it via POST /api/documents (storagePath)
+          example: "backups/550e8400-e29b-41d4-a716-446655440000/0198c9a1-73f2-7cde-9a3b-1f2e3d4c5b6a/tax-return-2026.pdf"
+        fileName:
+          type: string
+          description: Sanitized stored file name
+          example: tax-return-2026.pdf
+        fileSize:
+          type: integer
+          format: int64
+          description: File size in bytes (from the consumed upload)
+          example: 2456789
+        contentType:
+          type: string
+          description: Content type derived from the file extension (application/octet-stream when unknown)
+          example: application/pdf
 
   # ---------------------------------------------------------------------------
   # Reusable Responses
