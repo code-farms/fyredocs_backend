@@ -80,6 +80,7 @@ All `/api/*` traffic is proxied to **job-service**. Workers are not exposed publ
 | `/api/notifications/*` | `NOTIFICATION_SERVICE_URL` | In-app notification feed + SSE bell |
 | `/admin/*` | `ANALYTICS_SERVICE_URL` | Admin / analytics dashboards (super-admin only, enforced by the service) |
 | `/api/dashboard` | `ANALYTICS_SERVICE_URL` | Unified role-aware dashboard summary; the service filters by `X-User-Role` (admin/super-admin → system KPIs, user → personal KPIs, guest → 403) |
+| `/api/config/flags` | api-gateway (local) | Feature flags (Phase 10) — serves `FEATURE_FLAGS_JSON` verbatim in the standard envelope; PUBLIC (pre-auth, guests included); `Cache-Control: max-age=300`; also at `/api/v1/config/flags` |
 | `/healthz` | api-gateway (local) | Liveness — static `200 {"status":"ok"}`, no dependency checks |
 | `/readyz` | api-gateway (local) | Readiness — pings Redis (503 if unreachable) |
 | `/metrics` | api-gateway (local) | Prometheus metrics (internal network only — Caddy does not route it publicly) |
@@ -123,6 +124,7 @@ The reverse proxy sets `FlushInterval = -1` to stream responses immediately to t
 | `AUTH_SERVICE_URL` | Auth-service base URL (defaults to `JOB_SERVICE_URL` for backward compat) | `http://auth-service:8086` |
 | `ANALYTICS_SERVICE_URL` | Analytics-service base URL | `http://analytics-service:8087` |
 | `DOCUMENT_SERVICE_URL` | Document-service base URL (documents, folders, tags, exports) | `http://document-service:8089` |
+| `FEATURE_FLAGS_JSON` | Feature-flag object served at `/api/config/flags` (the mobile kill switch). Parsed once at boot; invalid JSON → `{}` + one log. Restart to apply. | `{"onDevicePdfRenderer":false}` |
 | `USER_SERVICE_URL` | User-service base URL (orgs, memberships, RBAC) | `http://user-service:8090` |
 | `NOTIFICATION_SERVICE_URL` | Notification-service base URL (notifications, SSE bell) | `http://notification-service:8091` |
 | `REDIS_ADDR` | Redis server address (used for denylist, guest cookie store, plan cache) | `redis:6379` |

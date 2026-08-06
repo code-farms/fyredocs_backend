@@ -144,6 +144,25 @@
        "body": "{\n  \"success\": true,\n  \"message\": \"API Gateway is healthy\",\n  \"data\": {\n    \"status\": \"ok\",\n    \"uptime\": \"2h15m30s\"\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
       }
      ]
+    },
+    {
+     "name": "Feature Flags",
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": {
+       "raw": "{{base_url}}/api/config/flags",
+       "host": [
+        "{{base_url}}"
+       ],
+       "path": [
+        "api",
+        "config",
+        "flags"
+       ]
+      },
+      "description": "Public (no auth). Serves the gateway's FEATURE_FLAGS_JSON env verbatim inside the standard envelope — the mobile app's boot-time kill-switch read. Known keys: onDevicePdfRenderer, cloudBackup, shareLinks, premiumFeatures. Cache-Control: max-age=300."
+     }
     }
    ]
   },
