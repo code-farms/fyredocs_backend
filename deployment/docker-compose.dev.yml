@@ -1,0 +1,30 @@
+# Dev-stack override — run a SECOND, fully isolated copy of the stack for
+# feature-branch work. Isolation comes from the compose PROJECT NAME, not this
+# file: named volumes are prefixed by project, so
+#
+#   docker compose -p fyredocs-dev -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# creates fyredocs-dev_postgres_data, fyredocs-dev_minio_data, … while the
+# main stack's volumes stay untouched. Branch migrations therefore land ONLY
+# in the dev database — redeploying main against its own volume can never see
+# them. Use the root Makefile's dev-up/dev-down/dev-nuke targets.
+#
+# This file only remaps the handful of HOST-published ports so both stacks
+# can run at the same time; everything else is inherited verbatim.
+services:
+  caddy:
+    ports: !override
+      - "8080:80"
+      - "8443:443"
+  minio:
+    ports: !override
+      - "127.0.0.1:9101:9001"
+  loki:
+    ports: !override
+      - "127.0.0.1:3101:3100"
+  prometheus:
+    ports: !override
+      - "127.0.0.1:9190:9090"
+  grafana:
+    ports: !override
+      - "127.0.0.1:3001:3000"
