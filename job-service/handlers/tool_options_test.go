@@ -284,3 +284,91 @@ func TestValidateSignOptionsEmptyRaw(t *testing.T) {
 		t.Error("empty options for sign-pdf must be rejected")
 	}
 }
+
+func TestValidateProtectOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr string
+	}{
+		{"legacy password", `{"password":"s3cret"}`, ""},
+		{"split form", `{"userPassword":"open1234","ownerPassword":"admin1234"}`, ""},
+		{"owner-only", `{"ownerPassword":"admin1234"}`, ""},
+		{"user-only", `{"userPassword":"open1234"}`, ""},
+		{"permissions and encryption ride along", `{"password":"s3cret","permissions":{"allowPrint":false,"allowCopy":true},"encryption":"aes-128"}`, ""},
+		{"allowEdit legacy alias accepted", `{"password":"s3cret","permissions":{"allowEdit":true}}`, ""},
+		{"unknown permission keys tolerated", `{"password":"s3cret","permissions":{"futureFlag":true}}`, ""},
+		{"confirmPassword tolerated", `{"password":"s3cret","confirmPassword":"s3cret"}`, ""},
+		{"encryption case-insensitive", `{"password":"s3cret","encryption":"AES-256"}`, ""},
+		{"rc4-128 accepted", `{"password":"s3cret","encryption":"rc4-128"}`, ""},
+		{"mixing password with userPassword", `{"password":"s3cret","userPassword":"open1234"}`, "either password"},
+		{"mixing password with ownerPassword", `{"password":"s3cret","ownerPassword":"admin1234"}`, "either password"},
+		{"no password anywhere", `{"permissions":{"allowPrint":true}}`, "requires a password"},
+		{"password too short", `{"password":"abc"}`, "between 4 and 128"},
+		{"password too long", `{"password":"` + strings.Repeat("x", 129) + `"}`, "between 4 and 128"},
+		{"short userPassword names the field", `{"userPassword":"abc","ownerPassword":"admin1234"}`, "userPassword"},
+		{"short ownerPassword names the field", `{"userPassword":"open1234","ownerPassword":"abc"}`, "ownerPassword"},
+		{"unsupported encryption", `{"password":"s3cret","encryption":"rc4-40"}`, "aes-256, aes-128, rc4-128"},
+		{"wrong-typed permissions", `{"password":"s3cret","permissions":{"allowPrint":"yes"}}`, "valid JSON"},
+		{"numeric password rejected", `{"password":1234}`, "valid JSON"},
+		{"bad json", `{"password":`, "valid JSON"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateToolOptions("protect-pdf", tt.raw)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateProtectOptionsEmptyRaw(t *testing.T) {
+	for _, raw := range []string{"", "   "} {
+		if err := validateToolOptions("protect-pdf", raw); err == nil ||
+			!strings.Contains(err.Error(), "requires options") {
+			t.Errorf("empty raw %q should be rejected, got: %v", raw, err)
+		}
+	}
+}
+
+func TestValidateUnlockOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr string
+	}{
+		{"any non-empty password", `{"password":"x"}`, ""},
+		{"missing password", `{}`, "current password"},
+		{"empty password", `{"password":""}`, "current password"},
+		{"too long", `{"password":"` + strings.Repeat("x", 129) + `"}`, "at most 128"},
+		{"bad json", `{"password":`, "valid JSON"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateToolOptions("unlock-pdf", tt.raw)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateUnlockOptionsEmptyRaw(t *testing.T) {
+	if err := validateToolOptions("unlock-pdf", ""); err == nil ||
+		!strings.Contains(err.Error(), "requires options") {
+		t.Errorf("empty raw should be rejected, got: %v", err)
+	}
+}

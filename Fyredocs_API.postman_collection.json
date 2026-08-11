@@ -3422,6 +3422,172 @@
      ]
     },
     {
+     "name": "Protect PDF",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "exec": [
+         "const response = pm.response.json();",
+         "pm.test(\"Response indicates success\", function() {",
+         "    pm.expect(response.success).to.eql(true);",
+         "});",
+         "if (response.data && response.data.id) {",
+         "    pm.environment.set('job_id', response.data.id);",
+         "}"
+        ],
+        "type": "text/javascript"
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       }
+      ],
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"uploadIds\": [\"{{upload_id}}\"],\n  \"options\": {\n    \"userPassword\": \"open-secret\",\n    \"ownerPassword\": \"admin-secret\",\n    \"permissions\": {\n      \"allowPrint\": true,\n      \"allowCopy\": false,\n      \"allowModify\": false,\n      \"allowAnnotate\": true,\n      \"allowAssemble\": false\n    },\n    \"encryption\": \"aes-256\"\n  }\n}"
+      },
+      "url": {
+       "raw": "{{base_url}}/api/organize-pdf/protect-pdf",
+       "host": [
+        "{{base_url}}"
+       ],
+       "path": [
+        "api",
+        "organize-pdf",
+        "protect-pdf"
+       ]
+      },
+      "description": "Encrypt a PDF with user/owner passwords, advisory permission flags, and a selectable cipher. Options are REQUIRED and validated at job creation (400 INVALID_OPTIONS). Two password forms: the legacy single `password` alias (used as BOTH the user and owner password) OR the userPassword/ownerPassword split shown here — mixing the two forms is rejected. userPassword opens the document; ownerPassword governs permission changes and falls back to userPassword when omitted; an EMPTY userPassword with an ownerPassword set means the file opens freely but stays permission-restricted. Passwords must be 4-128 characters. permissions (optional, advisory PDF Table 22 bits): allowPrint (default true), allowCopy, allowModify (legacy alias allowEdit), allowAnnotate, allowAssemble — all others default false. encryption: aes-256 (default), aes-128, or rc4-128. Password keys are redacted from persisted job metadata."
+     },
+     "response": [
+      {
+       "name": "201 - Job Created",
+       "originalRequest": {
+        "method": "POST",
+        "header": [
+         {
+          "key": "Content-Type",
+          "value": "application/json"
+         }
+        ],
+        "body": {
+         "mode": "raw",
+         "raw": "{\n  \"uploadIds\": [\"{{upload_id}}\"],\n  \"options\": {\n    \"userPassword\": \"open-secret\",\n    \"ownerPassword\": \"admin-secret\",\n    \"permissions\": {\n      \"allowPrint\": true,\n      \"allowCopy\": false,\n      \"allowModify\": false,\n      \"allowAnnotate\": true,\n      \"allowAssemble\": false\n    },\n    \"encryption\": \"aes-256\"\n  }\n}"
+        },
+        "url": {
+         "raw": "{{base_url}}/api/organize-pdf/protect-pdf",
+         "host": [
+          "{{base_url}}"
+         ],
+         "path": [
+          "api",
+          "organize-pdf",
+          "protect-pdf"
+         ]
+        }
+       },
+       "status": "Created",
+       "code": 201,
+       "header": [
+        {
+         "key": "Content-Type",
+         "value": "application/json"
+        }
+       ],
+       "body": "{\n  \"success\": true,\n  \"message\": \"Organization job created\",\n  \"data\": {\n    \"id\": \"job_abc123\",\n    \"tool\": \"protect-pdf\",\n    \"status\": \"pending\",\n    \"createdAt\": \"2026-03-03T12:00:00Z\"\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+      }
+     ]
+    },
+    {
+     "name": "Unlock PDF",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "exec": [
+         "const response = pm.response.json();",
+         "pm.test(\"Response indicates success\", function() {",
+         "    pm.expect(response.success).to.eql(true);",
+         "});",
+         "if (response.data && response.data.id) {",
+         "    pm.environment.set('job_id', response.data.id);",
+         "}"
+        ],
+        "type": "text/javascript"
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       }
+      ],
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"uploadIds\": [\"{{upload_id}}\"],\n  \"options\": {\n    \"password\": \"open-secret\"\n  }\n}"
+      },
+      "url": {
+       "raw": "{{base_url}}/api/organize-pdf/unlock-pdf",
+       "host": [
+        "{{base_url}}"
+       ],
+       "path": [
+        "api",
+        "organize-pdf",
+        "unlock-pdf"
+       ]
+      },
+      "description": "Remove the password from an encrypted PDF. Options are REQUIRED and validated at job creation (400 INVALID_OPTIONS): password must be non-empty and at most 128 characters (no minimum length — the existing PDF's password may be shorter than 4). Either the document's USER or OWNER password unlocks. A wrong password is not detectable at creation — it fails the job at the worker. The password key is redacted from persisted job metadata."
+     },
+     "response": [
+      {
+       "name": "201 - Job Created",
+       "originalRequest": {
+        "method": "POST",
+        "header": [
+         {
+          "key": "Content-Type",
+          "value": "application/json"
+         }
+        ],
+        "body": {
+         "mode": "raw",
+         "raw": "{\n  \"uploadIds\": [\"{{upload_id}}\"],\n  \"options\": {\n    \"password\": \"open-secret\"\n  }\n}"
+        },
+        "url": {
+         "raw": "{{base_url}}/api/organize-pdf/unlock-pdf",
+         "host": [
+          "{{base_url}}"
+         ],
+         "path": [
+          "api",
+          "organize-pdf",
+          "unlock-pdf"
+         ]
+        }
+       },
+       "status": "Created",
+       "code": 201,
+       "header": [
+        {
+         "key": "Content-Type",
+         "value": "application/json"
+        }
+       ],
+       "body": "{\n  \"success\": true,\n  \"message\": \"Organization job created\",\n  \"data\": {\n    \"id\": \"job_abc123\",\n    \"tool\": \"unlock-pdf\",\n    \"status\": \"pending\",\n    \"createdAt\": \"2026-03-03T12:00:00Z\"\n  },\n  \"error\": null,\n  \"meta\": {\n    \"requestId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"\n  }\n}"
+      }
+     ]
+    },
+    {
      "name": "Get Job Status",
      "request": {
       "method": "GET",

@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
 
 	"fyredocs/shared/config"
 	"fyredocs/shared/logger"
@@ -43,6 +44,17 @@ import (
 func main() {
 	config.LoadConfig()
 	logger.Init("organize-pdf", os.Getenv("LOG_MODE"))
+	// Without this, pdfcpu's NewDefaultConfiguration (see
+	// pdfcpu/pkg/pdfcpu/model/configuration.go) loads — and on first use
+	// WRITES — a config.yml under os.UserConfigDir(), making encryption and
+	// permission defaults environment-dependent, and calls os.Exit(1) from
+	// inside a job if the config dir is unusable. Disabling it pins the
+	// deterministic in-code defaults; protect-pdf sets every security field
+	// explicitly anyway (processing/processing_edit.go encryptPDF).
+	// NOTE: optimize-pdf, convert-from-pdf and convert-to-pdf also use
+	// pdfcpu and share this hazard; they are separate modules and get the
+	// same one-liner in their own change.
+	pdfcpuapi.DisableConfigDir()
 	shutdownTracer := telemetry.Init("organize-pdf")
 	defer shutdownTracer(context.Background())
 	models.Connect()

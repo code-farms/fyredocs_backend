@@ -177,13 +177,28 @@ Adds a text or image watermark to every page.
 
 ### 9. Protect PDF
 
-Encrypts a PDF with a password.
+Encrypts a PDF with user/owner passwords, advisory permission flags, and a selectable cipher.
 
 **Tool:** `protect-pdf`
 **Input:** Single PDF file
 **Output:** Password-protected PDF
-**Options:**
-- `password`: required, ≥4 characters
+**Options** (options are required — a password must be supplied one way or the other):
+- `password`: legacy single-password form — used as **both** the user and owner password. Mutually exclusive with the split form: sending `password` together with `userPassword`/`ownerPassword` is rejected.
+- `userPassword`: password required to **open** the document (split form). May be omitted/empty when `ownerPassword` is set — the file then opens freely but stays permission-restricted.
+- `ownerPassword`: password required to **change permissions** (split form). Falls back to `userPassword` when omitted (pdfcpu refuses an empty owner password).
+- `permissions`: object of advisory permission toggles (PDF 32000-1 Table 22 bits) — `allowPrint` (default **true**), `allowCopy`, `allowModify` (legacy alias `allowEdit`, only honoured when `allowModify` is absent), `allowAnnotate`, `allowAssemble` — all others default **false**. Omitting the object means "print only". Advisory: enforcement is up to the PDF reader.
+- `encryption`: `aes-256` (default), `aes-128`, or `rc4-128`
+
+Passwords must be 4–128 characters. Options are validated by job-service at job
+creation (`validateProtectOptions` in `job-service/handlers/tool_options.go`, 400
+`INVALID_OPTIONS`): a password is required, mixing the legacy and split forms is
+rejected, lengths are bounded, and `encryption` is allowlisted. The worker
+re-validates with the same rules (`parseProtectOptions` in
+`processing/processing_edit.go`) — defence in depth, not the primary gate.
+`encryptPDF` sets every security field explicitly, and `main.go` calls pdfcpu's
+`DisableConfigDir()` at boot so encryption/permission defaults are deterministic
+in-code values rather than whatever a host `config.yml` says. Password option keys
+are redacted from persisted job metadata (see `docs/developer/services/job-service.md`).
 
 ### 10. Unlock PDF
 
@@ -192,8 +207,14 @@ Removes the password from an encrypted PDF.
 **Tool:** `unlock-pdf`
 **Input:** Single password-protected PDF
 **Output:** Unprotected PDF
-**Options:**
-- `password`: required (existing password)
+**Options** (required):
+- `password`: the document's **user or owner** password — either unlocks (`decryptPDF` supplies the value as both; pdfcpu checks owner first, then user)
+
+Validated by job-service at job creation (`validateUnlockOptions`, 400
+`INVALID_OPTIONS`): non-empty and ≤128 characters. There is deliberately **no
+minimum length** — the existing PDF's password is whatever it is, including short
+legacy ones. A wrong password fails the job at the worker. The `password` key is
+redacted from persisted job metadata.
 
 ### 11. Sign PDF
 
@@ -754,9 +775,9 @@ sequenceDiagram
     else watermark-pdf
         W->>PC: pdfcpu add text/image watermark
     else protect-pdf
-        W->>PC: pdfcpu encrypt with password
+        W->>PC: pdfcpu encrypt (AES-256/AES-128/RC4-128, user/owner passwords, permission flags)
     else unlock-pdf
-        W->>PC: pdfcpu decrypt with password
+        W->>PC: pdfcpu decrypt (user OR owner password)
     else sign-pdf
         W->>PC: pdfcpu image stamp on selected page
     else edit-pdf

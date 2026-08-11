@@ -359,7 +359,7 @@ func CreateJobFromTool(c *gin.Context) {
 	correlationID := uuid.NewString()
 
 	metaPayload := map[string]interface{}{
-		"options":       parseOptions(optionsRaw),
+		"options":       redactSecretOptions(parseOptions(optionsRaw)),
 		"correlationId": correlationID,
 	}
 	metaBytes, err := json.Marshal(metaPayload)
@@ -1345,6 +1345,23 @@ func parseOptions(raw string) map[string]interface{} {
 		return map[string]interface{}{}
 	}
 	return parsed
+}
+
+// jobSecretOptionKeys are option keys that hold user secrets (protect-pdf /
+// unlock-pdf passwords and the client-side confirmation). They are stripped
+// from the metadata copy persisted to processing_jobs — and therefore from
+// every job GET response — because the worker receives options via the NATS
+// dispatch message (optionsPayload below), never from this metadata copy, so
+// redaction here cannot affect processing.
+var jobSecretOptionKeys = []string{"password", "userPassword", "ownerPassword", "confirmPassword"}
+
+// redactSecretOptions removes secret-bearing keys in place and returns the
+// map; nil-safe for the parseOptions empty-map contract.
+func redactSecretOptions(opts map[string]interface{}) map[string]interface{} {
+	for _, key := range jobSecretOptionKeys {
+		delete(opts, key)
+	}
+	return opts
 }
 
 // optionsPayload passes an options blob through to the queued NATS message,

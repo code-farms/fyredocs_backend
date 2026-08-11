@@ -77,7 +77,7 @@ options: <stringified JSON>
 | Status | Code | Description |
 |--------|------|-------------|
 | 400 | INVALID_INPUT | Missing fields, unknown tool, MIME mismatch |
-| 400 | INVALID_OPTIONS | `options` fails the per-tool schema (`scan-to-pdf`, `pdf-metadata`, `ocr-pdf`, `pdf-to-image`, `sign-pdf`) |
+| 400 | INVALID_OPTIONS | `options` fails the per-tool schema (`scan-to-pdf`, `pdf-metadata`, `ocr-pdf`, `pdf-to-image`, `sign-pdf`, `protect-pdf`, `unlock-pdf`) |
 | 400 | TOO_MANY_FILES | More files than the user's plan permits |
 | 401 | UNAUTHORIZED | Auth required for non-guest tools |
 | 413 | FILE_TOO_LARGE | File exceeds the plan's max-file-size |

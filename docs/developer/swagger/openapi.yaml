@@ -1636,9 +1636,19 @@ paths:
 
         `SignPdfOptions` schema and is REQUIRED (`signatureData` data URL).
 
-        All three schemas are validated at job creation — violations return
+        For `protect-pdf`, `options` follows the `ProtectPdfOptions` schema
 
-        400 with error code `INVALID_OPTIONS`.
+        and is REQUIRED (legacy `password` OR the userPassword/ownerPassword
+
+        split — mixing rejected; optional permissions object and encryption
+
+        enum). For `unlock-pdf`, `options` follows the `UnlockPdfOptions`
+
+        schema and is REQUIRED (the document''s current user or owner
+
+        password). All these schemas are validated at job creation —
+
+        violations return 400 with error code `INVALID_OPTIONS`.
 
         '
       operationId: createOrganizePdfJob
@@ -4760,6 +4770,148 @@ components:
         signatureData: data:image/png;base64,iVBORw0KGgo...
         position: br
         page: 1
+    ProtectPdfOptions:
+      type: object
+      description: 'Options for protect-pdf jobs (REQUIRED — the tool is meaningless
+
+        without a password). Validated by job-service at job creation —
+
+        violations return 400 INVALID_OPTIONS; the organize-pdf worker
+
+        re-validates the same rules defensively. Supply EITHER the legacy
+
+        single password (used as both the user and owner password) OR the
+
+        userPassword/ownerPassword split — mixing the two forms is rejected.
+
+        Password option keys (password, userPassword, ownerPassword,
+
+        confirmPassword) are redacted from the persisted job metadata.
+
+        '
+      properties:
+        password:
+          type: string
+          minLength: 4
+          maxLength: 128
+          description: 'Legacy single-password form: used as BOTH the user (open) and
+
+            owner (permissions) password. 4-128 characters. Mutually
+
+            exclusive with userPassword/ownerPassword.
+
+            '
+        userPassword:
+          type: string
+          minLength: 4
+          maxLength: 128
+          description: 'Split form: password required to OPEN the document. 4-128
+
+            characters when present. May be omitted or empty when
+
+            ownerPassword is set — the file then opens freely but stays
+
+            permission-restricted.
+
+            '
+        ownerPassword:
+          type: string
+          minLength: 4
+          maxLength: 128
+          description: 'Split form: password required to CHANGE PERMISSIONS
+
+            (owner-only semantics). 4-128 characters when present. Falls back
+
+            to userPassword when omitted (pdfcpu refuses an empty owner
+
+            password).
+
+            '
+        permissions:
+          type: object
+          description: 'Advisory permission toggles (PDF 32000-1 Table 22 bits) —
+
+            enforcement is up to the PDF reader. Omitted means "print only":
+
+            allowPrint defaults to true, every other flag to false.
+
+            '
+          properties:
+            allowPrint:
+              type: boolean
+              default: true
+              description: Allow printing.
+            allowCopy:
+              type: boolean
+              default: false
+              description: Allow text/graphics extraction (copy).
+            allowModify:
+              type: boolean
+              default: false
+              description: 'Allow content modification. Legacy alias: allowEdit, honoured
+
+                only when allowModify is absent.
+
+                '
+            allowAnnotate:
+              type: boolean
+              default: false
+              description: Allow annotations and form filling.
+            allowAssemble:
+              type: boolean
+              default: false
+              description: Allow page assembly (insert/rotate/delete pages).
+        encryption:
+          type: string
+          enum:
+          - aes-256
+          - aes-128
+          - rc4-128
+          default: aes-256
+          description: Encryption cipher and key length (case-insensitive).
+      example:
+        userPassword: open-secret
+        ownerPassword: admin-secret
+        permissions:
+          allowPrint: true
+          allowCopy: false
+          allowModify: false
+          allowAnnotate: true
+          allowAssemble: false
+        encryption: aes-256
+    UnlockPdfOptions:
+      type: object
+      required:
+      - password
+      description: 'Options for unlock-pdf jobs (REQUIRED — the current password is
+
+        the whole point of the tool). Validated by job-service at job
+
+        creation — violations return 400 INVALID_OPTIONS. The password key
+
+        is redacted from the persisted job metadata.
+
+        '
+      properties:
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: 'The document''s current USER or OWNER password — either
+
+            unlocks (the worker supplies the value as both; pdfcpu checks the
+
+            owner password first, then the user password). Non-empty, at most
+
+            128 characters; deliberately no minimum — the existing PDF''s
+
+            password may be shorter than 4. A WRONG password is not
+
+            detectable at creation and fails the job at the worker.
+
+            '
+      example:
+        password: open-secret
     CreateJobRequest:
       type: object
       description: JSON request body for creating a job from a completed upload
@@ -4785,7 +4937,14 @@ components:
             For pdf-to-image: see the PdfToImageOptions schema (validated at\njob creation; violations\
             \ return 400 INVALID_OPTIONS).\nFor sign-pdf: see the SignPdfOptions schema (REQUIRED —\n\
             signatureData png/jpeg data URL, decoded size ≤256 KB; validated\nat job creation; violations\
-            \ return 400 INVALID_OPTIONS).\nFor watermark-pdf:\n  - type: \"text\" | \"image\" (default:\
+            \ return 400 INVALID_OPTIONS).\nFor protect-pdf: see the ProtectPdfOptions
+            schema (REQUIRED — legacy password OR the userPassword/ownerPassword
+            split, never both; passwords 4-128 chars; optional permissions object
+            and encryption aes-256/aes-128/rc4-128; validated at job creation;
+            violations return 400 INVALID_OPTIONS).\nFor unlock-pdf: see the
+            UnlockPdfOptions schema (REQUIRED — the document's current user or
+            owner password, non-empty and ≤128 chars; validated at job creation;
+            violations return 400 INVALID_OPTIONS).\nFor watermark-pdf:\n  - type: \"text\" | \"image\" (default:\
             \ \"text\")\n  - text: string (watermark text, used when type=text)\n  - imageData: string\
             \ (base64 data URL, used when type=image)\n  - position: \"center\" | \"diagonal\" | \"tiled\"\
             \ (default: \"diagonal\")\n  - opacity: number 10-100 (default: 50)\n  - fontSize: number\
@@ -4857,7 +5016,15 @@ components:
 
             `textTruncated` appear only on the single-job GET — list and
 
-            history endpoints scrub them to keep payloads small.
+            history endpoints scrub them to keep payloads small. Secret
+
+            option keys (password, userPassword, ownerPassword,
+
+            confirmPassword — protect-pdf/unlock-pdf passwords) are redacted
+
+            before the metadata is persisted, so no job endpoint ever
+
+            returns them.
 
             '
         createdAt:

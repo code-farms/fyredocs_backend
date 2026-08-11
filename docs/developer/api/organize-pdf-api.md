@@ -618,11 +618,31 @@ Adds a text or image watermark to every page.
 
 ### protect-pdf
 
-Encrypts a PDF with a password.
+Encrypts a PDF with user/owner passwords, advisory permission flags, and a selectable cipher.
+
+**Options** (required — validated at job creation, violations return 400 `INVALID_OPTIONS`):
 
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
-| password | string | Yes | ≥ 4 characters |
+| password | string | One of* | Legacy single-password form: used as **both** user and owner password. 4–128 characters. Mutually exclusive with `userPassword`/`ownerPassword` — mixing the two forms is rejected |
+| userPassword | string | One of* | Split form: password required to **open** the document. 4–128 characters when present. May be omitted/empty when `ownerPassword` is set — the file then opens freely but stays permission-restricted |
+| ownerPassword | string | One of* | Split form: password required to **change permissions**. 4–128 characters when present. Falls back to `userPassword` when omitted |
+| permissions | object | No | Advisory permission toggles (PDF 32000-1 Table 22 bits) — see sub-table below. Omitted means "print only". Enforcement is up to the PDF reader |
+| encryption | string | No | `aes-256` (default), `aes-128`, or `rc4-128` (case-insensitive) |
+
+\* At least one of `password` or `userPassword`/`ownerPassword` must be supplied; the legacy and split forms cannot be combined.
+
+**`permissions` object:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| allowPrint | boolean | `true` | Printing |
+| allowCopy | boolean | `false` | Text/graphics extraction (copy) |
+| allowModify | boolean | `false` | Content modification. Legacy alias: `allowEdit`, honoured only when `allowModify` is absent |
+| allowAnnotate | boolean | `false` | Annotations and form filling |
+| allowAssemble | boolean | `false` | Page assembly (insert/rotate/delete) |
+
+**Validation errors** (400 `INVALID_OPTIONS`): options absent or empty; unparseable JSON; no password supplied; `password` mixed with `userPassword`/`ownerPassword`; any password outside 4–128 characters; `encryption` outside the allowlist. The worker re-validates the same rules defensively.
 
 ---
 
@@ -630,9 +650,13 @@ Encrypts a PDF with a password.
 
 Removes the password from an encrypted PDF.
 
+**Options** (required — validated at job creation, violations return 400 `INVALID_OPTIONS`):
+
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
-| password | string | Yes | The current password on the PDF |
+| password | string | Yes | The document's **user or owner** password — either unlocks. Non-empty, ≤ 128 characters (no minimum — the existing PDF's password may be shorter than 4) |
+
+**Validation errors** (400 `INVALID_OPTIONS`): options absent or empty; unparseable JSON; `password` missing or empty; `password` over 128 characters. A **wrong** password is not detectable at creation — it fails the job at the worker.
 
 ---
 

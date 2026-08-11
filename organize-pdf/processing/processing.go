@@ -95,11 +95,11 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		err = watermarkPDF(inputPaths[0], outputPath, options)
 	case "protect-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		password, ok := optionString(options, "password")
-		if !ok {
-			return Result{}, fmt.Errorf("missing password option")
+		settings, perr := parseProtectOptions(options)
+		if perr != nil {
+			return Result{}, perr
 		}
-		err = encryptPDF(inputPaths[0], outputPath, password)
+		err = encryptPDF(inputPaths[0], outputPath, settings)
 	case "unlock-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		password, ok := optionString(options, "password")

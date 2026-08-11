@@ -1034,3 +1034,32 @@ func TestScrubForListPassthrough(t *testing.T) {
 		t.Errorf("empty metadata must stay empty, got %s", got.Metadata)
 	}
 }
+
+// TestRedactSecretOptions pins the metadata redaction contract: secret keys
+// vanish from the persisted copy, non-secret keys survive, and the empty-map
+// contract from parseOptions is safe.
+func TestRedactSecretOptions(t *testing.T) {
+	opts := map[string]interface{}{
+		"password":        "s3cret",
+		"userPassword":    "open1234",
+		"ownerPassword":   "admin1234",
+		"confirmPassword": "s3cret",
+		"encryption":      "aes-256",
+		"permissions":     map[string]interface{}{"allowPrint": true},
+	}
+	got := redactSecretOptions(opts)
+	for _, key := range []string{"password", "userPassword", "ownerPassword", "confirmPassword"} {
+		if _, ok := got[key]; ok {
+			t.Errorf("%s should be redacted", key)
+		}
+	}
+	if got["encryption"] != "aes-256" {
+		t.Errorf("non-secret keys must survive, got %v", got["encryption"])
+	}
+	if _, ok := got["permissions"]; !ok {
+		t.Error("permissions must survive")
+	}
+	if out := redactSecretOptions(map[string]interface{}{}); len(out) != 0 {
+		t.Errorf("empty map should stay empty, got %v", out)
+	}
+}
