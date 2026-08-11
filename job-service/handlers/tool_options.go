@@ -93,8 +93,9 @@ type scanPointPayload struct {
 
 // validateToolOptions checks the options payload for tools with a defined
 // schema. Empty options and tools without a schema pass through unchanged —
-// except pdf-metadata, whose entire purpose is its options: absent options
-// would otherwise fail only inside the worker, after the upload is consumed.
+// except pdf-metadata, sign-pdf, protect-pdf and unlock-pdf, whose entire
+// purpose is their options: absent options would otherwise fail only inside
+// the worker, after the upload is consumed.
 func validateToolOptions(toolType string, raw string) error {
 	if strings.TrimSpace(raw) == "" {
 		if toolType == "pdf-metadata" {
@@ -102,6 +103,12 @@ func validateToolOptions(toolType string, raw string) error {
 		}
 		if toolType == "sign-pdf" {
 			return fmt.Errorf("sign-pdf requires options with signatureData")
+		}
+		if toolType == "protect-pdf" {
+			return fmt.Errorf("protect-pdf requires options with a password (or userPassword/ownerPassword)")
+		}
+		if toolType == "unlock-pdf" {
+			return fmt.Errorf("unlock-pdf requires options with the current password")
 		}
 		return nil
 	}
@@ -117,6 +124,10 @@ func validateToolOptions(toolType string, raw string) error {
 		return validatePdfToImageOptions(raw)
 	case "sign-pdf":
 		return validateSignOptions(raw)
+	case "protect-pdf":
+		return validateProtectOptions(raw)
+	case "unlock-pdf":
+		return validateUnlockOptions(raw)
 	default:
 		return nil
 	}
@@ -378,5 +389,104 @@ func validateScanOptions(raw string) error {
 		}
 	}
 
+	return nil
+}
+
+// Password length bounds for protect-pdf/unlock-pdf. The minimum makes the
+// documented "≥ 4 characters" contract real for newly protected files; the
+// cap bounds the key-derivation work a hostile payload can demand.
+// NOTE: mirrored in organize-pdf/processing/processing_edit.go — duplicated
+// by design, no shared DTOs across services.
+const (
+	minProtectPasswordLen = 4
+	maxProtectPasswordLen = 128
+	// maxUnlockPasswordLen deliberately has no ≥4 partner: the existing
+	// PDF's password is whatever it is, including short legacy ones.
+	maxUnlockPasswordLen = 128
+)
+
+var (
+	// protectEncryptionModes selects the pdfcpu cipher/key length in the
+	// organize-pdf worker. TRUST BOUNDARY: the worker's copy lives in
+	// organize-pdf/processing/processing_edit.go parseProtectOptions —
+	// duplicated by design, keep in sync. "" means the default (aes-256).
+	protectEncryptionModes = map[string]bool{"": true, "aes-256": true, "aes-128": true, "rc4-128": true}
+)
+
+// protectPermissionsPayload mirrors the protect-pdf "permissions" object
+// (worker copy in organize-pdf/processing/processing_edit.go — duplicated by
+// design). Pointers so absent is distinguishable from explicit false;
+// allowEdit is the legacy alias the shipped web UI sends for allowModify.
+type protectPermissionsPayload struct {
+	AllowPrint    *bool `json:"allowPrint"`
+	AllowCopy     *bool `json:"allowCopy"`
+	AllowModify   *bool `json:"allowModify"`
+	AllowEdit     *bool `json:"allowEdit"`
+	AllowAnnotate *bool `json:"allowAnnotate"`
+	AllowAssemble *bool `json:"allowAssemble"`
+}
+
+// protectOptionsPayload mirrors the protect-pdf options contract (worker copy
+// in organize-pdf/processing/processing_edit.go — duplicated by design, no
+// shared DTOs). Unknown keys (confirmPassword etc.) are tolerated by struct
+// decode, matching every other validator.
+type protectOptionsPayload struct {
+	Password      string                     `json:"password"`
+	UserPassword  string                     `json:"userPassword"`
+	OwnerPassword string                     `json:"ownerPassword"`
+	Permissions   *protectPermissionsPayload `json:"permissions"`
+	Encryption    string                     `json:"encryption"`
+}
+
+// unlockOptionsPayload mirrors the unlock-pdf options contract (worker reads
+// the same single key via optionString in organize-pdf/processing).
+type unlockOptionsPayload struct {
+	Password string `json:"password"`
+}
+
+// validateProtectOptions enforces the protect-pdf wire contract at the public
+// boundary; the worker re-validates defensively with the same rules. Password
+// VALUES never appear in errors — only field names.
+func validateProtectOptions(raw string) error {
+	var opts protectOptionsPayload
+	if err := json.Unmarshal([]byte(raw), &opts); err != nil {
+		return fmt.Errorf("options must be a valid JSON object")
+	}
+	if opts.Password != "" && (opts.UserPassword != "" || opts.OwnerPassword != "") {
+		return fmt.Errorf("use either password or the userPassword/ownerPassword split, not both")
+	}
+	if opts.Password == "" && opts.UserPassword == "" && opts.OwnerPassword == "" {
+		return fmt.Errorf("protect-pdf requires a password (or userPassword/ownerPassword)")
+	}
+	for _, f := range []struct{ name, value string }{
+		{"password", opts.Password},
+		{"userPassword", opts.UserPassword},
+		{"ownerPassword", opts.OwnerPassword},
+	} {
+		if f.value == "" {
+			continue
+		}
+		if len(f.value) < minProtectPasswordLen || len(f.value) > maxProtectPasswordLen {
+			return fmt.Errorf("%s must be between %d and %d characters", f.name, minProtectPasswordLen, maxProtectPasswordLen)
+		}
+	}
+	if !protectEncryptionModes[strings.ToLower(strings.TrimSpace(opts.Encryption))] {
+		return fmt.Errorf("unsupported encryption %q — supported: aes-256, aes-128, rc4-128", opts.Encryption)
+	}
+	return nil
+}
+
+// validateUnlockOptions requires the current password, non-empty and bounded.
+func validateUnlockOptions(raw string) error {
+	var opts unlockOptionsPayload
+	if err := json.Unmarshal([]byte(raw), &opts); err != nil {
+		return fmt.Errorf("options must be a valid JSON object")
+	}
+	if opts.Password == "" {
+		return fmt.Errorf("unlock-pdf requires options with the current password")
+	}
+	if len(opts.Password) > maxUnlockPasswordLen {
+		return fmt.Errorf("password must be at most %d characters", maxUnlockPasswordLen)
+	}
 	return nil
 }

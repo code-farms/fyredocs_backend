@@ -217,6 +217,7 @@ sequenceDiagram
 
     Main->>Config: LoadConfig()
     Main->>Main: logger.Init("organize-pdf")
+    Main->>Main: pdfcpuapi.DisableConfigDir() — pin deterministic pdfcpu defaults (no host config.yml)
     Main->>Main: telemetry.Init("organize-pdf")
     Main->>DB: models.Connect() + Migrate()
     Main->>Redis: redisstore.Connect()
@@ -271,22 +272,26 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
+    participant JS as job-service
     participant NATS as JOBS_DISPATCH
     participant W as organize-pdf worker
     participant Proc as processing.ProcessFile
     participant PC as pdfcpu
     participant PG as PostgreSQL
 
-    NATS->>W: msg {toolType: protect-pdf or unlock-pdf, options: {password}}
-    alt missing/short password
-        W->>PG: status=failed, reason "missing password" / "password too short"
+    Note over JS: validateProtectOptions / validateUnlockOptions at job creation —<br/>missing/short/over-long password, mixed password+userPassword/ownerPassword,<br/>unknown encryption → 400 INVALID_OPTIONS (job never created)
+    JS->>NATS: msg {toolType: protect-pdf, options: {password | userPassword/ownerPassword, permissions, encryption}}<br/>or {toolType: unlock-pdf, options: {password}}
+    NATS->>W: Deliver msg
+    alt invalid options (payload bypassed job-service — defence in depth)
+        W->>W: parseProtectOptions re-runs the same rules
+        W->>PG: status=failed, reason "missing password" / "password must be between 4 and 128 characters" / mixed forms / bad encryption
     else
         W->>W: Download input key from uploads bucket → scratch/in
-        W->>Proc: ProcessFile(toolType, [scratch/in/in.pdf], {password}, scratch/out)
+        W->>Proc: ProcessFile(toolType, [scratch/in/in.pdf], options, scratch/out)
         alt protect-pdf
-            Proc->>PC: pdfcpu encrypt with user/owner password
+            Proc->>PC: pdfcpu encrypt — AES-256 (default) / AES-128 / RC4-128,<br/>user + owner passwords (owner falls back to user), permission flags (Table 22 bits)
         else unlock-pdf
-            Proc->>PC: pdfcpu decrypt with provided password
+            Proc->>PC: pdfcpu decrypt — accepts the user OR owner password (both fields set)
         end
         PC-->>W: scratch/out/&lt;jobId&gt;.pdf
         W->>W: Upload to outputs bucket jobs/&lt;jobId&gt;/&lt;jobId&gt;.pdf

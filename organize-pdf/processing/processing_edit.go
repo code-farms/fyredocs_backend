@@ -16,13 +16,178 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
 
-// encryptPDF applies password protection. The password is a user secret and must
+// protectPermissions mirrors the wire "permissions" object. Pointer fields so
+// an absent key is distinguishable from an explicit false — allowPrint
+// defaults to TRUE (the shipped web UI's default), the rest to false.
+//
+// NOTE: duplicated by design (no shared DTOs across services) — the
+// job-service trust boundary keeps its own copy in
+// job-service/handlers/tool_options.go; keep the two rule-for-rule in sync.
+type protectPermissions struct {
+	AllowPrint  *bool `json:"allowPrint"`
+	AllowCopy   *bool `json:"allowCopy"`
+	AllowModify *bool `json:"allowModify"`
+	// AllowEdit is the legacy alias the shipped web UI sends; it only
+	// applies when allowModify is absent.
+	AllowEdit     *bool `json:"allowEdit"`
+	AllowAnnotate *bool `json:"allowAnnotate"`
+	AllowAssemble *bool `json:"allowAssemble"`
+}
+
+// protectOptions mirrors the protect-pdf wire contract. Unknown keys
+// (confirmPassword etc.) are tolerated by struct decoding on purpose.
+type protectOptions struct {
+	// Password is the legacy single-password form: user == owner.
+	Password      string              `json:"password"`
+	UserPassword  string              `json:"userPassword"`
+	OwnerPassword string              `json:"ownerPassword"`
+	Permissions   *protectPermissions `json:"permissions"`
+	// Encryption is one of "", "aes-256" (default), "aes-128", "rc4-128".
+	Encryption string `json:"encryption"`
+}
+
+// protectSettings is the fully resolved encryption plan handed to encryptPDF —
+// every field is explicit so the output never depends on pdfcpu's config.
+type protectSettings struct {
+	UserPW           string
+	OwnerPW          string
+	Permissions      model.PermissionFlags
+	EncryptUsingAES  bool
+	EncryptKeyLength int
+}
+
+// Password length bounds. The minimum makes the documented "≥ 4 characters"
+// contract real; the cap bounds the key-derivation work a hostile payload can
+// demand. NOTE: mirrored in job-service/handlers/tool_options.go.
+const (
+	minProtectPasswordLen = 4
+	maxProtectPasswordLen = 128
+)
+
+// permissionBits maps the wire toggles onto pdfcpu's PDF Table 22 flags,
+// starting from PermissionsNone (0xF0C3 — the always-set reserved bits).
+// Print/copy/annotate set both their rev2/rev3 bits, as pdfcpu's own
+// PermissionsPrint does; a nil object means "defaults" (print only).
+func permissionBits(p *protectPermissions) model.PermissionFlags {
+	if p == nil {
+		p = &protectPermissions{}
+	}
+	boolOf := func(v *bool, def bool) bool {
+		if v == nil {
+			return def
+		}
+		return *v
+	}
+	bits := model.PermissionsNone
+	if boolOf(p.AllowPrint, true) {
+		bits |= model.PermissionPrintRev2 | model.PermissionPrintRev3
+	}
+	if boolOf(p.AllowCopy, false) {
+		bits |= model.PermissionExtract | model.PermissionExtractRev3
+	}
+	modify := p.AllowModify
+	if modify == nil {
+		modify = p.AllowEdit
+	}
+	if boolOf(modify, false) {
+		bits |= model.PermissionModify
+	}
+	if boolOf(p.AllowAnnotate, false) {
+		bits |= model.PermissionModAnnFillForm | model.PermissionFillRev3
+	}
+	if boolOf(p.AllowAssemble, false) {
+		bits |= model.PermissionAssembleRev3
+	}
+	return bits
+}
+
+// checkPasswordLen enforces the shared bounds; the field name goes into the
+// error, the value never does (it is a secret).
+func checkPasswordLen(field, value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) < minProtectPasswordLen || len(value) > maxProtectPasswordLen {
+		return fmt.Errorf("%s must be between %d and %d characters", field, minProtectPasswordLen, maxProtectPasswordLen)
+	}
+	return nil
+}
+
+// parseProtectOptions resolves the protect-pdf wire options into an explicit
+// encryption plan. It is defence in depth behind the job-service validator
+// (job-service/handlers/tool_options.go — duplicated by design): a payload
+// that bypasses the API boundary still cannot reach pdfcpu half-validated.
+func parseProtectOptions(options map[string]interface{}) (protectSettings, error) {
+	raw, err := json.Marshal(options)
+	if err != nil {
+		return protectSettings{}, fmt.Errorf("invalid protect options: %w", err)
+	}
+	var opts protectOptions
+	if err := json.Unmarshal(raw, &opts); err != nil {
+		return protectSettings{}, fmt.Errorf("invalid protect options: %w", err)
+	}
+
+	if opts.Password != "" && (opts.UserPassword != "" || opts.OwnerPassword != "") {
+		return protectSettings{}, fmt.Errorf("use either password or the userPassword/ownerPassword split, not both")
+	}
+	if opts.Password == "" && opts.UserPassword == "" && opts.OwnerPassword == "" {
+		return protectSettings{}, fmt.Errorf("protect-pdf requires a password (password, or userPassword/ownerPassword)")
+	}
+	for _, f := range []struct{ name, value string }{
+		{"password", opts.Password},
+		{"userPassword", opts.UserPassword},
+		{"ownerPassword", opts.OwnerPassword},
+	} {
+		if err := checkPasswordLen(f.name, f.value); err != nil {
+			return protectSettings{}, err
+		}
+	}
+
+	s := protectSettings{Permissions: permissionBits(opts.Permissions)}
+	if opts.Password != "" {
+		s.UserPW = opts.Password
+		s.OwnerPW = opts.Password
+	} else {
+		s.UserPW = opts.UserPassword
+		// pdfcpu's ENCRYPT refuses an empty owner password (pdfcpu
+		// pkg/pdfcpu/read.go handleUnencryptedFile), so the owner falls
+		// back to the user password when only that was given. An empty
+		// USER password is the point: the file opens freely but stays
+		// permission-restricted.
+		s.OwnerPW = opts.OwnerPassword
+		if s.OwnerPW == "" {
+			s.OwnerPW = opts.UserPassword
+		}
+	}
+
+	switch strings.ToLower(strings.TrimSpace(opts.Encryption)) {
+	case "", "aes-256":
+		s.EncryptUsingAES = true
+		s.EncryptKeyLength = 256
+	case "aes-128":
+		s.EncryptUsingAES = true
+		s.EncryptKeyLength = 128
+	case "rc4-128":
+		s.EncryptUsingAES = false
+		s.EncryptKeyLength = 128
+	default:
+		return protectSettings{}, fmt.Errorf("unsupported encryption %q — supported: aes-256, aes-128, rc4-128", opts.Encryption)
+	}
+	return s, nil
+}
+
+// encryptPDF applies password protection. Every security field is set
+// explicitly so the result never depends on a host config.yml (see the
+// DisableConfigDir note in main.go). Passwords are user secrets and must
 // never be logged or echoed into an error message.
-func encryptPDF(inputPath string, outputPath string, password string) error {
-	slog.Info("encrypting PDF", "input", inputPath)
+func encryptPDF(inputPath string, outputPath string, s protectSettings) error {
+	slog.Info("encrypting PDF", "input", inputPath, "aes", s.EncryptUsingAES, "keyLength", s.EncryptKeyLength)
 	conf := model.NewDefaultConfiguration()
-	conf.UserPW = password
-	conf.OwnerPW = password
+	conf.UserPW = s.UserPW
+	conf.OwnerPW = s.OwnerPW
+	conf.Permissions = s.Permissions
+	conf.EncryptUsingAES = s.EncryptUsingAES
+	conf.EncryptKeyLength = s.EncryptKeyLength
 	return api.EncryptFile(inputPath, outputPath, conf)
 }
 
@@ -32,7 +197,12 @@ func encryptPDF(inputPath string, outputPath string, password string) error {
 func decryptPDF(inputPath string, outputPath string, password string) error {
 	slog.Info("decrypting PDF", "input", inputPath)
 	conf := model.NewDefaultConfiguration()
+	// Both fields carry the one supplied secret: pdfcpu validates the owner
+	// password first, then the user password. With only UserPW set, a file
+	// whose owner password differs from its user password could never be
+	// unlocked BY its owner — the exact split protect-pdf now produces.
 	conf.UserPW = password
+	conf.OwnerPW = password
 	return api.DecryptFile(inputPath, outputPath, conf)
 }
 
