@@ -1,10 +1,13 @@
 package subscriber
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"analytics-service/internal/models"
 )
 
 type fakeConsumeContext struct {
@@ -72,4 +75,38 @@ func TestSubscribers_Stop_ClearsHandles(t *testing.T) {
 	if s.analytics != nil || s.jobs != nil {
 		t.Error("Stop should clear consumer handles to make subsequent calls a no-op")
 	}
+}
+
+// TestAuditedEventTypes_ServerOriginOnly guards the double-count boundary:
+// only events the client cannot observe may be mirrored into user_activity.
+// If a client-observable event (login, signup, job lifecycle) appears here,
+// every occurrence will be recorded twice — once by the client SDK's ingest
+// and once by this subscriber.
+func TestAuditedEventTypes_ServerOriginOnly(t *testing.T) {
+	clientObservable := []string{"user.login", "user.signup", "job.created", "job.completed", "job.failed"}
+	for _, evt := range clientObservable {
+		if _, ok := auditedEventTypes[evt]; ok {
+			t.Errorf("client-observable event %q must not be subscriber-mapped (double count)", evt)
+		}
+	}
+
+	expected := map[string]string{
+		"user.refresh_reuse":            "auth.refresh_reuse",
+		"user.password_reset_completed": "auth.password_reset",
+		"user.proxy_login":              "auth.proxy_login",
+		"plan.changed":                  "plan.changed",
+		"plan.limit_hit":                "plan.limit_hit",
+	}
+	for from, want := range expected {
+		if got := auditedEventTypes[from]; got != want {
+			t.Errorf("auditedEventTypes[%q] = %q, want %q", from, got, want)
+		}
+	}
+}
+
+// TestRecordAuditActivity_UnmappedTypeIsNoop proves the mapping check happens
+// before any database access: models.DB is nil in tests, so reaching the
+// Create call would panic.
+func TestRecordAuditActivity_UnmappedTypeIsNoop(t *testing.T) {
+	recordAuditActivity(context.Background(), &models.AnalyticsEvent{EventType: "user.login"})
 }

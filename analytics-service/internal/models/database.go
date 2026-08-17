@@ -72,6 +72,7 @@ func legacyAutoMigrate() {
 		&AnalyticsEvent{},
 		&DailyMetric{},
 		&APIMetricSample{},
+		&UserActivity{},
 	); err != nil {
 		slog.Error("Database migration failed", "error", err)
 		os.Exit(1)
@@ -85,6 +86,15 @@ func legacyAutoMigrate() {
 		`CREATE INDEX IF NOT EXISTS idx_event_type_created ON analytics_events (event_type, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_event_user_created ON analytics_events (user_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_event_tool_created ON analytics_events (tool_type, created_at)`,
+		// user_activity indexes mirror 00002_user_activity.sql — GORM tags
+		// cannot express the partial unique or DESC forms, so dev parity
+		// lives here. NOTE: keep in sync with internal/migrations/00002_user_activity.sql.
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ua_client_event ON user_activity (client_event_id) WHERE client_event_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_ua_user_created ON user_activity (user_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_ua_document_created ON user_activity (document_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_ua_event_created ON user_activity (event_type, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_ua_session ON user_activity (session_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_ua_correlation ON user_activity (correlation_id)`,
 	}
 	for _, idx := range compositeIndexes {
 		if err := DB.Exec(idx).Error; err != nil {

@@ -215,6 +215,15 @@ func serviceRoutes(u upstreams) []routeConfig {
 			targetBasePath: "/api/dashboard",
 			targetURL:      u.analytics,
 		},
+		{
+			// Activity audit trail: batch ingest (authenticated or guest) and
+			// the user-scoped feed. Guest access is intentional — the handler
+			// derives identity from the AuthContext, so anonymous callers
+			// produce guest rows rather than being rejected at the edge.
+			prefix:         "/api/activity",
+			targetBasePath: "/api/activity",
+			targetURL:      u.analytics,
+		},
 	}
 }
 

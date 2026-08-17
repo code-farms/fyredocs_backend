@@ -42,7 +42,38 @@ Two observability responsibilities live here so no standalone Alertmanager/expor
 | `job.failed` | worker services (via JOBS_EVENTS) | Job processing failed (includes UserID) |
 | `plan.limit_hit` | job-service | User hit plan limit (file size or file count) |
 
+### Activity audit trail
+
+Alongside the lossy analytics pipeline, the service owns `user_activity` — an
+idempotent audit trail of meaningful user actions. It has two write paths:
+
+- **Client batch ingest** (`POST /api/activity/events`): web/mobile SDKs
+  submit batches of up to 50 events. Each event carries a client-minted
+  `clientEventId`; inserts use `ON CONFLICT DO NOTHING` against a partial
+  unique index, so retried batches deduplicate instead of duplicating.
+  Identity (user_id / is_guest) always comes from the verified AuthContext,
+  never the body — anonymous callers produce guest rows. Acceptance is
+  per-event: invalid events are rejected individually
+  (`data.rejected[{index,reason}]`) without failing the batch. Event types are
+  validated against a pattern + domain allowlist
+  (`internal/activity/catalog.go`); metadata keys matching
+  `password|token|secret|content|text|prompt|…` are stripped at ingest.
+- **Subscriber mapping**: after persisting an analytics event, the subscriber
+  mirrors the server-origin security/plan subset (`user.refresh_reuse`,
+  `user.password_reset_completed`, `user.proxy_login`, `plan.changed`,
+  `plan.limit_hit`) into `user_activity` with `platform='server'`. Only events
+  clients cannot observe are mapped — client-observable events (logins, job
+  lifecycle) are owned by the client SDKs, or every login would be counted
+  twice. This mirror write is best-effort: a failure is logged and swallowed,
+  never NAKed, because the analytics row is already committed.
+
 ## Routes
+
+### Activity (authenticated or guest)
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/activity/events` | Batch ingest (≤50 events, ≤128KB body, ≤4KB metadata/event). Returns `{accepted, deduplicated, rejected[]}`. Anonymous → guest rows. |
+| GET | `/api/activity/me?eventType=&status=&from=&to=&page=&limit=` | The caller's own activity, newest first, standard pagination meta. Requires a non-guest login (401 otherwise). `from`/`to` accept RFC3339 or `YYYY-MM-DD`; a bare `to` date covers its whole day. |
 
 ### Unified Dashboard (any authenticated user)
 | Method | Path | Description |
@@ -63,6 +94,8 @@ Behaviour by caller:
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/admin/authz` | Lightweight authorization probe — returns 200 for super-admins, 401/403 otherwise. Does no work; exists so the Caddy edge can `forward_auth` the `/grafana/*` observability embed through the gateway and admit only super-admins. See [observability.md](../architecture/observability.md#in-app-embedding-admin-observability-tab). |
+| GET | `/admin/activity?page=&limit=&userId=&eventType=&featureId=&toolId=&documentId=&status=&platform=&sessionId=&correlationId=&search=&from=&to=&sort=&order=` | Full `user_activity` audit trail for the admin dashboard. All filters exact-match except `search` (ILIKE over event_type / failure_reason / correlation_id). `sort` ∈ occurredAt\|createdAt\|eventType\|status\|platform (allowlisted — unknown values fall back to occurredAt), `order` asc\|desc, `limit` ≤100, page ≤200. An unparseable `userId` matches nothing rather than everything. |
+| GET | `/admin/activity/export?format=csv\|json` + all `/admin/activity` filters | Streams the filtered audit trail as an attachment, hard-capped at 10,000 rows. **Self-auditing and fail-closed**: an `admin.activity_exported` row (admin id, filters, rowCount, format) is written BEFORE any data streams; if that write fails, the export is refused. |
 | GET | `/admin/metrics/overview` | Today's summary (signups, DAU, jobs, errors) |
 | GET | `/admin/metrics/daily?from=YYYY-MM-DD&to=YYYY-MM-DD` | Daily aggregated metrics |
 | GET | `/admin/metrics/tools?days=30` | Tool usage breakdown |
@@ -124,6 +157,31 @@ See [schema-migrations.md](../architecture/schema-migrations.md).
 | idx_event_created_user | (created_at, user_id) WHERE user_id IS NOT NULL AND is_guest = false | DAU/WAU/MAU distinct user counts |
 | idx_event_metadata_jobid | (metadata->>'jobId') WHERE metadata->>'jobId' IS NOT NULL | Processing time correlation |
 
+### user_activity
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Primary key (UUIDv7, time-ordered) |
+| client_event_id | TEXT | Client idempotency key; NULL for server-origin rows. Partial unique index `idx_ua_client_event` is the dedupe authority. |
+| user_id | UUID | Actor; NULL for guests |
+| is_guest | BOOLEAN | Guest actor flag |
+| session_id | TEXT | Opaque client session grouping key (indexed) |
+| event_type | TEXT | `domain.action` catalog name (indexed with created_at) |
+| feature_id / tool_id / action | TEXT | Feature/tool context (tool_id matches the frontend ToolId registry) |
+| entity_type / entity_id / document_id | TEXT | Target of the action (document_id indexed with created_at) |
+| status | TEXT | `started` \| `success` \| `failed` \| `cancelled` |
+| failure_reason / error_code | TEXT | Failure context (reason capped at 1KB) |
+| old_value / new_value | JSONB | Settings scalars only, capped at 1KB each |
+| metadata | JSONB | Whitelisted event data, ≤4KB, sensitive keys stripped at ingest |
+| platform | TEXT | `web` \| `ios` \| `android` \| `server` (server is reserved for subscriber writes) |
+| device_type / app_version | TEXT | Client context |
+| correlation_id | TEXT | Cross-event linkage, e.g. jobId (indexed) |
+| occurred_at | TIMESTAMPTZ | Client clock, clamped to ±24h of server time at ingest; feed ordering |
+| created_at | TIMESTAMPTZ | Server write time; retention authority |
+
+Indexes: `(user_id, created_at DESC)`, `(document_id, created_at DESC)`,
+`(event_type, created_at DESC)`, `(session_id)`, `(correlation_id)`, plus the
+partial unique on `client_event_id`.
+
 ### daily_metrics
 | Column | Type | Description |
 |--------|------|-------------|
@@ -163,6 +221,7 @@ older than `API_METRIC_RETENTION_DAYS`.
 | SERVICE_URLS | api-gateway=http://api-gateway:8080,auth-service=http://auth-service:8086,job-service=http://job-service:8081,convert-from-pdf=http://convert-from-pdf:8082,convert-to-pdf=http://convert-to-pdf:8083,organize-pdf=http://organize-pdf:8084,optimize-pdf=http://optimize-pdf:8085 | Service name=URL pairs for performance scraping |
 | API_GATEWAY_METRICS_URL | http://api-gateway:8080/metrics | API gateway Prometheus metrics URL (used by `/admin/metrics/api-performance` and the API metrics sampler) |
 | API_SAMPLE_INTERVAL | 60s | How often the API metrics sampler scrapes the gateway and writes an `api_metric_samples` row |
+| ACTIVITY_RETENTION_DAYS | 180 | Daily `user_activity` retention sweep window (by `created_at`, batched deletes of 5k). `<=0` disables the sweep. `analytics_events` is unaffected. |
 | API_METRIC_RETENTION_DAYS | 30 | How long `api_metric_samples` rows are kept before the sampler prunes them |
 | PLAN_PRICES | guest=0,free=0,pro=12 | Comma-separated `plan=monthlyPrice` pairs used to compute **estimated** revenue (MRR/ARR). No billing integration. |
 | PLAN_CURRENCY | USD | Currency code reported with estimated revenue figures. |

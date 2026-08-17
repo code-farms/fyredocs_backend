@@ -52,7 +52,8 @@ Telemetry → Metrics → Request-ID → SecurityHeaders
             ├─ /api/orgs/*                                  → USER_SERVICE_URL
             ├─ /api/notifications/*                         → NOTIFICATION_SERVICE_URL
             ├─ /admin/*                                     → ANALYTICS_SERVICE_URL
-            └─ /api/dashboard                               → ANALYTICS_SERVICE_URL  (role-aware, any authenticated user)
+            ├─ /api/dashboard                               → ANALYTICS_SERVICE_URL  (role-aware, any authenticated user)
+            └─ /api/activity/*                              → ANALYTICS_SERVICE_URL  (activity audit: ingest + personal feed)
 ```
 
 ## Routing Configuration
@@ -80,6 +81,7 @@ All `/api/*` traffic is proxied to **job-service**. Workers are not exposed publ
 | `/api/notifications/*` | `NOTIFICATION_SERVICE_URL` | In-app notification feed + SSE bell |
 | `/admin/*` | `ANALYTICS_SERVICE_URL` | Admin / analytics dashboards (super-admin only, enforced by the service) |
 | `/api/dashboard` | `ANALYTICS_SERVICE_URL` | Unified role-aware dashboard summary; the service filters by `X-User-Role` (admin/super-admin → system KPIs, user → personal KPIs, guest → 403) |
+| `/api/activity/*` | `ANALYTICS_SERVICE_URL` | Activity audit trail: `POST /api/activity/events` batch ingest (authenticated **or guest** — the service derives identity from the AuthContext, anonymous → guest rows) and `GET /api/activity/me` personal feed (service enforces login). Rate-limited by the standard per-plan `/api/*` limiter. |
 | `/api/config/flags` | api-gateway (local) | Feature flags (Phase 10) — serves `FEATURE_FLAGS_JSON` verbatim in the standard envelope; PUBLIC (pre-auth, guests included); `Cache-Control: max-age=300`; also at `/api/v1/config/flags` |
 | `/healthz` | api-gateway (local) | Liveness — static `200 {"status":"ok"}`, no dependency checks |
 | `/readyz` | api-gateway (local) | Readiness — pings Redis (503 if unreachable) |
