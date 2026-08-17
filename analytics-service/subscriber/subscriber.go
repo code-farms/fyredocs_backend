@@ -16,6 +16,7 @@ import (
 	"fyredocs/shared/queue"
 	"fyredocs/shared/telemetry"
 
+	"analytics-service/internal/activity"
 	"analytics-service/internal/models"
 )
 
@@ -189,7 +190,51 @@ func handleAnalyticsEvent(ctx context.Context, msg jetstream.Msg) {
 		return
 	}
 
+	recordAuditActivity(ctx, &record)
+
 	_ = msg.Ack()
+}
+
+// auditedEventTypes maps analytics event names to their user_activity audit
+// names for the server-origin subset: security and plan events the client
+// cannot observe (and therefore cannot ingest itself). Client-observable
+// events are deliberately absent — clients own those writes, and mapping them
+// here too would double-count every login.
+var auditedEventTypes = map[string]string{
+	"user.refresh_reuse":            "auth.refresh_reuse",
+	"user.password_reset_completed": "auth.password_reset",
+	"user.proxy_login":              "auth.proxy_login",
+	"plan.changed":                  "plan.changed",
+	"plan.limit_hit":                "plan.limit_hit",
+}
+
+// recordAuditActivity mirrors a security/plan analytics event into the
+// user_activity audit trail. Best-effort by design: the analytics row is
+// already committed and ACK depends on it alone, so a failure here is logged
+// and swallowed — NAKing would redeliver and duplicate the analytics row,
+// which has no idempotency key.
+func recordAuditActivity(ctx context.Context, record *models.AnalyticsEvent) {
+	auditType, ok := auditedEventTypes[record.EventType]
+	if !ok {
+		return
+	}
+
+	row := models.UserActivity{
+		UserID:     record.UserID,
+		IsGuest:    record.IsGuest,
+		EventType:  auditType,
+		Status:     activity.StatusSuccess,
+		Metadata:   record.Metadata,
+		Platform:   "server",
+		OccurredAt: record.CreatedAt,
+	}
+	if record.JobID != nil {
+		row.CorrelationID = record.JobID.String()
+	}
+
+	if err := models.DB.WithContext(ctx).Create(&row).Error; err != nil {
+		slog.Error("failed to persist audit activity", "eventType", auditType, "error", err)
+	}
 }
 
 // handleJobEvent records a job lifecycle transition for reporting. Events are

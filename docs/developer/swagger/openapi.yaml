@@ -63,6 +63,9 @@ tags:
     prefix; the returned storage key is registered with document-service
 - name: Admin Analytics
   description: Admin dashboard metrics (requires super-admin role via JWT authentication)
+- name: Activity
+  description: User activity audit trail (analytics-service) — batch event ingest from web/mobile
+    SDKs and the per-user activity feed
 - name: Documents
   description: Persistent document library — documents, folders, tags, and exports (document-service)
 - name: Organizations
@@ -2792,6 +2795,214 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/APIResponse'
+  /admin/activity:
+    get:
+      tags:
+      - Admin Analytics
+      summary: Full user activity audit trail (paginated, filterable)
+      operationId: adminActivity
+      parameters:
+      - name: Authorization
+        in: header
+        required: true
+        description: JWT cookie auth with super-admin role required
+        schema:
+          type: string
+      - name: page
+        in: query
+        schema: {type: integer, default: 1}
+      - name: limit
+        in: query
+        schema: {type: integer, default: 50, maximum: 100}
+      - name: userId
+        in: query
+        description: Exact user UUID; an unparseable value matches nothing
+        schema: {type: string}
+      - name: eventType
+        in: query
+        schema: {type: string}
+      - name: featureId
+        in: query
+        schema: {type: string}
+      - name: toolId
+        in: query
+        schema: {type: string}
+      - name: documentId
+        in: query
+        schema: {type: string}
+      - name: status
+        in: query
+        schema: {type: string, enum: [started, success, failed, cancelled]}
+      - name: platform
+        in: query
+        schema: {type: string, enum: [web, ios, android, server]}
+      - name: sessionId
+        in: query
+        schema: {type: string}
+      - name: correlationId
+        in: query
+        schema: {type: string}
+      - name: search
+        in: query
+        description: ILIKE over event_type / failure_reason / correlation_id
+        schema: {type: string}
+      - name: from
+        in: query
+        schema: {type: string}
+      - name: to
+        in: query
+        schema: {type: string}
+      - name: sort
+        in: query
+        schema: {type: string, enum: [occurredAt, createdAt, eventType, status, platform], default: occurredAt}
+      - name: order
+        in: query
+        schema: {type: string, enum: [asc, desc], default: desc}
+      responses:
+        '200':
+          description: Activity list with pagination meta
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+  /admin/activity/export:
+    get:
+      tags:
+      - Admin Analytics
+      summary: Export the filtered audit trail (CSV or JSON attachment)
+      description: 'Streams up to 10,000 filtered user_activity rows as a download.
+        Self-auditing and fail-closed: an admin.activity_exported row (admin id,
+        filters, rowCount, format) is written before any data streams; if that
+        audit write fails, the export is refused. Accepts every /admin/activity
+        filter parameter.
+
+        '
+      operationId: adminActivityExport
+      parameters:
+      - name: Authorization
+        in: header
+        required: true
+        description: JWT cookie auth with super-admin role required
+        schema:
+          type: string
+      - name: format
+        in: query
+        schema: {type: string, enum: [csv, json], default: csv}
+      responses:
+        '200':
+          description: File attachment (text/csv or application/json)
+        '400':
+          description: Unknown format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+  /api/activity/events:
+    post:
+      tags:
+      - Activity
+      summary: Batch-ingest user activity events
+      description: 'Accepts up to 50 client activity events per request (body ≤128KB,
+
+        metadata ≤4KB/event). Identity comes exclusively from the verified auth
+
+        context — anonymous callers produce guest rows. Acceptance is per-event:
+
+        invalid events are rejected individually without failing the batch, and
+
+        retried batches deduplicate on clientEventId.
+
+        '
+      operationId: ingestActivity
+      security:
+      - CookieAuth: []
+      - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - events
+              properties:
+                events:
+                  type: array
+                  maxItems: 50
+                  items:
+                    $ref: '#/components/schemas/ActivityEventInput'
+      responses:
+        '200':
+          description: 'Batch result: `data.accepted`, `data.deduplicated`, `data.rejected[{index,reason}]`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        '400':
+          description: Empty batch, more than 50 events, or unparseable/oversized body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+  /api/activity/me:
+    get:
+      tags:
+      - Activity
+      summary: The authenticated user's activity feed
+      description: 'Returns the caller''s own user_activity rows, newest first, with
+
+        standard pagination meta. Guests receive 401 — guest rows carry no user id
+
+        to scope a personal feed to.
+
+        '
+      operationId: getMyActivity
+      security:
+      - CookieAuth: []
+      parameters:
+      - name: eventType
+        in: query
+        schema:
+          type: string
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum: [started, success, failed, cancelled]
+      - name: from
+        in: query
+        description: RFC3339 timestamp or YYYY-MM-DD
+        schema:
+          type: string
+      - name: to
+        in: query
+        description: RFC3339 timestamp or YYYY-MM-DD (a bare date covers its whole day)
+        schema:
+          type: string
+      - name: page
+        in: query
+        schema:
+          type: integer
+          default: 1
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 50
+          maximum: 200
+      responses:
+        '200':
+          description: Activity list with pagination meta
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        '401':
+          description: Not logged in (or guest session)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
   /auth/plan:
     put:
       tags:
@@ -4155,6 +4366,69 @@ components:
         type: integer
         format: int64
   schemas:
+    ActivityEventInput:
+      type: object
+      required:
+      - clientEventId
+      - eventType
+      - platform
+      properties:
+        clientEventId:
+          type: string
+          maxLength: 256
+          description: Client-minted idempotency key (unique per event, reused on retry)
+        eventType:
+          type: string
+          description: 'Lowercase domain.action name validated against the server catalog
+            (e.g. auth.login, job.started, share.link_created)'
+        sessionId:
+          type: string
+          maxLength: 256
+        featureId:
+          type: string
+        toolId:
+          type: string
+          description: Tool identifier from the frontend ToolId registry
+        action:
+          type: string
+        entityType:
+          type: string
+        entityId:
+          type: string
+        documentId:
+          type: string
+        status:
+          type: string
+          enum: [started, success, failed, cancelled]
+          default: success
+        failureReason:
+          type: string
+          maxLength: 1024
+        errorCode:
+          type: string
+        oldValue:
+          description: Settings scalar before the change (≤1KB)
+        newValue:
+          description: Settings scalar after the change (≤1KB)
+        metadata:
+          type: object
+          description: 'Whitelisted event data, ≤4KB. Keys matching password/token/secret/
+            content/text/prompt etc. are stripped server-side.'
+        platform:
+          type: string
+          enum: [web, ios, android]
+          description: '"server" is reserved for subscriber-written rows and rejected here'
+        deviceType:
+          type: string
+        appVersion:
+          type: string
+        correlationId:
+          type: string
+          description: Cross-event linkage, e.g. the jobId shared by job.started/job.completed
+        occurredAt:
+          type: string
+          format: date-time
+          description: Client clock; clamped server-side to ±24h of server time
     APIResponse:
       type: object
       required:

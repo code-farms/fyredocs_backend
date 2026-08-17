@@ -24,6 +24,7 @@ import (
 	"fyredocs/shared/telemetry"
 
 	"analytics-service/handlers"
+	"analytics-service/internal/activity"
 	"analytics-service/internal/apisampler"
 	"analytics-service/internal/models"
 	"analytics-service/internal/opsmetrics"
@@ -90,6 +91,13 @@ func main() {
 	defer stopOps()
 	opsDone := opsmetrics.Start(opsCtx, models.DB)
 
+	// Daily user_activity retention sweep (ACTIVITY_RETENTION_DAYS, default
+	// 180; <=0 disables). analytics_events is untouched — it has its own
+	// aggregation lifecycle.
+	retentionCtx, stopRetention := context.WithCancel(context.Background())
+	defer stopRetention()
+	retentionDone := activity.StartRetention(retentionCtx, models.DB)
+
 	var denylist authverify.TokenDenylist
 	if config.GetEnvBool("AUTH_DENYLIST_ENABLED", true) {
 		denylist = authverify.NewRedisTokenDenylist(redisstore.Client, os.Getenv("AUTH_DENYLIST_PREFIX"))
@@ -155,8 +163,10 @@ func main() {
 	// or prune finishes instead of being abandoned mid-statement.
 	stopSampler()
 	stopOps()
+	stopRetention()
 	joinPoller("apisampler", samplerDone)
 	joinPoller("opsmetrics", opsDone)
+	joinPoller("activity-retention", retentionDone)
 	slog.Info("analytics-service exited")
 }
 

@@ -7,8 +7,10 @@ graph TB
         SUB["subscriber<br/>(2 consumers · DeliverNewPolicy)"]
         DISPATCHER["handleAnalyticsEvent · handleJobEvent"]
         HANDLERS["handlers/* — 14 admin endpoints"]
+        ACTIVITY["handlers/activity_ingest.go<br/>POST /api/activity/events · GET /api/activity/me"]
+        CATALOG["internal/activity<br/>event catalog + validation"]
         ROUTES["routes/routes.go"]
-        MODELS["internal/models<br/>analytics_events · daily_metrics"]
+        MODELS["internal/models<br/>analytics_events · daily_metrics · user_activity"]
         STARTPROBE["/healthz · /readyz · /metrics"]
     end
 
@@ -41,7 +43,12 @@ graph TB
     MODELS -->|GORM| PG
 
     GW -->|/admin/*| ROUTES
+    GW -->|/api/activity/*| ROUTES
     ROUTES --> HANDLERS
+    ROUTES --> ACTIVITY
+    ACTIVITY --> CATALOG
+    ACTIVITY --> MODELS
+    SUB -->|"security/plan subset → user_activity<br/>(best-effort mirror)"| MODELS
     HANDLERS --> MODELS
     HANDLERS --> STARTPROBE
 ```
@@ -70,7 +77,28 @@ sequenceDiagram
     NATS->>Sub: Deliver msg
     Sub->>Sub: handleAnalyticsEvent / handleJobEvent — unmarshal queue.AnalyticsEvent / queue.JobEvent
     Sub->>DB: INSERT analytics_events (event_type, user_id, tool_type, plan_name, file_size, metadata, created_at, persisted_at)
+    opt event_type ∈ {user.refresh_reuse, user.password_reset_completed, user.proxy_login, plan.changed, plan.limit_hit}
+        Sub->>DB: INSERT user_activity (platform='server', best-effort — failure logged, never NAKed)
+    end
     Sub->>NATS: ACK
+```
+
+## Activity Ingest Path (web/mobile SDKs)
+
+```mermaid
+sequenceDiagram
+    participant C as Client SDK (web / iOS / Android)
+    participant GW as api-gateway :8080
+    participant AS as analytics-service :8087
+    participant DB as PostgreSQL (user_activity)
+
+    C->>GW: POST /api/activity/events {events:[≤50]} (cookie or anonymous)
+    GW->>GW: Resolve AuthContext (anonymous passes through as guest) · per-plan rate limit
+    GW->>AS: Proxy
+    AS->>AS: Per-event validation: catalog domain allowlist · status · platform ∈ {web,ios,android} · size caps · strip sensitive metadata keys · clamp occurredAt ±24h
+    AS->>DB: Batch INSERT ... ON CONFLICT (client_event_id) DO NOTHING
+    DB-->>AS: RowsAffected = actually inserted
+    AS-->>C: 200 {accepted, deduplicated, rejected[{index,reason}]}
 ```
 
 ## Admin Read Path

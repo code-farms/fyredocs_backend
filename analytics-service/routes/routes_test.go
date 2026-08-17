@@ -190,3 +190,27 @@ func TestNewEndpoints_RequireAdminAuth(t *testing.T) {
 		})
 	}
 }
+
+// TestActivityRoutes_Registered pins the activity tier decisions: ingest must
+// accept anonymous callers (it 400s on an empty body, proving the request
+// reached the handler rather than an auth gate), and the personal feed must
+// turn anonymous callers away with 401 inside the handler.
+func TestActivityRoutes_Registered(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	SetupRouter(r)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/activity/events", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("anonymous POST /api/activity/events with empty body: code = %d, want 400", w.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/activity/me", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous GET /api/activity/me: code = %d, want 401", w.Code)
+	}
+}

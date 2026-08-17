@@ -45,6 +45,14 @@ func SetupRouter(r *gin.Engine) {
 	// sits outside the super-admin-only /admin group.
 	r.GET("/api/dashboard", handlers.Dashboard)
 
+	// Activity audit trail. Ingest sits outside every auth group on purpose:
+	// guest tool usage is a real audit subject, and the handler takes identity
+	// exclusively from the resolved AuthContext (anonymous → guest row), never
+	// from the request body. The personal feed enforces login inside the
+	// handler, same tier as /api/dashboard.
+	r.POST("/api/activity/events", handlers.IngestActivity)
+	r.GET("/api/activity/me", handlers.GetMyActivity)
+
 	admin := r.Group("/admin")
 	admin.Use(adminAuth())
 	{
@@ -73,6 +81,8 @@ func SetupRouter(r *gin.Engine) {
 		admin.GET("/metrics/server-performance", handlers.ServerPerformance)
 		admin.GET("/metrics/api-performance", handlers.APIPerformance)
 		admin.GET("/metrics/api-trends", handlers.APITrends)
+		admin.GET("/activity", handlers.AdminListActivity)
+		admin.GET("/activity/export", handlers.AdminExportActivity)
 		admin.GET("/metrics/executive", handlers.ExecutiveOverview)
 		admin.GET("/metrics/revenue", handlers.RevenueMetrics)
 		admin.GET("/metrics/acquisition", handlers.AcquisitionMetrics)
