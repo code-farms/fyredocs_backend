@@ -44,6 +44,7 @@ func syntheticDocument(w, h int, quad Quad) *image.RGBA {
 }
 
 func TestDetectDocumentQuadSynthetic(t *testing.T) {
+	t.Parallel()
 	want := Quad{
 		TL: Point{0.15, 0.12},
 		TR: Point{0.88, 0.10},
@@ -69,6 +70,7 @@ func TestDetectDocumentQuadSynthetic(t *testing.T) {
 }
 
 func TestDetectDocumentQuadBlank(t *testing.T) {
+	t.Parallel()
 	img := image.NewRGBA(image.Rect(0, 0, 300, 400))
 	for y := 0; y < 400; y++ {
 		for x := 0; x < 300; x++ {
@@ -85,6 +87,7 @@ func TestDetectDocumentQuadBlank(t *testing.T) {
 }
 
 func TestDetectDocumentQuadNoise(t *testing.T) {
+	t.Parallel()
 	rng := rand.New(rand.NewSource(42))
 	img := image.NewRGBA(image.Rect(0, 0, 300, 400))
 	for y := 0; y < 400; y++ {
@@ -102,9 +105,24 @@ func TestDetectDocumentQuadNoise(t *testing.T) {
 }
 
 func TestDetectDocumentQuadTiny(t *testing.T) {
+	t.Parallel()
 	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
 	quad, conf := DetectDocumentQuad(img)
 	if conf != 0 || quad != FullImageQuad() {
 		t.Error("tiny image should return full-image fallback with confidence 0")
+	}
+}
+
+// BenchmarkDetectDocumentQuad guards the scan-detection hot path (blur → Sobel
+// → percentile threshold → Hough → quad selection) at the 500px working
+// resolution — this pipeline dominates per-page latency for document detection.
+func BenchmarkDetectDocumentQuad(b *testing.B) {
+	img := syntheticDocument(500, 500, Quad{
+		TL: Point{0.15, 0.12}, TR: Point{0.88, 0.10},
+		BR: Point{0.90, 0.88}, BL: Point{0.12, 0.90},
+	})
+	b.ReportAllocs()
+	for b.Loop() {
+		DetectDocumentQuad(img)
 	}
 }

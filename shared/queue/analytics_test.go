@@ -8,6 +8,7 @@ import (
 )
 
 func TestSubjectForAnalytics(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		eventType string
 		expected  string
@@ -26,6 +27,7 @@ func TestSubjectForAnalytics(t *testing.T) {
 }
 
 func TestAnalyticsEvent_Fields(t *testing.T) {
+	t.Parallel()
 	event := AnalyticsEvent{
 		EventType: "user.signup",
 		UserID:    "abc-123",
@@ -49,6 +51,7 @@ func TestAnalyticsEvent_Fields(t *testing.T) {
 // rows to their job.completed job-event rows so the reliability handler can
 // compute processing-duration percentiles.
 func TestAnalyticsEvent_JobIDRoundTrip(t *testing.T) {
+	t.Parallel()
 	in := AnalyticsEvent{
 		EventType: "job.created",
 		JobID:     "11111111-2222-3333-4444-555555555555",

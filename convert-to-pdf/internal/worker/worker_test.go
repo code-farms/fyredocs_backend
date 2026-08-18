@@ -4,10 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
+	"gorm.io/gorm/utils/tests"
 )
 
 func TestBackoffDuration(t *testing.T) {
@@ -332,4 +340,229 @@ func TestErrorCodeConstants(t *testing.T) {
 	if ErrCodeTimeout != "TIMEOUT" {
 		t.Errorf("ErrCodeTimeout = %q", ErrCodeTimeout)
 	}
+}
+
+// ─── Backoff drift guard and error-classification rows ──────────────────────
+//
+// NOTE: duplicated across the four PDF workers by design (CLAUDE.md §1).
+
+// TestBackoffTableMatchesConsumerConfig is the drift guard the comments on both
+// sites ask for: the package-level backoff table (NakWithDelay timing) and the
+// BackOff slice in Run's CreateOrUpdateConsumer call (ack-timeout redelivery
+// timing) must stay equal, but nothing in code links them. This pin holds one
+// side to the documented values; the compiler cannot reach the literal inside
+// Run, so a change to either site must come through this test.
+func TestBackoffTableMatchesConsumerConfig(t *testing.T) {
+	// Mirrors the BackOff literal in Run's ConsumerConfig (worker.go).
+	want := []time.Duration{10 * time.Second, 30 * time.Second, 2 * time.Minute}
+	if len(backoff) != len(want) {
+		t.Fatalf("backoff table has %d entries, want %d — the BackOff slice in Run must change in the same commit", len(backoff), len(want))
+	}
+	for i := range want {
+		if backoff[i] != want[i] {
+			t.Errorf("backoff[%d] = %v, want %v — the BackOff slice in Run must change in the same commit", i, backoff[i], want[i])
+		}
+	}
+	// MaxDeliver semantics: handleFailure retries while deliveryCount < 4 (the
+	// consumer's MaxDeliver), passing attempt = deliveryCount-1 to
+	// backoffDuration. Deliveries 1..3 therefore consume attempts 0..2, so the
+	// table needs exactly MaxDeliver-1 entries for the two retry paths to agree
+	// without clamping.
+	const maxDeliver = 4 // mirrors MaxDeliver in Run's ConsumerConfig
+	if len(backoff) != maxDeliver-1 {
+		t.Errorf("backoff table has %d entries but MaxDeliver %d implies %d retries", len(backoff), maxDeliver, maxDeliver-1)
+	}
+	for delivery := 1; delivery < maxDeliver; delivery++ {
+		if got := backoffDuration(delivery - 1); got != backoff[delivery-1] {
+			t.Errorf("delivery %d: backoffDuration = %v, want table entry %v", delivery, got, backoff[delivery-1])
+		}
+	}
+}
+
+// TestClassifyErrorContextSentinels pins how the real context sentinels
+// classify (existing rows only cover hand-built errors.New strings):
+// DeadlineExceeded's message contains "deadline exceeded" and maps to TIMEOUT;
+// Canceled matches neither substring and falls through to CONVERSION_FAILED —
+// a cancelled job reports as a generic conversion failure, pinned current
+// behavior.
+func TestClassifyErrorContextSentinels(t *testing.T) {
+	if got := classifyError(context.DeadlineExceeded); got != ErrCodeTimeout {
+		t.Errorf("classifyError(context.DeadlineExceeded) = %q, want %q", got, ErrCodeTimeout)
+	}
+	if got := classifyError(context.Canceled); got != ErrCodeConversionFailed {
+		t.Errorf("classifyError(context.Canceled) = %q, want %q", got, ErrCodeConversionFailed)
+	}
+	// %w wrapping keeps the substring, so the classification survives wrapping.
+	if got := classifyError(fmt.Errorf("process: %w", context.DeadlineExceeded)); got != ErrCodeTimeout {
+		t.Errorf("classifyError(wrapped DeadlineExceeded) = %q, want %q", got, ErrCodeTimeout)
+	}
+}
+
+// TestIsRecoverableContextAndWrapped pins the retry decision for the real
+// context sentinels and for marked errors travelling through wrapping:
+// DeadlineExceeded implements Timeout() and is retried; Canceled carries no
+// transient signal and — per the permanent-by-default posture — is not.
+func TestIsRecoverableContextAndWrapped(t *testing.T) {
+	if !isRecoverable(context.DeadlineExceeded) {
+		t.Error("context.DeadlineExceeded should be recoverable (implements Timeout() bool)")
+	}
+	if isRecoverable(context.Canceled) {
+		t.Error("context.Canceled should not be recoverable (no transient signal)")
+	}
+	marked := markRecoverable(errors.New("connection reset"))
+	if !isRecoverable(fmt.Errorf("stage inputs: %w", marked)) {
+		t.Error("fmt.Errorf %w-wrapped marked error should stay recoverable")
+	}
+	if !isRecoverable(errors.Join(errors.New("cleanup failed"), marked)) {
+		t.Error("errors.Join-ed marked error should stay recoverable")
+	}
+	// Unknown errors default to permanent — the safe posture for a worker.
+	if isRecoverable(errors.New("exit status 1")) {
+		t.Error("unknown error should default to permanent")
+	}
+}
+
+// ─── Mid-job storage failure (resilience) ─────────────────────────────────────
+//
+// NOTE: this suite lives in convert-to-pdf ONLY. The four PDF workers duplicate
+// worker.go and its tests by design (CLAUDE.md §1), but this test exercises the
+// shared SHAPE of the pipeline — processMessage → storeOutput → handleFailure →
+// NAK/ack discipline — with heavy scaffolding (fake jetstream.Msg, dry-run gorm
+// handle, fake storage). That wiring is byte-identical across the workers, so
+// the resilience pin is written once here rather than four times: duplicating
+// the scaffolding would multiply maintenance surface without adding coverage.
+
+// jsFakeMsg is a hand-rolled jetstream.Msg double (the repo's no-gomock
+// convention, mirroring notification-service's fakeMsg) that records the
+// disposition processMessage gives the message.
+type jsFakeMsg struct {
+	data     []byte
+	meta     *jetstream.MsgMetadata
+	acks     int
+	naks     int
+	terms    int
+	nakDelay time.Duration
+}
+
+func (m *jsFakeMsg) Metadata() (*jetstream.MsgMetadata, error) { return m.meta, nil }
+func (m *jsFakeMsg) Data() []byte                              { return m.data }
+func (m *jsFakeMsg) Headers() nats.Header                      { return nil }
+func (m *jsFakeMsg) Subject() string                           { return "jobs.dispatch.convert-to-pdf" }
+func (m *jsFakeMsg) Reply() string                             { return "" }
+func (m *jsFakeMsg) Ack() error                                { m.acks++; return nil }
+func (m *jsFakeMsg) DoubleAck(context.Context) error           { m.acks++; return nil }
+func (m *jsFakeMsg) Nak() error                                { m.naks++; return nil }
+func (m *jsFakeMsg) NakWithDelay(d time.Duration) error        { m.naks++; m.nakDelay = d; return nil }
+func (m *jsFakeMsg) InProgress() error                         { return nil }
+func (m *jsFakeMsg) Term() error                               { m.terms++; return nil }
+func (m *jsFakeMsg) TermWithReason(string) error               { m.terms++; return nil }
+
+var _ jetstream.Msg = (*jsFakeMsg)(nil)
+
+// dryRunWorkerDB returns a gorm handle that builds SQL but never executes it
+// (DummyDialector + DryRun). The worker's status writes deliberately swallow DB
+// errors (see the DB-helpers comment in worker.go), so the test's observable
+// contract is the message disposition, not rows — the dry-run handle just keeps
+// those swallow-error paths from panicking on a nil DB.
+func dryRunWorkerDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(tests.DummyDialector{}, &gorm.Config{
+		DryRun: true,
+		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open dry-run gorm: %v", err)
+	}
+	return db
+}
+
+// TestProcessMessageStoreOutputFailure pins the worker's behavior when the
+// conversion SUCCEEDS but persisting the output to object storage fails
+// mid-job. storeOutput failures are wrapped with markRecoverable (upload
+// failures are network-ish), so handleFailure must NAK with the backoff delay
+// for the current delivery while deliveries remain under MaxDeliver — the
+// completed conversion work is retried, never silently discarded — and once
+// deliveries reach MaxDeliver (4) the job is terminal: the message is ACKED
+// (stop redelivery) and, with a live JetStream handle, a copy goes to the DLQ
+// before the ack. cfg.JS is nil here, so the DLQ publish is skipped by its nil
+// guard; the DLQ ordering itself is pinned by handleFailure's own comment and
+// the job-service DLQ handler tests.
+func TestProcessMessageStoreOutputFailure(t *testing.T) {
+	jobID := uuid.New()
+	payloadBytes, err := json.Marshal(JobPayload{
+		EventType:     "JobCreated",
+		JobID:         jobID.String(),
+		ToolType:      "word-to-pdf",
+		InputPaths:    []string{"users/u1/" + jobID.String() + "_input.docx"},
+		CorrelationID: "corr-storeoutput",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// run drives one processMessage with an upload-erroring storage fake and a
+	// ProcessFunc that genuinely produces an output file, returning the message
+	// double for disposition assertions.
+	run := func(t *testing.T, numDelivered uint64) (*jsFakeMsg, *bool) {
+		t.Helper()
+		store := newFakeStorage()
+		store.uploadErr = errors.New("connection reset by peer")
+		processed := false
+		cfg := WorkerConfig{
+			ServiceName:  "convert-to-pdf",
+			AllowedTools: map[string]bool{"word-to-pdf": true},
+			DB:           dryRunWorkerDB(t),
+			Storage:      store,
+			Process: func(_ context.Context, _ uuid.UUID, _ string, _ []string, _ map[string]interface{}, outputDir string, _ ProgressFunc) (*ProcessResult, error) {
+				processed = true
+				out := filepath.Join(outputDir, "result.pdf")
+				if err := os.WriteFile(out, []byte("%PDF-1.7"), 0o644); err != nil {
+					return nil, err
+				}
+				return &ProcessResult{OutputPath: out}, nil
+			},
+		}
+		msg := &jsFakeMsg{data: payloadBytes, meta: &jetstream.MsgMetadata{NumDelivered: numDelivered}}
+		processMessage(context.Background(), cfg, msg, testLogger())
+		if !processed {
+			t.Fatal("ProcessFunc never ran — the failure under test happens AFTER a successful conversion")
+		}
+		if len(store.uploads) != 0 {
+			t.Fatalf("uploads recorded despite injected error: %v", store.uploads)
+		}
+		return msg, &processed
+	}
+
+	t.Run("first delivery is NAK'd with the first backoff delay", func(t *testing.T) {
+		msg, _ := run(t, 1)
+		if msg.naks != 1 {
+			t.Fatalf("naks = %d, want 1 (recoverable failure must be retried)", msg.naks)
+		}
+		if msg.nakDelay != backoffDuration(0) {
+			t.Errorf("nak delay = %v, want %v (backoff table entry for delivery 1)", msg.nakDelay, backoffDuration(0))
+		}
+		if msg.acks != 0 || msg.terms != 0 {
+			t.Errorf("acks = %d, terms = %d, want 0/0 — an acked or termed message would never redeliver", msg.acks, msg.terms)
+		}
+	})
+
+	t.Run("third delivery still retries with the last backoff entry", func(t *testing.T) {
+		msg, _ := run(t, 3)
+		if msg.naks != 1 {
+			t.Fatalf("naks = %d, want 1 (deliveries under MaxDeliver keep retrying)", msg.naks)
+		}
+		if msg.nakDelay != backoffDuration(2) {
+			t.Errorf("nak delay = %v, want %v", msg.nakDelay, backoffDuration(2))
+		}
+	})
+
+	t.Run("delivery at MaxDeliver is terminal: acked, not NAK'd", func(t *testing.T) {
+		msg, _ := run(t, 4)
+		if msg.acks != 1 {
+			t.Fatalf("acks = %d, want 1 (retries exhausted → ack to stop redelivery)", msg.acks)
+		}
+		if msg.naks != 0 || msg.terms != 0 {
+			t.Errorf("naks = %d, terms = %d, want 0/0 on the terminal path", msg.naks, msg.terms)
+		}
+	})
 }

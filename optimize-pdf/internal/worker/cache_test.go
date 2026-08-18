@@ -155,3 +155,97 @@ func TestTryServeFromCacheInvalidJSON(t *testing.T) {
 		t.Error("expected false on invalid cached JSON")
 	}
 }
+
+// ─── Cache-key security ──────────────────────────────────────────────────────
+//
+// NOTE: duplicated across the four PDF workers by design (CLAUDE.md §1).
+//
+// The cache key is the only thing separating one user's cached output from
+// another's: a collision serves user B a copy of user A's converted document.
+// These tests treat buildCacheKey as a security boundary, not a hash helper.
+
+// TestBuildCacheKeySameOptionsDifferentETags guards cross-user isolation: two
+// users running the same tool with identical options on different files must
+// never share a cache entry.
+func TestBuildCacheKeySameOptionsDifferentETags(t *testing.T) {
+	opts := json.RawMessage(`{"quality":"high"}`)
+	k1 := buildCacheKey("word-to-pdf", opts, []string{"etag-a1", "etag-a2"})
+	k2 := buildCacheKey("word-to-pdf", opts, []string{"etag-b1", "etag-b2"})
+	if k1 == k2 {
+		t.Error("same options with different input ETags must produce different keys")
+	}
+	// A subset of the same ETags is a different input set, not the same one.
+	k3 := buildCacheKey("word-to-pdf", opts, []string{"etag-a1"})
+	if k3 == k1 {
+		t.Error("fewer inputs sharing an ETag must produce a different key")
+	}
+}
+
+// TestBuildCacheKeyNoConcatenationAmbiguity is the cross-user cache-poisoning
+// check: if the ETag list were concatenated without a separator, ["a","bc"]
+// and ["ab","c"] would hash identically and one job could be served another
+// job's output. buildCacheKey writes a NUL after every element, so the field
+// boundaries must be unambiguous.
+func TestBuildCacheKeyNoConcatenationAmbiguity(t *testing.T) {
+	opts := json.RawMessage(`{}`)
+	if buildCacheKey("merge-pdf", opts, []string{"a", "bc"}) ==
+		buildCacheKey("merge-pdf", opts, []string{"ab", "c"}) {
+		t.Error("ETag lists [a bc] and [ab c] collide — concatenation ambiguity enables cross-user cache poisoning")
+	}
+	// The tool/options boundary must be just as unambiguous: shifting a byte
+	// across it must change the key.
+	if buildCacheKey("merge-pdfx", json.RawMessage(`{}`), []string{"a"}) ==
+		buildCacheKey("merge-pdf", json.RawMessage(`x{}`), []string{"a"}) {
+		t.Error("tool/options boundary is ambiguous — a byte moved across it did not change the key")
+	}
+}
+
+// TestBuildCacheKeyNULInETagPinnedAmbiguity pins a known residual ambiguity:
+// an ETag containing a literal NUL byte is indistinguishable from two adjacent
+// ETags, because NUL doubles as the element separator. This is pinned rather
+// than fixed (testing-strategy.md convention) because S3/MinIO ETags are
+// hex/quoted-hex and can never contain NUL, so the collision is unreachable
+// with real storage. If the encoding is ever hardened (e.g. length-prefixed
+// elements), update this pin to assert inequality.
+func TestBuildCacheKeyNULInETagPinnedAmbiguity(t *testing.T) {
+	opts := json.RawMessage(`{}`)
+	k1 := buildCacheKey("merge-pdf", opts, []string{"a\x00b"})
+	k2 := buildCacheKey("merge-pdf", opts, []string{"a", "b"})
+	if k1 != k2 {
+		t.Error("pinned behavior changed: NUL-embedded ETag no longer collides with the split ETag list — update this pin alongside the encoding change")
+	}
+}
+
+// TestBuildCacheKeyOptionsKeyOrderCanonical asserts canonicalisation at the
+// buildCacheKey level (TestCanonicalOptions covers the helper alone): the same
+// options serialized differently must land on the same cache entry, otherwise
+// deduplication silently stops working for JSON emitted by different clients.
+func TestBuildCacheKeyOptionsKeyOrderCanonical(t *testing.T) {
+	etags := []string{"e1"}
+	k1 := buildCacheKey("word-to-pdf", json.RawMessage(`{"a":1,"b":"x"}`), etags)
+	k2 := buildCacheKey("word-to-pdf", json.RawMessage(`{"b":"x","a":1}`), etags)
+	if k1 != k2 {
+		t.Errorf("options key order must not affect the key: %q vs %q", k1, k2)
+	}
+	// Insignificant whitespace canonicalises away too.
+	k3 := buildCacheKey("word-to-pdf", json.RawMessage(`{ "a": 1, "b": "x" }`), etags)
+	if k3 != k1 {
+		t.Errorf("options whitespace must not affect the key: %q vs %q", k3, k1)
+	}
+}
+
+// TestBuildCacheKeyEmptyVsNilOptions pins that nil, zero-length, and `{}`
+// options all hash identically: a payload that omits options and one that
+// sends an empty object mean the same conversion and must share a cache entry.
+func TestBuildCacheKeyEmptyVsNilOptions(t *testing.T) {
+	etags := []string{"e1"}
+	kNil := buildCacheKey("word-to-pdf", nil, etags)
+	kZero := buildCacheKey("word-to-pdf", json.RawMessage{}, etags)
+	kObj := buildCacheKey("word-to-pdf", json.RawMessage(`{}`), etags)
+	if kNil != kObj {
+		t.Errorf("nil options key %q != empty-object options key %q", kNil, kObj)
+	}
+	if kZero != kObj {
+		t.Errorf("zero-length options key %q != empty-object options key %q", kZero, kObj)
+	}
+}

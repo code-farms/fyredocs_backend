@@ -1,0 +1,32 @@
+# Minimal, pinned linter set (testing program, 2026-08). Correctness linters
+# only — no style-war linters, per the repo's static-analysis policy in
+# docs/developer/architecture/testing-strategy.md. Run per module (the
+# workspace root is not a module): scripts/ci/02-static.sh does the loop.
+#
+# Pin the binary version in CI: golangci-lint v2.x (config version 2).
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - unused
+    - ineffassign
+  settings:
+    errcheck:
+      # The repo deliberately ignores best-effort error returns on logging,
+      # cleanup, and Close paths; flagging them would bury real findings.
+      check-type-assertions: false
+      check-blank: false
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  # Report everything; baselining happens by fixing or explicitly ignoring at
+  # the call site, not by hiding whole files.
+  max-issues-per-linter: 0
+  max-same-issues: 0

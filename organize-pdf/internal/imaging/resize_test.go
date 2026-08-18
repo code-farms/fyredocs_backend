@@ -7,6 +7,7 @@ import (
 )
 
 func TestDownscaleToShrinks(t *testing.T) {
+	t.Parallel()
 	src := image.NewRGBA(image.Rect(0, 0, 1000, 500))
 	out, scale := DownscaleTo(src, 500)
 	if out.Bounds().Dx() != 500 || out.Bounds().Dy() != 250 {
@@ -18,6 +19,7 @@ func TestDownscaleToShrinks(t *testing.T) {
 }
 
 func TestDownscaleToNoOp(t *testing.T) {
+	t.Parallel()
 	src := image.NewRGBA(image.Rect(0, 0, 300, 200))
 	out, scale := DownscaleTo(src, 500)
 	if out.Bounds().Dx() != 300 || out.Bounds().Dy() != 200 {

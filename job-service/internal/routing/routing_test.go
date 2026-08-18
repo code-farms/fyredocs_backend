@@ -5,6 +5,7 @@ import (
 )
 
 func TestServiceForTool(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		tool string
 		want string
@@ -71,12 +72,14 @@ func TestServiceForTool(t *testing.T) {
 }
 
 func TestToolServiceMapNotEmpty(t *testing.T) {
+	t.Parallel()
 	if len(ToolServiceMap) == 0 {
 		t.Error("ToolServiceMap should not be empty")
 	}
 }
 
 func TestAllToolsMappedToValidServices(t *testing.T) {
+	t.Parallel()
 	validServices := map[string]bool{
 		"convert-from-pdf": true,
 		"convert-to-pdf":   true,

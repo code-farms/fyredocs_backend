@@ -52,7 +52,7 @@ func DetectEdges(c *gin.Context) {
 	// Peek at the upload: validates existence, size cap, and image MIME
 	// sniff for scan-to-pdf. Deliberately no releaseUpload — the same
 	// uploadId feeds job creation next.
-	consumed, err := consumeUpload(c.Request.Context(), "scan-to-pdf", uploadID)
+	consumed, err := consumeUpload(c.Request.Context(), "scan-to-pdf", uploadID, uploadOwnerID(c, false))
 	if err != nil {
 		response.Errorf(c, http.StatusBadRequest, response.CodeInvalidInput, err.Error(), err,
 			"op", "detect_edges.consume_upload", "uploadId", uploadID)

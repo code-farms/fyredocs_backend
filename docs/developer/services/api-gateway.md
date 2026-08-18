@@ -226,9 +226,11 @@ The following paths skip authentication (`PublicPaths` in [shared/authverify](..
 - `/auth/signup` - User registration
 - `/auth/refresh` - Refresh-token rotation (the cookie itself is the credential)
 - `/auth/plans` - Public plan listing
+- `/auth/forgot-password`, `/auth/reset-password` - Password reset (auth-service serves them publicly; without these entries a stale `access_token` cookie would 401 exactly the users who need a reset)
+- `/api/config/flags` - Feature flags (pre-auth kill-switch read)
 - OPTIONS requests (CORS preflight)
 
-`PublicPaths` is an exact-match set. Routes with a variable segment use the companion **`PublicPrefixes`** option (`shared/authverify` `HTTPMiddlewareOptions`): any path starting with a listed prefix skips token verification and is treated as guest. The gateway registers `/share/` and `/api/v1/share/` so a share-link redeem (`GET /share/:token`) can never 401 on a recipient's stale `access_token` cookie — the 256-bit token in the path is the credential. Entries end with `/` so `/share/x` matches but `/shares` does not.
+All of the above are registered in both their legacy and `/api/v1` spellings. `PublicPaths` is an exact-match set. Routes with a variable segment use the companion **`PublicPrefixes`** option (`shared/authverify` `HTTPMiddlewareOptions`): any path starting with a listed prefix skips token verification and is treated as guest. The gateway registers **only the unversioned `/share/`** so a share-link redeem (`GET /share/:token`) can never 401 on a recipient's stale `access_token` cookie — the 256-bit token in the path is the credential. `/api/v1/share/` is deliberately NOT listed: that prefix belongs to the authenticated share create/revoke group, and making it public would let anyone revoke another user's share link. Entries end with `/` so `/share/x` matches but `/shares` does not.
 
 ## CORS Configuration
 
@@ -633,7 +635,8 @@ The following paths skip JWT authentication:
 - `/auth/signup` -- User registration
 - `/auth/login` -- User login
 - `/auth/plans` -- Public plan listing
-- `/share/*` (and `/api/v1/share/*`) -- Public share-link redeem, via `PublicPrefixes` (the token in the path is the credential)
+- `/auth/forgot-password`, `/auth/reset-password` -- Password reset (stale-cookie deadlock prevention)
+- `/share/*` -- Public share-link redeem, via `PublicPrefixes` (the token in the path is the credential; `/api/v1/share/*` stays authenticated — it is the share create/revoke group)
 - `OPTIONS` requests -- CORS preflight
 
 ### Backend Service Failure Handling

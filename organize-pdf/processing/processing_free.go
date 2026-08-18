@@ -202,8 +202,9 @@ func rotatePDF(inputPath string, outputPath string, rotation int, applyTo string
 }
 
 // parsePageRange expands a page expression like "1,3,5-8" into 1-based page
-// numbers, deduplicated and in the order first seen. An empty string or "all"
-// means every page.
+// numbers, deduplicated and sorted ascending — input order is NOT preserved
+// (callers needing user-specified order use parsePageRangeGroups). An empty
+// string or "all" means every page.
 //
 // Malformed or out-of-bounds components are SKIPPED rather than reported: a
 // reversed range, an unparseable number, or a page past the end simply

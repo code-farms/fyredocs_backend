@@ -1,8 +1,13 @@
+// Tests for the platform role ordering. The invariant under guard:
+// impersonation requires strictly greater privilege, unknown or differently
+// cased role strings rank below every real role, and nothing — not even a
+// super-admin — can impersonate a super-admin or an unrecognized role.
 package models
 
 import "testing"
 
 func TestRoleRank(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		role string
 		want int
@@ -13,6 +18,14 @@ func TestRoleRank(t *testing.T) {
 		{"", 0},
 		{"owner", 0},
 		{"  admin  ", 2},
+		// Guest sessions never appear in users.role (chk_user_role), so the
+		// string must rank as unknown, below every real role.
+		{"guest", 0},
+		// Case matters: a differently cased role would bypass the CHECK
+		// constraint values, so it must not inherit the canonical rank.
+		{"Admin", 0},
+		{"ADMIN", 0},
+		{"Super-Admin", 0},
 	}
 	for _, tc := range cases {
 		if got := RoleRank(tc.role); got != tc.want {
@@ -22,6 +35,7 @@ func TestRoleRank(t *testing.T) {
 }
 
 func TestCanImpersonate(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		caller string
 		target string
@@ -47,6 +61,20 @@ func TestCanImpersonate(t *testing.T) {
 		{RoleSuperAdmin, "owner", false},
 		// Whitespace is tolerated.
 		{" super-admin ", " admin ", true},
+		// Case-mismatched roles are unknown on both sides: a caller cannot gain
+		// the gate with "Admin", and a target under an aliased casing cannot be
+		// impersonated even by the top rank.
+		{"Admin", RoleUser, false},
+		{"ADMIN", RoleUser, false},
+		{RoleSuperAdmin, "Admin", false},
+		// Guest ranks as unknown: it can never impersonate, and impersonating a
+		// guest-role row is refused because its privilege cannot be reasoned about.
+		{"guest", RoleUser, false},
+		{RoleAdmin, "guest", false},
+		{RoleSuperAdmin, "guest", false},
+		// Both sides empty: empty caller loses before the target defaulting to
+		// "user" can apply.
+		{"", "", false},
 	}
 	for _, tc := range cases {
 		if got := CanImpersonate(tc.caller, tc.target); got != tc.want {

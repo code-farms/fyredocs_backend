@@ -7,6 +7,7 @@ import (
 )
 
 func TestGrayscaleLuma(t *testing.T) {
+	t.Parallel()
 	src := image.NewRGBA(image.Rect(0, 0, 3, 1))
 	src.Set(0, 0, color.RGBA{255, 255, 255, 255})
 	src.Set(1, 0, color.RGBA{0, 0, 0, 255})
@@ -26,6 +27,7 @@ func TestGrayscaleLuma(t *testing.T) {
 }
 
 func TestAdaptiveThresholdBilevel(t *testing.T) {
+	t.Parallel()
 	// Light paper with dark "text" strip; uneven background gradient.
 	src := image.NewGray(image.Rect(0, 0, 64, 64))
 	for y := 0; y < 64; y++ {
@@ -54,6 +56,7 @@ func TestAdaptiveThresholdBilevel(t *testing.T) {
 }
 
 func TestColorBoostBounds(t *testing.T) {
+	t.Parallel()
 	src := image.NewRGBA(image.Rect(0, 0, 2, 1))
 	src.Set(0, 0, color.RGBA{255, 255, 255, 255}) // must not overflow
 	src.Set(1, 0, color.RGBA{128, 128, 128, 255}) // gray midpoint ≈ stable
@@ -70,6 +73,7 @@ func TestColorBoostBounds(t *testing.T) {
 }
 
 func TestRotateDimensions(t *testing.T) {
+	t.Parallel()
 	src := image.NewRGBA(image.Rect(0, 0, 30, 20))
 	src.Set(0, 0, color.RGBA{255, 0, 0, 255}) // TL marker
 

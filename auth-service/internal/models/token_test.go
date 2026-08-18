@@ -5,6 +5,7 @@ import (
 )
 
 func TestHashToken(t *testing.T) {
+	t.Parallel()
 	hash := HashToken("test-token-string")
 	if hash == "" {
 		t.Fatal("expected non-empty hash")
@@ -27,6 +28,7 @@ func TestHashToken(t *testing.T) {
 }
 
 func TestHashTokenEmpty(t *testing.T) {
+	t.Parallel()
 	hash := HashToken("")
 	if hash == "" {
 		t.Fatal("expected non-empty hash even for empty input")

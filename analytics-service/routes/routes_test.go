@@ -214,3 +214,40 @@ func TestActivityRoutes_Registered(t *testing.T) {
 		t.Errorf("anonymous GET /api/activity/me: code = %d, want 401", w.Code)
 	}
 }
+
+// TestAlertReceiver_RegisteredOutsideAdminAuth pins the third access tier from
+// the package doc: POST /internal/alerts/api/v2/alerts must stay reachable
+// with no credentials at all, because Prometheus cannot send an identity
+// header — moving it inside adminAuth would silently break Discord alerting
+// (the edge still shields it: Caddy never routes /internal). A 400 on an empty
+// body proves the request reached the AlertReceiver handler's payload
+// validation rather than an auth gate, and the /admin/activity contrast case
+// proves the same anonymous request is still turned away by adminAuth on the
+// guarded tier of the same router.
+func TestAlertReceiver_RegisteredOutsideAdminAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	SetupRouter(r)
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/alerts/api/v2/alerts", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	switch w.Code {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		t.Errorf("anonymous POST /internal/alerts/api/v2/alerts: code = %d; the alert receiver was moved behind an auth gate — Prometheus alerting is broken", w.Code)
+	case http.StatusNotFound:
+		t.Errorf("POST /internal/alerts/api/v2/alerts is not registered; prometheus.yml's alerting path_prefix points here")
+	case http.StatusBadRequest:
+		// Expected: the request reached AlertWebhookHandler, whose JSON binding
+		// rejects the empty body. No Discord send is attempted.
+	default:
+		t.Errorf("anonymous POST /internal/alerts/api/v2/alerts: code = %d, want 400 from the handler's payload validation", w.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/activity", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous GET /admin/activity: code = %d, want 401 from adminAuth", w.Code)
+	}
+}

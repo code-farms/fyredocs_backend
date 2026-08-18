@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -37,6 +38,14 @@ type JobEvent struct {
 // JetStream subject, carrying the current W3C trace context in the message
 // headers so consumers continue the same trace.
 func PublishJobEvent(ctx context.Context, js jetstream.JetStream, subject string, event JobEvent) error {
+	// A nil handle must surface as an error, not a panic: callers pass
+	// natsconn.JS directly, which is nil whenever NATS never connected, and a
+	// panic here fires AFTER the caller committed its job row — the recovery
+	// middleware's 500 leaves a stranded row the client retries into a
+	// duplicate.
+	if js == nil {
+		return fmt.Errorf("queue: jetstream not initialized")
+	}
 	// Every worker routes its terminal transitions through here, so this is the
 	// single choke point where the job outcome counters and the end-to-end
 	// latency histogram (shared/metrics) are emitted — once per job outcome.
@@ -62,6 +71,10 @@ func PublishJobEvent(ctx context.Context, js jetstream.JetStream, subject string
 // preserving the original message headers and stamping the current trace
 // context on top, so a dead-lettered message keeps its end-to-end trace.
 func PublishRaw(ctx context.Context, js jetstream.JetStream, subject string, data []byte, base nats.Header) error {
+	// Same nil posture as PublishJobEvent: DLQ hops pass natsconn.JS directly.
+	if js == nil {
+		return fmt.Errorf("queue: jetstream not initialized")
+	}
 	ctx, span := startProducerSpan(ctx, subject)
 	defer span.End()
 	_, err := js.PublishMsg(ctx, &nats.Msg{

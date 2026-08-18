@@ -243,3 +243,42 @@ func TestParseCommaList(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkVerify guards token-verification latency: Verify runs on every
+// authenticated request in every service, so a parse/validation regression here
+// is a fleet-wide per-request tax. The token is minted once in setup the same
+// way the Verify tests above mint theirs.
+func BenchmarkVerify(b *testing.B) {
+	secret := []byte("test-secret-key-32-chars-long!!")
+	v, err := NewVerifier(VerifierConfig{
+		AllowedAlgs: []string{"HS256"},
+		HMACSecret:  secret,
+		Issuer:      "fyredocs",
+		Audience:    "fyredocs-api",
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	now := time.Now()
+	claims := &Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   "user-123",
+			Issuer:    "fyredocs",
+			Audience:  []string{"fyredocs-api"},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+		},
+		Role: "user",
+	}
+	tokenStr, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(secret)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := v.Verify(ctx, tokenStr); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

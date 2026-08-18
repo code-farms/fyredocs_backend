@@ -3,45 +3,51 @@ package worker
 import (
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
+// NOTE: duplicated across the four PDF workers by design (CLAUDE.md §1).
+//
+// The two waitDrain tests run inside a synctest bubble: waitDrain is pure
+// channel/timer plumbing, so under fake time the sleep-vs-deadline ordering
+// is exact. With real clocks, a 20ms sleep on a loaded runner (especially
+// under -race) can overshoot the drain deadline and flake.
 func TestWaitDrainCompletesWithinDeadline(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		wg.Done()
-	}()
-	fired := false
-	if ok := waitDrain(&wg, time.Second, func() { fired = true }); !ok {
-		t.Error("expected drain to complete within deadline")
-	}
-	if fired {
-		t.Error("onTimeout must not fire when drain completes in time")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			wg.Done()
+		}()
+		fired := false
+		if ok := waitDrain(&wg, time.Second, func() { fired = true }); !ok {
+			t.Error("expected drain to complete within deadline")
+		}
+		if fired {
+			t.Error("onTimeout must not fire when drain completes in time")
+		}
+	})
 }
 
 func TestWaitDrainTimesOutAndCancels(t *testing.T) {
-	var wg sync.WaitGroup
-	release := make(chan struct{})
-	wg.Add(1)
-	go func() {
-		<-release // simulates a hung job until onTimeout "cancels" it
-		wg.Done()
-	}()
-	ok := waitDrain(&wg, 20*time.Millisecond, func() { close(release) })
-	if ok {
-		t.Error("expected drain to report timeout")
-	}
-	// waitDrain must still have waited for the goroutine to unwind.
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Error("waitDrain returned before the waitgroup unwound")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		var wg sync.WaitGroup
+		release := make(chan struct{})
+		wg.Add(1)
+		go func() {
+			<-release // simulates a hung job until onTimeout "cancels" it
+			wg.Done()
+		}()
+		if ok := waitDrain(&wg, 20*time.Millisecond, func() { close(release) }); ok {
+			t.Error("expected drain to report timeout")
+		}
+		// waitDrain's contract is to return only after the waitgroup unwinds.
+		// If it returned early, this Wait would block forever and synctest
+		// would fail the bubble as deadlocked instead of hanging the run.
+		wg.Wait()
+	})
 }
 
 func TestDrainTimeoutEnv(t *testing.T) {

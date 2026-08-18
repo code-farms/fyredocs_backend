@@ -6,6 +6,7 @@ import (
 )
 
 func TestNewParserRejectsGarbage(t *testing.T) {
+	t.Parallel()
 	if _, err := NewParser([]string{"not-an-ip"}); err == nil {
 		t.Error("expected error for invalid IP entry")
 	}
@@ -18,6 +19,7 @@ func TestNewParserRejectsGarbage(t *testing.T) {
 }
 
 func TestClientIP(t *testing.T) {
+	t.Parallel()
 	p, err := NewParser([]string{"172.18.0.0/16", "127.0.0.1", "::1"})
 	if err != nil {
 		t.Fatal(err)
@@ -105,6 +107,7 @@ func TestClientIP(t *testing.T) {
 }
 
 func TestClientIPNoTrustedProxies(t *testing.T) {
+	t.Parallel()
 	p, err := NewParser(nil)
 	if err != nil {
 		t.Fatal(err)

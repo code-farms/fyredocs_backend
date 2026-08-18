@@ -10,6 +10,7 @@ import (
 // TestPasswordResetTokenBeforeCreateAssignsID verifies the GORM hook auto-assigns
 // a UUIDv7 when one isn't supplied — mirrors UserSession.BeforeCreate behavior.
 func TestPasswordResetTokenBeforeCreateAssignsID(t *testing.T) {
+	t.Parallel()
 	row := &PasswordResetToken{}
 	if err := row.BeforeCreate(nil); err != nil {
 		t.Fatalf("BeforeCreate returned error: %v", err)
@@ -22,6 +23,7 @@ func TestPasswordResetTokenBeforeCreateAssignsID(t *testing.T) {
 // TestPasswordResetTokenBeforeCreatePreservesExistingID verifies the hook does
 // not overwrite an explicitly-set ID.
 func TestPasswordResetTokenBeforeCreatePreservesExistingID(t *testing.T) {
+	t.Parallel()
 	preset := uuid.Must(uuid.NewV7())
 	row := &PasswordResetToken{ID: preset}
 	if err := row.BeforeCreate(nil); err != nil {
@@ -36,6 +38,7 @@ func TestPasswordResetTokenBeforeCreatePreservesExistingID(t *testing.T) {
 // powers both session and reset tokens — reset-token lookups rely on this
 // determinism.
 func TestHashTokenStablyHashesResetTokens(t *testing.T) {
+	t.Parallel()
 	raw := "a-raw-reset-token-string"
 	h1 := HashToken(raw)
 	h2 := HashToken(raw)
@@ -51,6 +54,7 @@ func TestHashTokenStablyHashesResetTokens(t *testing.T) {
 // CreatePasswordResetToken so we don't accidentally ship a token whose
 // expires_at is in the past.
 func TestPasswordResetTokenExpiresAtMath(t *testing.T) {
+	t.Parallel()
 	ttl := 1 * time.Hour
 	before := time.Now()
 	expires := before.Add(ttl)

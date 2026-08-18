@@ -513,7 +513,14 @@ func registerServiceRoutes(mux *http.ServeMux, routes []routeConfig) {
 // They are public because an expired cookie must never be able to lock a user
 // out of logging back in.
 func publicAuthPaths() []string {
-	legacy := []string{"/auth/login", "/auth/signup", "/auth/refresh", "/auth/plans"}
+	// forgot/reset-password must be public here for the same reason login is:
+	// auth-service registers them unauthenticated (routes/routes.go), and a
+	// browser holding an EXPIRED access_token cookie would otherwise 401 at
+	// the gateway on exactly the endpoints a locked-out user needs.
+	legacy := []string{
+		"/auth/login", "/auth/signup", "/auth/refresh", "/auth/plans",
+		"/auth/forgot-password", "/auth/reset-password",
+	}
 	paths := make([]string, 0, len(legacy)*2+2)
 	for _, p := range legacy {
 		paths = append(paths, p, apiVersionPrefix+p)

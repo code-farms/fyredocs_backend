@@ -21,7 +21,19 @@ DEV_COMPOSE = docker compose -p fyredocs-dev \
   -f deployment/docker-compose.yml -f deployment/docker-compose.dev.yml \
   --env-file .env
 
-.PHONY: up down logs ps check-ports test test-v dev-up dev-down dev-logs dev-ps dev-nuke $(addprefix test-,$(SERVICES)) $(addprefix test-v-,$(SERVICES))
+# Infra-only stack for integration-tagged tests (Postgres/Redis/NATS/MinIO on
+# loopback ports). Kept separate from the full COMPOSE stack so test infra can
+# run without the services themselves competing for the same containers.
+ESSENTIALS_COMPOSE = docker compose -f deployment/docker-compose.essentials.yml --env-file .env
+
+# Flags for every unit-test invocation. -count=1 defeats the build cache so a
+# rerun actually executes (a cached "ok" hides newly introduced flakes);
+# -shuffle=on surfaces test-order dependencies before they calcify; the
+# timeout is a backstop against hangs, sized for the slowest module
+# (organize-pdf's pdfcpu suites) under -race overhead.
+TESTFLAGS = -race -count=1 -shuffle=on -timeout=10m
+
+.PHONY: up down logs ps check-ports test test-v test-integration test-infra-up test-infra-down test-binaries cover bench fuzz-short lint dev-up dev-down dev-logs dev-ps dev-nuke $(addprefix test-,$(SERVICES)) $(addprefix test-v-,$(SERVICES))
 
 ## Start service(s) (SVC=…) or the whole stack; env comes from the root .env
 up:
@@ -68,7 +80,7 @@ test:
 	@fail=0; \
 	for svc in $(SERVICES); do \
 		echo "--- $$svc ---"; \
-		go test ./$$svc/... || fail=1; \
+		go test $(TESTFLAGS) ./$$svc/... || fail=1; \
 	done; \
 	exit $$fail
 
@@ -77,14 +89,83 @@ test-v:
 	@fail=0; \
 	for svc in $(SERVICES); do \
 		echo "--- $$svc ---"; \
-		go test -v ./$$svc/... || fail=1; \
+		go test -v $(TESTFLAGS) ./$$svc/... || fail=1; \
 	done; \
 	exit $$fail
 
 ## Run tests for a single service  (e.g. make test-shared, make test-api-gateway)
 $(addprefix test-,$(SERVICES)):
-	go test ./$(@:test-%=%)/...
+	go test $(TESTFLAGS) ./$(@:test-%=%)/...
 
 ## Verbose variant  (e.g. make test-v-shared, make test-v-api-gateway)
 $(addprefix test-v-,$(SERVICES)):
-	go test -v ./$(@:test-v-%=%)/...
+	go test -v $(TESTFLAGS) ./$(@:test-v-%=%)/...
+
+## Start ONLY the infra containers integration tests need (loopback ports)
+test-infra-up:
+	$(ESSENTIALS_COMPOSE) up -d db redis nats minio minio-init
+
+## Stop the integration-test infra containers (volumes kept)
+test-infra-down:
+	$(ESSENTIALS_COMPOSE) down --remove-orphans
+
+## Run integration-tagged tests against the essentials stack (make test-infra-up first).
+# -p 1 because integration packages share the test database; parallel packages
+# would TRUNCATE each other's rows mid-test. .env is sourced (set -a, the same
+# way deploy.sh loads it) so shared/database/dbtest derives the DSN from the
+# stack's real POSTGRES_* credentials.
+test-integration:
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	fail=0; \
+	for svc in $(SERVICES); do \
+		echo "--- $$svc (integration) ---"; \
+		go test -tags=integration $(TESTFLAGS) -p 1 ./$$svc/... || fail=1; \
+	done; \
+	exit $$fail
+
+## Run binaries-tagged tests (real gs/libreoffice/tesseract exec paths) in Docker.
+# The suite is file-in/file-out (no infra); the container just supplies the
+# tools the host lacks. Module/build caches are volume-mounted so reruns are
+# incremental. Scope with SVC=<module> (default: the four PDF workers).
+BINARIES_SVCS ?= convert-to-pdf convert-from-pdf organize-pdf optimize-pdf
+test-binaries:
+	docker build -q -f deployment/test-binaries.Dockerfile -t fyredocs-test-binaries deployment >/dev/null
+	docker run --rm -v "$(CURDIR)":/src -v fyredocs-test-gomod:/go/pkg/mod \
+		-v fyredocs-test-gocache:/root/.cache/go-build \
+		fyredocs-test-binaries bash -c '\
+		fail=0; \
+		for svc in $(or $(SVC),$(BINARIES_SVCS)); do \
+			echo "--- $$svc (binaries) ---"; \
+			go test -tags="integration binaries" -count=1 -timeout=15m ./$$svc/... || fail=1; \
+		done; \
+		exit $$fail'
+
+## Per-module coverage profiles merged into coverage/merged.out + func summary
+cover:
+	@bash scripts/coverage.sh
+
+## Run all benchmarks (no tests: -run=^$$ keeps the loop pure benchmark time)
+bench:
+	@fail=0; \
+	for svc in $(SERVICES); do \
+		echo "--- $$svc (bench) ---"; \
+		go test -bench=. -benchmem -run='^$$' ./$$svc/... || fail=1; \
+	done; \
+	exit $$fail
+
+## Run every fuzz target briefly (smoke fuzzing; long sessions are manual)
+fuzz-short:
+	@bash scripts/fuzz-short.sh
+
+## Format check + vet across every module (golangci-lint added on top if installed)
+lint:
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt needed on:"; echo "$$unformatted"; exit 1; \
+	fi
+	@fail=0; \
+	for svc in $(SERVICES); do \
+		echo "--- $$svc (vet) ---"; \
+		go vet ./$$svc/... || fail=1; \
+	done; \
+	exit $$fail

@@ -21,6 +21,7 @@ func testImage(w, h int) *image.RGBA {
 }
 
 func TestEncodeDecodeRoundTrip(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	jpgPath := filepath.Join(dir, "t.jpg")
@@ -49,6 +50,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 }
 
 func TestDecodeReaderMatchesFile(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, testImage(10, 10)); err != nil {
 		t.Fatal(err)
@@ -63,6 +65,7 @@ func TestDecodeReaderMatchesFile(t *testing.T) {
 }
 
 func TestDecodeRejectsGarbage(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "bad.jpg")
 	if err := os.WriteFile(bad, []byte("not an image at all"), 0o644); err != nil {
@@ -74,6 +77,7 @@ func TestDecodeRejectsGarbage(t *testing.T) {
 }
 
 func TestDecodeRejectsOversize(t *testing.T) {
+	t.Parallel()
 	// Craft a PNG header claiming enormous dimensions without allocating one:
 	// encode a tiny image, then patch the IHDR width/height fields.
 	var buf bytes.Buffer

@@ -288,7 +288,21 @@ func storagePathAllowed(path string, uid uuid.UUID) bool {
 	if !strings.HasPrefix(path, "backups/") {
 		return true
 	}
-	return strings.HasPrefix(path, "backups/"+uid.String()+"/")
+	if !strings.HasPrefix(path, "backups/"+uid.String()+"/") {
+		return false
+	}
+	// A ".." segment can re-resolve the ownership prefix at any hop that
+	// normalizes dot segments (edge proxy, presign URL handling), turning
+	// backups/<me>/../<other>/f into <other>'s key. Legitimate backup keys
+	// are server-minted (uuid + sanitized file name — see job-service
+	// backups.go), so a bare ".." segment never appears in one and rejecting
+	// it breaks nothing.
+	for _, seg := range strings.Split(path, "/") {
+		if seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // downloadURLExpiry matches job-service's presign window: long enough to
@@ -498,6 +512,15 @@ func PurgeDocument(c *gin.Context) {
 		response.NotFound(c, response.CodeNotFound, "Document not found.")
 		return
 	}
+	// Associations must go BEFORE the row: fk_document_tags_document rejects
+	// deleting a document that still has tag rows, which made every tagged
+	// document permanently unpurgeable (500). Ownership is already proven by
+	// the scoped fetch above, so this cannot strip tags off a foreign row.
+	if err := models.DB.Exec("DELETE FROM document_tags WHERE document_id = ?", id).Error; err != nil {
+		response.InternalErrorf(c, "PURGE_FAILED", "Could not permanently delete document.", err,
+			"op", "db.document_tags.purge", "docId", id)
+		return
+	}
 	res := scopeOwned(models.DB.Unscoped(), uid, orgID).Where("id = ?", id).Delete(&models.Document{})
 	if res.Error != nil {
 		response.InternalErrorf(c, "PURGE_FAILED", "Could not permanently delete document.", res.Error,
@@ -515,9 +538,6 @@ func PurgeDocument(c *gin.Context) {
 			// Row is gone (truth); a leaked object is logged, not fatal.
 			logger.LogWarn(c.Request.Context(), "documents.purge.remove_object", err, "docId", id, "key", doc.StoragePath)
 		}
-	}
-	if err := models.DB.Exec("DELETE FROM document_tags WHERE document_id = ?", id).Error; err != nil {
-		logger.LogWarn(c.Request.Context(), "db.document_tags.purge", err, "docId", id)
 	}
 	response.OK(c, "Document permanently deleted", gin.H{"id": id})
 }

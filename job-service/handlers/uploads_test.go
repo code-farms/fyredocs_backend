@@ -16,6 +16,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	"fyredocs/shared/authverify"
+	"fyredocs/shared/redisstore"
 )
 
 // apiEnvelope mirrors the standard {success,message,data,error} response
@@ -566,4 +570,167 @@ func TestUploadTTL(t *testing.T) {
 			t.Errorf("uploadTTL() = %v, want 1h", got)
 		}
 	})
+}
+
+func TestUploadOwnerID(t *testing.T) {
+	t.Run("authenticated user wins even with a guest cookie", func(t *testing.T) {
+		// A logged-in user who still carries a stale guest cookie must be
+		// bound by account, not by cookie — otherwise logging in mid-flow
+		// would orphan the upload.
+		uid := uuid.New()
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/init", nil)
+		c.Request.AddCookie(&http.Cookie{Name: "guest_token", Value: "stale"})
+		authverify.SetGinAuth(c, authverify.AuthContext{UserID: uid.String()})
+
+		if got := uploadOwnerID(c, false); got != "user:"+uid.String() {
+			t.Errorf("uploadOwnerID = %q, want user:%s", got, uid)
+		}
+	})
+
+	t.Run("guest cookie identity", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/init", nil)
+		c.Request.AddCookie(&http.Cookie{Name: "guest_token", Value: "tok-123"})
+
+		if got := uploadOwnerID(c, false); got != "guest:tok-123" {
+			t.Errorf("uploadOwnerID = %q, want guest:tok-123", got)
+		}
+	})
+
+	t.Run("no identity without mint", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/uploads/x/status", nil)
+
+		if got := uploadOwnerID(c, false); got != "" {
+			t.Errorf("read-only lookup minted an identity: %q", got)
+		}
+	})
+
+	t.Run("mint requires redis", func(t *testing.T) {
+		// Without Redis there is nowhere to anchor the new guest's session
+		// state, so minting must refuse rather than hand out a token that
+		// cannot own anything.
+		prev := redisstore.Client
+		redisstore.Client = nil
+		t.Cleanup(func() { redisstore.Client = prev })
+
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/init", nil)
+
+		if got := uploadOwnerID(c, true); got != "" {
+			t.Errorf("minted %q with no redis backing", got)
+		}
+	})
+
+	t.Run("mint issues a stable cookie identity", func(t *testing.T) {
+		withMiniRedis(t)
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/api/uploads/init", nil)
+
+		got := uploadOwnerID(c, true)
+		if !strings.HasPrefix(got, "guest:") || got == "guest:" {
+			t.Fatalf("uploadOwnerID = %q, want a minted guest identity", got)
+		}
+		// The token must round-trip through the Set-Cookie header, or the
+		// guest loses ownership of their own upload on the next request.
+		cookies := rec.Result().Cookies()
+		var minted string
+		for _, ck := range cookies {
+			if ck.Name == "guest_token" {
+				minted = ck.Value
+			}
+		}
+		if minted == "" {
+			t.Fatal("mint did not set the guest_token cookie")
+		}
+		if got != "guest:"+minted {
+			t.Errorf("identity %q does not match minted cookie %q", got, minted)
+		}
+	})
+}
+
+func TestUploadOwnerMatches(t *testing.T) {
+	t.Run("legacy session without owner is grandfathered", func(t *testing.T) {
+		// NOTE: pre-F4 sessions have no owner field and must keep working
+		// through a deploy (finding F4 — docs/developer/architecture/
+		// backend-hardening.md §3.20). This row pins the deliberate
+		// fail-open; new sessions always carry an owner.
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/uploads/x/status", nil)
+
+		if !uploadOwnerMatches(c, map[string]string{"fileName": "a.pdf"}) {
+			t.Error("legacy ownerless session was rejected")
+		}
+	})
+
+	t.Run("matching user owner passes", func(t *testing.T) {
+		uid := uuid.New()
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/uploads/x/status", nil)
+		authverify.SetGinAuth(c, authverify.AuthContext{UserID: uid.String()})
+
+		if !uploadOwnerMatches(c, map[string]string{"owner": "user:" + uid.String()}) {
+			t.Error("owner was denied their own upload session")
+		}
+	})
+
+	t.Run("different user denied", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/uploads/x/status", nil)
+		authverify.SetGinAuth(c, authverify.AuthContext{UserID: uuid.NewString()})
+
+		if uploadOwnerMatches(c, map[string]string{"owner": "user:" + uuid.NewString()}) {
+			t.Error("IDOR: a different user matched someone else's upload session")
+		}
+	})
+
+	t.Run("guest cannot match a user-owned session", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/uploads/x/status", nil)
+		c.Request.AddCookie(&http.Cookie{Name: "guest_token", Value: "tok-abc"})
+
+		if uploadOwnerMatches(c, map[string]string{"owner": "user:" + uuid.NewString()}) {
+			t.Error("guest token matched a user-owned upload session")
+		}
+	})
+
+	t.Run("anonymous cannot match any owned session", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/uploads/x/status", nil)
+
+		if uploadOwnerMatches(c, map[string]string{"owner": "guest:tok-abc"}) {
+			t.Error("caller with no identity matched an owned session")
+		}
+	})
+}
+
+// ─── Benchmarks ───────────────────────────────────────────────────────────────
+
+// BenchmarkSanitizeFileName guards the per-upload cost of client-filename
+// sanitisation, which runs on every upload init; the adversarial row keeps the
+// traversal-shaped worst case measured alongside the typical one.
+func BenchmarkSanitizeFileName(b *testing.B) {
+	names := []string{
+		"Quarterly Report (final) v2.docx",
+		"../../../../etc/passwd\x00; rm -rf --.pdf",
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		for _, n := range names {
+			sanitizeFileName(n)
+		}
+	}
+}
+
+// BenchmarkParsePartNumbers guards the multipart presign hot path: the
+// client-supplied part list is parsed on every presign-parts request.
+func BenchmarkParsePartNumbers(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := parsePartNumbers("1,2,3,5,8,13,21,34,55,89", 100); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

@@ -63,6 +63,10 @@ var allowedMIMETypes = map[string][]string{
 	"odt":   {"application/vnd.oasis.opendocument.text", "application/zip"},
 	"ods":   {"application/vnd.oasis.opendocument.spreadsheet", "application/zip"},
 	"odp":   {"application/vnd.oasis.opendocument.presentation", "application/zip"},
+	// text/plain is allowed alongside text/html because DetectContentType
+	// only reports text/html when the sniffed bytes start with a recognized
+	// tag — a fragment or a file with a leading BOM/comment sniffs as plain.
+	"html": {"text/html; charset=utf-8", "text/plain; charset=utf-8"},
 	// "share" is the pseudo-tool used by share-link creation (shares.go), not
 	// a routable tool: any document type the platform handles, plus plain
 	// text (DetectContentType reports text with a charset suffix).
@@ -245,7 +249,7 @@ func CreateJobFromTool(c *gin.Context) {
 		defer releaseUploadClaims(context.Background(), claimed)
 
 		for _, uploadID := range uploadIDs {
-			consumed, err := consumeUpload(c.Request.Context(), toolType, uploadID)
+			consumed, err := consumeUpload(c.Request.Context(), toolType, uploadID, uploadOwnerID(c, false))
 			if err != nil {
 				response.Errorf(c, http.StatusBadRequest, response.CodeInvalidInput, err.Error(), err,
 					"op", "consume_upload", "uploadId", uploadID, "tool", toolType, "jobId", jobID)
@@ -702,7 +706,15 @@ type consumedUpload struct {
 // transaction, queue publish) without forcing the user to re-upload. The
 // caller must invoke releaseUpload after the job is committed to free the
 // upload slot.
-func consumeUpload(ctx context.Context, toolType string, uploadID string) (consumedUpload, error) {
+//
+// callerOwner is the consuming caller's identity from uploadOwnerID(c, false).
+// Sessions carry the initiator's identity in their "owner" field (finding F4 —
+// docs/developer/architecture/backend-hardening.md §3.20); without this check
+// the multipart endpoints enforce ownership but consumption does not, so any
+// caller who learned a live uploadId could pull another user's bytes into
+// their own job, share, or backup. Legacy pre-F4 sessions have no owner field
+// and are grandfathered, exactly as uploadOwnerMatches does.
+func consumeUpload(ctx context.Context, toolType string, uploadID string, callerOwner string) (consumedUpload, error) {
 	if uploadID == "" {
 		return consumedUpload{}, fmt.Errorf("uploadId is required")
 	}
@@ -724,6 +736,13 @@ func consumeUpload(ctx context.Context, toolType string, uploadID string) (consu
 		return consumedUpload{}, fmt.Errorf("failed to read upload state")
 	}
 	if len(state) == 0 {
+		return consumedUpload{}, fmt.Errorf("upload not found")
+	}
+	if owner := state["owner"]; owner != "" && owner != callerOwner {
+		// Same "gone" message as a missing session: a distinct error would
+		// confirm to a probing caller that the uploadId exists.
+		logger.LogWarn(ctx, "consume_upload.owner_mismatch",
+			fmt.Errorf("upload session owned by another caller"), "uploadId", uploadID)
 		return consumedUpload{}, fmt.Errorf("upload not found")
 	}
 	fileName := state["fileName"]
@@ -1200,8 +1219,16 @@ func validateFileType(toolType string, fileName string) error {
 	ext := strings.ToLower(filepath.Ext(fileName))
 	isPDF := ext == ".pdf"
 	switch toolType {
-	case "pdf-to-word", "pdf-to-excel", "pdf-to-powerpoint", "pdf-to-image",
-		"pdf-to-html", "pdf-to-text", "pdf-to-pdfa",
+	// NOTE: pdf-to-docx/xlsx/pptx/txt are routable aliases that
+	// normalizeToolType does NOT canonicalize (the workers accept them
+	// verbatim — see convert-from-pdf/processing/processing.go). They must be
+	// listed here and in mimeCategory explicitly: leaving an alias out does
+	// not break the tool, it silently skips both validations for it, because
+	// unknown tool types fall through this switch and validateMIMEHead is
+	// fail-open by design.
+	case "pdf-to-word", "pdf-to-docx", "pdf-to-excel", "pdf-to-xlsx",
+		"pdf-to-powerpoint", "pdf-to-pptx", "pdf-to-image",
+		"pdf-to-html", "pdf-to-text", "pdf-to-txt", "pdf-to-pdfa",
 		"pdf-to-odt", "pdf-to-ods", "pdf-to-odp",
 		"merge-pdf", "split-pdf", "compress-pdf",
 		"rotate-pdf", "remove-pages", "extract-pages", "organize-pdf",
@@ -1209,6 +1236,10 @@ func validateFileType(toolType string, fileName string) error {
 		"add-page-numbers", "repair-pdf", "ocr-pdf", "ocr", "flatten-pdf", "pdf-metadata":
 		if !isPDF {
 			return fmt.Errorf("only PDF files are supported for this tool")
+		}
+	case "html-to-pdf":
+		if ext != ".html" && ext != ".htm" {
+			return fmt.Errorf("only HTML files are supported for this tool")
 		}
 	case "scan-to-pdf":
 		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" && ext != ".pdf" {
@@ -1261,14 +1292,19 @@ func validateFileType(toolType string, fileName string) error {
 // mimeCategory returns the MIME category key for the given tool type.
 func mimeCategory(toolType string) string {
 	switch toolType {
-	case "pdf-to-word", "pdf-to-excel", "pdf-to-powerpoint", "pdf-to-image",
-		"pdf-to-html", "pdf-to-text", "pdf-to-pdfa",
+	// NOTE: alias coverage must mirror validateFileType above — an alias
+	// missing here returns "" and validateMIMEHead fail-opens for it.
+	case "pdf-to-word", "pdf-to-docx", "pdf-to-excel", "pdf-to-xlsx",
+		"pdf-to-powerpoint", "pdf-to-pptx", "pdf-to-image",
+		"pdf-to-html", "pdf-to-text", "pdf-to-txt", "pdf-to-pdfa",
 		"pdf-to-odt", "pdf-to-ods", "pdf-to-odp",
 		"merge-pdf", "split-pdf", "compress-pdf",
 		"rotate-pdf", "remove-pages", "extract-pages", "organize-pdf",
 		"watermark-pdf", "protect-pdf", "unlock-pdf", "sign-pdf", "edit-pdf",
 		"add-page-numbers", "repair-pdf", "ocr-pdf", "ocr", "flatten-pdf", "pdf-metadata":
 		return "pdf"
+	case "html-to-pdf":
+		return "html"
 	case "scan-to-pdf":
 		return "image"
 	case "share":
