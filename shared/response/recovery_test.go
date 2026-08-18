@@ -13,6 +13,7 @@ import (
 // GinRecovery must convert a handler panic into the standard 500 envelope with
 // no stack trace leaked to the client body.
 func TestGinRecoveryReturnsEnvelopeNoStackLeak(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(GinRecovery())
@@ -38,6 +39,7 @@ func TestGinRecoveryReturnsEnvelopeNoStackLeak(t *testing.T) {
 
 // HTTPRecovery must do the same for the net/http gateway chain.
 func TestHTTPRecoveryReturnsEnvelope(t *testing.T) {
+	t.Parallel()
 	h := HTTPRecovery(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("kaboom")
 	}))

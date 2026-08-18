@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 
 	"document-service/internal/models"
-	"fyredocs/shared/logger"
 	"fyredocs/shared/response"
 )
 
@@ -80,6 +79,21 @@ func DeleteTag(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// Ownership must be proven BEFORE touching associations — a blind
+	// association delete would let a non-owner strip a foreign tag off every
+	// document it is attached to.
+	var tag models.Tag
+	if err := scopeOwned(models.DB, uid, orgID).Where("id = ?", id).First(&tag).Error; err != nil {
+		response.NotFound(c, response.CodeNotFound, "Tag not found.")
+		return
+	}
+	// Associations go before the row: fk_document_tags_tag rejects deleting a
+	// tag that is still attached anywhere, which made every in-use tag
+	// undeletable (500).
+	if err := models.DB.Exec("DELETE FROM document_tags WHERE tag_id = ?", id).Error; err != nil {
+		response.InternalErrorf(c, "DELETE_FAILED", "Could not delete tag.", err, "op", "db.document_tags.cleanup", "tagId", id)
+		return
+	}
 	res := scopeOwned(models.DB, uid, orgID).Where("id = ?", id).Delete(&models.Tag{})
 	if res.Error != nil {
 		response.InternalErrorf(c, "DELETE_FAILED", "Could not delete tag.", res.Error, "op", "db.tags.delete", "tagId", id)
@@ -88,9 +102,6 @@ func DeleteTag(c *gin.Context) {
 	if res.RowsAffected == 0 {
 		response.NotFound(c, response.CodeNotFound, "Tag not found.")
 		return
-	}
-	if err := models.DB.Exec("DELETE FROM document_tags WHERE tag_id = ?", id).Error; err != nil {
-		logger.LogWarn(c.Request.Context(), "db.document_tags.cleanup", err, "tagId", id)
 	}
 	response.OK(c, "Tag deleted", gin.H{"id": id})
 }

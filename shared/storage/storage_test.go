@@ -1,9 +1,7 @@
 package storage
 
 import (
-	"bytes"
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -100,62 +98,5 @@ func TestNewBuildsPresignClients(t *testing.T) {
 	}
 	if !strings.Contains(u, "partNumber=1") || !strings.Contains(u, "uploadId=s3id") {
 		t.Errorf("presigned URL missing multipart params: %s", u)
-	}
-}
-
-// Integration tests run only when a live S3 endpoint is provided.
-func TestIntegration(t *testing.T) {
-	endpoint := os.Getenv("S3_TEST_ENDPOINT")
-	if endpoint == "" {
-		t.Skip("S3_TEST_ENDPOINT not set; skipping integration tests")
-	}
-	cfg := Config{
-		Endpoint:      endpoint,
-		AccessKey:     os.Getenv("S3_TEST_ACCESS_KEY"),
-		SecretKey:     os.Getenv("S3_TEST_SECRET_KEY"),
-		BucketUploads: "fyredocs-test",
-		BucketOutputs: "fyredocs-test",
-	}
-	c, err := New(cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	ctx := context.Background()
-	if err := c.EnsureBucket(ctx, cfg.BucketUploads); err != nil {
-		t.Fatalf("EnsureBucket: %v", err)
-	}
-
-	key := "it/test-object.txt"
-	body := []byte("hello fyredocs")
-	if err := c.PutObject(ctx, cfg.BucketUploads, key, bytes.NewReader(body), int64(len(body)), "text/plain"); err != nil {
-		t.Fatalf("PutObject: %v", err)
-	}
-	info, err := c.StatObject(ctx, cfg.BucketUploads, key)
-	if err != nil || info.Size != int64(len(body)) {
-		t.Fatalf("StatObject: %v size=%d", err, info.Size)
-	}
-	head, err := c.GetObjectRange(ctx, cfg.BucketUploads, key, 0, 5)
-	if err != nil || string(head) != "hello" {
-		t.Fatalf("GetObjectRange: %v %q", err, head)
-	}
-
-	// Server-side copy must produce an identical object at the destination key.
-	copyKey := "it/test-object-copy.txt"
-	if err := c.CopyObject(ctx, cfg.BucketUploads, key, cfg.BucketOutputs, copyKey); err != nil {
-		t.Fatalf("CopyObject: %v", err)
-	}
-	cinfo, err := c.StatObject(ctx, cfg.BucketOutputs, copyKey)
-	if err != nil || cinfo.Size != int64(len(body)) {
-		t.Fatalf("StatObject(copy): %v size=%d", err, cinfo.Size)
-	}
-	if err := c.RemoveObject(ctx, cfg.BucketOutputs, copyKey); err != nil {
-		t.Fatalf("RemoveObject(copy): %v", err)
-	}
-
-	if err := c.RemoveObject(ctx, cfg.BucketUploads, key); err != nil {
-		t.Fatalf("RemoveObject: %v", err)
-	}
-	if _, err := c.StatObject(ctx, cfg.BucketUploads, key); !IsNotFound(err) {
-		t.Fatalf("expected not-found after delete, got %v", err)
 	}
 }

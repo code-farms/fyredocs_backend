@@ -4,6 +4,7 @@
 package token
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -354,5 +355,203 @@ func TestVerifyRefreshTokenWrongSecret(t *testing.T) {
 	_, err := issuer2.VerifyRefreshToken(tokenStr)
 	if err == nil {
 		t.Error("expected error for wrong secret")
+	}
+}
+
+func TestVerifyRefreshTokenNilIssuer(t *testing.T) {
+	var issuer *Issuer
+	if _, err := issuer.VerifyRefreshToken("any-token"); err == nil {
+		t.Error("expected error for nil issuer")
+	}
+}
+
+// TestVerifyRefreshTokenTamperedSignature flips one character of the signature
+// segment: a valid payload under a corrupted MAC must be rejected, or an
+// attacker could splice claims onto a previously observed signature.
+func TestVerifyRefreshTokenTamperedSignature(t *testing.T) {
+	issuer := &Issuer{
+		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
+	}
+
+	tokenStr, _, _, err := issuer.IssueRefreshToken("user-tamper", time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Tamper the FIRST character of the signature segment, never the last:
+	// the final base64url char of a 32-byte MAC carries 2 padding bits the
+	// decoder ignores, so a last-char flip between values 0-3 (A-D) decodes
+	// to the identical signature and verifies — a ~5% flake.
+	dot := strings.LastIndexByte(tokenStr, '.')
+	sigStart := dot + 1
+	flip := byte('A')
+	if tokenStr[sigStart] == 'A' {
+		flip = 'B'
+	}
+	tampered := tokenStr[:sigStart] + string(flip) + tokenStr[sigStart+1:]
+
+	if _, err := issuer.VerifyRefreshToken(tampered); err == nil {
+		t.Error("expected error for tampered signature")
+	}
+}
+
+// TestVerifyRefreshTokenAlgNoneRejected pins the classic JWT downgrade attack:
+// an unsigned alg=none token with otherwise perfect claims must be refused by
+// the keyfunc's method check, not accepted because "no signature" verifies
+// trivially.
+func TestVerifyRefreshTokenAlgNoneRejected(t *testing.T) {
+	issuer := &Issuer{
+		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
+	}
+
+	claims := jwt.RegisteredClaims{
+		Subject:   "user-none",
+		Issuer:    "fyredocs",
+		Audience:  []string{"fyredocs-api"},
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
+	tokenStr, err := tok.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	if err != nil {
+		t.Fatalf("failed to build alg=none token: %v", err)
+	}
+
+	if _, err := issuer.VerifyRefreshToken(tokenStr); err == nil {
+		t.Error("expected error for alg=none token")
+	}
+}
+
+func TestVerifyRefreshTokenExpired(t *testing.T) {
+	issuer := &Issuer{
+		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
+	}
+
+	// A negative TTL yields an already-expired but correctly signed token — the
+	// exp claim must be enforced, not merely present.
+	tokenStr, _, _, err := issuer.IssueRefreshToken("user-expired", -time.Minute)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := issuer.VerifyRefreshToken(tokenStr); err == nil {
+		t.Error("expected error for expired refresh token")
+	}
+}
+
+// TestVerifyRefreshTokenCrossTenantRejected pins the provenance checks
+// (finding 3.4 — docs/developer/architecture/backend-hardening.md): a token
+// signed with the SAME secret but a different issuer or audience (e.g. another
+// environment sharing a leaked secret) must not verify.
+func TestVerifyRefreshTokenCrossTenantRejected(t *testing.T) {
+	secret := []byte("test-secret-key-32-chars-long!!")
+	verifier := &Issuer{hmacSecret: secret, issuer: "fyredocs", audience: "fyredocs-api"}
+
+	cases := []struct {
+		name     string
+		issuer   string
+		audience string
+	}{
+		{"wrong issuer", "other-app", "fyredocs-api"},
+		{"wrong audience", "fyredocs", "other-api"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			foreign := &Issuer{hmacSecret: secret, issuer: tc.issuer, audience: tc.audience}
+			tokenStr, _, _, err := foreign.IssueRefreshToken("user-x", time.Hour)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if _, err := verifier.VerifyRefreshToken(tokenStr); err == nil {
+				t.Error("expected error for cross-tenant token")
+			}
+		})
+	}
+}
+
+// TestVerifyRefreshTokenSubjectHandling: a refresh token without a usable
+// subject authenticates nobody and must be refused even though its signature
+// is genuine; a padded subject is trimmed at issue time so downstream UUID
+// parsing sees the canonical form.
+func TestVerifyRefreshTokenSubjectHandling(t *testing.T) {
+	issuer := &Issuer{
+		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
+	}
+
+	t.Run("empty subject rejected", func(t *testing.T) {
+		tokenStr, _, _, err := issuer.IssueRefreshToken("", time.Hour)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, err := issuer.VerifyRefreshToken(tokenStr); err == nil {
+			t.Error("expected error for empty subject")
+		}
+	})
+
+	t.Run("whitespace subject rejected", func(t *testing.T) {
+		// IssueRefreshToken trims the subject, so whitespace collapses to empty
+		// and must fail verification the same way.
+		tokenStr, _, _, err := issuer.IssueRefreshToken("   ", time.Hour)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, err := issuer.VerifyRefreshToken(tokenStr); err == nil {
+			t.Error("expected error for whitespace-only subject")
+		}
+	})
+
+	t.Run("padded subject trimmed at issue", func(t *testing.T) {
+		tokenStr, _, _, err := issuer.IssueRefreshToken("  user-padded  ", time.Hour)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		userID, err := issuer.VerifyRefreshToken(tokenStr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if userID != "user-padded" {
+			t.Errorf("expected trimmed subject 'user-padded', got %q", userID)
+		}
+	})
+}
+
+// TestVerifyRefreshTokenAcceptsAccessTokenPinnedGap pins a known gap, not
+// desired behavior.
+//
+// NOTE: tokens carry no type claim, so VerifyRefreshToken accepts an ACCESS
+// token as a refresh token (same secret, issuer, and audience). The
+// /auth/refresh handler still rejects the attempt because the session lookup
+// matches stored refresh-token hashes only, but the confusion should be closed
+// at the token layer (candidate finding for
+// docs/developer/architecture/backend-hardening.md; pinned per
+// docs/developer/architecture/testing-strategy.md — gaps are asserted, not
+// silently fixed). If this test starts failing, the gap was closed: update the
+// hardening doc and invert this assertion.
+func TestVerifyRefreshTokenAcceptsAccessTokenPinnedGap(t *testing.T) {
+	issuer := &Issuer{
+		hmacSecret: []byte("test-secret-key-32-chars-long!!"),
+		issuer:     "fyredocs",
+		audience:   "fyredocs-api",
+	}
+
+	accessToken, _, _, err := issuer.IssueAccessToken("user-confused", "user", nil, time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	userID, err := issuer.VerifyRefreshToken(accessToken)
+	if err != nil {
+		t.Fatalf("pinned behavior changed: VerifyRefreshToken now rejects access tokens (%v) — update backend-hardening.md and this test", err)
+	}
+	if userID != "user-confused" {
+		t.Errorf("expected subject 'user-confused', got %q", userID)
 	}
 }

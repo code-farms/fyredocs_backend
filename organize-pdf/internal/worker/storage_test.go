@@ -231,3 +231,130 @@ func TestMarkRecoverable(t *testing.T) {
 		t.Error("wrapped marked error should remain recoverable")
 	}
 }
+
+// ─── fetchInputs containment ─────────────────────────────────────────────────
+//
+// NOTE: duplicated across the four PDF workers by design (CLAUDE.md §1).
+//
+// Object keys derive from user-supplied filenames, so fetchInputs is a trust
+// boundary: path.Base is the containment (see the SECURITY comment on
+// fetchInputs). These tests drive it with hostile keys and assert that nothing
+// is ever written outside the per-job scratch directory.
+
+// assertInsideScratch fails the test if p, after cleaning, escapes scratch.
+func assertInsideScratch(t *testing.T, scratch, p string) {
+	t.Helper()
+	rel, err := filepath.Rel(scratch, filepath.Clean(p))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		t.Errorf("path %q escapes scratch dir %q (rel %q)", p, scratch, rel)
+	}
+}
+
+// TestFetchInputsAdversarialKeys verifies that traversal-shaped keys collapse
+// to a single path segment flat inside <scratch>/in/ — the property that makes
+// containment provable.
+func TestFetchInputsAdversarialKeys(t *testing.T) {
+	cases := []struct {
+		name     string
+		key      string
+		wantBase string
+	}{
+		{"relative traversal", "../../etc/passwd", "passwd"},
+		{"absolute path", "/etc/passwd", "passwd"},
+		{"embedded dotdot", "a/b/../c.pdf", "c.pdf"},
+		// Percent-encoded separators are inert: they reach storage as literal
+		// bytes, so the whole thing is one path segment, not a traversal.
+		{"encoded traversal", "users/u1/..%2f..%2fescape.pdf", "..%2f..%2fescape.pdf"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			scratch := t.TempDir()
+			store := newFakeStorage()
+			paths, err := fetchInputs(context.Background(), store, scratch, []string{tc.key})
+			if err != nil {
+				t.Fatalf("fetchInputs(%q) error: %v", tc.key, err)
+			}
+			if len(paths) != 1 {
+				t.Fatalf("expected 1 path, got %v", paths)
+			}
+			inDir := filepath.Join(scratch, "in")
+			if filepath.Dir(paths[0]) != inDir {
+				t.Errorf("file for key %q landed at %q, want flat inside %q", tc.key, paths[0], inDir)
+			}
+			if filepath.Base(paths[0]) != tc.wantBase {
+				t.Errorf("base = %q, want %q", filepath.Base(paths[0]), tc.wantBase)
+			}
+			assertInsideScratch(t, scratch, paths[0])
+			if _, statErr := os.Stat(paths[0]); statErr != nil {
+				t.Errorf("expected downloaded file at %q: %v", paths[0], statErr)
+			}
+		})
+	}
+}
+
+// TestFetchInputsDotDotKey pins the one key path.Base cannot flatten: ".." is
+// its own base, so the download target resolves to the scratch directory
+// itself. Containment still holds — the target never leaves scratch, and the
+// write fails because it aims at an existing directory — but the failure mode
+// is an error, not a contained download. Pinned current behavior.
+func TestFetchInputsDotDotKey(t *testing.T) {
+	scratch := t.TempDir()
+	store := newFakeStorage()
+	if _, err := fetchInputs(context.Background(), store, scratch, []string{".."}); err == nil {
+		t.Fatal("expected error for key \"..\": its download target is the scratch directory itself")
+	}
+	// The failed attempt must leave nothing behind — inside or outside scratch.
+	entries, err := os.ReadDir(scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("scratch dir should be empty after the failed fetch, found %d entries", len(entries))
+	}
+}
+
+// TestFetchInputsEmptyStringKey pins the empty-key degenerate: path.Base("")
+// is ".", so the target collapses to <scratch>/in itself and the download
+// creates a regular FILE named "in" at the scratch root — inside scratch (the
+// security property fetchInputs owns still holds), but not inside a real in/
+// directory. Pinned current behavior, not an endorsement: job-service
+// validates input paths upstream, so an empty key should never reach here.
+func TestFetchInputsEmptyStringKey(t *testing.T) {
+	scratch := t.TempDir()
+	store := newFakeStorage()
+	paths, err := fetchInputs(context.Background(), store, scratch, []string{""})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := filepath.Join(scratch, "in")
+	if len(paths) != 1 || paths[0] != want {
+		t.Fatalf("paths = %v, want [%s] (pinned degenerate)", paths, want)
+	}
+	assertInsideScratch(t, scratch, paths[0])
+}
+
+// TestFetchInputsBasenameCollisionPinned pins a consequence of the flat in/
+// layout: two keys sharing a basename map to the same local file, so the
+// second download overwrites the first and the job processes one input twice.
+// Unreachable in practice — upload keys carry a UUID-prefixed basename
+// (users/<id>/<uuid>_<name>) — but worth pinning so a change to the key scheme
+// re-evaluates this.
+func TestFetchInputsBasenameCollisionPinned(t *testing.T) {
+	scratch := t.TempDir()
+	store := newFakeStorage()
+	paths, err := fetchInputs(context.Background(), store, scratch, []string{"users/u1/report.pdf", "users/u2/report.pdf"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(paths) != 2 || paths[0] != paths[1] {
+		t.Fatalf("pinned behavior changed: expected both keys to collapse to one local path, got %v", paths)
+	}
+	// Last download wins: the surviving content is the second key's.
+	data, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "content of users/u2/report.pdf" {
+		t.Errorf("surviving content = %q, want the second key's download", data)
+	}
+}

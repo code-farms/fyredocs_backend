@@ -15,6 +15,16 @@ import (
 	"fyredocs/shared/circuitbreaker"
 )
 
+// TestCorsAllowOrigin covers the happy paths plus the adversarial origins a
+// browser or attacker can actually send. Matching is exact-string, which is
+// what makes the suffix/scheme/port tricks fail closed — a looser (substring
+// or suffix) match would let evil-example.com ride an example.com allowlist.
+//
+// NOTE: the last two rows pin the documented wildcard widening
+// (main.go corsAllowOrigin): allowedOrigins ["*"] with credentials enabled
+// echoes ANY caller origin — including the literal "null" that sandboxed
+// iframes and file:// pages send — so that configuration must never leave
+// local development.
 func TestCorsAllowOrigin(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -30,6 +40,19 @@ func TestCorsAllowOrigin(t *testing.T) {
 		{"non-matching origin", "http://evil.com", []string{"http://localhost:5173"}, false, ""},
 		{"case insensitive match", "HTTP://LOCALHOST:5173", []string{"http://localhost:5173"}, false, "HTTP://LOCALHOST:5173"},
 		{"multiple allowed origins", "http://example.com", []string{"http://localhost:5173", "http://example.com"}, false, "http://example.com"},
+		{"null origin not in allowlist", "null", []string{"https://example.com"}, false, ""},
+		{"null origin with credentials still denied", "null", []string{"https://example.com"}, true, ""},
+		{"scheme mismatch http vs https", "http://example.com", []string{"https://example.com"}, false, ""},
+		{"subdomain suffix trick evil-example.com", "https://evil-example.com", []string{"https://example.com"}, false, ""},
+		{"allowed host embedded as attacker subdomain", "https://example.com.evil.com", []string{"https://example.com"}, false, ""},
+		{"prefix trick allowed origin plus suffix", "https://example.com.evil", []string{"https://example.com"}, false, ""},
+		{"trailing slash does not match", "https://example.com/", []string{"https://example.com"}, false, ""},
+		{"explicit port does not match portless allowlist", "https://example.com:8443", []string{"https://example.com"}, false, ""},
+		{"portless origin does not match ported allowlist", "https://example.com", []string{"https://example.com:8443"}, false, ""},
+		{"empty allowlist denies everything", "https://example.com", nil, false, ""},
+		{"empty allowlist entry (trailing comma) never matches", "https://example.com", []string{""}, false, ""},
+		{"wildcard with credentials echoes null origin", "null", []string{"*"}, true, "null"},
+		{"wildcard with credentials echoes attacker origin", "https://evil.com", []string{"*"}, true, "https://evil.com"},
 	}
 
 	for _, tt := range tests {
@@ -317,6 +340,27 @@ func TestRegisterServiceRoutesAppliesBodyLimitToUploadRoute(t *testing.T) {
 		// where the read fails the proxy surfaces 413 or 502 — never 2xx.
 		if rec.Code < 400 {
 			t.Errorf("expected error status for oversized body on /api/upload, got %d", rec.Code)
+		}
+	})
+
+	// Boundary pins for the 1 MiB cap wired in registerServiceRoutes
+	// (main.go: withMaxBodySize(..., 1<<20)). MaxBytesReader is inclusive:
+	// exactly the limit must pass, one byte more must not.
+	t.Run("body of exactly 1 MiB passes", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/upload/init", bytes.NewReader(make([]byte, 1<<20)))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200 for body of exactly 1 MiB, got %d", rec.Code)
+		}
+	})
+
+	t.Run("body of 1 MiB plus one byte is rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/upload/init", bytes.NewReader(make([]byte, 1<<20+1)))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code < 400 {
+			t.Errorf("expected error status for 1 MiB + 1 byte body, got %d", rec.Code)
 		}
 	})
 }

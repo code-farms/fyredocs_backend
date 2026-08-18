@@ -10,6 +10,7 @@ import (
 )
 
 func TestWriteErr(t *testing.T) {
+	t.Parallel()
 	rec := httptest.NewRecorder()
 	WriteErr(rec, http.StatusBadRequest, "INVALID_INPUT", "bad request")
 
@@ -30,6 +31,7 @@ func TestWriteErr(t *testing.T) {
 }
 
 func TestWriteOK(t *testing.T) {
+	t.Parallel()
 	rec := httptest.NewRecorder()
 	WriteOK(rec, http.StatusOK, "done", map[string]string{"key": "value"})
 
@@ -50,16 +52,19 @@ func TestWriteOK(t *testing.T) {
 }
 
 func TestWriteErrNilWriter(t *testing.T) {
+	t.Parallel()
 	// Should not panic
 	WriteErr(nil, http.StatusInternalServerError, "ERR", "test")
 }
 
 func TestWriteOKNilWriter(t *testing.T) {
+	t.Parallel()
 	// Should not panic
 	WriteOK(nil, http.StatusOK, "ok", nil)
 }
 
 func TestGinOK(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -83,6 +88,7 @@ func TestGinOK(t *testing.T) {
 }
 
 func TestGinErr(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -106,6 +112,7 @@ func TestGinErr(t *testing.T) {
 }
 
 func TestGinCreated(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -118,6 +125,7 @@ func TestGinCreated(t *testing.T) {
 }
 
 func TestGinNoContent(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -130,6 +138,7 @@ func TestGinNoContent(t *testing.T) {
 }
 
 func TestGinOKWithMeta(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -149,6 +158,7 @@ func TestGinOKWithMeta(t *testing.T) {
 }
 
 func TestGinAbortErr(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -164,6 +174,7 @@ func TestGinAbortErr(t *testing.T) {
 }
 
 func TestRequestIDInMeta(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -184,6 +195,7 @@ func TestRequestIDInMeta(t *testing.T) {
 }
 
 func TestGinBadRequest(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -194,6 +206,7 @@ func TestGinBadRequest(t *testing.T) {
 }
 
 func TestGinUnauthorized(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -204,6 +217,7 @@ func TestGinUnauthorized(t *testing.T) {
 }
 
 func TestGinNotFound(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -214,6 +228,7 @@ func TestGinNotFound(t *testing.T) {
 }
 
 func TestGinInternalError(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -224,6 +239,7 @@ func TestGinInternalError(t *testing.T) {
 }
 
 func TestGinForbidden(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)

@@ -1,13 +1,19 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"fyredocs/shared/authverify"
 	"fyredocs/shared/natsconn"
@@ -204,5 +210,115 @@ func TestSSEJobUpdates_JobNotFound(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 for a missing job", w.Code)
+	}
+}
+
+// ─── Client-disconnect resilience ─────────────────────────────────────────────
+
+// sseFakeBatch is an empty jetstream.MessageBatch — a closed channel and no
+// error, the shape of a Fetch that elapsed with nothing to deliver.
+type sseFakeBatch struct{}
+
+func (sseFakeBatch) Messages() <-chan jetstream.Msg {
+	ch := make(chan jetstream.Msg)
+	close(ch)
+	return ch
+}
+func (sseFakeBatch) Error() error { return nil }
+
+// sseFakeConsumer embeds the jetstream.Consumer interface so only the methods
+// SSEJobUpdates actually calls need implementations; anything else panics on
+// the nil embedded interface, which is the drift alarm we want if the handler
+// starts using more of the consumer surface.
+type sseFakeConsumer struct {
+	jetstream.Consumer
+	fetchStarted chan struct{} // closed on first Fetch: the stream is now mid-flight
+	release      chan struct{} // Fetch blocks until closed (models FetchMaxWait)
+	once         sync.Once
+}
+
+func (c *sseFakeConsumer) CachedInfo() *jetstream.ConsumerInfo {
+	return &jetstream.ConsumerInfo{Name: "sse-fake"}
+}
+
+// Fetch blocks like a real pull consumer with no traffic, then returns an
+// empty batch when released — the FetchMaxWait-expiry shape after which the
+// stream loop re-checks its context.
+func (c *sseFakeConsumer) Fetch(int, ...jetstream.FetchOpt) (jetstream.MessageBatch, error) {
+	c.once.Do(func() { close(c.fetchStarted) })
+	<-c.release
+	return sseFakeBatch{}, nil
+}
+
+// sseFakeJS satisfies jetstream.JetStream via embedding, overriding just the
+// consumer lifecycle calls the SSE handler makes.
+type sseFakeJS struct {
+	jetstream.JetStream
+	cons *sseFakeConsumer
+}
+
+func (f *sseFakeJS) CreateConsumer(context.Context, string, jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+	return f.cons, nil
+}
+func (f *sseFakeJS) DeleteConsumer(context.Context, string, string) error { return nil }
+
+// TestSSEJobUpdates_ClientDisconnectEndsHandler pins disconnect resilience: a
+// client that goes away mid-stream (net/http surfaces a dropped connection as
+// request-context cancellation) must end the handler promptly instead of
+// leaving its goroutine pinned to a dead connection for the remainder of the
+// 5-minute stream budget — under load, leaked SSE handlers accumulate per
+// abandoned tab until the server runs out of them.
+func TestSSEJobUpdates_ClientDisconnectEndsHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cons := &sseFakeConsumer{fetchStarted: make(chan struct{}), release: make(chan struct{})}
+	originalJS := natsconn.JS
+	natsconn.JS = &sseFakeJS{cons: cons}
+	defer func() { natsconn.JS = originalJS }()
+
+	r := ownedJobRouter(t)
+
+	before := runtime.NumGoroutine()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs/job-1/events", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.ServeHTTP(rec, req)
+	}()
+
+	// Wait until the handler is mid-stream (blocked in Fetch), then disconnect.
+	select {
+	case <-cons.fetchStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler never reached Fetch — the stream did not start")
+	}
+	cancel()
+	close(cons.release) // the in-flight Fetch returns, as it would at FetchMaxWait
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler leaked: still streaming 5s after the client disconnected")
+	}
+
+	// Safe to read the recorder once the handler goroutine has exited.
+	if body := rec.Body.String(); !strings.Contains(body, "event: connected") {
+		t.Errorf("stream never sent the connected event; body = %q", body)
+	}
+
+	// Belt and braces: total goroutines settle back to (roughly) the baseline.
+	// Tolerance absorbs unrelated runtime/test-framework goroutines; the hard
+	// assertion above (handler returned) is the real leak check.
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before+2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if g := runtime.NumGoroutine(); g > before+2 {
+		t.Errorf("goroutines = %d, baseline %d (+2 tolerance) — SSE disconnect leaked goroutines", g, before)
 	}
 }

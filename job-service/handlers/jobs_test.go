@@ -23,9 +23,11 @@ import (
 	"github.com/redis/go-redis/v9"
 	"gorm.io/datatypes"
 
+	"fyredocs/shared/authverify"
 	"fyredocs/shared/redisstore"
 
 	"job-service/internal/models"
+	"job-service/internal/routing"
 )
 
 // withMiniRedis swaps the global redisstore.Client for one backed by an
@@ -192,6 +194,22 @@ func TestValidateFileType(t *testing.T) {
 		{"flatten-pdf rejects Word", "flatten-pdf", "form.docx", true},
 		{"pdf-metadata accepts PDF", "pdf-metadata", "doc.pdf", false},
 		{"pdf-metadata rejects image", "pdf-metadata", "doc.png", true},
+
+		// Routable aliases the workers accept verbatim. Regression rows: these
+		// five tool names were dispatchable with no extension or content
+		// validation at all until they were added to the switch.
+		{"pdf-to-docx accepts PDF", "pdf-to-docx", "doc.pdf", false},
+		{"pdf-to-docx rejects Word", "pdf-to-docx", "doc.docx", true},
+		{"pdf-to-xlsx accepts PDF", "pdf-to-xlsx", "sheet.pdf", false},
+		{"pdf-to-xlsx rejects executable", "pdf-to-xlsx", "run.exe", true},
+		{"pdf-to-pptx accepts PDF", "pdf-to-pptx", "deck.pdf", false},
+		{"pdf-to-pptx rejects PowerPoint", "pdf-to-pptx", "deck.pptx", true},
+		{"pdf-to-txt accepts PDF", "pdf-to-txt", "doc.pdf", false},
+		{"pdf-to-txt rejects text", "pdf-to-txt", "doc.txt", true},
+		{"html-to-pdf accepts .html", "html-to-pdf", "page.html", false},
+		{"html-to-pdf accepts .htm", "html-to-pdf", "page.htm", false},
+		{"html-to-pdf rejects PDF", "html-to-pdf", "page.pdf", true},
+		{"html-to-pdf rejects executable", "html-to-pdf", "page.exe", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -426,6 +444,12 @@ func TestMimeCategory(t *testing.T) {
 		{"odp-to-pdf", "odp"},
 		{"flatten-pdf", "pdf"},
 		{"pdf-metadata", "pdf"},
+		// Alias regression rows — see the matching TestValidateFileType note.
+		{"pdf-to-docx", "pdf"},
+		{"pdf-to-xlsx", "pdf"},
+		{"pdf-to-pptx", "pdf"},
+		{"pdf-to-txt", "pdf"},
+		{"html-to-pdf", "html"},
 		{"unknown-tool", ""},
 	}
 	for _, tt := range tests {
@@ -642,7 +666,7 @@ func TestConsumeUpload_HappyPathPreservesState(t *testing.T) {
 	uploadID := "upl-success"
 	key := seedUploadObject(t, client, fs, uploadID, "photo.png", pngBytes)
 
-	consumed, err := consumeUpload(context.Background(), "image-to-pdf", uploadID)
+	consumed, err := consumeUpload(context.Background(), "image-to-pdf", uploadID, "")
 	if err != nil {
 		t.Fatalf("consumeUpload: %v", err)
 	}
@@ -679,11 +703,11 @@ func TestConsumeUpload_RetrySafe(t *testing.T) {
 
 	// consumeUpload is read-only — a second call with the same uploadId
 	// (frontend retry after a downstream failure) must succeed identically.
-	first, err := consumeUpload(context.Background(), "image-to-pdf", uploadID)
+	first, err := consumeUpload(context.Background(), "image-to-pdf", uploadID, "")
 	if err != nil {
 		t.Fatalf("first consumeUpload: %v", err)
 	}
-	second, err := consumeUpload(context.Background(), "image-to-pdf", uploadID)
+	second, err := consumeUpload(context.Background(), "image-to-pdf", uploadID, "")
 	if err != nil {
 		t.Fatalf("retry consumeUpload must succeed, got: %v", err)
 	}
@@ -696,7 +720,7 @@ func TestConsumeUpload_RejectsMissingUpload(t *testing.T) {
 	_, _ = withMiniRedis(t)
 	withFakeStore(t)
 
-	_, err := consumeUpload(context.Background(), "image-to-pdf", "nope")
+	_, err := consumeUpload(context.Background(), "image-to-pdf", "nope", "")
 	if err == nil || err.Error() != "upload not found" {
 		t.Errorf("expected 'upload not found', got %v", err)
 	}
@@ -713,7 +737,7 @@ func TestConsumeUpload_RejectsMissingObject(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := consumeUpload(context.Background(), "image-to-pdf", uploadID)
+	_, err := consumeUpload(context.Background(), "image-to-pdf", uploadID, "")
 	if err == nil {
 		t.Fatal("expected error when the uploaded object is missing")
 	}
@@ -731,7 +755,7 @@ func TestConsumeUpload_RejectsWrongFileType(t *testing.T) {
 	uploadID := "upl-bad-ext"
 	key := seedUploadObject(t, client, fs, uploadID, "doc.pdf", []byte("%PDF-1.4"))
 
-	_, err := consumeUpload(context.Background(), "image-to-pdf", uploadID)
+	_, err := consumeUpload(context.Background(), "image-to-pdf", uploadID, "")
 	if err == nil {
 		t.Fatal("expected error for pdf submitted to image-to-pdf")
 	}
@@ -753,7 +777,7 @@ func TestConsumeUpload_RejectsMIMEMismatch(t *testing.T) {
 	uploadID := "upl-bad-mime"
 	seedUploadObject(t, client, fs, uploadID, "doc.pdf", pngBytes)
 
-	_, err := consumeUpload(context.Background(), "pdf-to-word", uploadID)
+	_, err := consumeUpload(context.Background(), "pdf-to-word", uploadID, "")
 	if err == nil || !strings.Contains(err.Error(), "not allowed") {
 		t.Errorf("expected MIME mismatch error, got %v", err)
 	}
@@ -1062,4 +1086,131 @@ func TestRedactSecretOptions(t *testing.T) {
 	if out := redactSecretOptions(map[string]interface{}{}); len(out) != 0 {
 		t.Errorf("empty map should stay empty, got %v", out)
 	}
+}
+
+// TestEveryRoutedToolIsValidated pins the coupling that validateMIMEHead's
+// deliberate fail-open makes dangerous: a tool present in
+// routing.ToolServiceMap but missing from validateFileType/mimeCategory is
+// dispatchable with no extension or content checks at all. That is exactly
+// how pdf-to-docx/xlsx/pptx/txt and html-to-pdf shipped unvalidated, so this
+// test fails the moment a new tool is routed without its validation cases.
+func TestEveryRoutedToolIsValidated(t *testing.T) {
+	for tool := range routing.ToolServiceMap {
+		t.Run(tool, func(t *testing.T) {
+			canonical, err := normalizeToolType(tool)
+			if err != nil {
+				t.Fatalf("routed tool failed normalization: %v", err)
+			}
+			if mimeCategory(canonical) == "" {
+				t.Errorf("mimeCategory(%q) = %q — content sniffing is fail-open for this routed tool", canonical, "")
+			}
+			if err := validateFileType(canonical, "payload.zzz"); err == nil {
+				t.Errorf("validateFileType(%q, payload.zzz) accepted an arbitrary extension", canonical)
+			}
+		})
+	}
+}
+
+// authzContext builds a request-bearing gin context for authorizeJobAccess
+// tests. Identity is layered on by the callers: SetGinAuth for users, the
+// guest_token cookie for guests, neither for anonymous.
+func authzContext(t *testing.T) *gin.Context {
+	t.Helper()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/jobs/x", nil)
+	return c
+}
+
+func TestAuthorizeJobAccess_UserOwnedJob(t *testing.T) {
+	ownerID := uuid.New()
+	job := &models.ProcessingJob{ID: uuid.New(), UserID: &ownerID}
+
+	t.Run("owner passes", func(t *testing.T) {
+		c := authzContext(t)
+		authverify.SetGinAuth(c, authverify.AuthContext{UserID: ownerID.String()})
+		if !authorizeJobAccess(c, job) {
+			t.Error("owner was denied their own job")
+		}
+	})
+
+	t.Run("different user denied", func(t *testing.T) {
+		c := authzContext(t)
+		authverify.SetGinAuth(c, authverify.AuthContext{UserID: uuid.NewString()})
+		if authorizeJobAccess(c, job) {
+			t.Error("IDOR: another user read a job they do not own")
+		}
+	})
+
+	t.Run("unauthenticated denied", func(t *testing.T) {
+		if authorizeJobAccess(authzContext(t), job) {
+			t.Error("anonymous caller read a user-owned job")
+		}
+	})
+
+	t.Run("guest token never reaches an account job", func(t *testing.T) {
+		// Even a guest whose Redis set somehow contains the job ID must be
+		// denied: ownership by UserID and ownership by guest token are
+		// disjoint models, and crossing them would let a forged guest set
+		// read account data.
+		_, client := withMiniRedis(t)
+		c := authzContext(t)
+		const token = "guest-tok-crossover"
+		client.SAdd(context.Background(), "guest:"+token+":jobs", job.ID.String())
+		c.Request.AddCookie(&http.Cookie{Name: "guest_token", Value: token})
+		if authorizeJobAccess(c, job) {
+			t.Error("guest token granted access to a user-owned job")
+		}
+	})
+}
+
+func TestAuthorizeJobAccess_GuestJob(t *testing.T) {
+	job := &models.ProcessingJob{ID: uuid.New()} // no UserID: guest-owned
+
+	t.Run("missing token denied", func(t *testing.T) {
+		withMiniRedis(t)
+		if authorizeJobAccess(authzContext(t), job) {
+			t.Error("anonymous caller without a token read a guest job")
+		}
+	})
+
+	t.Run("token holding the job passes", func(t *testing.T) {
+		_, client := withMiniRedis(t)
+		const token = "guest-tok-owner"
+		client.SAdd(context.Background(), "guest:"+token+":jobs", job.ID.String())
+		c := authzContext(t)
+		c.Request.AddCookie(&http.Cookie{Name: "guest_token", Value: token})
+		if !authorizeJobAccess(c, job) {
+			t.Error("owning guest was denied their job")
+		}
+	})
+
+	t.Run("token not holding the job denied", func(t *testing.T) {
+		withMiniRedis(t)
+		c := authzContext(t)
+		c.Request.AddCookie(&http.Cookie{Name: "guest_token", Value: "guest-tok-stranger"})
+		if authorizeJobAccess(c, job) {
+			t.Error("guest job IDs are enumerable by any token holder")
+		}
+	})
+
+	t.Run("authenticated user without token denied", func(t *testing.T) {
+		withMiniRedis(t)
+		c := authzContext(t)
+		authverify.SetGinAuth(c, authverify.AuthContext{UserID: uuid.NewString()})
+		if authorizeJobAccess(c, job) {
+			t.Error("logged-in user read an unrelated guest job")
+		}
+	})
+
+	t.Run("unreachable redis fails closed", func(t *testing.T) {
+		prev := redisstore.Client
+		redisstore.Client = nil
+		t.Cleanup(func() { redisstore.Client = prev })
+
+		c := authzContext(t)
+		c.Request.AddCookie(&http.Cookie{Name: "guest_token", Value: "guest-tok-owner"})
+		if authorizeJobAccess(c, job) {
+			t.Error("redis outage granted access instead of denying")
+		}
+	})
 }

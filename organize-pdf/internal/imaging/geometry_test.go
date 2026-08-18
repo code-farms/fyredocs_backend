@@ -6,6 +6,7 @@ import (
 )
 
 func TestOrderCornersPermutations(t *testing.T) {
+	t.Parallel()
 	want := Quad{
 		TL: Point{0.1, 0.1},
 		TR: Point{0.9, 0.15},
@@ -27,6 +28,7 @@ func TestOrderCornersPermutations(t *testing.T) {
 }
 
 func TestQuadAreaUnitSquare(t *testing.T) {
+	t.Parallel()
 	q := FullImageQuad()
 	if area := q.Area(); math.Abs(area-1) > 1e-9 {
 		t.Errorf("full-image quad area = %f, want 1", area)
@@ -34,6 +36,7 @@ func TestQuadAreaUnitSquare(t *testing.T) {
 }
 
 func TestQuadConvexity(t *testing.T) {
+	t.Parallel()
 	if !FullImageQuad().IsConvex() {
 		t.Error("unit square should be convex")
 	}
@@ -50,6 +53,7 @@ func TestQuadConvexity(t *testing.T) {
 }
 
 func TestQuadValidate(t *testing.T) {
+	t.Parallel()
 	if err := FullImageQuad().Validate(); err != nil {
 		t.Errorf("full-image quad should validate: %v", err)
 	}
@@ -81,6 +85,7 @@ func TestQuadValidate(t *testing.T) {
 }
 
 func TestNormalizeDenormalizeRoundTrip(t *testing.T) {
+	t.Parallel()
 	q := Quad{
 		TL: Point{0.1, 0.2}, TR: Point{0.9, 0.25},
 		BR: Point{0.88, 0.9}, BL: Point{0.12, 0.85},
@@ -95,6 +100,7 @@ func TestNormalizeDenormalizeRoundTrip(t *testing.T) {
 }
 
 func TestClamp01(t *testing.T) {
+	t.Parallel()
 	q := Quad{
 		TL: Point{-0.2, 0.5}, TR: Point{1.3, -0.1},
 		BR: Point{0.5, 1.7}, BL: Point{0.5, 0.5},

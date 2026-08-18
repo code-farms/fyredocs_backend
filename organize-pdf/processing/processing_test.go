@@ -252,3 +252,13 @@ func TestZipDirectoryWithFiles(t *testing.T) {
 		t.Errorf("expected 2 entries in zip, got %d", len(r.File))
 	}
 }
+
+// BenchmarkParsePageRange guards page-expression expansion — it runs once per
+// split/rotate/extract job on a user-supplied range string, so quadratic
+// parsing or per-page allocation regressions surface here.
+func BenchmarkParsePageRange(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		parsePageRange("1-3,5,7-10,15-20", 50)
+	}
+}

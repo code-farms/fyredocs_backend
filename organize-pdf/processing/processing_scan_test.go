@@ -100,6 +100,61 @@ func TestTesseractLang(t *testing.T) {
 	}
 }
 
+// TestTesseractLangAdversarial treats tesseractLang as the trust boundary it
+// is: the result reaches a `tesseract -l` command line, so shell
+// metacharacters, control bytes, combo syntax, oversized values, and unicode
+// homoglyphs must all coerce onto the scanLanguages allowlist. The invariant
+// check at the bottom is the real guard; the exact-value rows document the
+// current mapping.
+func TestTesseractLangAdversarial(t *testing.T) {
+	cases := map[string]string{
+		// Shell/command injection shapes: never passed through.
+		"eng; rm -rf /": "eng",
+		"eng$(reboot)":  "eng",
+		"eng`id`":       "eng",
+		"deu && whoami": "eng",
+		"-l deu":        "eng",
+		// Control bytes: only edge whitespace is trimmed, so an interior
+		// newline or NUL makes the value unrecognized → default.
+		"eng\ndeu": "eng",
+		"deu\x00":  "eng",
+		// Case folding plus edge-whitespace trimming keeps legit values
+		// working even when clients serialize sloppily.
+		"DEU\n":  "deu",
+		"\tHIN ": "hin",
+		// Tesseract multi-language syntax is NOT supported: pinned — a combo
+		// is off the allowlist and coerces to the default.
+		"eng+deu": "eng",
+		"hin+eng": "eng",
+		// A pack that exists for tesseract but is not installed in this
+		// service's image must not pass through.
+		"chi_sim": "eng",
+		"jpn":     "eng",
+		// Path-shaped and oversized values.
+		"../../usr/share/tessdata": "eng",
+		strings.Repeat("a", 100):   "eng",
+		// Unicode homoglyphs (Cyrillic е U+0435, fullwidth letters) must not
+		// match: the output is the ASCII default, never the homoglyph itself.
+		"еng": "eng",
+		"ｅｎｇ": "eng",
+	}
+	for in, want := range cases {
+		got := tesseractLang(in)
+		if got != want {
+			t.Errorf("tesseractLang(%q) = %q, want %q", in, got, want)
+		}
+		if !scanLanguages[got] {
+			t.Errorf("tesseractLang(%q) = %q escaped the allowlist — this value would reach `tesseract -l` verbatim", in, got)
+		}
+	}
+	// Allowlist closure: every installed pack passes through unchanged.
+	for code := range scanLanguages {
+		if got := tesseractLang(code); got != code {
+			t.Errorf("allowlisted pack %q must pass through unchanged, got %q", code, got)
+		}
+	}
+}
+
 func TestImportConfigForPageSize(t *testing.T) {
 	for _, size := range []string{"", "auto", "AUTO", "weird"} {
 		imp, err := importConfigForPageSize(size, "")

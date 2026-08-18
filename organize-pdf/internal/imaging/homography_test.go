@@ -8,6 +8,7 @@ import (
 )
 
 func TestComputeHomographyIdentity(t *testing.T) {
+	t.Parallel()
 	pts := [4]Point{{0, 0}, {100, 0}, {100, 100}, {0, 100}}
 	h, err := ComputeHomography(pts, pts)
 	if err != nil {
@@ -22,6 +23,7 @@ func TestComputeHomographyIdentity(t *testing.T) {
 }
 
 func TestComputeHomographyKnownTrapezoid(t *testing.T) {
+	t.Parallel()
 	src := [4]Point{{10, 20}, {190, 10}, {180, 220}, {20, 230}}
 	dst := [4]Point{{0, 0}, {200, 0}, {200, 250}, {0, 250}}
 	h, err := ComputeHomography(src, dst)
@@ -37,6 +39,7 @@ func TestComputeHomographyKnownTrapezoid(t *testing.T) {
 }
 
 func TestComputeHomographyDegenerate(t *testing.T) {
+	t.Parallel()
 	// Three collinear source points → singular system.
 	src := [4]Point{{0, 0}, {50, 0}, {100, 0}, {0, 100}}
 	dst := [4]Point{{0, 0}, {100, 0}, {100, 100}, {0, 100}}
@@ -46,6 +49,7 @@ func TestComputeHomographyDegenerate(t *testing.T) {
 }
 
 func TestWarpOutputSize(t *testing.T) {
+	t.Parallel()
 	quad := Quad{
 		TL: Point{0, 0}, TR: Point{200, 0},
 		BR: Point{200, 300}, BL: Point{0, 300},
@@ -71,6 +75,7 @@ func TestWarpOutputSize(t *testing.T) {
 }
 
 func TestWarpPerspectiveCornerColors(t *testing.T) {
+	t.Parallel()
 	// A 100×100 image with distinct corner quadrant colors; warping the inner
 	// quad that covers the whole image should preserve corner colors.
 	src := image.NewRGBA(image.Rect(0, 0, 100, 100))

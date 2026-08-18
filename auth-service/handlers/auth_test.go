@@ -1,3 +1,7 @@
+// Tests for the authentication handlers' pure helpers and pre-DB guard paths.
+// The invariants under guard: login failures are uniform in both response and
+// bcrypt cost (no account-enumeration oracle), the password hash never reaches
+// a response body, and cookie attributes match between set and clear.
 package handlers
 
 import (
@@ -5,15 +9,90 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"auth-service/internal/models"
 )
+
+// TestDummyPasswordHashTimingEqualizer pins the login timing equalizer: when
+// the email is unknown, Login compares the supplied password against
+// dummyPasswordHash so the failure burns the same bcrypt cost as a real
+// mismatch. The handler path itself needs models.DB (the unknown-email branch
+// only runs after a database lookup), so this pins the constant's properties:
+// a malformed or cheap hash would silently reintroduce the timing oracle while
+// the compare's error is discarded with `_ =` in Login.
+func TestDummyPasswordHashTimingEqualizer(t *testing.T) {
+	t.Run("cost matches signup hashes", func(t *testing.T) {
+		cost, err := bcrypt.Cost(dummyPasswordHash)
+		if err != nil {
+			t.Fatalf("dummyPasswordHash is not a parseable bcrypt hash: %v", err)
+		}
+		// Signup hashes with bcrypt.DefaultCost; a differing cost would make the
+		// unknown-email path measurably faster or slower than a real mismatch.
+		if cost != bcrypt.DefaultCost {
+			t.Errorf("dummyPasswordHash cost = %d, want bcrypt.DefaultCost (%d)", cost, bcrypt.DefaultCost)
+		}
+	})
+
+	t.Run("compare runs to a full-cost mismatch", func(t *testing.T) {
+		err := bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte("attacker-guess"))
+		// ErrMismatchedHashAndPassword proves the full key-derivation ran; a
+		// parse-stage error (e.g. ErrHashTooShort) would return in microseconds
+		// and defeat the equalization.
+		if !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			t.Errorf("CompareHashAndPassword = %v, want bcrypt.ErrMismatchedHashAndPassword", err)
+		}
+	})
+}
+
+// TestLoginPreDBGuards exercises Login's rejection paths that run before any
+// database access. models.DB is nil in unit tests, so reaching the user lookup
+// would panic — passing doubles as proof these guards stay pre-DB. Both guard
+// rejections must be the uniform INVALID_CREDENTIALS 401, never a distinct
+// validation error that would tell a prober which field failed.
+func TestLoginPreDBGuards(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ae := &AuthEndpoints{}
+	r := gin.New()
+	r.POST("/auth/login", ae.Login)
+
+	cases := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantCode   string
+	}{
+		// Whitespace values pass the binding's `required` tag, so the post-trim
+		// guard is the only thing standing between them and the DB lookup.
+		{"whitespace email is uniform 401", `{"email":"   ","password":"correct-horse"}`, http.StatusUnauthorized, "INVALID_CREDENTIALS"},
+		{"whitespace password is uniform 401", `{"email":"user@example.com","password":"   "}`, http.StatusUnauthorized, "INVALID_CREDENTIALS"},
+		{"missing password fails binding", `{"email":"user@example.com"}`, http.StatusBadRequest, ""},
+		{"missing email fails binding", `{"password":"correct-horse"}`, http.StatusBadRequest, ""},
+		{"malformed json fails binding", `not-json`, http.StatusBadRequest, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantCode != "" && !strings.Contains(rec.Body.String(), tc.wantCode) {
+				t.Errorf("body %q missing error code %q", rec.Body.String(), tc.wantCode)
+			}
+		})
+	}
+}
 
 func TestNormalizeEmail(t *testing.T) {
 	tests := []struct {

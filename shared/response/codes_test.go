@@ -7,6 +7,7 @@ import "testing"
 // break and must be deliberate — if this test fails, you are renaming a code
 // every client sees.
 func TestErrorCodeValuesAreStable(t *testing.T) {
+	t.Parallel()
 	pins := map[string]string{
 		CodeInvalidInput:        "INVALID_INPUT",
 		CodeInvalidID:           "INVALID_ID",

@@ -38,6 +38,7 @@ func decodeEnvelope(t *testing.T, rec *httptest.ResponseRecorder) APIResponse {
 }
 
 func TestBindJSONSuccess(t *testing.T) {
+	t.Parallel()
 	rec, ok := doBind(t, `{"email":"a@b.com","name":"ok","count":3}`)
 	if !ok {
 		t.Fatalf("expected bind to succeed, got %s", rec.Body.String())
@@ -48,6 +49,7 @@ func TestBindJSONSuccess(t *testing.T) {
 }
 
 func TestBindJSONMalformedJSON(t *testing.T) {
+	t.Parallel()
 	rec, ok := doBind(t, `not-json`)
 	if ok {
 		t.Fatal("expected bind to fail")
@@ -62,6 +64,7 @@ func TestBindJSONMalformedJSON(t *testing.T) {
 }
 
 func TestBindJSONValidationErrorsNameFields(t *testing.T) {
+	t.Parallel()
 	rec, ok := doBind(t, `{"email":"not-an-email","count":-2}`)
 	if ok {
 		t.Fatal("expected bind to fail")
@@ -82,6 +85,7 @@ func TestBindJSONValidationErrorsNameFields(t *testing.T) {
 }
 
 func TestBindJSONOptionalFieldsPass(t *testing.T) {
+	t.Parallel()
 	// count is omitempty — omitting it entirely must not fail gt=0.
 	_, ok := doBind(t, `{"email":"a@b.com","name":"ok"}`)
 	if !ok {

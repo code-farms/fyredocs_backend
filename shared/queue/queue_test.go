@@ -6,6 +6,7 @@ import (
 )
 
 func TestSubjectForDispatch(t *testing.T) {
+	t.Parallel()
 	got := SubjectForDispatch("convert-from-pdf")
 	want := "jobs.dispatch.convert-from-pdf"
 	if got != want {
@@ -14,6 +15,7 @@ func TestSubjectForDispatch(t *testing.T) {
 }
 
 func TestSubjectForEvent(t *testing.T) {
+	t.Parallel()
 	got := SubjectForEvent("completed")
 	want := "jobs.events.completed"
 	if got != want {
@@ -22,6 +24,7 @@ func TestSubjectForEvent(t *testing.T) {
 }
 
 func TestJobEventMarshal(t *testing.T) {
+	t.Parallel()
 	event := JobEvent{
 		EventType: "JobCreated",
 		JobID:     "test-id",
@@ -45,6 +48,7 @@ func TestJobEventMarshal(t *testing.T) {
 }
 
 func TestSubjectForDispatchVariousServices(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		service string
 		want    string

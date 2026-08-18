@@ -6,6 +6,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -29,6 +30,12 @@ type AnalyticsEvent struct {
 // analytics NATS stream, carrying the current W3C trace context in the
 // message headers so the analytics subscriber continues the same trace.
 func PublishAnalyticsEvent(ctx context.Context, js jetstream.JetStream, event AnalyticsEvent) error {
+	// Nil handle → error, not panic (same posture as PublishJobEvent). Most
+	// callers already guard, but one missed guard must cost a metric, never
+	// the user's request.
+	if js == nil {
+		return fmt.Errorf("queue: jetstream not initialized")
+	}
 	data, err := json.Marshal(event)
 	if err != nil {
 		return err

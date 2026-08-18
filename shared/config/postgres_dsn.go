@@ -47,6 +47,14 @@ func ApplyPostgresDSNDefaults(dsn string) string {
 		if err != nil {
 			return dsn
 		}
+		// A host-less URI (bare "postgres://") cannot connect anyway, and
+		// url.String() would render it WITHOUT the "//" — flipping it out of
+		// URI shape so a second application appends key=value duplicates.
+		// Unrecognisable-shape inputs are returned unchanged, so this
+		// degenerate one is too.
+		if u.Host == "" {
+			return dsn
+		}
 		q := u.Query()
 		for k, v := range defaults {
 			if q.Get(k) == "" {

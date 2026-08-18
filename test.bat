@@ -35,9 +35,14 @@ if "!HAS_TARGETS!"=="0" (
     set "TARGETS=shared api-gateway auth-service job-service convert-to-pdf convert-from-pdf organize-pdf optimize-pdf analytics-service document-service user-service notification-service"
 )
 
+REM Same flags as the Makefile TESTFLAGS / test.sh: -count=1 defeats the
+REM result cache, -shuffle=on surfaces order dependencies, -race and the
+REM timeout catch what a bare `go test` silently misses.
+set "TESTFLAGS=-race -count=1 -shuffle=on -timeout=10m"
+
 for %%s in (!TARGETS!) do (
     echo --- %%s ---
-    go test !VERBOSE! ./%%s/...
+    go test !VERBOSE! !TESTFLAGS! ./%%s/...
     if errorlevel 1 set "FAIL=1"
 )
 

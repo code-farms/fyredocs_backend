@@ -57,7 +57,7 @@ func CreateBackup(c *gin.Context) {
 
 	// The "backup" pseudo-tool applies the shareable-type gates (extension +
 	// MIME sniff) inside the normal upload consumption path.
-	consumed, err := consumeUpload(c.Request.Context(), "backup", strings.TrimSpace(req.UploadID))
+	consumed, err := consumeUpload(c.Request.Context(), "backup", strings.TrimSpace(req.UploadID), uploadOwnerID(c, false))
 	if err != nil {
 		response.BadRequest(c, response.CodeInvalidInput, err.Error())
 		return

@@ -36,7 +36,7 @@ File bytes never stream through the job-service. The browser talks to object sto
 2. The browser `PUT`s each part directly to the presigned URL and collects the returned `ETag`s.
 3. `GET /api/uploads/:uploadId/parts?partNumbers=2,3` — re-presigns part URLs (resume after interruption or URL expiry); all parts when `partNumbers` is omitted.
 4. `POST /api/uploads/:uploadId/complete` `{parts:[{partNumber,etag}]}` — completes the multipart upload, then `StatObject`s the result and re-verifies the **true** size against the plan limit (the declared size at init is client-supplied). Oversized objects are removed and the request gets 413.
-5. `POST /api/{category}/:tool` `{uploadId}` — job creation consumes the uploaded object in place (no copy): existence + size via `StatObject`, MIME sniff via a ranged GET of the first 512 bytes.
+5. `POST /api/{category}/:tool` `{uploadId}` — job creation consumes the uploaded object in place (no copy): existence + size via `StatObject`, MIME sniff via a ranged GET of the first 512 bytes. Consumption also enforces the session's `owner` binding (finding F4): a session initiated by another user or guest answers the same "upload not found" as a missing session — before this check (added 2026-08) any caller who learned a live `uploadId` could consume another user's bytes into their own job, share, or backup. Legacy pre-F4 sessions without an `owner` field remain consumable (grandfathered, matching `uploadOwnerMatches`).
 6. `DELETE /api/uploads/:uploadId` — aborts the S3 multipart upload and clears the session (idempotent, 204).
 
 `PUT /api/uploads/:uploadId/chunk` is a one-release migration stub for the retired chunk-streaming protocol: it always answers `410 UPLOAD_PROTOCOL_CHANGED` ("Please refresh the page to continue uploading.") so stale frontend bundles reload into the new flow. Remove it (route + handler) next release.
@@ -130,6 +130,8 @@ The `routing.go` file contains the centralized mapping from tool types to their 
 | `optimize-pdf` | compress-pdf, repair-pdf, ocr-pdf, flatten-pdf |
 
 The mapping in `routing.go` is the only authoritative source — these tables in docs are kept in sync, but **always cross-check against `internal/routing/routing.go` and each worker's `main.go` `AllowedTools` if there is any doubt.**
+
+**Every routed tool must also appear in `validateFileType` and `mimeCategory`** (`handlers/jobs.go`) — either under its own name or via `normalizeToolType` canonicalization. `validateMIMEHead` is deliberately fail-open for uncategorized tools, so a tool present in the routing map but missing from those switches is dispatchable with no extension or content validation at all. This happened to the `pdf-to-docx`/`pdf-to-xlsx`/`pdf-to-pptx`/`pdf-to-txt` aliases and `html-to-pdf` (fixed 2026-08; `html-to-pdf` now requires `.html`/`.htm` and sniffs against a `"html"` MIME category). `TestEveryRoutedToolIsValidated` in `handlers/jobs_test.go` enforces the coupling.
 
 ## Routes
 

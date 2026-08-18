@@ -147,3 +147,25 @@ func TestAbortErrorfAbortsAndLogs(t *testing.T) {
 		t.Errorf("expected log with error='token expired', got %+v", line)
 	}
 }
+
+// BenchmarkEnvelopeOK guards the cost of the standard success envelope
+// (extractMeta + gin JSON serialisation): every 2xx response in every service
+// pays it, so envelope bloat or an accidental reflection hot spot shows up as
+// a fleet-wide per-request tax. Recorder/context setup is included — it is the
+// same fixed cost for any handler benchmark and keeps the loop self-contained.
+func BenchmarkEnvelopeOK(b *testing.B) {
+	gin.SetMode(gin.TestMode)
+	payload := gin.H{
+		"jobId":    "11111111-2222-3333-4444-555555555555",
+		"status":   "queued",
+		"progress": 0,
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/api/jobs", nil)
+		c.Set("requestID", "req-bench-1")
+		OK(c, "Job created successfully", payload)
+	}
+}

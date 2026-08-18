@@ -51,10 +51,15 @@ if [ ${#TARGETS[@]} -eq 0 ]; then
   TARGETS=("${ALL_SERVICES[@]}")
 fi
 
+# Same flags as the Makefile TESTFLAGS: -count=1 defeats the result cache so
+# reruns actually execute, -shuffle=on surfaces order dependencies, -race and
+# the timeout catch what a bare `go test` silently misses.
+TESTFLAGS=(-race -count=1 -shuffle=on -timeout=10m)
+
 FAIL=0
 for svc in "${TARGETS[@]}"; do
   echo "--- $svc ---"
-  if ! go test $VERBOSE ./"$svc"/...; then
+  if ! go test $VERBOSE "${TESTFLAGS[@]}" ./"$svc"/...; then
     FAIL=1
   fi
 done
