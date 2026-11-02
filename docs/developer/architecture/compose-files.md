@@ -174,6 +174,30 @@ make check-ports        # -> deployment/scripts/check-port-exposure.sh
 It fails if any compose file host-publishes a port other than Caddy's `80`/`443`
 or a `127.0.0.1`-bound mapping. Run it in CI and before deploys.
 
+### Operator DB access (Tailscale)
+
+The full stack binds Postgres to `127.0.0.1:5432` on the host, so the address is
+stable across container recreates (the container's bridge IP is not), and it is
+never reachable from the internet. Operators reach it from their own machine
+over Tailscale, without an SSH tunnel and without an IP allowlist:
+
+```bash
+# on the server, once
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up --ssh
+sudo tailscale serve --bg --tcp 5432 tcp://localhost:5432   # persists across reboots
+```
+
+Beekeeper / psql then connect to the server's tailnet name (or `tailscale ip -4`)
+on port `5432` as `POSTGRES_USER`, SSL off (the tailnet is already encrypted).
+Use `5432`, not pgbouncer's `6432`: transaction pooling breaks GUI clients.
+
+Tailscale Serve is used instead of binding Docker to the `100.x` address on
+purpose: if tailscaled started after Docker at boot, that bind would fail and
+take `db` (and the app) down with it. With Serve, Docker never depends on
+Tailscale. Do **not** "simplify" this to `0.0.0.0:5432` plus a ufw rule —
+Docker-published ports bypass ufw.
+
 ## Multi-host
 
 `deploy.sh --host-role=<all|data|app|work>` selects the compose file and the

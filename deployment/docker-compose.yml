@@ -41,6 +41,12 @@ services:
     # in <=17). Mounting at the old path makes 18 refuse to start.
     volumes:
       - postgres_data:/var/lib/postgresql
+    ports:
+      # Loopback-only operator access (Beekeeper/psql). Exposed to the team's
+      # tailnet via `tailscale serve --tcp 5432`, never to the internet; app
+      # services keep using db:5432 on fyredocs_net. See
+      # docs/developer/architecture/compose-files.md "Operator DB access".
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-fyredocs}"]
       interval: 5s
