@@ -827,3 +827,36 @@ func TestRunSweep_DB_ConsumedCheckFailsSafe(t *testing.T) {
 		t.Error("the expired session itself is still reaped (redis is healthy)")
 	}
 }
+
+// TestGetJobByID_DB_OutputFileSize pins that a completed job reports its
+// output size separately from FileSize (the INPUT total), so the result
+// screen can show the compressed size before the user downloads. Unfinished
+// jobs omit the field rather than reporting 0 as if the output were empty.
+func TestGetJobByID_DB_OutputFileSize(t *testing.T) {
+	withDB(t)
+	owner := uuid.New()
+	router := jobRouter(seedAuth(owner.String()))
+
+	done := seedJob(t, &owner, nil)
+	if err := models.DB.Model(&done).Updates(map[string]any{"status": "completed", "file_size": 7_000_000}).Error; err != nil {
+		t.Fatalf("mark completed: %v", err)
+	}
+	out := seedFileMeta(t, done.ID, "output", "outputs/"+done.ID.String()+"/doc.pdf")
+
+	rec, env := doJSON(t, router, http.MethodGet, "/api/optimize-pdf/compress-pdf/"+done.ID.String(), nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := env.Data["outputFileSize"]; got != float64(out.SizeBytes) {
+		t.Errorf("outputFileSize = %v, want %d", got, out.SizeBytes)
+	}
+	if got := env.Data["fileSize"]; got != float64(7_000_000) {
+		t.Errorf("fileSize = %v, want the input total 7000000", got)
+	}
+
+	queued := seedJob(t, &owner, nil)
+	_, env = doJSON(t, router, http.MethodGet, "/api/optimize-pdf/compress-pdf/"+queued.ID.String(), nil, nil)
+	if _, present := env.Data["outputFileSize"]; present {
+		t.Errorf("queued job reported outputFileSize = %v, want it omitted", env.Data["outputFileSize"])
+	}
+}

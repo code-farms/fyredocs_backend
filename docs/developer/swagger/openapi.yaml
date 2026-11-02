@@ -5340,6 +5340,13 @@ components:
           description: Computed output file name with the correct extension for the tool type (e.g. "document.docx"
             for pdf-to-word, "photo.pdf" for image-to-pdf)
           example: document.docx
+        outputFileSize:
+          type: integer
+          format: int64
+          description: Size in bytes of the downloadable output. Returned only by the single-job endpoint
+            (GET /api/{group}/{tool}/{id}) for completed jobs; omitted otherwise. `fileSize` is the
+            total input size.
+          example: 4089446
     CreateJobResponse:
       description: 'Extends ProcessingJob with an optional `guestToken` field. When present,
 

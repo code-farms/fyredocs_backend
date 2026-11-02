@@ -519,7 +519,33 @@ func GetJobByID(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, "Job details loaded", toJobResponse(job))
+	resp := toJobResponse(job)
+	if job.Status == "completed" {
+		resp.OutputFileSize = outputFileSize(c.Request.Context(), job.ID)
+	}
+	response.OK(c, "Job details loaded", resp)
+}
+
+// outputFileSize returns the size in bytes of the job's recorded output, or 0
+// when there is none. Best-effort: the size is display-only, so a lookup
+// failure is logged and must never turn a successful job fetch into an error.
+// Reads through outputFileCache (warmed by downloads) but never fills it: this
+// query selects only size_bytes, and caching that partial row would hand the
+// download path an empty Path.
+func outputFileSize(ctx context.Context, jobID uuid.UUID) int64 {
+	if cached, ok := outputFileCache.Get(jobID); ok {
+		return cached.SizeBytes
+	}
+	var out models.FileMetadata
+	err := models.DB.WithContext(ctx).Select("size_bytes").
+		Where("job_id = ? AND kind = ?", jobID, "output").Take(&out).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			slog.Warn("output size lookup failed", "jobId", jobID, "error", err)
+		}
+		return 0
+	}
+	return out.SizeBytes
 }
 
 // DeleteJobByID removes a job the caller owns along with its stored input and
@@ -997,6 +1023,11 @@ func normalizeToolType(toolType string) (string, error) {
 type jobResponse struct {
 	models.ProcessingJob
 	OutputFileName string `json:"outputFileName"`
+	// OutputFileSize is the downloadable output's size in bytes. ProcessingJob's
+	// FileSize is the total INPUT size, so without this the result screen shows
+	// the pre-compression size. Set only by the single-job endpoint for
+	// completed jobs (lists would need one lookup per row); omitted otherwise.
+	OutputFileSize int64 `json:"outputFileSize,omitempty"`
 }
 
 // createJobResponse extends jobResponse with an optional guest token so that
