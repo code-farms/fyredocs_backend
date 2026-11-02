@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestBackoffDuration(t *testing.T) {
@@ -250,5 +252,26 @@ func TestIsRecoverableContextAndWrapped(t *testing.T) {
 	// Unknown errors default to permanent — the safe posture for a worker.
 	if isRecoverable(errors.New("exit status 1")) {
 		t.Error("unknown error should default to permanent")
+	}
+}
+
+// TestBuildStatusEventCarriesOwner pins that terminal events echo the job
+// owner from the dispatch payload. document-service drops a JobCompleted with
+// no UserID and analytics records it unattributed, so losing it is silent.
+func TestBuildStatusEventCarriesOwner(t *testing.T) {
+	jobID := uuid.New()
+	queued := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+
+	ev := buildStatusEvent(jobID, "owner-1", "tool", "completed", 100, "", queued, 42)
+	if ev.UserID != "owner-1" {
+		t.Errorf("UserID = %q, want owner-1", ev.UserID)
+	}
+	if ev.EventType != "JobCompleted" || ev.JobID != jobID.String() || ev.FileSize != 42 || !ev.QueuedAt.Equal(queued) {
+		t.Errorf("unexpected event: %+v", ev)
+	}
+
+	guest := buildStatusEvent(jobID, "", "tool", "failed", 0, "boom", queued)
+	if guest.UserID != "" || guest.EventType != "JobFailed" || guest.FileSize != 0 {
+		t.Errorf("unexpected guest event: %+v", guest)
 	}
 }

@@ -105,11 +105,11 @@ sequenceDiagram
             JS->>PG: COMMIT
 
             JS->>JS: assignGuestTokenIfNeeded
-            JS->>NATS: Publish jobs.dispatch.&lt;serviceName&gt; (inputPaths = object keys)
+            JS->>NATS: Publish jobs.dispatch.&lt;serviceName&gt; (userId, inputPaths = object keys)
             JS->>Redis: SET idempotency:upload:&lt;id&gt; &lt;jobId&gt;
             JS->>Redis: DEL upload:&lt;id&gt; (session only — object untouched)
             JS->>Redis: SETEX idempotency:&lt;key&gt; 10m → jobId
-            JS->>NATS: Publish analytics.events.job.created
+            JS->>NATS: Publish analytics.events.job.created (planName from X-User-Plan)
             JS-->>GW: 201 {job, guestToken?}
         end
     end

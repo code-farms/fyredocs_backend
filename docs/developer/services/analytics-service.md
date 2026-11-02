@@ -37,9 +37,18 @@ Two observability responsibilities live here so no standalone Alertmanager/expor
 | `user.signup` | auth-service | New user registration |
 | `user.login` | auth-service | User login |
 | `plan.changed` | auth-service | User changed subscription plan (metadata: oldPlan, newPlan) |
-| `job.created` | job-service | New processing job created (carries `jobId` for latency correlation) |
-| `job.completed` | worker services (via JOBS_EVENTS) | Job finished successfully (includes UserID) |
-| `job.failed` | worker services (via JOBS_EVENTS) | Job processing failed (includes UserID) |
+| `job.created` | job-service | New processing job created (carries `jobId` for latency correlation and `planName` from `X-User-Plan`) |
+| `job.completed` | worker services (via JOBS_EVENTS) | Job finished successfully (UserID echoed from the dispatch payload) |
+| `job.failed` | worker services (via JOBS_EVENTS) | Job processing failed (UserID echoed from the dispatch payload) |
+
+Terminal job rows are enriched from their `job.created` row at write time
+(`subscriber.applyJobOrigin`): `plan_name` always (workers never send it), and
+`user_id`/`is_guest` when the event arrived without an owner. `is_guest` is
+`true` when no owner is known. Migration `00003_backfill_job_event_owner.sql`
+repaired rows written before workers echoed the owner.
+
+By design, `user.*` rows have no `job_id`, `tool_type`, `file_size`, or
+`metadata`, and `job.created` rows have no `metadata`.
 | `plan.limit_hit` | job-service | User hit plan limit (file size or file count) |
 
 ### Activity audit trail

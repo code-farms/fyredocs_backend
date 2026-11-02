@@ -1214,3 +1214,25 @@ func TestAuthorizeJobAccess_GuestJob(t *testing.T) {
 		}
 	})
 }
+
+// TestNewDispatchEventCarriesOwner pins that the job owner rides on the
+// dispatch message. Workers echo UserID on terminal events; without it
+// document-service drops the completed output and analytics records an
+// unattributed job.completed row.
+func TestNewDispatchEventCarriesOwner(t *testing.T) {
+	at := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	uid := uuid.New()
+
+	ev := newDispatchEvent("job-1", "split-pdf", &uid, []string{"in.pdf"}, nil, "corr-1", at)
+	if ev.UserID != uid.String() {
+		t.Errorf("UserID = %q, want %q", ev.UserID, uid.String())
+	}
+	if ev.EventType != "JobCreated" || !ev.QueuedAt.Equal(at) || !ev.Timestamp.Equal(at) {
+		t.Errorf("unexpected envelope: %+v", ev)
+	}
+
+	guest := newDispatchEvent("job-2", "split-pdf", nil, nil, nil, "corr-2", at)
+	if guest.UserID != "" {
+		t.Errorf("guest UserID = %q, want empty", guest.UserID)
+	}
+}

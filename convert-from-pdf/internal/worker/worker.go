@@ -59,8 +59,11 @@ type WorkerConfig struct {
 
 // JobPayload is the dispatch message consumed from the JOBS_DISPATCH stream.
 type JobPayload struct {
-	EventType     string          `json:"eventType"`
-	JobID         string          `json:"jobId"`
+	EventType string `json:"eventType"`
+	JobID     string `json:"jobId"`
+	// UserID is the job owner from job-service's dispatch (empty for guests),
+	// echoed on every status event; see buildStatusEvent.
+	UserID        string          `json:"userId,omitempty"`
 	ToolType      string          `json:"toolType"`
 	InputPaths    []string        `json:"inputPaths,omitempty"`
 	Options       json.RawMessage `json:"options,omitempty"`
@@ -270,7 +273,7 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 							updateJobStatusString(cfg.DB, p.JobID, "failed", 0, failMsg)
 							if jid, e := uuid.Parse(p.JobID); e == nil {
 								publishStatusEvent(queue.ExtractTraceContext(context.Background(), m.Headers()),
-									cfg.JS, jid, p.ToolType, "failed", 0, failMsg, p.QueuedAt)
+									cfg.JS, jid, p.UserID, p.ToolType, "failed", 0, failMsg, p.QueuedAt)
 							}
 						}
 						_ = m.Term()
@@ -332,7 +335,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 		failMsg := friendlyMessage(ErrCodeUnsupportedTool)
 		updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, failMsg)
 		if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
-			publishStatusEvent(ctx, cfg.JS, parsed, payload.ToolType, "failed", 0, failMsg, payload.QueuedAt)
+			publishStatusEvent(ctx, cfg.JS, parsed, payload.UserID, payload.ToolType, "failed", 0, failMsg, payload.QueuedAt)
 		}
 		// Non-recoverable: ack to stop redelivery.
 		_ = msg.Ack()
@@ -358,7 +361,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 
 	// Only increase progress, never decrease on re-entry (retries).
 	updateJobStatusNoRegress(cfg.DB, jobID, "processing", 20)
-	publishStatusEvent(ctx, cfg.JS, jobID, payload.ToolType, "processing", 20, "", payload.QueuedAt)
+	publishStatusEvent(ctx, cfg.JS, jobID, payload.UserID, payload.ToolType, "processing", 20, "", payload.QueuedAt)
 
 	options := map[string]interface{}{}
 	if len(payload.Options) > 0 && json.Valid(payload.Options) {
@@ -458,7 +461,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 				logger.Warn("failed to update progress", "jobId", jobID, "error", err)
 			}
 		}
-		publishStatusEvent(ctx, cfg.JS, jobID, payload.ToolType, "processing", clamped, "", payload.QueuedAt)
+		publishStatusEvent(ctx, cfg.JS, jobID, payload.UserID, payload.ToolType, "processing", clamped, "", payload.QueuedAt)
 	}
 
 	result, procErr := cfg.Process(jobCtx, jobID, payload.ToolType, localInputs, options, outDir, onProgress)
@@ -495,7 +498,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 	}
 
 	updateJobStatus(cfg.DB, jobID, "completed", 100, "")
-	publishStatusEvent(ctx, cfg.JS, jobID, payload.ToolType, "completed", 100, "", payload.QueuedAt, outSize)
+	publishStatusEvent(ctx, cfg.JS, jobID, payload.UserID, payload.ToolType, "completed", 100, "", payload.QueuedAt, outSize)
 	clearFailure(cfg.DB, jobID)
 
 	if err := msg.Ack(); err != nil {
@@ -542,7 +545,7 @@ func tryServeFromCache(ctx context.Context, cfg WorkerConfig, cache cacheStore, 
 
 	mergeMetadata(cfg.DB, jobID, cv.Metadata, logger)
 	updateJobStatus(cfg.DB, jobID, "completed", 100, "")
-	publishStatusEvent(ctx, cfg.JS, jobID, payload.ToolType, "completed", 100, "", payload.QueuedAt, info.Size)
+	publishStatusEvent(ctx, cfg.JS, jobID, payload.UserID, payload.ToolType, "completed", 100, "", payload.QueuedAt, info.Size)
 	clearFailure(cfg.DB, jobID)
 	logger.InfoContext(ctx, "job completed from cache", "jobId", payload.JobID, "correlationId", payload.CorrelationID)
 	return true
@@ -590,7 +593,7 @@ func handleFailure(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, pay
 		retryReason := fmt.Sprintf("retrying (attempt %d): %v", deliveryCount, err)
 		updateJobStatusString(cfg.DB, payload.JobID, "queued", 0, retryReason)
 		if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
-			publishStatusEvent(ctx, cfg.JS, parsed, payload.ToolType, "queued", 0, retryReason, payload.QueuedAt)
+			publishStatusEvent(ctx, cfg.JS, parsed, payload.UserID, payload.ToolType, "queued", 0, retryReason, payload.QueuedAt)
 		}
 		delay := backoffDuration(int(deliveryCount) - 1)
 		if nakErr := msg.NakWithDelay(delay); nakErr != nil {
@@ -610,7 +613,7 @@ func handleFailure(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, pay
 	failMsg := friendlyMessage(errCode)
 	updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, failMsg)
 	if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
-		publishStatusEvent(ctx, cfg.JS, parsed, payload.ToolType, "failed", 0, failMsg, payload.QueuedAt)
+		publishStatusEvent(ctx, cfg.JS, parsed, payload.UserID, payload.ToolType, "failed", 0, failMsg, payload.QueuedAt)
 	}
 
 	// Publish to DLQ before acking. PublishRaw preserves the original message
@@ -802,19 +805,19 @@ func statusToEventType(status string) string {
 	}
 }
 
-// publishStatusEvent publishes a job status update to NATS so that SSE
-// consumers receive real-time updates without polling. ctx carries the job's
-// trace context (the event rides in the same trace); cancellation is stripped
-// so a cancelled job still gets its terminal event out. queuedAt echoes the
-// dispatch timestamp so terminal events feed job_duration_seconds.
-func publishStatusEvent(ctx context.Context, js jetstream.JetStream, jobID uuid.UUID, toolType, status string, progress int, failureReason string, queuedAt time.Time, fileSize ...int64) {
-	if js == nil {
-		return
-	}
-	eventType := statusToEventType(status)
+// buildStatusEvent assembles a job status event. userID must be the owner
+// from the dispatch payload (empty for guests): document-service drops a
+// JobCompleted with no owner, notification-service has no one to notify, and
+// analytics-service records an unattributed job.completed row. queuedAt echoes
+// the dispatch timestamp so terminal events feed job_duration_seconds.
+//
+// NOTE: duplicated by design (CLAUDE.md §1) in convert-to-pdf, organize-pdf, optimize-pdf
+// — keep the four copies in step.
+func buildStatusEvent(jobID uuid.UUID, userID, toolType, status string, progress int, failureReason string, queuedAt time.Time, fileSize ...int64) queue.JobEvent {
 	event := queue.JobEvent{
-		EventType:     eventType,
+		EventType:     statusToEventType(status),
 		JobID:         jobID.String(),
+		UserID:        userID,
 		ToolType:      toolType,
 		Progress:      progress,
 		FailureReason: failureReason,
@@ -824,8 +827,21 @@ func publishStatusEvent(ctx context.Context, js jetstream.JetStream, jobID uuid.
 	if len(fileSize) > 0 {
 		event.FileSize = fileSize[0]
 	}
-	subject := queue.SubjectForJobEvent(jobID.String(), eventType)
+	return event
+}
+
+// publishStatusEvent publishes a job status update to NATS so that SSE
+// consumers receive real-time updates without polling. ctx carries the job's
+// trace context (the event rides in the same trace); cancellation is stripped
+// so a cancelled job still gets its terminal event out. Publish failures are
+// logged and swallowed — the DB row remains the source of truth.
+func publishStatusEvent(ctx context.Context, js jetstream.JetStream, jobID uuid.UUID, userID, toolType, status string, progress int, failureReason string, queuedAt time.Time, fileSize ...int64) {
+	if js == nil {
+		return
+	}
+	event := buildStatusEvent(jobID, userID, toolType, status, progress, failureReason, queuedAt, fileSize...)
+	subject := queue.SubjectForJobEvent(jobID.String(), event.EventType)
 	if err := queue.PublishJobEvent(context.WithoutCancel(ctx), js, subject, event); err != nil {
-		slog.WarnContext(ctx, "failed to publish job event", "jobId", jobID, "event", eventType, "error", err)
+		slog.WarnContext(ctx, "failed to publish job event", "jobId", jobID, "event", event.EventType, "error", err)
 	}
 }

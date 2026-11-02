@@ -42,7 +42,7 @@ sequenceDiagram
 
     NATS->>Worker: Fetch message from<br/>jobs.dispatch.organize-pdf
 
-    Worker->>Worker: Unmarshal JobPayload<br/>{jobId, toolType: "split-pdf", inputPaths: ["users/u1/doc.pdf"], options: {pages: "1-3,5"}}
+    Worker->>Worker: Unmarshal JobPayload<br/>{jobId, userId, toolType: "split-pdf", inputPaths: ["users/u1/doc.pdf"], options: {pages: "1-3,5"}}
 
     Worker->>Worker: Validate toolType in AllowedTools
 

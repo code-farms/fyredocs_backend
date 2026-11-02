@@ -42,7 +42,7 @@ sequenceDiagram
 
     NATS->>Worker: Fetch message from<br/>jobs.dispatch.optimize-pdf
 
-    Worker->>Worker: Unmarshal JobPayload<br/>{jobId, toolType: "compress-pdf",<br/>inputPaths: ["users/u1/large.pdf"],<br/>options: {quality: "medium"}}
+    Worker->>Worker: Unmarshal JobPayload<br/>{jobId, userId, toolType: "compress-pdf",<br/>inputPaths: ["users/u1/large.pdf"],<br/>options: {quality: "medium"}}
 
     Worker->>Worker: Validate toolType in AllowedTools
 

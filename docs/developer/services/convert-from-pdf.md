@@ -787,7 +787,9 @@ Dispatch messages carry W3C trace context in their NATS headers.
 leg appears in the same Tempo trace as the originating API request; worker logs
 use the `*Context` slog variants on that context and therefore carry
 `trace_id`. Terminal events echo `JobEvent.QueuedAt` (stamped by job-service at
-dispatch) which feeds the `job_duration_seconds` histogram.
+dispatch) which feeds the `job_duration_seconds` histogram, and `JobEvent.UserID`
+(the job owner from the dispatch payload, empty for guests) so document-service,
+notification-service, and analytics-service can attribute the result.
 
 ### NATS Redelivery
 

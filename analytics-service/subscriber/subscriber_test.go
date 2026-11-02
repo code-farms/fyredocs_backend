@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"analytics-service/internal/models"
@@ -109,4 +110,46 @@ func TestAuditedEventTypes_ServerOriginOnly(t *testing.T) {
 // Create call would panic.
 func TestRecordAuditActivity_UnmappedTypeIsNoop(t *testing.T) {
 	recordAuditActivity(context.Background(), &models.AnalyticsEvent{EventType: "user.login"})
+}
+
+// TestApplyJobOrigin pins how terminal job rows inherit from job.created:
+// plan always (workers never send it), owner only when the event had none
+// (messages from workers that predate UserID echoing), and a missing origin
+// leaves the row as the event described it.
+func TestApplyJobOrigin(t *testing.T) {
+	owner := uuid.New()
+	other := uuid.New()
+	origin := &models.AnalyticsEvent{UserID: &owner, IsGuest: false, PlanName: "pro"}
+
+	t.Run("ownerless event inherits owner and plan", func(t *testing.T) {
+		rec := models.AnalyticsEvent{IsGuest: true}
+		applyJobOrigin(&rec, origin)
+		if rec.UserID == nil || *rec.UserID != owner || rec.IsGuest || rec.PlanName != "pro" {
+			t.Errorf("got %+v", rec)
+		}
+	})
+
+	t.Run("event owner wins over origin", func(t *testing.T) {
+		rec := models.AnalyticsEvent{UserID: &other}
+		applyJobOrigin(&rec, origin)
+		if *rec.UserID != other || rec.PlanName != "pro" {
+			t.Errorf("got %+v", rec)
+		}
+	})
+
+	t.Run("guest origin keeps guest", func(t *testing.T) {
+		rec := models.AnalyticsEvent{IsGuest: true}
+		applyJobOrigin(&rec, &models.AnalyticsEvent{IsGuest: true})
+		if rec.UserID != nil || !rec.IsGuest {
+			t.Errorf("got %+v", rec)
+		}
+	})
+
+	t.Run("nil origin is a no-op", func(t *testing.T) {
+		rec := models.AnalyticsEvent{IsGuest: true}
+		applyJobOrigin(&rec, nil)
+		if rec.UserID != nil || !rec.IsGuest || rec.PlanName != "" {
+			t.Errorf("got %+v", rec)
+		}
+	})
 }

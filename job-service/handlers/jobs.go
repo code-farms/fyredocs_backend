@@ -416,19 +416,7 @@ func CreateJobFromTool(c *gin.Context) {
 		response.BadRequest(c, response.CodeInvalidInput, "This tool is not available.")
 		return
 	}
-	dispatchedAt := time.Now().UTC()
-	event := queue.JobEvent{
-		EventType:     "JobCreated",
-		JobID:         job.ID.String(),
-		ToolType:      toolType,
-		InputPaths:    inputPaths,
-		Options:       optionsPayload(optionsRaw),
-		CorrelationID: correlationID,
-		Timestamp:     dispatchedAt,
-		// QueuedAt anchors the job_duration_seconds histogram: workers echo it
-		// on terminal events so end-to-end latency (incl. retries) is measured.
-		QueuedAt: dispatchedAt,
-	}
+	event := newDispatchEvent(job.ID.String(), toolType, userID, inputPaths, optionsPayload(optionsRaw), correlationID, time.Now().UTC())
 	subject := queue.SubjectForDispatch(serviceName)
 	if err := queue.PublishJobEvent(c.Request.Context(), natsconn.JS, subject, event); err != nil {
 		response.InternalErrorf(c, response.CodeServerError, "Our servers are busy. Please try again in a moment.", err,
@@ -453,7 +441,7 @@ func CreateJobFromTool(c *gin.Context) {
 	// The Idempotency-Key was reserved with this jobID up front (see the top of
 	// the handler), so no post-commit write is needed here.
 
-	publishJobAnalyticsEvent(c.Request.Context(), "job.created", job.ID.String(), toolType, userID, totalSize)
+	publishJobAnalyticsEvent(c.Request.Context(), "job.created", job.ID.String(), toolType, userID, planName, totalSize)
 	slog.Info("job queued", "jobId", job.ID, "tool", toolType, "correlationId", correlationID)
 	response.Created(c, "Your file is being processed!", createJobResponse{
 		jobResponse: toJobResponse(job),
@@ -1568,13 +1556,39 @@ func guestToken(c *gin.Context) string {
 	return ""
 }
 
+// newDispatchEvent builds the JobCreated message a worker consumes.
+//
+// UserID must ride along (empty for guests): workers echo it on their
+// JobCompleted/JobFailed events, and every consumer of those keys on it —
+// document-service drops a completion with no owner, notification-service has
+// no one to notify, and analytics-service records an unattributed row.
+// QueuedAt anchors the job_duration_seconds histogram: workers echo it on
+// terminal events so end-to-end latency (incl. retries) is measured.
+func newDispatchEvent(jobID, toolType string, userID *uuid.UUID, inputPaths []string, options json.RawMessage, correlationID string, at time.Time) queue.JobEvent {
+	event := queue.JobEvent{
+		EventType:     "JobCreated",
+		JobID:         jobID,
+		ToolType:      toolType,
+		InputPaths:    inputPaths,
+		Options:       options,
+		CorrelationID: correlationID,
+		Timestamp:     at,
+		QueuedAt:      at,
+	}
+	if userID != nil {
+		event.UserID = userID.String()
+	}
+	return event
+}
+
 // publishJobAnalyticsEvent emits a job lifecycle event for analytics-service.
 //
 // Best-effort by design: a nil JetStream handle or a publish failure is logged
 // and ignored, because losing a metric must never fail the user's job. Guests are
 // recorded as IsGuest with no UserID rather than being skipped, so anonymous
 // traffic still shows up in totals without being attributed to anyone.
-func publishJobAnalyticsEvent(ctx context.Context, eventType string, jobID string, toolType string, userID *uuid.UUID, fileSize int64) {
+// planName comes from the gateway's X-User-Plan header (empty for guests).
+func publishJobAnalyticsEvent(ctx context.Context, eventType string, jobID string, toolType string, userID *uuid.UUID, planName string, fileSize int64) {
 	if natsconn.JS == nil {
 		return
 	}
@@ -1582,6 +1596,7 @@ func publishJobAnalyticsEvent(ctx context.Context, eventType string, jobID strin
 		EventType: eventType,
 		JobID:     jobID,
 		ToolType:  toolType,
+		PlanName:  planName,
 		FileSize:  fileSize,
 		IsGuest:   userID == nil,
 		Timestamp: time.Now().UTC(),

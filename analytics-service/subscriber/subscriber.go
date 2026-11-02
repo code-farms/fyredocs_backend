@@ -5,12 +5,14 @@ package subscriber
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/queue"
@@ -237,6 +239,43 @@ func recordAuditActivity(ctx context.Context, record *models.AnalyticsEvent) {
 	}
 }
 
+// lookupJobCreated returns the job.created row for jobID, or nil when there is
+// none or the query fails. Best-effort: a miss only costs attribution on the
+// terminal row, never the row itself, so errors are logged and swallowed.
+// Served by idx_event_job_type (internal/models/database.go).
+func lookupJobCreated(ctx context.Context, jobID uuid.UUID) *models.AnalyticsEvent {
+	var origin models.AnalyticsEvent
+	err := models.DB.WithContext(ctx).
+		Select("user_id", "is_guest", "plan_name").
+		Where("job_id = ? AND event_type = ?", jobID, "job.created").
+		Take(&origin).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			slog.Warn("failed to look up job.created for attribution", "jobId", jobID, "error", err)
+		}
+		return nil
+	}
+	return &origin
+}
+
+// applyJobOrigin fills a terminal job row from its job.created row. Worker
+// terminal events carry no plan, so plan_name always comes from the origin.
+// The owner is copied only when the event lacked one: messages published by
+// workers that predate UserID echoing arrive ownerless, and without this they
+// would be recorded as guest jobs. A nil origin leaves the record unchanged.
+func applyJobOrigin(record *models.AnalyticsEvent, origin *models.AnalyticsEvent) {
+	if origin == nil {
+		return
+	}
+	if record.PlanName == "" {
+		record.PlanName = origin.PlanName
+	}
+	if record.UserID == nil && origin.UserID != nil {
+		record.UserID = origin.UserID
+		record.IsGuest = origin.IsGuest
+	}
+}
+
 // handleJobEvent records a job lifecycle transition for reporting. Events are
 // at-least-once, so writes here must tolerate seeing the same transition twice.
 func handleJobEvent(ctx context.Context, msg jetstream.Msg) {
@@ -288,11 +327,15 @@ func handleJobEvent(ctx context.Context, msg jetstream.Msg) {
 		EventType:   eventType,
 		UserID:      userID,
 		JobID:       jobID,
+		IsGuest:     userID == nil,
 		ToolType:    event.ToolType,
 		FileSize:    event.FileSize,
 		Metadata:    datatypes.JSON(metaBytes),
 		CreatedAt:   event.Timestamp,
 		PersistedAt: time.Now().UTC(),
+	}
+	if jobID != nil {
+		applyJobOrigin(&record, lookupJobCreated(ctx, *jobID))
 	}
 
 	if record.CreatedAt.IsZero() {

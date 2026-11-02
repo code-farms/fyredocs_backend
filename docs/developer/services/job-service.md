@@ -397,6 +397,7 @@ When a job is created, the service publishes a `JobCreated` event to NATS JetStr
 {
   "eventType": "JobCreated",
   "jobId": "uuid",
+  "userId": "uuid",
   "toolType": "pdf-to-word",
   "inputPaths": ["uploads/<uploadId>/file.pdf"],
   "options": { ... },
@@ -405,6 +406,11 @@ When a job is created, the service publishes a `JobCreated` event to NATS JetStr
   "queuedAt": "2024-01-15T10:30:00Z"
 }
 ```
+
+`userId` is the job owner (omitted for guests). Workers echo it on every status
+event; document-service, notification-service, and analytics-service key on it
+for JobCompleted/JobFailed, so a dispatch without it leaves the output out of the
+user's Documents and the analytics row unattributed.
 
 `queuedAt` is the dispatch timestamp. Workers echo it on terminal events so
 `shared/queue` can observe `job_duration_seconds` (end-to-end queued→terminal
@@ -624,7 +630,7 @@ sequenceDiagram
     JS->>DB: INSERT file_metadata (kind=input, path=<object key>)
 
     JS->>JS: routing.ServiceForTool("pdf-to-word") => "convert-from-pdf"
-    JS->>NATS: Publish JobCreated (inputPaths = object keys) to jobs.dispatch.convert-from-pdf
+    JS->>NATS: Publish JobCreated (userId, inputPaths = object keys) to jobs.dispatch.convert-from-pdf
     NATS-->>W: Deliver JobCreated event
 
     JS->>R: DEL upload:<uploadId> (release session — only after publish succeeds; object stays for the worker)
