@@ -80,6 +80,7 @@ Set-Cookie: refresh_token=<JWT>; Path=/auth; Secure; HttpOnly; SameSite=Lax; Max
 | 400 | INVALID_INPUT | Missing required fields or unparsable body |
 | 400 | WEAK_PASSWORD | Password less than 8 characters |
 | 400 | INVALID_INPUT | Password longer than 128 characters |
+| 403 | SIGNUP_DISABLED | Registration closed (`SIGNUP_ENABLED=false`) |
 | 409 | USER_ALREADY_EXISTS | Email already registered |
 | 429 | RATE_LIMIT_EXCEEDED | Too many signups from this IP |
 | 500 | SERVER_ERROR | DB / hashing / token-issuance failure |

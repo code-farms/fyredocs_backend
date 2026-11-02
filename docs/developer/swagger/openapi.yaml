@@ -248,6 +248,8 @@ paths:
 
         Password must be 8-128 characters.
 
+        Returns 403 SIGNUP_DISABLED when `SIGNUP_ENABLED=false`.
+
         '
       operationId: signup
       requestBody:
@@ -278,6 +280,20 @@ paths:
                           $ref: '#/components/schemas/User'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Registration is closed (`SIGNUP_ENABLED=false`)
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/APIResponse'
+                - type: object
+                  properties:
+                    error:
+                      $ref: '#/components/schemas/APIError'
+                      example:
+                        code: SIGNUP_DISABLED
+                        details: New account registration is currently closed.
         '409':
           description: User already exists
           content:

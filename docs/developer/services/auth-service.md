@@ -85,7 +85,7 @@ Auth Service :8086
 
 | Method | Path | Handler | Rate Limit | Description |
 |--------|------|---------|------------|-------------|
-| POST | `/auth/signup` | `Signup` | 3/min per IP | Create a new user account; returns access+refresh cookies |
+| POST | `/auth/signup` | `Signup` | 3/min per IP | Create a new user account; returns access+refresh cookies. Returns 403 `SIGNUP_DISABLED` when `SIGNUP_ENABLED=false` |
 | POST | `/auth/login` | `Login` | 5/min per IP | Authenticate; returns access+refresh cookies |
 | POST | `/auth/refresh` | `Refresh` | 10/min per IP | Rotate the token pair: issues a new access **and** refresh cookie, retires the presented refresh token, and revokes the session on replay (reuse detection) |
 | POST | `/auth/forgot-password` | `ForgotPassword` | 3/min per IP | Issue a single-use reset token and email it; always responds 200 regardless of whether the email is registered |
@@ -265,6 +265,9 @@ sequenceDiagram
 
     C->>GW: POST /auth/signup {email, password, fullName, country}
     GW->>AS: Proxy
+    alt SIGNUP_ENABLED=false
+        AS-->>C: 403 SIGNUP_DISABLED
+    end
     AS->>AS: Validate (email, password >= 8, fullName, country)
     AS->>DB: SELECT users WHERE email=?
     alt User exists
@@ -513,6 +516,7 @@ sequenceDiagram
 | `INVALID_INPUT` | 400 | Missing required fields or invalid payload |
 | `INVALID_INPUT` | 400 | Password less than 8 characters |
 | `USER_ALREADY_EXISTS` | 409 | Email already registered |
+| `SIGNUP_DISABLED` | 403 | `Signup` while `SIGNUP_ENABLED=false` |
 | `INVALID_CREDENTIALS` | 401 | Wrong email or password |
 | `INVALID_REFRESH_TOKEN` | 401 | Missing, expired, or unknown refresh token — **also returned on detected reuse** (replay of a rotated-out refresh token; the session is revoked and cookies cleared, but the response is indistinguishable by design) |
 | `INVALID_OR_EXPIRED_TOKEN` | 400 | Reset token does not match any active row or has expired |
@@ -679,6 +683,12 @@ Rate limits are per IP and enforced via Redis-backed middleware.
 | `RESET_EMAIL_FROM` | `no-reply@fyredocs.com` | From address. Must be on a domain verified in the Resend dashboard, otherwise Resend will only deliver to the account owner. |
 | `APP_BASE_URL` | `http://localhost:5173` | Used to build the magic link: `${APP_BASE_URL}/reset-password?token=<raw>`. |
 | `PASSWORD_RESET_TOKEN_TTL` | `1h` | Lifetime of a password reset token. |
+
+### Signup
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SIGNUP_ENABLED` | `true` | When `false`, `POST /auth/signup` returns `403 SIGNUP_DISABLED` before any DB or bcrypt work. The gateway route stays public, so this flag (not the frontend's `VITE_SIGNUP_ENABLED`) is what actually closes registration. Existing accounts can still log in. |
 
 ### Proxy Login (Admin Impersonation)
 

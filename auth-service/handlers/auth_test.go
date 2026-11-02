@@ -94,6 +94,44 @@ func TestLoginPreDBGuards(t *testing.T) {
 	}
 }
 
+// TestSignupGate pins the SIGNUP_ENABLED switch. models.DB is nil in unit
+// tests, so the disabled case passing proves the gate runs before any DB or
+// bcrypt work; the enabled case proves the gate does not swallow requests
+// when registration is open (they reach binding and fail there instead).
+func TestSignupGate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ae := &AuthEndpoints{}
+	r := gin.New()
+	r.POST("/auth/signup", ae.Signup)
+
+	cases := []struct {
+		name       string
+		enabled    string
+		body       string
+		wantStatus int
+		wantCode   string
+	}{
+		{"disabled rejects a valid payload", "false", `{"email":"user@example.com","password":"correct-horse","fullName":"A","country":"India"}`, http.StatusForbidden, "SIGNUP_DISABLED"},
+		{"enabled reaches binding", "true", `not-json`, http.StatusBadRequest, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SIGNUP_ENABLED", tc.enabled)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/auth/signup", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantCode != "" && !strings.Contains(rec.Body.String(), tc.wantCode) {
+				t.Errorf("body %q missing error code %q", rec.Body.String(), tc.wantCode)
+			}
+		})
+	}
+}
+
 func TestNormalizeEmail(t *testing.T) {
 	tests := []struct {
 		input string

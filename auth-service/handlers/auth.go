@@ -86,7 +86,17 @@ type AuthEndpoints struct {
 // Signup registers a new account. It validates and normalizes the payload,
 // rejects duplicate emails, hashes the password with bcrypt, persists the user,
 // emits a signup analytics event, and responds with a fresh token pair.
+//
+// SIGNUP_ENABLED=false closes registration with 403 SIGNUP_DISABLED. The check
+// runs before binding so a closed endpoint costs no DB or bcrypt work; hiding
+// the frontend form alone would not do, because the gateway route stays public
+// (api-gateway/main.go publicAuthPaths) and is reachable with plain curl.
 func (ae *AuthEndpoints) Signup(c *gin.Context) {
+	if !config.GetEnvBool("SIGNUP_ENABLED", true) {
+		response.Forbidden(c, "SIGNUP_DISABLED", "New account registration is currently closed.")
+		return
+	}
+
 	var payload signupRequest
 	if !response.BindJSON(c, &payload) {
 		return

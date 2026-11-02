@@ -613,6 +613,11 @@ services:
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:5173}
       PASSWORD_RESET_TOKEN_TTL: "1h"
 
+      # Public registration. false = POST /auth/signup returns 403
+      # SIGNUP_DISABLED (the gateway route stays public, so the UI toggle alone
+      # would not stop curl).
+      SIGNUP_ENABLED: ${SIGNUP_ENABLED:-true}
+
       # Proxy login (admin impersonation)
       PROXY_LOGIN_ENABLED: ${PROXY_LOGIN_ENABLED:-true}
       PROXY_LOGIN_TTL: ${PROXY_LOGIN_TTL:-30m}

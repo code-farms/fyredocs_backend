@@ -18,6 +18,10 @@ sequenceDiagram
 
     Note over AS: Rate limit ratelimit:signup:&lt;ip&gt; (3/min)
 
+    alt SIGNUP_ENABLED=false
+        AS-->>Client: 403 SIGNUP_DISABLED
+    end
+
     AS->>AS: Validate inputs (email · password 8-128 · fullName · country)
     AS->>AS: normalizeEmail(email)
     AS->>PG: SELECT users WHERE email=?
