@@ -213,8 +213,11 @@ services:
   # network; browsers reach objects through presigned URLs routed at the
   # Caddy edge (/uploads/*, /outputs/*) — port 9000 is NOT published.
   # The console is bound to localhost only for operators.
+  # NOTE: official minio/minio and minio/mc were removed from Docker Hub (Sept
+  # 2026) and quay.io now needs auth, so we pin Pigsty's community build. Any
+  # replacement must ship curl (healthcheck below) and /bin/sh (minio-init).
   minio:
-    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-04-22T22-12-26Z}
+    image: ${MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}
     restart: always
     command: server /data --console-address ":9001"
     environment:
@@ -270,7 +273,7 @@ services:
   # row expires, reaps orphaned uploads on the upload-session TTL, and aborts
   # stale multipart uploads. A bucket expiry rule would wipe free/pro inputs early.
   minio-init:
-    image: ${MINIO_MC_IMAGE:-minio/mc:RELEASE.2025-04-16T18-13-26Z}
+    image: ${MINIO_MC_IMAGE:-pgsty/mc:RELEASE.2026-10-26T00-00-00Z}
     restart: "no"
     entrypoint: ["/bin/sh", "-ec"]
     command:

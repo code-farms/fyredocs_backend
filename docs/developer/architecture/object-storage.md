@@ -22,14 +22,20 @@ graph LR
 
 The api-gateway is **not** in the object-byte path — it is internal-only and API-routing only. Object bytes flow browser → Caddy edge → MinIO.
 
-- **`minio`** (pinned image, `minio/minio:RELEASE.2025-04-22T22-12-26Z`) runs
+- **`minio`** (pinned image, `pgsty/minio:RELEASE.2026-08-04T00-00-00Z`) runs
   with a named volume `minio_data`. Port `9000` (S3 API) is **not published**;
   only the admin console is exposed on `127.0.0.1:9001`.
-- **`minio-init`** (`minio/mc`) is a one-shot bootstrap container: it creates
+- **`minio-init`** (`pgsty/mc:RELEASE.2026-10-26T00-00-00Z`) is a one-shot bootstrap container: it creates
   the buckets, **clears any pre-existing bucket lifecycle rule** (retention is
   DB-driven, see below), and provisions the scoped application user. Every
   service that touches objects has
   `depends_on: minio-init: condition: service_completed_successfully`.
+- **Why `pgsty/*`:** the official `minio/minio` and `minio/mc` repos were removed
+  from Docker Hub (Sept 2026) and `quay.io/minio/*` now requires auth, so the
+  stack pins Pigsty's community build. A replacement image must ship `curl`
+  (minio healthcheck) and `/bin/sh` (minio-init entrypoint); distroless builds
+  such as Chainguard's free tier do not. Override with `MINIO_IMAGE` /
+  `MINIO_MC_IMAGE` in `.env`.
 - Services authenticate with the **scoped app credentials**
   (`S3_ACCESS_KEY`/`S3_SECRET_KEY`), never the MinIO root user. The attached
   policy grants read/write/delete + multipart actions on the two fyredocs

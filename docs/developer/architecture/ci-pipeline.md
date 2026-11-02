@@ -128,7 +128,7 @@ spec:
           image: nats:2.10-alpine
           args: ["-js"]
         - name: minio
-          image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+          image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
           args: [server, /data]
           env:
             - {name: MINIO_ROOT_USER, value: fyredocs}
