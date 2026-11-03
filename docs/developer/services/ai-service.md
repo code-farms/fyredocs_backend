@@ -17,6 +17,7 @@ The **server-side proxy for every AI feature** (mobile Phase 23). It owns the op
 - `internal/ops/`: the op catalog (op → model tier + task template), input limits, `FormatDocument` (1-based `<<page N>>` markers) and `Build`.
 - `internal/llm/`: the `Client` interface, `Usage`, and the classified `Error{Code}`. `Compat` (`compat.go`) is the only implementation: streaming Chat Completions through `github.com/openai/openai-go/v3`, pointed at whatever `AI_BASE_URL` names. It uses `stream_options.include_usage` and falls back to a chars/4 estimate when a provider omits usage. Errors are classified **by HTTP status and wording, never by vendor type**: 413, or a 400 mentioning the context window → `AI_REQUEST_TOO_LARGE`; everything else → `AI_UNAVAILABLE`. A `shared/circuitbreaker` TwoStep trips on provider failures only (not oversize input or client disconnects). With no endpoint or model configured, `New` returns `Unconfigured`.
 - `internal/quota/`: the reserve/settle ledger (below).
+- `internal/doccache/`: the per-user document cache behind `docRef` (below).
 - `internal/sse/`: frame writer with **lazy header commit**, so an error before the first delta is still a normal JSON error with its HTTP status.
 - `internal/models/`, `internal/migrations/`: the `ai_usage` ledger.
 
@@ -54,6 +55,7 @@ SSE frames (the shape of the app's `AiEvent`, `fyredocs_app/src/lib/ai/provider.
 | unknown op | 404 `NOT_FOUND` |
 | bad JSON / missing field | 400 `INVALID_INPUT` |
 | over limits, or the model's context | 413 `AI_REQUEST_TOO_LARGE` |
+| `docRef` no longer cached | 410 `AI_DOCUMENT_EXPIRED`: resend `pages` |
 | month's quota used | 429 `AI_QUOTA_EXCEEDED` (the provider is never called) |
 | quota ledger unreachable | 503 `AI_UNAVAILABLE`: **fails closed**, since answering unmetered spends money no limit accounts for |
 | provider unconfigured, down, or unclassified | 503 `AI_UNAVAILABLE` (the cause is logged, **never** sent: provider error bodies can echo request content or account details) |
@@ -61,6 +63,13 @@ SSE frames (the shape of the app's `AiEvent`, `fyredocs_app/src/lib/ai/provider.
 
 ## DB Schema (own Postgres)
 - **ai_usage**: `subject` (text, `user:<id>` today), `period` (UTC YYYYMM), `input_tokens`, `output_tokens`, `cached_tokens`, `reserved_tokens`, `updated_at`; PK `(subject, period)`. `subject` is text so per-org quota (`org:<id>`) needs no schema change once the gateway carries an org identity. Versioned migrations (`goose_db_version_ai_service`) are the authority; see [schema-migrations.md](../architecture/schema-migrations.md).
+
+### Document reuse and prompt caching
+Every successful op with `pages` returns a `docRef` (the sha256 of the page list) in its `done` frame or JSON result. The next request may send `docRef` **instead of** `pages`: a multi-turn Ask stops re-uploading up to ~1 MiB of page text per turn from a phone. Entries live in Redis under `ai:doc:<userId>:<ref>` with a sliding `AI_DOC_CACHE_TTL` (30m). They are scoped per user, because a content hash alone would let one user read another's document by hashing common text. A miss (expired, evicted, another user's ref, or Redis down) is `410 AI_DOCUMENT_EXPIRED`, and the client resends the pages. Pages in the body always win over a ref.
+
+The cache also pins the document **byte-identically** across turns, which is the condition for provider-side automatic prefix caching: the document is the stable system prefix of every op. Hits come back as `cached_tokens` in usage and are recorded in the ledger. Only this portable mechanism is used, with no vendor cache API.
+
+Native PDF input (sending the PDF file itself) is **deliberately not built**. The app already extracts digital PDFs' text on-device and offline, so it removes no pipeline stage. File-input support also differs across OpenAI-compatible providers, which would break the configuration-only provider swap.
 
 ## Quota
 Per user and per UTC month. Plan limits are `AI_QUOTA_FREE_TOKENS` / `AI_QUOTA_PRO_TOKENS`; unknown plans get the free limit, as the gateway rate limiter does, and 0 disables a plan. Each op **reserves its worst case** (estimated input + the output cap) in a single `INSERT … ON CONFLICT … DO UPDATE … WHERE used + held + new <= limit` statement. The check and the increment are atomic, so concurrent requests cannot jointly overrun. After the stream the op **settles** to the provider's real usage (input + output count; cached tokens are recorded for visibility) on a context detached from the client, so a disconnect cannot leak the hold. A failure before any output settles at zero; a failure after output was streamed is charged by estimate. Known gap: a process crash between reserve and settle leaks that hold until the month rolls over.
@@ -87,6 +96,7 @@ Each completed op publishes `analytics.events.ai.op.completed` (`toolType` = op,
 | AI_MAX_RETRIES | 1 | Provider retries (429/5xx) |
 | AI_MAX_OUTPUT_TOKENS | 4096 | Output cap per op |
 | AI_QUOTA_FREE_TOKENS / AI_QUOTA_PRO_TOKENS | 300000 / 5000000 | Monthly per-user token limits |
+| AI_DOC_CACHE_TTL | 30m | Sliding TTL of the `docRef` document cache |
 | TRUSTED_PROXIES, OTEL_EXPORTER_OTLP_ENDPOINT | — | Standard |
 
 ## Gateway / Deployment
@@ -98,4 +108,3 @@ Each completed op publishes `analytics.events.ai.op.completed` (`toolType` = op,
 Stateless apart from the ledger: replicas scale horizontally. Each op holds a DB connection only for quota reads and writes, never across the model stream, so the pool is small (10). Long streams hold an HTTP connection (WriteTimeout unset), so capacity is bound by concurrent streams and the provider's rate limits, not CPU.
 
 ## Roadmap (Phase 23)
-- **Chunk D:** optional native-PDF input (`AI_PDF_INPUT`), cached-token accounting, and Ask session document cache.

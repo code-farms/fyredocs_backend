@@ -26,6 +26,7 @@ import (
 	"fyredocs/shared/telemetry"
 
 	"ai-service/handlers"
+	"ai-service/internal/doccache"
 	"ai-service/internal/llm"
 	"ai-service/internal/models"
 	"ai-service/internal/quota"
@@ -63,8 +64,8 @@ func main() {
 		}
 	}
 
-	// Redis backs the JWT denylist, so a token revoked at logout stops
-	// spending AI quota here too, not just at the gateway.
+	// Redis backs the JWT denylist — so a token revoked at logout stops
+	// spending AI quota here too — and the short-TTL document cache.
 	redisstore.Connect()
 	defer redisstore.Close()
 
@@ -105,6 +106,7 @@ func main() {
 		LLM:       client,
 		Publish:   publish,
 		Quota:     &quota.Ledger{DB: models.DB, Limits: quota.LimitsFromEnv()},
+		Docs:      &doccache.Redis{Client: redisstore.Client, TTL: docCacheTTL()},
 		MaxTokens: config.GetEnvInt("AI_MAX_OUTPUT_TOKENS", 4096),
 	})
 
@@ -163,4 +165,14 @@ func buildAuthMiddleware(denylist authverify.TokenDenylist) gin.HandlerFunc {
 		Verifier:            verifier,
 		TrustGatewayHeaders: trustGateway,
 	})
+}
+
+// docCacheTTL reads AI_DOC_CACHE_TTL (default 30m): long enough for a reading
+// session's follow-up questions, short enough that page text does not linger.
+func docCacheTTL() time.Duration {
+	d, err := time.ParseDuration(config.GetEnv("AI_DOC_CACHE_TTL", "30m"))
+	if err != nil || d <= 0 {
+		return 30 * time.Minute
+	}
+	return d
 }

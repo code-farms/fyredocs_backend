@@ -25,6 +25,7 @@ func TestErrorCodeValuesAreStable(t *testing.T) {
 		CodeAIUnavailable:       "AI_UNAVAILABLE",
 		CodeAIQuotaExceeded:     "AI_QUOTA_EXCEEDED",
 		CodeAIRequestTooLarge:   "AI_REQUEST_TOO_LARGE",
+		CodeAIDocumentExpired:   "AI_DOCUMENT_EXPIRED",
 	}
 	for got, want := range pins {
 		if got != want {

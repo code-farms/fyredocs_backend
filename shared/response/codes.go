@@ -36,4 +36,5 @@ const (
 	CodeAIUnavailable     = "AI_UNAVAILABLE"       // model provider unconfigured, down, or breaker open (503)
 	CodeAIQuotaExceeded   = "AI_QUOTA_EXCEEDED"    // the caller's AI token quota for the period is used (429)
 	CodeAIRequestTooLarge = "AI_REQUEST_TOO_LARGE" // input over the service's limits or the model's context (413)
+	CodeAIDocumentExpired = "AI_DOCUMENT_EXPIRED"  // a docRef is no longer cached — resend the pages (410)
 )

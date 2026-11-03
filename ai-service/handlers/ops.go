@@ -15,6 +15,7 @@ import (
 	"fyredocs/shared/queue"
 	"fyredocs/shared/response"
 
+	"ai-service/internal/doccache"
 	"ai-service/internal/llm"
 	"ai-service/internal/ops"
 	"ai-service/internal/quota"
@@ -45,6 +46,7 @@ type Ops struct {
 	LLM       llm.Client
 	Publish   Publisher
 	Quota     QuotaGate
+	Docs      doccache.Store
 	MaxTokens int
 }
 
@@ -56,12 +58,15 @@ type Event struct {
 	Usage   *llm.Usage `json:"usage,omitempty"`
 	Code    string     `json:"code,omitempty"`
 	Message string     `json:"message,omitempty"`
+	// DocRef (on done) lets the next request send the ref instead of pages.
+	DocRef string `json:"docRef,omitempty"`
 }
 
 // opResult is the JSON (non-streaming) response data.
 type opResult struct {
-	Text  string    `json:"text"`
-	Usage llm.Usage `json:"usage"`
+	Text   string    `json:"text"`
+	Usage  llm.Usage `json:"usage"`
+	DocRef string    `json:"docRef,omitempty"`
 }
 
 // RequireUser rejects guests and anonymous callers. AI is sign-in-only:
@@ -129,10 +134,14 @@ func (h *Ops) Run(c *gin.Context) {
 		response.Err(c, http.StatusBadRequest, response.CodeInvalidInput, "Invalid request body.")
 		return
 	}
+	if !h.resolveDocRef(c, &in) {
+		return
+	}
 	if verr := ops.Validate(spec, name, in); verr != nil {
 		response.Err(c, verr.Status, verr.Code, verr.Message)
 		return
 	}
+	docRef := h.cacheDocument(c, in)
 
 	req := llm.Request{Tier: spec.Tier, Messages: ops.Build(spec, name, in), MaxTokens: h.MaxTokens}
 	streaming := strings.Contains(c.GetHeader("Accept"), "text/event-stream")
@@ -168,7 +177,7 @@ func (h *Ops) Run(c *gin.Context) {
 			_ = w.Send(Event{Type: "error", Code: code, Message: msg})
 			return
 		}
-		_ = w.Send(Event{Type: "done", Usage: &usage})
+		_ = w.Send(Event{Type: "done", Usage: &usage, DocRef: docRef})
 	} else {
 		usage, err = h.LLM.Stream(ctx, req, func(delta string) error {
 			outChars += len([]rune(delta))
@@ -181,7 +190,7 @@ func (h *Ops) Run(c *gin.Context) {
 			response.Err(c, statusFor(code), code, msg)
 			return
 		}
-		response.OK(c, "OK", opResult{Text: text.String(), Usage: usage})
+		response.OK(c, "OK", opResult{Text: text.String(), Usage: usage, DocRef: docRef})
 	}
 	h.recordCompleted(c, name, spec.Tier, usage, time.Since(started))
 }
@@ -286,4 +295,71 @@ func (h *Ops) GetQuota(c *gin.Context) {
 		return
 	}
 	response.OK(c, "OK", st)
+}
+
+// resolveDocRef swaps a body's docRef for the cached pages. A miss — expired,
+// evicted, another user's ref, or no cache at all — is 410
+// AI_DOCUMENT_EXPIRED, which tells the app to resend the pages; a Redis error
+// is treated as a miss for the same reason. Pages in the body win over a ref.
+func (h *Ops) resolveDocRef(c *gin.Context, in *ops.Input) bool {
+	if len(in.Pages) > 0 || in.DocRef == "" {
+		in.DocRef = ""
+		return true
+	}
+	if !validRef(in.DocRef) {
+		response.Err(c, http.StatusBadRequest, response.CodeInvalidInput, "Invalid docRef.")
+		return false
+	}
+	expired := func() bool {
+		response.Err(c, http.StatusGone, response.CodeAIDocumentExpired, "The document is no longer cached — send its pages again.")
+		return false
+	}
+	if h.Docs == nil {
+		return expired()
+	}
+	auth, _ := authverify.GetGinAuth(c)
+	pages, ok, err := h.Docs.Get(c.Request.Context(), auth.UserID, in.DocRef)
+	if err != nil {
+		slog.WarnContext(c.Request.Context(), "ai doc cache read failed", "error", err)
+		return expired()
+	}
+	if !ok {
+		return expired()
+	}
+	in.Pages = pages
+	return true
+}
+
+// cacheDocument stores freshly sent pages and returns their ref ("" when
+// caching is off or failed — the app then simply keeps sending pages). A
+// request that arrived by ref returns the same ref; its read already slid
+// the TTL.
+func (h *Ops) cacheDocument(c *gin.Context, in ops.Input) string {
+	if in.DocRef != "" {
+		return in.DocRef
+	}
+	if h.Docs == nil || len(in.Pages) == 0 {
+		return ""
+	}
+	auth, _ := authverify.GetGinAuth(c)
+	ref, err := h.Docs.Put(c.Request.Context(), auth.UserID, in.Pages)
+	if err != nil {
+		slog.WarnContext(c.Request.Context(), "ai doc cache write failed", "error", err)
+		return ""
+	}
+	return ref
+}
+
+// validRef accepts only a lowercase hex sha256, so a ref can never inject
+// into the Redis key.
+func validRef(ref string) bool {
+	if len(ref) != 64 {
+		return false
+	}
+	for _, r := range ref {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
 }

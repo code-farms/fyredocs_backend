@@ -4284,6 +4284,10 @@ paths:
                   type: string
                   maxLength: 20000
                   description: Required for rewrite
+                docRef:
+                  type: string
+                  pattern: '^[0-9a-f]{64}$'
+                  description: Replaces pages with a document this user sent earlier (returned on done; sliding 30m TTL)
       responses:
         '200':
           description: SSE stream (Accept text/event-stream) or envelope with {text, usage}
@@ -4306,6 +4310,8 @@ paths:
           description: AUTH_UNAUTHORIZED (guest or signed out)
         '404':
           description: NOT_FOUND (unknown op)
+        '410':
+          description: AI_DOCUMENT_EXPIRED (docRef no longer cached — resend pages)
         '413':
           description: AI_REQUEST_TOO_LARGE
         '429':

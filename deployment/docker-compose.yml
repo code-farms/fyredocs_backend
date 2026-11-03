@@ -1447,6 +1447,8 @@ services:
       AI_REQUEST_TIMEOUT: ${AI_REQUEST_TIMEOUT:-90s}
       AI_MAX_RETRIES: ${AI_MAX_RETRIES:-1}
       AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-4096}
+      # Sliding TTL for the per-user document cache behind docRef.
+      AI_DOC_CACHE_TTL: ${AI_DOC_CACHE_TTL:-30m}
       # Monthly per-user token quota (input + output); 0 disables a plan.
       AI_QUOTA_FREE_TOKENS: ${AI_QUOTA_FREE_TOKENS:-300000}
       AI_QUOTA_PRO_TOKENS: ${AI_QUOTA_PRO_TOKENS:-5000000}

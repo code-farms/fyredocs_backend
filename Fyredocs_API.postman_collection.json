@@ -6027,6 +6027,40 @@
           "response": []
         },
         {
+          "name": "Ask follow-up by docRef",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"docRef\": \"{{ai_doc_ref}}\",\n  \"question\": \"Can either party terminate early?\",\n  \"history\": [\n    {\n      \"role\": \"user\",\n      \"text\": \"When does the agreement end?\"\n    },\n    {\n      \"role\": \"assistant\",\n      \"text\": \"On 1 March [p.1].\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/ai/ops/ask",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "ai",
+                "ops",
+                "ask"
+              ]
+            },
+            "description": "Send the docRef from a previous done frame instead of pages. 410 AI_DOCUMENT_EXPIRED \u2192 resend pages."
+          },
+          "response": []
+        },
+        {
           "name": "Translate",
           "request": {
             "method": "POST",

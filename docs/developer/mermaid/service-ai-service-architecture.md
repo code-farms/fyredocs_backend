@@ -28,6 +28,7 @@ graph TB
             SSEW["internal/sse<br/>lazy-commit frame writer"]
             LLM["internal/llm.Compat<br/>OpenAI-compatible stream ·<br/>circuit breaker"]
             QUOTA["internal/quota<br/>atomic reserve → settle"]
+            DOCS["internal/doccache<br/>docRef → pages (per user, sliding TTL)"]
         end
 
         subgraph Models["internal/models (GORM)"]
@@ -44,6 +45,7 @@ graph TB
     USAGE --- PG[("PostgreSQL")]
     OPS -.->|analytics.events.ai.op.completed| NATS[("NATS JetStream<br/>ANALYTICS")]
     AUTH -.->|denylist| REDIS[("Redis")]
+    OPS --> DOCS -.->|ai:doc:user:ref| REDIS
 ```
 
 ## Notes

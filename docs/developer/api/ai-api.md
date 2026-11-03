@@ -16,9 +16,11 @@ Run an AI op over document text. `:op` is one of `summarize`, `explain`, `ask`, 
   "question": "What is the deadline?",
   "history": [{ "role": "user", "text": "…" }, { "role": "assistant", "text": "…" }],
   "targetLang": "Hindi",
-  "passage": "Text to rewrite"
+  "passage": "Text to rewrite",
+  "docRef": "9f2c…(64 hex)"
 }
 ```
+- `docRef` may replace `pages`: send the `docRef` returned by an earlier op on the same document (per user, sliding 30-minute TTL). If it has expired you get `410 AI_DOCUMENT_EXPIRED`; resend `pages`. `pages` win when both are sent.
 - `pages[].index` is 0-based; the model sees and cites pages 1-based (`[p.1]`).
 - `question` is required for `ask`; `history` is used only by `ask`.
 - `targetLang` is required for `translate`; `passage` is required for `rewrite` (`pages` optional).
@@ -30,7 +32,7 @@ data: {"type":"delta","text":"The contract "}
 
 data: {"type":"delta","text":"ends on 1 March [p.3]."}
 
-data: {"type":"done","usage":{"inputTokens":1830,"outputTokens":14,"cachedTokens":1536}}
+data: {"type":"done","usage":{"inputTokens":1830,"outputTokens":14,"cachedTokens":1536},"docRef":"9f2c…"}
 ```
 A provider failure after the first delta arrives as `data: {"type":"error","code":"AI_UNAVAILABLE","message":"…"}`.
 
@@ -39,7 +41,7 @@ A provider failure after the first delta arrives as `data: {"type":"error","code
 {
   "success": true,
   "message": "OK",
-  "data": { "text": "The contract ends on 1 March [p.3].", "usage": { "inputTokens": 1830, "outputTokens": 14, "cachedTokens": 1536 } }
+  "data": { "text": "The contract ends on 1 March [p.3].", "usage": { "inputTokens": 1830, "outputTokens": 14, "cachedTokens": 1536 }, "docRef": "9f2c…" }
 }
 ```
 
@@ -49,6 +51,7 @@ A provider failure after the first delta arrives as `data: {"type":"error","code
 | 400 | `INVALID_INPUT` | malformed body, missing op-specific field, bad history role |
 | 401 | `AUTH_UNAUTHORIZED` | guest or not signed in |
 | 404 | `NOT_FOUND` | unknown op |
+| 410 | `AI_DOCUMENT_EXPIRED` | `docRef` no longer cached; resend `pages` |
 | 413 | `AI_REQUEST_TOO_LARGE` | over the limits above, or the model's context |
 | 429 | `AI_QUOTA_EXCEEDED` | this month's token quota is used (the provider is not called) |
 | 503 | `AI_UNAVAILABLE` | provider not configured, down, or breaker open |

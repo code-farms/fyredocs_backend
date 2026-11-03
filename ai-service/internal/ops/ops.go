@@ -46,9 +46,11 @@ type Turn struct {
 	Text string `json:"text"`
 }
 
-// Input is the op request body.
+// Input is the op request body. DocRef may replace Pages: it names a
+// document this user sent earlier (see internal/doccache).
 type Input struct {
 	Pages      []Page `json:"pages"`
+	DocRef     string `json:"docRef"`
 	Question   string `json:"question"`
 	History    []Turn `json:"history"`
 	TargetLang string `json:"targetLang"`

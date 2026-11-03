@@ -63,3 +63,27 @@ sequenceDiagram
     AI-->>App: 401 {error:{code:"AUTH_UNAUTHORIZED"}}
     Note over App: the app shows a sign-in hint instead of the AI button
 ```
+
+## Multi-turn Ask by docRef
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant AI as ai-service
+    participant R as Redis (ai:doc:user:ref)
+    participant P as Model provider
+
+    App->>AI: POST /ops/summarize {pages}
+    AI->>R: SET ref → pages (TTL 30m)
+    AI->>P: [system+document][task]
+    AI-->>App: … done {docRef}
+    App->>AI: POST /ops/ask {docRef, question, history}
+    AI->>R: GETEX ref (slides TTL)
+    alt hit
+        AI->>P: same [system+document] prefix → provider prefix-cache hit
+        AI-->>App: … done {usage.cachedTokens, docRef}
+    else miss / expired
+        AI-->>App: 410 AI_DOCUMENT_EXPIRED
+        App->>AI: retry with {pages}
+    end
+```
