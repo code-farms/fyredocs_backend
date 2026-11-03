@@ -4954,10 +4954,12 @@ components:
           - a4
           - letter
           - id
+          - card
           default: auto
           description: 'PDF page size. "auto" (default) sizes each page to its image;
 
-            "id" is the ISO ID-1 card format (85.6×54 mm). IGNORED on the OCR
+            "id" is the ISO ID-1 card format (85.6×54 mm); "card" is a 3.5×2 in
+            business card. IGNORED on the OCR
 
             path — Tesseract emits image-sized pages.
 
@@ -4983,7 +4985,7 @@ components:
 
             1.0/0.95/0.9/0.85 relative). Only applies with a fixed pageSize
 
-            (a4/letter/id) — with "auto" (or on the OCR path) the value is
+            (a4/letter/id/card) — with "auto" (or on the OCR path) the value is
 
             accepted but IGNORED with a worker warning. Unknown values are
 

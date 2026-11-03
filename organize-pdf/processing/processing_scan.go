@@ -28,6 +28,9 @@ import (
 // idCardAspect is the ISO/IEC 7810 ID-1 card aspect ratio (85.6mm × 54mm).
 const idCardAspect = 85.6 / 54.0
 
+// businessCardAspect is the US/international 3.5 × 2 in business card.
+const businessCardAspect = 88.9 / 50.8
+
 // scanLanguages are the tesseract language packs installed in the Dockerfile.
 var scanLanguages = map[string]bool{
 	"eng": true, "deu": true, "fra": true, "spa": true, "hin": true,
@@ -67,7 +70,7 @@ type ScanPage struct {
 type ScanOptions struct {
 	OCR      bool       `json:"ocr"`
 	Language string     `json:"language"`
-	PageSize string     `json:"pageSize"` // "", auto, a4, letter, id
+	PageSize string     `json:"pageSize"` // "", auto, a4, letter, id, card
 	Enhance  string     `json:"enhance"`  // "", none, grayscale, bw, color-boost
 	Margin   string     `json:"margin"`   // "", none, small, normal, large
 	Pages    []ScanPage `json:"pages"`
@@ -99,7 +102,7 @@ func parseScanOptions(options map[string]interface{}) ScanOptions {
 
 	opts.PageSize = strings.ToLower(strings.TrimSpace(opts.PageSize))
 	switch opts.PageSize {
-	case "", "auto", "a4", "letter", "id":
+	case "", "auto", "a4", "letter", "id", "card":
 	default:
 		slog.Warn("unknown pageSize; falling back to auto", "pageSize", opts.PageSize)
 		opts.PageSize = ""
@@ -124,7 +127,7 @@ func parseScanOptions(options map[string]interface{}) ScanOptions {
 	// auto sizing the page IS the image and there is nothing to inset against
 	// (pdfcpu defaults any non-empty descriptor to A4). Degrade, don't fail.
 	if opts.Margin != "" && opts.Margin != "none" && (opts.PageSize == "" || opts.PageSize == "auto") {
-		slog.Warn("margin requires a fixed pageSize (a4/letter/id); ignoring", "margin", opts.Margin)
+		slog.Warn("margin requires a fixed pageSize (a4/letter/id/card); ignoring", "margin", opts.Margin)
 		opts.Margin = ""
 	}
 
@@ -176,9 +179,14 @@ func needsPreprocessing(opts ScanOptions) bool {
 // pageAspect returns the fixed output aspect (w/h) for a page size, or 0 to
 // derive the aspect from the crop quad itself. Only the ID card imposes an
 // aspect on the warp — A4/Letter are handled by pdfcpu page geometry.
+// Cards (ID and business) impose one: their warp must land on the card's
+// shape, not on whatever the photographed quad happened to be.
 func pageAspect(pageSize string) float64 {
-	if pageSize == "id" {
+	switch pageSize {
+	case "id":
 		return idCardAspect
+	case "card":
+		return businessCardAspect
 	}
 	return 0
 }
@@ -313,6 +321,9 @@ func importConfigForPageSize(pageSize, margin string) (*pdfcpu.Import, error) {
 	case "id":
 		// ISO ID-1 card: 85.6 × 54 mm = 242.6 × 153.1 points.
 		return api.Import(fmt.Sprintf("dim:243 153, pos:c, sc:%s rel", scale), types.POINTS)
+	case "card":
+		// Business card: 3.5 × 2 in = 252 × 144 points.
+		return api.Import(fmt.Sprintf("dim:252 144, pos:c, sc:%s rel", scale), types.POINTS)
 	default:
 		return nil, nil
 	}

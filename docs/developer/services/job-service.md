@@ -275,9 +275,9 @@ The client then registers the document with document-service (`POST /api/documen
 |-------|------|
 | `ocr` | boolean |
 | `language` | whitelist: `eng`, `deu`, `fra`, `spa`, `hin` |
-| `pageSize` | whitelist: `""`, `auto`, `a4`, `letter`, `id` |
+| `pageSize` | whitelist: `""`, `auto`, `a4`, `letter`, `id`, `card` |
 | `enhance` | whitelist: `""`, `none`, `grayscale`, `bw`, `color-boost` |
-| `margin` | whitelist: `""`, `none`, `small`, `normal`, `large` (only takes effect with `pageSize` `a4`/`letter`/`id`; the worker ignores it with a warning on `auto` and on the OCR path) |
+| `margin` | whitelist: `""`, `none`, `small`, `normal`, `large` (only takes effect with `pageSize` `a4`/`letter`/`id`/`card`; the worker ignores it with a warning on `auto` and on the OCR path) |
 | `pages` | max 50 entries (index-aligned with `uploadIds`) |
 | `pages[i].rotation` | one of `0`, `90`, `180`, `270` |
 | `pages[i].corners` | all four of `tl`/`tr`/`br`/`bl` or omitted; each with numeric `x`,`y` in `[0, 1]` |

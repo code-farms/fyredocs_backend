@@ -129,18 +129,18 @@ Converts images to PDF (similar to scanning documents), with optional per-page p
 |--------|------|---------|--------|-------------|
 | `ocr` | boolean | `false` | — | Produce a searchable PDF via Tesseract |
 | `language` | string | `eng` | `eng`, `deu`, `fra`, `spa`, `hin` | Tesseract language (`-l <language>`); whitelist matches the installed packs |
-| `pageSize` | string | `auto` | `""`, `auto`, `a4`, `letter`, `id` | PDF page size. `auto` = page matches image size; `id` = ISO ID-1 card (85.6×54 mm) |
+| `pageSize` | string | `auto` | `""`, `auto`, `a4`, `letter`, `id`, `card` | PDF page size. `auto` = page matches image size; `id` = ISO ID-1 card (85.6×54 mm); `card` = business card (3.5×2 in, 252×144 pt). Card sizes also fix the warp aspect |
 | `enhance` | string | none | `""`, `none`, `grayscale`, `bw`, `color-boost` | Image enhancement. `bw` applies an adaptive-threshold "scan" look |
 | `pages` | array | — | — | Per-page directives, **index-aligned with `uploadIds`**; each entry optional |
 | `pages[i].corners` | object | — | `{tl,tr,br,bl}` each `{x,y}` in `[0,1]` | Normalized document quad to perspective-warp; all four corners or omitted |
 | `pages[i].rotation` | integer | `0` | `0`, `90`, `180`, `270` | Clockwise rotation, applied after the warp |
-| `margin` | string | none | `""`, `none`, `small`, `normal`, `large` | White margin around the image on **fixed page sizes only** (`a4`/`letter`/`id`); maps to pdfcpu import scale `1.0`/`0.95`/`0.9`/`0.85` relative on the fixed page form |
+| `margin` | string | none | `""`, `none`, `small`, `normal`, `large` | White margin around the image on **fixed page sizes only** (`a4`/`letter`/`id`/`card`); maps to pdfcpu import scale `1.0`/`0.95`/`0.9`/`0.85` relative on the fixed page form |
 
 Per-image preprocessing pipeline (`processing/processing_scan.go`): decode (jpeg/png/webp, ≤ 50 MP) → if corners present: validate + perspective-warp via the pure-Go homography in `internal/imaging` → rotate → enhance → re-encode (PNG for `bw`, JPEG quality 92 otherwise) → pdfcpu `ImportImagesFile` with the page-size import config (`form:A4` / `form:Letter` / `dim:243 153`pt for `id`; `auto` = nil; `margin` appends `sc:<factor> rel` to the fixed-form config).
 
 **Caveats:**
 - **OCR path ignores `pageSize`** — Tesseract emits image-sized pages.
-- **`margin` only applies with a fixed `pageSize`** (`a4`/`letter`/`id`) — the scale factor is relative to the fixed page form. With `pageSize: auto` (or on the OCR path) `margin` is accepted but **ignored** with a worker `slog.Warn` (degrade-don't-fail). Unknown `margin` values are rejected by job-service at job creation (400 `INVALID_OPTIONS`).
+- **`margin` only applies with a fixed `pageSize`** (`a4`/`letter`/`id`/`card`) — the scale factor is relative to the fixed page form. With `pageSize: auto` (or on the OCR path) `margin` is accepted but **ignored** with a worker `slog.Warn` (degrade-don't-fail). Unknown `margin` values are rejected by job-service at job creation (400 `INVALID_OPTIONS`).
 - **EXIF contract:** Go image decoding ignores EXIF orientation. `corners` and `rotation` are relative to the **decoded pixel grid**; clients must bake EXIF orientation into the pixels before upload.
 - Options are validated by job-service at job creation (400 `INVALID_OPTIONS`); the worker re-clamps defensively and never fails a job on a bad enum value — it degrades to the default with a `slog.Warn`.
 

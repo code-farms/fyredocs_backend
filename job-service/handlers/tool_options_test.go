@@ -44,6 +44,7 @@ func TestValidateScanOptions(t *testing.T) {
 		{"bad json", `{"ocr":`, "valid JSON"},
 		{"bad language", `{"language":"jpn"}`, "language"},
 		{"bad pageSize", `{"pageSize":"a3"}`, "pageSize"},
+		{"business card pageSize", `{"pageSize":"card"}`, ""},
 		{"bad enhance", `{"enhance":"vivid"}`, "enhance"},
 		{"valid margin", `{"pageSize":"a4","margin":"small"}`, ""},
 		{"margin none ok", `{"margin":"none"}`, ""},

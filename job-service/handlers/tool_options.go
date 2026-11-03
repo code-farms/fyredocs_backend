@@ -27,13 +27,13 @@ var (
 	scanLanguages = map[string]bool{"eng": true, "deu": true, "fra": true, "spa": true, "hin": true}
 	// scanPageSizes is the allowlist of output geometries the scan pipeline can lay
 	// out. "" and "auto" both mean "infer from the pages themselves".
-	scanPageSizes = map[string]bool{"": true, "auto": true, "a4": true, "letter": true, "id": true}
+	scanPageSizes = map[string]bool{"": true, "auto": true, "a4": true, "letter": true, "id": true, "card": true}
 	// scanEnhance is the allowlist of image-enhancement modes implemented in the
 	// imaging package. "" and "none" both mean no enhancement.
 	scanEnhance = map[string]bool{"": true, "none": true, "grayscale": true, "bw": true, "color-boost": true}
 	// scanMargins is the allowlist of page-margin presets. The worker maps each
 	// to a pdfcpu import scale; margins only take effect with a fixed pageSize
-	// (a4/letter/id) — with "auto" the worker accepts and ignores the value.
+	// (a4/letter/id/card) — with "auto" the worker accepts and ignores the value.
 	scanMargins = map[string]bool{"": true, "none": true, "small": true, "normal": true, "large": true}
 )
 

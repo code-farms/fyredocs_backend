@@ -183,6 +183,14 @@ func TestImportConfigForPageSize(t *testing.T) {
 	if id.PageDim.Width < 240 || id.PageDim.Width > 246 {
 		t.Errorf("id width = %f, want ≈243pt", id.PageDim.Width)
 	}
+
+	card, err := importConfigForPageSize("card", "")
+	if err != nil || card == nil || card.PageDim == nil || card.PageDim.Width != 252 || card.PageDim.Height != 144 {
+		t.Fatalf("card config: %+v (err %v)", card, err)
+	}
+	if pageAspect("card") != businessCardAspect || pageAspect("a4") != 0 {
+		t.Error("card must impose its own warp aspect; paper sizes none")
+	}
 }
 
 // TestImportConfigMargins verifies the margin presets translate to the
