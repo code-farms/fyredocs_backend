@@ -123,7 +123,7 @@ func (rl *RateLimiter) RateLimitByIP() gin.HandlerFunc {
 				retryAfter = 0
 			}
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
-			response.AbortErr(c, http.StatusTooManyRequests, "RATE_LIMIT_EXCEEDED",
+			response.AbortErr(c, http.StatusTooManyRequests, response.CodeRateLimited,
 				fmt.Sprintf("Too many requests. Please try again in %d seconds.", retryAfter))
 			return
 		}

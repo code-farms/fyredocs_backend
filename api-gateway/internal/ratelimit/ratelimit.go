@@ -169,7 +169,7 @@ func Middleware(cfg Config) func(http.Handler) http.Handler {
 			if count >= int64(limit) {
 				retryAfter := int(cfg.Window.Seconds())
 				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-				response.WriteErr(w, http.StatusTooManyRequests, "RATE_LIMIT_EXCEEDED",
+				response.WriteErr(w, http.StatusTooManyRequests, response.CodeRateLimited,
 					fmt.Sprintf("Too many requests. Please try again in %d seconds.", retryAfter))
 				return
 			}

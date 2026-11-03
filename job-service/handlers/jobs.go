@@ -195,7 +195,7 @@ func CreateJobFromTool(c *gin.Context) {
 		maxFiles := planMaxFilesPerJob(c)
 		if len(uploadIDs) > maxFiles {
 			publishPlanLimitHit(c, "max_files", toolType)
-			response.BadRequest(c, "TOO_MANY_FILES",
+			response.BadRequest(c, response.CodeTooManyFiles,
 				fmt.Sprintf("Your plan allows up to %d files per job", maxFiles))
 			return
 		}
@@ -295,7 +295,7 @@ func CreateJobFromTool(c *gin.Context) {
 		maxFiles := planMaxFilesPerJob(c)
 		if len(files) > maxFiles {
 			publishPlanLimitHit(c, "max_files", toolType)
-			response.BadRequest(c, "TOO_MANY_FILES",
+			response.BadRequest(c, response.CodeTooManyFiles,
 				fmt.Sprintf("Your plan allows up to %d files per job", maxFiles))
 			return
 		}
@@ -317,7 +317,7 @@ func CreateJobFromTool(c *gin.Context) {
 		for _, file := range files {
 			if file.Size > maxSize {
 				publishPlanLimitHit(c, "max_file_size", toolType)
-				response.Err(c, 413, "FILE_TOO_LARGE",
+				response.Err(c, http.StatusRequestEntityTooLarge, response.CodeFileTooLarge,
 					fmt.Sprintf("File size exceeds the %dMB limit for your plan", maxFileSizeMB))
 				return
 			}

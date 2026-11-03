@@ -94,7 +94,7 @@ func InitUpload(c *gin.Context) {
 
 	maxFileSizeMB := planMaxFileSizeMB(c)
 	if req.FileSize > int64(maxFileSizeMB)*1024*1024 {
-		response.Err(c, http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE",
+		response.Err(c, http.StatusRequestEntityTooLarge, response.CodeFileTooLarge,
 			fmt.Sprintf("File size exceeds the %dMB limit for your plan", maxFileSizeMB))
 		return
 	}
@@ -290,7 +290,7 @@ func CompleteUpload(c *gin.Context) {
 	if info.Size > int64(maxFileSizeMB)*1024*1024 {
 		_ = objStore.RemoveObject(ctx, bucket, key)
 		_ = redisstore.Client.Del(ctx, uploadStateKey(uploadID)).Err()
-		response.Err(c, http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE",
+		response.Err(c, http.StatusRequestEntityTooLarge, response.CodeFileTooLarge,
 			fmt.Sprintf("File size exceeds the %dMB limit for your plan", maxFileSizeMB))
 		return
 	}
