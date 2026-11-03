@@ -111,7 +111,7 @@ Browser → Caddy edge (:80/:443)
            ├─ TLS termination (automatic HTTPS when PUBLIC_DOMAIN is set)
            ├─ /                           → SPA static files (/srv/spa)
            ├─ /uploads/* , /outputs/*     → MinIO (:9000) directly (presigned object bytes)
-           └─ /api/* /auth/* /admin/* /healthz → api-gateway (:8080, internal)
+           └─ /api/* /auth/* /admin/metrics/* /admin/authz /healthz → api-gateway (:8080, internal)
                        │
                        ├─ CORS, security headers
                        ├─ Auth check (JWT / Guest cookie) + plan resolution from Redis

@@ -44,7 +44,14 @@
 	# ---- API, auth, and admin routes → api-gateway ---------------------
 	# /metrics is intentionally NOT routed: Prometheus scrapes services on
 	# the internal network; metrics are no longer internet-reachable.
-	@api path /api/* /auth/* /admin/* /healthz
+	#
+	# Only the root /admin API paths that still have callers are proxied
+	# (legacy unversioned /admin/metrics/* and the /admin/authz probe); the
+	# web and mobile clients use /api/v1/admin/*. A blanket /admin/* sent the
+	# SPA's own admin pages (/admin/growth, /admin/activity, ...) to the
+	# gateway, so a refresh or deep link 404'd — or returned analytics JSON
+	# where an API route shares the page's path.
+	@api path /api/* /auth/* /admin/metrics/* /admin/authz /healthz
 	handle @api {
 		# Load balanced across every api-gateway listed in API_GATEWAY_UPSTREAMS
 		# (space-separated "host:port"). Defaults to the single-host container
@@ -132,9 +139,27 @@
 			# the app, so fonts stay same-origin.
 			Content-Security-Policy "default-src 'self'; script-src 'self' https://plausible.io {$CSP_AD_DOMAINS}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: {$CSP_AD_DOMAINS}; font-src 'self' data:; connect-src 'self' https://plausible.io {$CSP_AD_DOMAINS}; frame-src 'self' {$CSP_AD_DOMAINS}; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		}
+		# Hashed assets are immutable. A missing one must 404 rather than fall
+		# through to index.html: a tab still running the previous build asks for
+		# chunks the deploy deleted, and an HTML 200 for a .js import surfaces as
+		# an opaque "Failed to fetch dynamically imported module" instead of a
+		# clean failure the SPA's lazyWithReload can recover from.
+		#
+		# Two sibling handles, not a nested handle beside try_files: Caddy runs
+		# try_files (a rewrite) before handle, so the asset path would already
+		# be rewritten to /index.html by the time an inner handle matched.
 		@assets path /assets/*
-		header @assets Cache-Control "public, max-age=31536000, immutable"
-		try_files {path} /index.html
-		file_server
+		handle @assets {
+			header Cache-Control "public, max-age=31536000, immutable"
+			file_server
+		}
+		# index.html (and the SPA fallback) must revalidate on every load, or the
+		# browser heuristically caches it and keeps requesting a previous
+		# build's chunk names after a deploy. no-cache still allows a 304.
+		handle {
+			header Cache-Control "no-cache"
+			try_files {path} /index.html
+			file_server
+		}
 	}
 }

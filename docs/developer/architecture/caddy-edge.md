@@ -14,8 +14,9 @@ gateway's CPU. Config: [`deployment/caddy/Caddyfile`](../../../deployment/caddy/
    client-side-routing fallback.
 3. **Object-byte routing** — proxies `/uploads/* /outputs/*` straight to
    `minio:9000` for presigned uploads/downloads (bytes never touch the gateway).
-4. **API proxying** — forwards `/api/* /auth/* /admin/* /healthz` to
-   `api-gateway:8080` on the internal network.
+4. **API proxying** — forwards `/api/* /auth/* /admin/metrics/* /admin/authz /healthz`
+   to `api-gateway:8080` on the internal network. Other `/admin/*` paths are the
+   SPA's admin pages and must reach the fallback (see the route table).
 
 ### Why this is a separate container, not part of api-gateway
 
@@ -74,7 +75,7 @@ graph TB
 
     Browser -->|HTTPS| TLS --> R
     R -->|"/uploads/* · /outputs/*<br/>(presigned, Host preserved)"| MINIO["MinIO :9000<br/>(internal)"]
-    R -->|"/api/* /auth/* /admin/* /healthz"| GW["api-gateway :8080<br/>(internal)"]
+    R -->|"/api/* /auth/* /admin/metrics/* /admin/authz /healthz"| GW["api-gateway :8080<br/>(internal)"]
     R -->|"/ (everything else)"| SPA["/srv/spa<br/>static files"]
 
     GW --> SVCS["auth · job · document · user<br/>notification · analytics services"]
@@ -122,9 +123,27 @@ sequenceDiagram
 | Matcher | Paths | Upstream / action | Notes |
 |---------|-------|-------------------|-------|
 | `@objects` | `/{$S3_BUCKET_UPLOADS}/*`, `/{$S3_BUCKET_OUTPUTS}/*` (default `uploads`/`outputs`) | `reverse_proxy {$MINIO_UPSTREAM}` (default `minio:9000`) | `header_up Host {host}` (SigV4), `flush_interval -1`, no auth middleware — the presigned signature is the credential |
-| `@api` | `/api/*`, `/auth/*`, `/admin/*`, `/healthz` | `reverse_proxy` → `{$API_GATEWAY_UPSTREAMS}` (default `api-gateway:8080`) | Load balanced (`lb_policy least_conn`) across every listed gateway, with active `/healthz` probes; `flush_interval -1` for SSE streams. See [Scaling the gateway](#scaling-the-gateway) |
+| `@api` | `/api/*`, `/auth/*`, `/admin/metrics/*`, `/admin/authz`, `/healthz` | `reverse_proxy` → `{$API_GATEWAY_UPSTREAMS}` (default `api-gateway:8080`) | Load balanced (`lb_policy least_conn`) across every listed gateway, with active `/healthz` probes; `flush_interval -1` for SSE streams. See [Scaling the gateway](#scaling-the-gateway) |
 | `@grafana` | `/grafana`, `/grafana/*` | `forward_auth` → `{$AUTHZ_UPSTREAM}` `/admin/authz`, then `reverse_proxy {$GRAFANA_UPSTREAM}` | Serves the embedded observability dashboards. `forward_auth` enforces super-admin (this path bypasses the gateway proxy). Only present when the `observability` compose profile is up. See [observability.md](./observability.md#in-app-embedding-admin-observability-tab) |
-| (fallback) | everything else | `file_server` from `/srv/spa` | `try_files {path} /index.html`; `/assets/*` served `Cache-Control: public, max-age=31536000, immutable`; **security headers** (see below) |
+| (fallback) | everything else | `file_server` from `/srv/spa` | `/assets/*`: `file_server` only, `Cache-Control: public, max-age=31536000, immutable`, a missing asset is a real **404**. Everything else: `try_files {path} /index.html` with `Cache-Control: no-cache`. **Security headers** on both (see below) |
+
+### Why `/admin/*` is not proxied, and the SPA cache rules
+
+- **Admin pages vs. admin API.** The SPA's admin pages live at `/admin/growth`,
+  `/admin/activity`, and so on. When `@api` matched all of `/admin/*`, a refresh
+  or deep link on those pages went to the gateway, which returned analytics-service's
+  `404 page not found`, or a `401` JSON body where an API route shares the path
+  (`GET /admin/activity`). Web and mobile call the admin API only through
+  `/api/v1/admin/*`. The root paths kept on `@api` are the legacy unversioned
+  `/admin/metrics/*` and the `/admin/authz` probe.
+- **Stale chunks after a deploy.** Each frontend build deletes the previous build's
+  hashed `/assets/*` files. `index.html` is served `no-cache`, so the browser
+  revalidates it (ETag, usually a 304) instead of heuristically caching it and
+  requesting deleted chunk names. A missing asset returns a 404 rather than
+  falling through to `index.html`: an HTML 200 for a `.js` import fails as an
+  opaque MIME/module error. A tab opened before the deploy still asks for old
+  chunks; the SPA's `lazyWithReload` (`fyredocs_frontend/src/lib/lazyWithReload.ts`)
+  reloads once to pick up the new `index.html`.
 
 ### Security headers (finding A1 / production-readiness S8)
 

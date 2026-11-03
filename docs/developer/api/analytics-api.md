@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost` (the Caddy edge; the api-gateway is internal-only)
 
-The gateway forwards `/api/dashboard` and `/admin/*` to `analytics-service:8087`. All responses use the standard envelope `{success, message, data, error, meta}`. The service computes everything from its own event store (`analytics_events`, `daily_metrics`) populated by the NATS subscribers — there is no separate ingestion endpoint.
+The gateway forwards `/api/dashboard` and `/admin/*` to `analytics-service:8087`. All responses use the standard envelope `{success, message, data, error, meta}`. The service computes everything from its own event store (`analytics_events`, `daily_metrics`) populated by the NATS subscribers — there is no separate ingestion endpoint. Clients call the admin routes as `/api/v1/admin/*` (the gateway's v1 alias). The public Caddy edge forwards only `/admin/metrics/*` and `/admin/authz` at the root, because other root `/admin/*` paths are SPA pages (see `architecture/caddy-edge.md`).
 
 **Auth:**
 - `/api/dashboard` — any authenticated user (role-aware). Guests are rejected (`403`).
