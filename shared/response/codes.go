@@ -30,4 +30,10 @@ const (
 	CodeServerError         = "SERVER_ERROR"         // unexpected internal failure (incl. recovered panics)
 	CodeUpstreamUnavailable = "UPSTREAM_UNAVAILABLE" // a downstream service could not be reached (502)
 	CodeServiceUnavailable  = "SERVICE_UNAVAILABLE"  // a required dependency is down (503)
+
+	// AI (ai-service). Distinct from the generic codes so the mobile app's
+	// jobErrors table can say something specific instead of a generic toast.
+	CodeAIUnavailable     = "AI_UNAVAILABLE"       // model provider unconfigured, down, or breaker open (503)
+	CodeAIQuotaExceeded   = "AI_QUOTA_EXCEEDED"    // the caller's AI token quota for the period is used (429)
+	CodeAIRequestTooLarge = "AI_REQUEST_TOO_LARGE" // input over the service's limits or the model's context (413)
 )

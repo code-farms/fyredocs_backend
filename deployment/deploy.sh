@@ -183,7 +183,7 @@ COMPOSE_PROJECT="fyredocs"
 GO_SERVICES=(
   "api-gateway" "analytics-service" "auth-service" "job-service"
   "convert-from-pdf" "convert-to-pdf" "organize-pdf" "optimize-pdf"
-  "document-service" "user-service" "notification-service"
+  "document-service" "user-service" "notification-service" "ai-service"
 )
 
 # ─── Host role ───────────────────────────────────────────────────────────────
@@ -217,6 +217,7 @@ case "$HOST_ROLE" in
         ROLE_SERVICES=(
           "api-gateway" "auth-service" "job-service"
           "document-service" "user-service" "analytics-service" "notification-service"
+          "ai-service"
         )
         ;;
     work)
@@ -346,7 +347,7 @@ compute_resource_budget() {
     local NAMES=(redis nats minio api-gateway auth-service job-service \
         convert-from-pdf convert-to-pdf organize-pdf optimize-pdf \
         analytics-service document-service user-service notification-service \
-        db db-backup pgbouncer)
+        ai-service db db-backup pgbouncer)
     # Weights reflect each service's real responsibilities (not the old 8 GB-box
     # limits). Memory: LibreOffice/OCR workers + MinIO get the bulk; redis and
     # the light Go CRUD services stay lean. CPU: the heavy workers AND the
@@ -363,9 +364,11 @@ compute_resource_budget() {
     # deliberately excluded — it belongs to the reserved OS/edge headroom.)
     # pgbouncer is a tiny C proxy — a few MB of RAM per pooled connection and
     # almost no CPU — but it is on every query path, so it gets a real sliver.
-    #              redis nats minio  gw auth  job   cF  cT org opt  an doc usr ntf   db db-bk pgb
-    local MEMW=(     8   12   34   14    7   24   48  48  24  46    6   6   6   6   26    3    2)
-    local CPUW=(     2    2    7   10    2    6   18  18  12  18    1   1   1   1   10    1    2)
+    # ai-service only proxies model streams (no inference), so it is a light
+    # CRUD-sized slot like notification-service.
+    #              redis nats minio  gw auth  job   cF  cT org opt  an doc usr ntf  ai   db db-bk pgb
+    local MEMW=(     8   12   34   14    7   24   48  48  24  46    6   6   6   6   6   26    3    2)
+    local CPUW=(     2    2    7   10    2    6   18  18  12  18    1   1   1   1   1   10    1    2)
     # Observability ships on by default (COMPOSE_PROFILES=observability), and
     # its six containers are real memory — ~2.5 GB at the compose defaults. Left
     # outside the budget they sat ON TOP of the cap and could push a small host
@@ -977,6 +980,7 @@ echo "  📊 Analytics:             internal only (analytics-service:8087)"
 echo "  🗂️  Document Service:      internal only (document-service:8089)"
 echo "  👤 User Service:          internal only (user-service:8090)"
 echo "  🔔 Notification Service:  internal only (notification-service:8091)"
+echo "  🤖 AI Service:            internal only (ai-service:8092, profile: ai)"
 echo "  📦 MinIO (S3):            internal (minio:9000) — console http://127.0.0.1:9001, objects via edge /uploads /outputs"
 echo "  📨 NATS:                  internal only (nats:4222)"
 echo "  🔴 Redis:                 internal only (redis:6379)"

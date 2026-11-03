@@ -72,6 +72,8 @@ tags:
   description: Organizations, memberships, and RBAC (user-service)
 - name: Notifications
   description: Per-user in-app notification feed and live SSE bell (notification-service)
+- name: AI
+  description: Sign-in-only AI reading ops over document text, streamed as SSE (ai-service)
 x-path-tool-convert-from:
   name: tool
   in: path
@@ -4221,6 +4223,95 @@ paths:
           description: Caller not admin+, or the owner
         '404':
           description: Member not found
+  /api/ai/ops/{op}:
+    post:
+      tags:
+      - AI
+      summary: Run an AI op over document text
+      description: Prompt templates are server-owned; the body carries inputs only. With Accept text/event-stream the answer streams as SSE frames (delta, then done or error); otherwise it is returned in the envelope as {text, usage}. Guests are rejected.
+      operationId: runAiOp
+      security:
+      - BearerAuth: []
+      - CookieAuth: []
+      parameters:
+      - name: op
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [summarize, explain, ask, translate, rewrite, keyPoints, actionItems, notes, flashcards]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pages:
+                  type: array
+                  maxItems: 50
+                  items:
+                    type: object
+                    properties:
+                      index:
+                        type: integer
+                        minimum: 0
+                        description: 0-based page index (the model cites pages 1-based as [p.N])
+                      text:
+                        type: string
+                question:
+                  type: string
+                  maxLength: 2000
+                  description: Required for ask
+                history:
+                  type: array
+                  maxItems: 20
+                  description: Prior ask turns, oldest first
+                  items:
+                    type: object
+                    properties:
+                      role:
+                        type: string
+                        enum: [user, assistant]
+                      text:
+                        type: string
+                        maxLength: 8000
+                targetLang:
+                  type: string
+                  maxLength: 40
+                  description: Required for translate
+                passage:
+                  type: string
+                  maxLength: 20000
+                  description: Required for rewrite
+      responses:
+        '200':
+          description: SSE stream (Accept text/event-stream) or envelope with {text, usage}
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: 'data: {"type":"delta","text":"The contract ends on 1 March [p.3]."}
+
+
+                data: {"type":"done","usage":{"inputTokens":1830,"outputTokens":14,"cachedTokens":1536}}
+
+                '
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        '400':
+          description: INVALID_INPUT
+        '401':
+          description: AUTH_UNAUTHORIZED (guest or signed out)
+        '404':
+          description: NOT_FOUND (unknown op)
+        '413':
+          description: AI_REQUEST_TOO_LARGE
+        '429':
+          description: AI_QUOTA_EXCEEDED
+        '503':
+          description: AI_UNAVAILABLE
   /api/notifications:
     get:
       tags:

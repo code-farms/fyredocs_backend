@@ -94,7 +94,7 @@ func withV1Aliases(routes []routeConfig) []routeConfig {
 }
 
 // upstreams carries the resolved service base URLs for serviceRoutes. A struct
-// rather than six positional strings: they are all the same type, so a
+// rather than seven positional strings: they are all the same type, so a
 // transposed pair would compile silently and mis-route a whole service.
 type upstreams struct {
 	job          string
@@ -103,6 +103,7 @@ type upstreams struct {
 	document     string
 	user         string
 	notification string
+	ai           string
 }
 
 // serviceRoutes is the gateway's complete public route table, extracted from
@@ -206,6 +207,13 @@ func serviceRoutes(u upstreams) []routeConfig {
 			targetURL:      u.notification,
 		},
 		{
+			// AI ops (Phase 23): the model-provider proxy. Streams SSE, which
+			// the proxy's FlushInterval -1 already passes through unbuffered.
+			prefix:         "/api/ai",
+			targetBasePath: "/api/ai",
+			targetURL:      u.ai,
+		},
+		{
 			prefix:         "/admin",
 			targetBasePath: "/admin",
 			targetURL:      u.analytics,
@@ -290,6 +298,7 @@ func main() {
 	documentServiceURL := config.GetEnv("DOCUMENT_SERVICE_URL", "http://document-service:8089")
 	userServiceURL := config.GetEnv("USER_SERVICE_URL", "http://user-service:8090")
 	notificationServiceURL := config.GetEnv("NOTIFICATION_SERVICE_URL", "http://notification-service:8091")
+	aiServiceURL := config.GetEnv("AI_SERVICE_URL", "http://ai-service:8092")
 
 	routes := serviceRoutes(upstreams{
 		job:          jobServiceURL,
@@ -298,6 +307,7 @@ func main() {
 		document:     documentServiceURL,
 		user:         userServiceURL,
 		notification: notificationServiceURL,
+		ai:           aiServiceURL,
 	})
 
 	mux := http.NewServeMux()

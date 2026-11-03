@@ -99,6 +99,14 @@ services:
       service: notification-service
     depends_on: !reset []
 
+  # Inherits profiles: ["ai"], so it stays opt-in here too. Enable with
+  # --profile ai.
+  ai-service:
+    extends:
+      file: docker-compose.yml
+      service: ai-service
+    depends_on: !reset []
+
 networks:
   fyredocs_net:
     name: fyredocs_net

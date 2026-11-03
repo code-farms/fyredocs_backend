@@ -393,6 +393,24 @@ var testUpstreams = upstreams{
 	document:     "http://document:8089",
 	user:         "http://user:8090",
 	notification: "http://notification:8091",
+	ai:           "http://ai:8092",
+}
+
+// TestServiceRoutesSendAIToAIService pins the Phase 23 route: AI ops must reach
+// ai-service (the only holder of the provider key and the quota ledger), on
+// both the unversioned path and its /api/v1 alias.
+func TestServiceRoutesSendAIToAIService(t *testing.T) {
+	found := map[string]string{}
+	for _, c := range withV1Aliases(serviceRoutes(testUpstreams)) {
+		if c.prefix == "/api/ai" || c.prefix == "/api/v1/ai" {
+			found[c.prefix] = c.targetURL + c.targetBasePath
+		}
+	}
+	for _, prefix := range []string{"/api/ai", "/api/v1/ai"} {
+		if found[prefix] != "http://ai:8092/api/ai" {
+			t.Errorf("%s routes to %q, want ai-service /api/ai", prefix, found[prefix])
+		}
+	}
 }
 
 // TestServiceRoutesHaveNoAliasCollisions guards the REAL route table, not a

@@ -1,6 +1,7 @@
 go 1.25.7
 
 use (
+	./ai-service
 	./analytics-service
 	./api-gateway
 	./auth-service

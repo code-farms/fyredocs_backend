@@ -48,7 +48,7 @@ export DATABASE_URL="postgresql://postgres:baseline@localhost:${PGPORT}/fyredocs
 # Force the legacy AutoMigrate path — that is exactly the schema we are capturing.
 export DB_AUTOMIGRATE=true
 
-SERVICES=(auth-service job-service user-service document-service notification-service analytics-service)
+SERVICES=(auth-service job-service user-service document-service notification-service analytics-service ai-service)
 
 echo "==> Bootstrapping schema from each service"
 for svc in "${SERVICES[@]}"; do

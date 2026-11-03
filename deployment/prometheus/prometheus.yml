@@ -43,6 +43,7 @@ scrape_configs:
           - document-service:8089
           - user-service:8090
           - notification-service:8091
+          - ai-service:8092
 
   # otel-collector self-telemetry (span throughput, queue sizes, export errors).
   - job_name: otel-collector

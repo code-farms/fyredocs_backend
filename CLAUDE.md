@@ -47,6 +47,7 @@ If a user request violates microservice boundaries, Claude must correct or rejec
 - `document-service/`
 - `user-service/`
 - `notification-service/`
+- `ai-service/`
 
 ## Forbidden:
 - Shared `/models`, `/handlers`, `/domain`, `/business` folders
@@ -361,7 +362,7 @@ to a module, or use `make test` which loops over all of them:
 go build ./job-service/... && go vet ./job-service/... && go test ./job-service/...
 
 # All modules
-SVCS=(analytics-service api-gateway auth-service convert-from-pdf convert-to-pdf \
+SVCS=(ai-service analytics-service api-gateway auth-service convert-from-pdf convert-to-pdf \
       document-service job-service notification-service optimize-pdf \
       organize-pdf shared user-service)
 for s in $SVCS; do go build ./$s/... && go vet ./$s/...; done

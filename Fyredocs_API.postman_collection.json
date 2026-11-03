@@ -5957,6 +5957,170 @@
           "response": []
         }
       ]
+    },
+    {
+      "name": "15. AI",
+      "description": "ai-service (opt-in `ai` compose profile). Sign-in required; guests get 401. Until a model provider is configured every op returns 503 AI_UNAVAILABLE.",
+      "item": [
+        {
+          "name": "Summarize (SSE stream)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pages\": [\n    {\n      \"index\": 0,\n      \"text\": \"This agreement starts on 1 January and ends on 1 March.\"\n    },\n    {\n      \"index\": 1,\n      \"text\": \"Either party may terminate with 30 days notice.\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/ai/ops/summarize",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "ai",
+                "ops",
+                "summarize"
+              ]
+            },
+            "description": "Streams data: frames \u2014 delta\u2026, then done with usage."
+          },
+          "response": []
+        },
+        {
+          "name": "Ask (JSON)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pages\": [\n    {\n      \"index\": 0,\n      \"text\": \"This agreement starts on 1 January and ends on 1 March.\"\n    },\n    {\n      \"index\": 1,\n      \"text\": \"Either party may terminate with 30 days notice.\"\n    }\n  ],\n  \"question\": \"When does the agreement end?\",\n  \"history\": []\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/ai/ops/ask",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "ai",
+                "ops",
+                "ask"
+              ]
+            },
+            "description": "Non-streaming: envelope data {text, usage}. Answers cite pages as [p.N]."
+          },
+          "response": []
+        },
+        {
+          "name": "Translate",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pages\": [\n    {\n      \"index\": 0,\n      \"text\": \"This agreement starts on 1 January and ends on 1 March.\"\n    },\n    {\n      \"index\": 1,\n      \"text\": \"Either party may terminate with 30 days notice.\"\n    }\n  ],\n  \"targetLang\": \"Hindi\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/ai/ops/translate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "ai",
+                "ops",
+                "translate"
+              ]
+            },
+            "description": "targetLang is required."
+          },
+          "response": []
+        },
+        {
+          "name": "Rewrite passage",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"passage\": \"Either party may terminate with 30 days notice.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/ai/ops/rewrite",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "ai",
+                "ops",
+                "rewrite"
+              ]
+            },
+            "description": "pages optional for rewrite."
+          },
+          "response": []
+        },
+        {
+          "name": "Flashcards",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pages\": [\n    {\n      \"index\": 0,\n      \"text\": \"This agreement starts on 1 January and ends on 1 March.\"\n    },\n    {\n      \"index\": 1,\n      \"text\": \"Either party may terminate with 30 days notice.\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/ai/ops/flashcards",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "ai",
+                "ops",
+                "flashcards"
+              ]
+            },
+            "description": "Plain Q:/A: lines, parsed by the app."
+          },
+          "response": []
+        }
+      ]
     }
   ]
 }

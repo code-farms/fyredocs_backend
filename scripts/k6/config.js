@@ -25,6 +25,10 @@ export const TEST_PLAN = __ENV.TEST_PLAN || 'pro';
 // started that profile (COMPOSE_PROFILES=observability,notifications).
 export const TEST_NOTIFICATIONS = (__ENV.TEST_NOTIFICATIONS || 'false') === 'true';
 
+// ai-service (`ai` profile) is deliberately NOT in any load scenario: every op
+// spends real model-provider tokens and per-user quota, so a load run would
+// bill the provider account rather than measure the stack.
+
 // How many users setup() provisions and VUs round-robin across. In capacity
 // mode signup/login limits are raised, so a pool is cheap and avoids per-IP /
 // per-user rate skew. Reuse fixed creds instead by setting USER_EMAIL/USER_PASSWORD.

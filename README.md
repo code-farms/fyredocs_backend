@@ -32,6 +32,7 @@ All other services are internal-only (reachable on the `fyredocs_net` Docker net
 | **Document Service** | 8089 | Persistent document library — documents, folders, tags, exports; finalizes completed jobs into documents (NATS subscriber) |
 | **User Service** | 8090 | Organizations, memberships, and the RBAC role model |
 | **Notification Service** | 8091 | In-app notification feed; consumes job events, pushes a live SSE bell |
+| **AI Service** | 8092 | Server-side proxy for AI reading features (summarize, ask, notes…); owns prompts, limits and quota; speaks any OpenAI-compatible provider. Opt-in `ai` compose profile |
 | **MinIO** | — (internal) | Object storage for all file bytes (`uploads`, `outputs`); bootstrapped by the one-shot `minio-init` container (creates buckets + scoped app user, clears any bucket lifecycle rule — retention is DB-driven via job-service's cleanup loop) |
 
 ## Request Flow
@@ -57,6 +58,7 @@ Client → Caddy edge (:80/:443 — TLS, gzip)
             ├─ /api/{documents,folders,tags,exports}/* → Document Service (:8089)
             ├─ /api/orgs/*           → User Service (:8090)
             ├─ /api/notifications/*  → Notification Service (:8091)
+            ├─ /api/ai/*             → AI Service (:8092)
             └─ /admin/* , /api/dashboard → Analytics Service (:8087)
                           │
                           ▼
@@ -159,7 +161,7 @@ test.bat
 test.bat -v api-gateway
 ```
 
-Available services: `shared`, `api-gateway`, `auth-service`, `job-service`, `convert-to-pdf`, `convert-from-pdf`, `organize-pdf`, `optimize-pdf`, `analytics-service`, `document-service`, `user-service`, `notification-service` (the cleanup sweep is part of `job-service`)
+Available services: `shared`, `api-gateway`, `auth-service`, `job-service`, `convert-to-pdf`, `convert-from-pdf`, `organize-pdf`, `optimize-pdf`, `analytics-service`, `document-service`, `user-service`, `notification-service`, `ai-service` (the cleanup sweep is part of `job-service`)
 
 ## License
 

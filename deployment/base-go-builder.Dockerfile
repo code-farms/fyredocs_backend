@@ -44,6 +44,7 @@ COPY analytics-service/go.mod* ./analytics-service/
 COPY document-service/go.mod* ./document-service/
 COPY user-service/go.mod* ./user-service/
 COPY notification-service/go.mod* ./notification-service/
+COPY ai-service/go.mod* ./ai-service/
 
 # 2. Download every module's deps into /go/pkg/mod (baked into the image).
 RUN go mod download
@@ -59,7 +60,7 @@ COPY . .
 RUN set -eux; \
     for m in shared api-gateway auth-service convert-from-pdf convert-to-pdf \
              optimize-pdf organize-pdf job-service analytics-service \
-             document-service user-service notification-service; do \
+             document-service user-service notification-service ai-service; do \
       ( cd "$m" && CGO_ENABLED=0 GOOS=linux \
           go build -p "${GO_BUILD_PARALLELISM}" -trimpath ./... ) || true; \
     done

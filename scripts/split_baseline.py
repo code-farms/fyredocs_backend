@@ -40,6 +40,7 @@ OWNERSHIP = {
         "job_workspace_hints",
     ],
     "notification-service": ["notifications"],
+    "ai-service": ["ai_usage"],
     "analytics-service": ["analytics_events", "daily_metrics", "api_metric_samples"],
 }
 

@@ -26,6 +26,7 @@ SERVICES=(
   document-service
   user-service
   notification-service
+  ai-service
 )
 
 # for_each_module <cmd...> — runs the command with the module path appended

@@ -39,6 +39,7 @@ graph TB
         DOC["document-service :8089<br/>Gin · library + NATS finalize subscriber"]
         USR["user-service :8090<br/>Gin · orgs, memberships, RBAC"]
         NOT["notification-service :8091<br/>Gin · feed + SSE bell (NATS subscriber)"]
+        AIS["ai-service :8092<br/>Gin · AI op proxy, SSE (profile: ai)"]
     end
 
     subgraph Infrastructure
@@ -62,6 +63,9 @@ graph TB
     GW -->|/api/{documents,folders,tags,exports}/*| DOC
     GW -->|/api/orgs/*| USR
     GW -->|/api/notifications/*| NOT
+    GW -->|/api/ai/*| AIS
+    AIS -.->|OpenAI-compatible API| LLMP["Model provider<br/>(external, env-configured)"]
+    AIS -.->|analytics.events.ai.*| NATS
     GW -->|/admin/* · /api/dashboard| AN
     GW -->|plan info| RD
 
@@ -127,8 +131,8 @@ metrics are all correlated in Grafana.
 
 ```mermaid
 graph LR
-    subgraph Services["All 11 services"]
-        SVC["api-gateway · auth · job · workers ·<br/>analytics · document · user · notification<br/>(OTLP traces + /metrics + JSON stdout logs)"]
+    subgraph Services["All 12 services"]
+        SVC["api-gateway · auth · job · workers ·<br/>analytics · document · user · notification · ai<br/>(OTLP traces + /metrics + JSON stdout logs)"]
     end
 
     subgraph Obs["Observability stack (profile: observability)"]

@@ -465,6 +465,7 @@ services:
       DOCUMENT_SERVICE_URL: http://document-service:8089
       USER_SERVICE_URL: http://user-service:8090
       NOTIFICATION_SERVICE_URL: http://notification-service:8091
+      AI_SERVICE_URL: http://ai-service:8092
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: "0"
@@ -546,6 +547,7 @@ services:
       # notification-service intentionally omitted: it is disabled by default
       # (notifications profile). The gateway proxies /api/notifications on demand
       # and NOTIFICATION_SERVICE_URL below still resolves when it is enabled.
+      # ai-service is omitted for the same reason (ai profile).
     networks:
       - fyredocs_net
 
@@ -1391,6 +1393,82 @@ services:
           cpus: "${NOTIFICATION_SERVICE_CPU_LIMIT:-0.5}"
         reservations:
           memory: ${NOTIFICATION_SERVICE_MEM_RESERVATION:-64M}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - fyredocs_net
+
+  # ==================== AI SERVICE ====================
+  # Server-side proxy for every AI feature (Phase 23): owns prompt templates,
+  # input limits and the token quota, and talks to the model provider over the
+  # OpenAI-compatible API — the provider is configuration, never code. Disabled
+  # by default via the `ai` profile, like notification-service: it does nothing
+  # useful until a provider is configured, and the gateway proxies /api/ai on
+  # demand (the app degrades to "AI unavailable" while it is off).
+  # Enable:
+  #   docker compose -f deployment/docker-compose.yml --env-file .env --profile ai up -d
+  #   (or) ./deployment/deploy.sh ai-service
+  ai-service:
+    profiles: ["ai"]
+    build:
+      context: ..
+      dockerfile: ai-service/Dockerfile
+    restart: always
+    environment:
+      PORT: "8092"
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
+      # Migrations take a session advisory lock, which transaction-mode
+      # pooling breaks — they always connect straight to Postgres.
+      DATABASE_URL_DIRECT: ${DATABASE_URL_DIRECT:-}
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_DB: "0"
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
+
+      # Model output cap per op (tokens).
+      AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-4096}
+
+      # JWT Configuration — this service verifies tokens itself rather than
+      # trusting gateway headers, so it needs the same signing config.
+      JWT_HS256_SECRET: ${JWT_HS256_SECRET}
+      JWT_ALLOWED_ALGS: "HS256"
+      JWT_ISSUER: "fyredocs"
+      JWT_AUDIENCE: "fyredocs-api"
+      JWT_CLOCK_SKEW: "60s"
+
+      # Auth settings. AUTH_TRUST_GATEWAY_HEADERS defaults to false so a forged
+      # X-User-ID cannot spend another user's AI quota once this service is
+      # reachable across a host boundary.
+      AUTH_DENYLIST_ENABLED: "true"
+      AUTH_DENYLIST_PREFIX: "denylist:jwt"
+      AUTH_TRUST_GATEWAY_HEADERS: ${AUTH_TRUST_GATEWAY_HEADERS:-false}
+
+      # Observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    healthcheck:
+      test: ["CMD", "./healthcheck", "http://localhost:8092/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: ${AI_SERVICE_MEM_LIMIT:-256M}
+          cpus: "${AI_SERVICE_CPU_LIMIT:-0.5}"
+        reservations:
+          memory: ${AI_SERVICE_MEM_RESERVATION:-64M}
     logging:
       driver: "json-file"
       options:

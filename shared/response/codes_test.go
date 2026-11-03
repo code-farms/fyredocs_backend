@@ -22,6 +22,9 @@ func TestErrorCodeValuesAreStable(t *testing.T) {
 		CodeServerError:         "SERVER_ERROR",
 		CodeUpstreamUnavailable: "UPSTREAM_UNAVAILABLE",
 		CodeServiceUnavailable:  "SERVICE_UNAVAILABLE",
+		CodeAIUnavailable:       "AI_UNAVAILABLE",
+		CodeAIQuotaExceeded:     "AI_QUOTA_EXCEEDED",
+		CodeAIRequestTooLarge:   "AI_REQUEST_TOO_LARGE",
 	}
 	for got, want := range pins {
 		if got != want {

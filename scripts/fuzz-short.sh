@@ -28,6 +28,7 @@ ALL_SERVICES=(
   document-service
   user-service
   notification-service
+  ai-service
 )
 
 TARGETS=("$@")
