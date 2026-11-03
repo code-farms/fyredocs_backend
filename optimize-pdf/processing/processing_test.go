@@ -86,6 +86,9 @@ func TestResolveLanguage(t *testing.T) {
 		{"missing falls back to eng", "fra", []string{"eng", "spa"}, "eng"},
 		{"missing and no eng uses first", "fra", []string{"spa", "deu"}, "spa"},
 		{"empty available keeps requested", "fra", nil, "fra"},
+		{"multi keeps installed parts in order", "hin+eng", []string{"eng", "hin"}, "hin+eng"},
+		{"multi drops a missing part", "eng+hin", []string{"eng", "deu"}, "eng"},
+		{"multi with none installed falls back", "eng+hin", []string{"spa", "deu"}, "spa"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

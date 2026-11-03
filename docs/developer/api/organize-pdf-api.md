@@ -544,7 +544,7 @@ Convert images to a PDF document, with optional per-page perspective correction 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | ocr | boolean | false | Apply OCR to make text searchable |
-| language | string | `"eng"` | OCR language — one of `eng`, `deu`, `fra`, `spa`, `hin` |
+| language | string | `"eng"` | OCR language — `eng`, `hin`, or `eng+hin` (either order) for mixed English/Hindi pages |
 | pageSize | string | `"auto"` | PDF page size — `""`/`"auto"` (page = image size), `"a4"`, `"letter"`, `"id"` (ISO ID-1 card, 85.6×54 mm), `"card"` (business card, 3.5×2 in). **Ignored when `ocr=true`** (Tesseract emits image-sized pages) |
 | enhance | string | — | `""`/`"none"`, `"grayscale"`, `"bw"` (adaptive-threshold scan look), `"color-boost"` |
 | margin | string | — | White margin around the image — `""`/`"none"`, `"small"`, `"normal"`, `"large"` (pdfcpu import scale `1.0`/`0.95`/`0.9`/`0.85` relative). **Only applies with a fixed `pageSize`** (`a4`, `letter`, `id`, `card`); with `"auto"` (or on the OCR path) it is accepted but ignored with a worker warning |

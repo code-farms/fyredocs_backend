@@ -330,7 +330,7 @@ Add a searchable text layer to scanned PDF documents.
 
 | Option | Type | Default | Rule | Description |
 |--------|------|---------|------|-------------|
-| language | string | `"eng"` | one of `"en"`, `"eng"` (case-insensitive) or omitted | OCR language. Only English is supported today — the worker image ships only the English tesseract pack. The allowlist grows together with the image when more language packs are added. |
+| language | string | `"eng"` | `eng` (or the `en` alias), `hin`, or `eng+hin` (either order) for mixed English/Hindi documents (case-insensitive) or omitted ||
 | dpi | number or string | `150` (server env `OCR_DEFAULT_DPI`) | whole number, 72–600 | Rasterization resolution for OCR. Both `300` and `"300"` are accepted. The worker may additionally cap the effective DPI on very large pages to bound image size. |
 
 **Supported Languages:**

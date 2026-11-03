@@ -17,11 +17,13 @@ func TestSanitizeOCRLanguage(t *testing.T) {
 	cases := map[string]string{
 		"":                         "eng", // empty → default
 		"en":                       "eng", // ISO 639-1 mapped
-		"de":                       "deu",
-		"zh":                       "chi_sim",
+		"hi":                       "hin", // ISO 639-1 mapped
+		"hin":                      "hin",
 		"eng":                      "eng", // already a tesseract code
-		"chi_sim":                  "chi_sim",
-		"  fr  ":                   "fra", // trimmed then mapped
+		"  hi  ":                   "hin", // trimmed then mapped
+		"de":                       "eng", // out of product scope → default
+		"deu":                      "eng",
+		"chi_sim":                  "eng",
 		"xx":                       "eng", // unknown code → default
 		"eng; rm -rf /":            "eng", // crafted value rejected
 		"../../usr/share/tessdata": "eng", // path-like value rejected
@@ -54,12 +56,20 @@ func TestSanitizeOCRLanguageAdversarial(t *testing.T) {
 		// Leading/trailing whitespace (incl. newline) is trimmed, so a legit
 		// code survives sloppy client serialization.
 		"\neng\t": "eng",
-		" de \n":  "deu",
-		// Tesseract multi-language syntax is NOT supported: pinned — "eng+deu"
-		// is off the allowlist and coerces to the default rather than passing
-		// a combo through to `tesseract -l`.
-		"eng+deu": "eng",
-		"deu+eng": "eng",
+		" hi \n":  "hin",
+		// Multi-language: ONLY English + Hindi (either order, ISO aliases
+		// allowed), rebuilt from known codes. Every other combination —
+		// including otherwise-valid pairs — falls back to the default.
+		"eng+hin":         "eng+hin",
+		"hin+eng":         "hin+eng",
+		"en+hi":           "eng+hin",
+		" eng + hin ":     "eng+hin",
+		"eng+deu":         "eng",
+		"deu+eng":         "eng",
+		"eng+eng":         "eng",
+		"eng+hin+deu":     "eng",
+		"eng+hin; reboot": "eng",
+		"eng++hin":        "eng",
 		// Unicode homoglyphs (Cyrillic е U+0435, fullwidth letters) must not
 		// match: the output is the ASCII default, never the homoglyph itself.
 		"еng":                      "eng",
@@ -72,8 +82,10 @@ func TestSanitizeOCRLanguageAdversarial(t *testing.T) {
 		if got != want {
 			t.Errorf("sanitizeOCRLanguage(%q) = %q, want %q", in, got, want)
 		}
-		if !ocrAllowedLanguages[got] {
-			t.Errorf("sanitizeOCRLanguage(%q) = %q escaped the allowlist — this value would reach `tesseract -l` verbatim", in, got)
+		for _, part := range strings.Split(got, "+") {
+			if !ocrAllowedLanguages[part] {
+				t.Errorf("sanitizeOCRLanguage(%q) = %q has part %q off the allowlist — it would reach `tesseract -l` verbatim", in, got, part)
+			}
 		}
 	}
 }

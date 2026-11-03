@@ -274,7 +274,7 @@ The client then registers the document with document-service (`POST /api/documen
 | Field | Rule |
 |-------|------|
 | `ocr` | boolean |
-| `language` | whitelist: `eng`, `deu`, `fra`, `spa`, `hin` |
+| `language` | whitelist: `eng`, `hin`, or `eng+hin` (either order) |
 | `pageSize` | whitelist: `""`, `auto`, `a4`, `letter`, `id`, `card` |
 | `enhance` | whitelist: `""`, `none`, `grayscale`, `bw`, `color-boost` |
 | `margin` | whitelist: `""`, `none`, `small`, `normal`, `large` (only takes effect with `pageSize` `a4`/`letter`/`id`/`card`; the worker ignores it with a warning on `auto` and on the OCR path) |
@@ -288,7 +288,7 @@ The client then registers the document with document-service (`POST /api/documen
 
 | Field | Rule |
 |-------|------|
-| `language` | whitelist: `""`, `en`, `eng` (case-insensitive). The allowlist is a trust boundary — the value reaches a tesseract command line, and the optimize-pdf image ships only the English pack today. Extend this set together with the optimize-pdf Dockerfile when more packs land; rejecting here is deliberate because the worker's wider language map would otherwise silently degrade unknown languages to `eng`. |
+| `language` | whitelist: `""`, `en`, `eng`, `hin` (case-insensitive), or the one supported combination `eng+hin` (either order). Product scope is English and Hindi only. The allowlist is a trust boundary — the value reaches a tesseract command line — and must equal the packs the optimize-pdf image installs; `TestOCRLanguagesMatchInstalledPacks` reads both Dockerfiles so `ocrLanguages`/`scanLanguages` can never drift from their images again. Rejecting here is deliberate: the worker's wider map would otherwise silently degrade an uninstalled language to `eng`. |
 | `dpi` | optional; JSON number or string (clients send both `300` and `"300"`); must be a whole number in `[72, 600]` (below 72 tesseract accuracy collapses; above 600 a single page rasterizes into hundreds of MB — the worker further clamps DPI against page dimensions) |
 
 **pdf-to-image schema** (`validatePdfToImageOptions`; all fields optional; alias `pdf-to-img` is normalized first):

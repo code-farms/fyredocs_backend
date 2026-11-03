@@ -34,7 +34,7 @@ const businessCardAspect = 88.9 / 50.8
 
 // scanLanguages are the tesseract language packs installed in the Dockerfile.
 var scanLanguages = map[string]bool{
-	"eng": true, "deu": true, "fra": true, "spa": true, "hin": true,
+	"eng": true, "hin": true,
 }
 
 // ScanCorners is the normalized document quad for one page. All four corners
@@ -158,7 +158,7 @@ func parseScanOptions(options map[string]interface{}) ScanOptions {
 	}
 
 	opts.Language = strings.ToLower(strings.TrimSpace(opts.Language))
-	if opts.Language != "" && !scanLanguages[opts.Language] {
+	if opts.Language != "" && tesseractLang(opts.Language) != opts.Language {
 		slog.Warn("unsupported OCR language; falling back to eng", "language", opts.Language)
 		opts.Language = ""
 	}
@@ -216,11 +216,23 @@ func parseScanOptions(options map[string]interface{}) ScanOptions {
 	return opts
 }
 
-// tesseractLang maps the requested OCR language onto an installed pack.
+// tesseractLang maps the requested OCR language onto an installed pack. The
+// only multi-language form accepted is English + Hindi ("eng+hin" /
+// "hin+eng") — the product's one supported pairing; anything else, or any
+// unknown code, degrades to "eng". The result is rebuilt from known codes
+// (a trust boundary: it reaches `tesseract -l`).
+// NOTE: mirrors job-service validLanguageList (duplicated by design).
 func tesseractLang(requested string) string {
-	requested = strings.ToLower(strings.TrimSpace(requested))
-	if scanLanguages[requested] {
-		return requested
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(requested)), "+")
+	if len(parts) == 2 {
+		a, b := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		if (a == "eng" && b == "hin") || (a == "hin" && b == "eng") {
+			return a + "+" + b
+		}
+		return "eng"
+	}
+	if len(parts) == 1 && scanLanguages[strings.TrimSpace(parts[0])] {
+		return strings.TrimSpace(parts[0])
 	}
 	return "eng"
 }

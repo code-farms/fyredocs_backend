@@ -89,9 +89,12 @@ func TestParseScanOptionsLegacyOCROnSchemaMismatch(t *testing.T) {
 
 func TestTesseractLang(t *testing.T) {
 	cases := map[string]string{
-		"eng": "eng", "deu": "deu", "fra": "fra", "spa": "spa", "hin": "hin",
+		"eng": "eng", "hin": "hin",
+		"deu": "eng", "fra": "eng", "spa": "eng", // out of product scope → default
 		"":  "eng",
-		"x": "eng", "ENG": "eng", " deu ": "deu",
+		"x": "eng", "ENG": "eng", " hin ": "hin",
+		"eng+hin": "eng+hin", "HIN + ENG": "hin+eng", "eng+eng": "eng",
+		"eng+deu": "eng", "eng+jpn": "eng", "eng+hin+deu": "eng", "eng+": "eng",
 	}
 	for in, want := range cases {
 		if got := tesseractLang(in); got != want {
@@ -120,12 +123,16 @@ func TestTesseractLangAdversarial(t *testing.T) {
 		"deu\x00":  "eng",
 		// Case folding plus edge-whitespace trimming keeps legit values
 		// working even when clients serialize sloppily.
-		"DEU\n":  "deu",
+		"HIN\n":  "hin",
 		"\tHIN ": "hin",
-		// Tesseract multi-language syntax is NOT supported: pinned — a combo
-		// is off the allowlist and coerces to the default.
-		"eng+deu": "eng",
-		"hin+eng": "eng",
+		// Multi-language: ONLY English + Hindi; every other combination,
+		// and any crafted part, degrades to the default.
+		"eng+hin":         "eng+hin",
+		"hin+eng":         "hin+eng",
+		"eng+deu":         "eng",
+		"eng+hin; reboot": "eng",
+		"eng+chi_sim":     "eng",
+		"eng+$(id)":       "eng",
 		// A pack that exists for tesseract but is not installed in this
 		// service's image must not pass through.
 		"chi_sim": "eng",
@@ -143,8 +150,10 @@ func TestTesseractLangAdversarial(t *testing.T) {
 		if got != want {
 			t.Errorf("tesseractLang(%q) = %q, want %q", in, got, want)
 		}
-		if !scanLanguages[got] {
-			t.Errorf("tesseractLang(%q) = %q escaped the allowlist — this value would reach `tesseract -l` verbatim", in, got)
+		for _, part := range strings.Split(got, "+") {
+			if !scanLanguages[part] {
+				t.Errorf("tesseractLang(%q) = %q has part %q off the allowlist — it would reach `tesseract -l` verbatim", in, got, part)
+			}
 		}
 	}
 	// Allowlist closure: every installed pack passes through unchanged.

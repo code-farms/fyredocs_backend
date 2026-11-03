@@ -9,7 +9,7 @@ The Organize-PDF service provides comprehensive PDF manipulation capabilities us
 **Port:** 8084
 **Bus:** NATS JetStream — pulls from `jobs.dispatch.organize-pdf`, publishes events to `jobs.events.<jobId>.*`, DLQ on `jobs.dlq.organize-pdf`
 **Engine:** [pdfcpu](https://github.com/pdfcpu/pdfcpu) (pure Go, no LibreOffice in this container)
-**OCR (optional):** Tesseract — used by `scan-to-pdf` when `options.ocr = true`; language packs `eng`, `deu`, `fra`, `spa`, `hin` are installed in the runtime image
+**OCR (optional):** Tesseract — used by `scan-to-pdf` when `options.ocr = true`; language packs `eng` and `hin` are installed in the runtime image
 **Internal HTTP API:** `POST /internal/v1/detect-edges` (document edge detection for the scanner UI, relayed by job-service)
 
 ## Supported Operations
@@ -128,7 +128,7 @@ Converts images to PDF (similar to scanning documents), with optional per-page p
 | Option | Type | Default | Values | Description |
 |--------|------|---------|--------|-------------|
 | `ocr` | boolean | `false` | — | Produce a searchable PDF via Tesseract |
-| `language` | string | `eng` | `eng`, `deu`, `fra`, `spa`, `hin` | Tesseract language (`-l <language>`); whitelist matches the installed packs |
+| `language` | string | `eng` | `eng`, `hin`, `eng+hin`, `hin+eng` | Tesseract language (`-l <language>`); English, Hindi, or both for mixed pages. Whitelist matches the installed packs |
 | `pageSize` | string | `auto` | `""`, `auto`, `a4`, `letter`, `id`, `card` | PDF page size. `auto` = page matches image size; `id` = ISO ID-1 card (85.6×54 mm); `card` = business card (3.5×2 in, 252×144 pt). Card sizes also fix the warp aspect |
 | `enhance` | string | none | `""`, `none`, `grayscale`, `bw`, `color-boost` | Image enhancement. `bw` applies an adaptive-threshold "scan" look |
 | `pages` | array | — | — | Per-page directives, **index-aligned with `uploadIds`**; each entry optional |
@@ -487,7 +487,7 @@ Caching is **best-effort**: any cache-path error (Redis down, stat/copy failure,
 
 ### System Dependencies
 - **poppler-utils** - PDF utilities (pdftoppm, pdftotext)
-- **tesseract-ocr** - Optional OCR support for scan-to-pdf, with language packs `tesseract-ocr-data-{eng,deu,fra,spa,hin}` installed in the runtime image
+- **tesseract-ocr** - Optional OCR support for scan-to-pdf, with language packs `tesseract-ocr-data-{eng,hin}` installed in the runtime image
 
 ## Architecture
 
@@ -945,7 +945,7 @@ When retries are exhausted (MaxDeliver reached), the failed job payload is publi
 
 - Page thumbnails for preview
 - Batch processing for multiple documents
-- Additional OCR language packs beyond eng/deu/fra/spa/hin
+- Additional OCR language packs beyond eng/hin (product scope is English + Hindi today)
 - Watermarking support
 - PDF compression options
 

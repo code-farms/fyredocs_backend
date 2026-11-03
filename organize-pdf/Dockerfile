@@ -29,9 +29,6 @@ RUN apk add --no-cache \
     ca-certificates \
     tesseract-ocr \
     tesseract-ocr-data-eng \
-    tesseract-ocr-data-deu \
-    tesseract-ocr-data-fra \
-    tesseract-ocr-data-spa \
     tesseract-ocr-data-hin \
     && rm -rf /var/cache/apk/*
 

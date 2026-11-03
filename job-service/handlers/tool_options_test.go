@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -36,13 +38,16 @@ func TestValidateScanOptions(t *testing.T) {
 		wantErr string // substring; empty = valid
 	}{
 		{"valid full payload", fmt.Sprintf(
-			`{"ocr":true,"language":"deu","pageSize":"a4","enhance":"bw","pages":[{"corners":%s,"rotation":90}]}`,
+			`{"ocr":true,"language":"hin","pageSize":"a4","enhance":"bw","pages":[{"corners":%s,"rotation":90}]}`,
 			fullCorners), ""},
 		{"valid minimal", `{"ocr":false}`, ""},
 		{"unknown fields ignored", `{"ocr":true,"futureField":123}`, ""},
 		{"case-insensitive enums", `{"pageSize":"A4","enhance":"GRAYSCALE","language":"ENG"}`, ""},
 		{"bad json", `{"ocr":`, "valid JSON"},
 		{"bad language", `{"language":"jpn"}`, "language"},
+		{"scan multi-language", `{"ocr":true,"language":"eng+hin"}`, ""},
+		{"scan multi-language unknown part", `{"ocr":true,"language":"eng+jpn"}`, "language"},
+		{"scan other pair rejected", `{"ocr":true,"language":"deu+fra"}`, "language"},
 		{"bad pageSize", `{"pageSize":"a3"}`, "pageSize"},
 		{"business card pageSize", `{"pageSize":"card"}`, ""},
 		{"cleanup flags", `{"pages":[{"cleanup":{"shadows":true,"fingers":true,"holes":false,"glare":true,"background":true,"auto":false}}]}`, ""},
@@ -166,7 +171,17 @@ func TestValidateOcrOptions(t *testing.T) {
 		{"eng", `{"language":"eng"}`, ""},
 		{"iso en", `{"language":"en"}`, ""},
 		{"case and space folded", `{"language":" ENG "}`, ""},
-		{"uninstalled pack rejected", `{"language":"spa"}`, "unsupported OCR language"},
+		{"removed pack spa rejected", `{"language":"spa"}`, "unsupported OCR language"},
+		{"removed pack deu rejected", `{"language":"deu"}`, "unsupported OCR language"},
+		{"installed pack hin", `{"language":"hin"}`, ""},
+		{"english + hindi", `{"language":"eng+hin"}`, ""},
+		{"hindi + english", `{"language":"HIN + ENG"}`, ""},
+		{"other pair rejected", `{"language":"eng+deu"}`, "unsupported OCR language"},
+		{"three languages rejected", `{"language":"eng+hin+deu"}`, "unsupported OCR language"},
+		{"unknown part rejected", `{"language":"eng+jpn"}`, "unsupported OCR language"},
+		{"duplicate rejected", `{"language":"eng+eng"}`, "unsupported OCR language"},
+		{"empty part rejected", `{"language":"eng+"}`, "unsupported OCR language"},
+		{"uninstalled pack rejected", `{"language":"jpn"}`, "unsupported OCR language"},
 		{"crafted language rejected", `{"language":"eng -c foo"}`, "unsupported OCR language"},
 		{"dpi as string", `{"dpi":"300"}`, ""},
 		{"dpi as number", `{"dpi":300}`, ""},
@@ -382,4 +397,53 @@ func TestValidateUnlockOptionsEmptyRaw(t *testing.T) {
 		!strings.Contains(err.Error(), "requires options") {
 		t.Errorf("empty raw should be rejected, got: %v", err)
 	}
+}
+
+// installedPacks returns the tesseract-ocr-data-<lang> packages a Dockerfile
+// installs — read from the real file, so an allowlist can never claim a pack
+// the image does not ship (the drift that made the ocr tool English-only
+// while organize-pdf had five).
+func installedPacks(t *testing.T, path string) map[string]bool {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	packs := map[string]bool{}
+	for _, m := range regexp.MustCompile(`tesseract-ocr-data-([a-z_]+)`).FindAllStringSubmatch(string(raw), -1) {
+		packs[m[1]] = true
+	}
+	if len(packs) == 0 {
+		t.Fatalf("no tesseract packs found in %s — the pattern or the Dockerfile changed", path)
+	}
+	return packs
+}
+
+// equalCodes compares an allowlist (minus aliases) with installed packs.
+func equalCodes(t *testing.T, name string, allow map[string]bool, aliases []string, packs map[string]bool) {
+	t.Helper()
+	codes := map[string]bool{}
+	for k := range allow {
+		codes[k] = true
+	}
+	for _, a := range aliases {
+		delete(codes, a)
+	}
+	for c := range codes {
+		if !packs[c] {
+			t.Errorf("%s allows %q but the image does not install tesseract-ocr-data-%s", name, c, c)
+		}
+	}
+	for p := range packs {
+		if !codes[p] {
+			t.Errorf("the image installs %q but %s does not allow it", p, name)
+		}
+	}
+}
+
+// TestOCRLanguagesMatchInstalledPacks pins each allowlist to its worker's
+// Dockerfile: ocr-pdf runs in optimize-pdf, scan-to-pdf in organize-pdf.
+func TestOCRLanguagesMatchInstalledPacks(t *testing.T) {
+	equalCodes(t, "ocrLanguages", ocrLanguages, []string{"", "en"}, installedPacks(t, "../../optimize-pdf/Dockerfile"))
+	equalCodes(t, "scanLanguages", scanLanguages, nil, installedPacks(t, "../../organize-pdf/Dockerfile"))
 }

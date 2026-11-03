@@ -29,6 +29,7 @@ RUN apk add --no-cache \
     ghostscript \
     tesseract-ocr \
     tesseract-ocr-data-eng \
+    tesseract-ocr-data-hin \
     && rm -rf /var/cache/apk/*
 
 RUN adduser -D -u 10001 appuser

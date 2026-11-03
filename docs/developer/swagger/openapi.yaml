@@ -1901,7 +1901,7 @@ paths:
 
         For `ocr-pdf`, `options` follows the `OcrPdfOptions` schema (language
 
-        en/eng only, dpi 72–600) and is validated at job creation — violations
+        eng, hin, or eng+hin, dpi 72–600) and is validated at job creation — violations
 
         return 400 INVALID_OPTIONS. Completed ocr-pdf jobs carry the extracted
 
@@ -4940,12 +4940,12 @@ components:
           type: string
           enum:
           - eng
-          - deu
-          - fra
-          - spa
           - hin
+          - eng+hin
+          - hin+eng
           default: eng
-          description: Tesseract OCR language (whitelist matches the installed language packs)
+          description: Tesseract OCR language — English, Hindi, or both for mixed documents (whitelist
+            matches the installed language packs)
         pageSize:
           type: string
           enum:
@@ -5151,9 +5151,13 @@ components:
           enum:
           - en
           - eng
+          - hin
+          - eng+hin
+          - hin+eng
           default: eng
-          description: OCR language (case-insensitive). English only until more tesseract packs land in
-            the worker image.
+          description: OCR language (case-insensitive) — English (eng, en alias), Hindi (hin), or both for mixed
+            English/Hindi documents (eng+hin, either order). Must match the packs installed in the optimize-pdf
+            image (pinned by a test that reads its Dockerfile).
         dpi:
           type: integer
           minimum: 72

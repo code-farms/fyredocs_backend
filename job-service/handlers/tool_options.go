@@ -25,7 +25,7 @@ var (
 	// tesseract can only satisfy languages whose trained-data packs are installed
 	// in the optimize-pdf image. Adding an entry here without adding the pack to
 	// that Dockerfile turns every request using it into a job failure.
-	scanLanguages = map[string]bool{"eng": true, "deu": true, "fra": true, "spa": true, "hin": true}
+	scanLanguages = map[string]bool{"eng": true, "hin": true}
 	// scanPageSizes is the allowlist of output geometries the scan pipeline can lay
 	// out. "" and "auto" both mean "infer from the pages themselves".
 	scanPageSizes = map[string]bool{"": true, "auto": true, "a4": true, "letter": true, "id": true, "card": true}
@@ -272,11 +272,12 @@ func validatePdfToImageOptions(raw string) error {
 var (
 	// ocrLanguages is the ocr-pdf language allowlist — a TRUST BOUNDARY like
 	// scanLanguages: the value reaches a tesseract command line, and only packs
-	// installed in the optimize-pdf image can be satisfied. That image ships
-	// English ONLY today; extend this set together with its Dockerfile when
-	// more packs land. The worker's own wider map would silently degrade
-	// unknown languages to eng — rejecting here keeps the contract honest.
-	ocrLanguages = map[string]bool{"": true, "en": true, "eng": true}
+	// installed in the optimize-pdf image can be satisfied. It must equal that
+	// image's packs (pinned by TestOCRLanguagesMatchInstalledPacks, which reads
+	// optimize-pdf/Dockerfile) plus the "en" alias; the worker's own wider map
+	// would silently degrade an uninstalled language to eng — rejecting here
+	// keeps the contract honest.
+	ocrLanguages = map[string]bool{"": true, "en": true, "eng": true, "hin": true}
 )
 
 // OCR render-DPI bounds. Below 72 tesseract accuracy collapses; above 600 a
@@ -303,8 +304,8 @@ func validateOcrOptions(raw string) error {
 	if err := json.Unmarshal([]byte(raw), &opts); err != nil {
 		return fmt.Errorf("options must be a valid JSON object")
 	}
-	if !ocrLanguages[strings.ToLower(strings.TrimSpace(opts.Language))] {
-		return fmt.Errorf("unsupported OCR language %q — supported: eng", opts.Language)
+	if !validLanguageList(opts.Language, ocrLanguages) {
+		return fmt.Errorf("unsupported OCR language %q — supported: eng, hin, or eng+hin for mixed English/Hindi", opts.Language)
 	}
 	if dpiStr := strings.Trim(strings.TrimSpace(string(opts.Dpi)), `"`); dpiStr != "" && dpiStr != "null" {
 		dpi, err := strconv.Atoi(dpiStr)
@@ -370,8 +371,8 @@ func validateScanOptions(raw string) error {
 		return fmt.Errorf("options must be a valid JSON object")
 	}
 
-	if lang := strings.ToLower(strings.TrimSpace(opts.Language)); lang != "" && !scanLanguages[lang] {
-		return fmt.Errorf("unsupported OCR language %q — supported: eng, deu, fra, spa, hin", opts.Language)
+	if lang := strings.TrimSpace(opts.Language); lang != "" && !validLanguageList(lang, scanLanguages) {
+		return fmt.Errorf("unsupported OCR language %q — supported: eng, hin, or eng+hin for mixed English/Hindi", opts.Language)
 	}
 	if size := strings.ToLower(strings.TrimSpace(opts.PageSize)); !scanPageSizes[size] {
 		return fmt.Errorf("unsupported pageSize %q — supported: auto, a4, letter, id, card", opts.PageSize)
@@ -556,4 +557,32 @@ func validateUnlockOptions(raw string) error {
 		return fmt.Errorf("password must be at most %d characters", maxUnlockPasswordLen)
 	}
 	return nil
+}
+
+// validLanguageList accepts "" or one allowlisted code, or the ONE supported
+// multi-language combination: English + Hindi ("eng+hin" / "hin+eng", the
+// order picks tesseract's primary). Product decision: that pairing is the
+// mixed-language case the app's users actually have; other combinations
+// slow tesseract and dilute accuracy for little gain, so they are rejected.
+// NOTE: mirrored by sanitizeOCRLanguage (optimize-pdf) and tesseractLang
+// (organize-pdf) — duplicated by design, keep the three in step.
+func validLanguageList(raw string, allowed map[string]bool) bool {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return allowed[""]
+	}
+	parts := strings.Split(raw, "+")
+	if len(parts) == 1 {
+		return allowed[strings.TrimSpace(parts[0])]
+	}
+	return isEngHinPair(parts)
+}
+
+// isEngHinPair reports whether parts is exactly {eng, hin} in either order.
+func isEngHinPair(parts []string) bool {
+	if len(parts) != 2 {
+		return false
+	}
+	a, b := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	return (a == "eng" && b == "hin") || (a == "hin" && b == "eng")
 }

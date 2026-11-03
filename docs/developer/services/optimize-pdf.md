@@ -44,7 +44,7 @@ curl -X POST http://localhost/api/optimize-pdf/repair-pdf \
 Adds a searchable text layer to scanned PDFs using Tesseract OCR.
 
 **Options:**
-- `language`: OCR language code (default: `eng`). job-service rejects anything outside `en`/`eng` at job creation (the runtime image ships only the English tesseract pack — see `handlers/tool_options.go` in job-service). As defense-in-depth the worker still resolves the language against what is actually installed (`tesseract --list-langs`); if a pack is missing it falls back to `eng` (then the first available), so a missing language pack never fails the job.
+- `language`: OCR language code (default: `eng`): `eng`, `hin`, or `eng+hin` (either order) for mixed English/Hindi documents. The image installs those five packs, and job-service's allowlist is pinned to them by a test that reads this service's Dockerfile. As defense-in-depth the worker still resolves the language against what is actually installed (`tesseract --list-langs`); if a pack is missing it falls back to `eng` (then the first available), so a missing language pack never fails the job.
 - `dpi`: Resolution for conversion (default: `150`, from `OCR_DEFAULT_DPI`). job-service accepts 72–600 at job creation. The effective DPI is additionally capped so the longest edge of a rendered page stays within `OCR_MAX_IMAGE_DIM` pixels (default `10000`) — this prevents oversized rasters (e.g. large banner PDFs) from making Tesseract/pdfcpu fail. The size bound wins over resolution, so very large pages may render below the requested DPI.
 
 **Job metadata:** on success the worker returns metadata that job-service stores on the job row (`metadata` jsonb):
@@ -133,7 +133,7 @@ AUTH_GUEST_SUFFIX="jobs"
 AUTH_DENYLIST_ENABLED="true"
 
 # OCR
-OCR_DEFAULT_LANGUAGE="eng"  # tesseract language code (639-2/T). The worker maps ISO 639-1 → tesseract codes and falls back to "eng" for unmapped/uninstalled values, but job-service already rejects anything outside en/eng at job creation (image ships English only)
+OCR_DEFAULT_LANGUAGE="eng"  # tesseract language code (639-2/T). The worker maps ISO 639-1 → tesseract codes and falls back to "eng" for unmapped/uninstalled values, but job-service already rejects anything outside the installed eng/hin (or eng+hin) at job creation
 OCR_DEFAULT_DPI="150"       # rasterization DPI for OCR (compose default 150); overridable per-job via options.dpi (job-service accepts 72–600)
 OCR_MAX_WORKERS=""         # OCR page-pool cap; unset = min(NumCPU,4). Auto-sized by deploy.sh's 70% budget (see below); pin only to override
 OCR_MAX_IMAGE_DIM="10000"  # max px for the longest edge of a rasterized OCR page; effective DPI is capped to keep images within this bound so oversized pages don't fail tesseract

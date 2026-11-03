@@ -355,32 +355,48 @@ func pdfPageDimensions(ctx context.Context, inputPath string) (float64, float64,
 // ocrLangMap maps ISO 639-1 codes (as the frontend sends) to tesseract's ISO
 // 639-2/T codes.
 var ocrLangMap = map[string]string{
-	"en": "eng", "es": "spa", "fr": "fra", "de": "deu",
-	"it": "ita", "pt": "por", "zh": "chi_sim", "ja": "jpn",
-	"ko": "kor", "ar": "ara",
+	"en": "eng", "hi": "hin",
 }
 
 // ocrAllowedLanguages is the whitelist of tesseract language codes OCR will pass
 // to `tesseract -l`. Anything outside it (an unmapped or crafted option value) is
 // coerced to the default so an attacker-influenced language can never reach the
 // tesseract invocation verbatim (finding I1 — docs/developer/architecture/backend-hardening.md section 3.20).
-// Extend this if more language packs
-// are installed in the image.
+// Product scope: English and Hindi only (plus the eng+hin pair); the image
+// installs exactly these two packs. Extend both together.
 var ocrAllowedLanguages = map[string]bool{
-	"eng": true, "spa": true, "fra": true, "deu": true, "ita": true,
-	"por": true, "chi_sim": true, "jpn": true, "kor": true, "ara": true,
+	"eng": true, "hin": true,
 }
 
-// sanitizeOCRLanguage maps a requested language (ISO 639-1 or a tesseract code) to
-// a whitelisted tesseract code, falling back to "eng" for anything unrecognized or
-// empty. This is the trust boundary for the user-supplied "language" option.
+// sanitizeOCRLanguage maps a requested language to a whitelisted tesseract
+// code, falling back to "eng" for anything unrecognized or empty. The only
+// multi-language form accepted is English + Hindi ("eng+hin" / "hin+eng",
+// ISO aliases allowed) — the product's one supported pairing; any other
+// combination falls back to "eng". This is the trust boundary for the
+// user-supplied "language" option: the output is REBUILT from allowlisted
+// codes, so no input byte reaches `tesseract -l` verbatim.
+// NOTE: mirrors job-service validLanguageList (duplicated by design).
 func sanitizeOCRLanguage(requested string) string {
-	requested = strings.TrimSpace(requested)
-	if mapped, ok := ocrLangMap[requested]; ok {
-		requested = mapped
+	norm := func(part string) string {
+		part = strings.TrimSpace(part)
+		if mapped, ok := ocrLangMap[part]; ok {
+			return mapped
+		}
+		return part
 	}
-	if ocrAllowedLanguages[requested] {
-		return requested
+	parts := strings.Split(strings.TrimSpace(requested), "+")
+	if len(parts) == 2 {
+		a, b := norm(parts[0]), norm(parts[1])
+		if (a == "eng" && b == "hin") || (a == "hin" && b == "eng") {
+			return a + "+" + b
+		}
+		return "eng"
+	}
+	if len(parts) != 1 {
+		return "eng"
+	}
+	if code := norm(parts[0]); ocrAllowedLanguages[code] {
+		return code
 	}
 	return "eng"
 }
@@ -390,6 +406,10 @@ func sanitizeOCRLanguage(requested string) string {
 // If it is available it is used as-is; otherwise it falls back to "eng", then to
 // the first available language, and finally to the requested value so tesseract
 // can surface its own error if nothing is installed.
+//
+// For a multi-language request each part is checked: installed parts are
+// kept (in order), missing ones dropped; only when none is installed does
+// the single-language fallback apply.
 func resolveLanguage(requested string, available []string) string {
 	if len(available) == 0 {
 		return requested
@@ -402,8 +422,14 @@ func resolveLanguage(requested string, available []string) string {
 		}
 		return false
 	}
-	if has(requested) {
-		return requested
+	var kept []string
+	for _, part := range strings.Split(requested, "+") {
+		if has(part) {
+			kept = append(kept, part)
+		}
+	}
+	if len(kept) > 0 {
+		return strings.Join(kept, "+")
 	}
 	if has("eng") {
 		return "eng"
