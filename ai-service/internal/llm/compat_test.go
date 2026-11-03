@@ -311,3 +311,24 @@ func TestEstimateCountsImages(t *testing.T) {
 		t.Fatal("each image must add ImageTokens to the estimate")
 	}
 }
+
+// Transcription without the image would be a confident answer about nothing:
+// RequireImages turns both text-only paths into AI_UNAVAILABLE.
+func TestRequireImagesNeverFallsBackToText(t *testing.T) {
+	req := imgReq
+	req.RequireImages = true
+
+	f := &fakeProvider{deltas: []string{"should not be sent"}}
+	_, _, err := collect(newTestClient(t, f, func(c *Config) { c.Vision = false }), req)
+	if e, ok := AsError(err); !ok || e.Code != response.CodeAIUnavailable || f.calls.Load() != 0 {
+		t.Fatalf("vision off: err=%v calls=%d", err, f.calls.Load())
+	}
+
+	r := &rejectImages{fakeProvider: fakeProvider{deltas: []string{"from text"}}}
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+	c := New(Config{BaseURL: srv.URL + "/v1/", ModelFast: "m", Timeout: 5 * time.Second, Vision: true})
+	if _, _, err := collect(c, req); err == nil || r.requests.Load() != 1 {
+		t.Fatalf("image rejected: err=%v requests=%d (no text-only retry allowed)", err, r.requests.Load())
+	}
+}

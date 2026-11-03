@@ -112,3 +112,22 @@ Classify a document, suggest a title, and extract typed fields and tables in one
 `docType` ∈ `invoice, receipt, id_document, business_card, form, letter, contract, statement, other`; `subtype` (id_document only) ∈ `passport, aadhaar, pan, driver_license, voter_id, business_license, other_id`. Each type's fields are listed in `ai-service/internal/extract/schema.go`. A missing field means it was not found; values are never guessed (an ambiguous date is omitted).
 
 **Errors:** 400 `INVALID_INPUT` (no input, a non-data-URL or unsupported image type, bad base64), 401, 413 `AI_REQUEST_TOO_LARGE` (over 2 images or 1.5 MB, or the page/char limits), 429 `AI_QUOTA_EXCEEDED`, 503 `AI_UNAVAILABLE`.
+
+---
+
+## POST /api/ai/transcribe
+Handwriting (and printed) text from page images, verbatim. Body ≤4 MiB.
+
+**Request**
+```json
+{ "images": ["data:image/jpeg;base64,/9j/4AAQ…"], "language": "eng+hin" }
+```
+- 1–2 images (JPEG/PNG/WebP data URLs, ≤1.5 MB each decoded). `language` is optional: `eng`, `hin` or `eng+hin`.
+
+**200 OK**
+```json
+{ "success": true, "data": { "pages": ["Dear Asha,\nthanks for the [illegible] notes"], "usage": { "inputTokens": 1620, "outputTokens": 18, "cachedTokens": 0 } } }
+```
+One string per image, in order. An empty string means no text was found on that page.
+
+**Errors:** 400 `INVALID_INPUT` (no images, bad data URL or type, unknown language), 401, 413 `AI_REQUEST_TOO_LARGE` (over 2 images or 1.5 MB), 429 `AI_QUOTA_EXCEEDED`, 503 `AI_UNAVAILABLE` (also when the configured model has no vision: transcription never falls back to text-only).

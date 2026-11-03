@@ -137,13 +137,17 @@ func (c *Compat) Stream(ctx context.Context, req Request, onDelta func(string) e
 		return Usage{}, &Error{Code: response.CodeAIUnavailable, Message: "provider circuit open"}
 	}
 	if !c.cfg.Vision && req.HasImages() {
+		if req.RequireImages {
+			done(nil)
+			return Usage{}, &Error{Code: response.CodeAIUnavailable, Message: "this op needs a vision-capable model (AI_VISION=false)"}
+		}
 		req = req.WithoutImages()
 	}
 	usage, err := c.stream(ctx, req, onDelta)
 	// A provider or model that rejects image parts answers 400; retry once on
 	// the text alone rather than failing an extraction that text can serve.
 	// Only before any output: a 400 always arrives before the first delta.
-	if e, ok := AsError(err); ok && ctx.Err() == nil && req.HasImages() &&
+	if e, ok := AsError(err); ok && ctx.Err() == nil && req.HasImages() && !req.RequireImages &&
 		e.Status == http.StatusBadRequest && e.Code == response.CodeAIUnavailable {
 		slog.WarnContext(ctx, "provider rejected image input — retrying text-only (set AI_VISION=false for this model)")
 		usage, err = c.stream(ctx, req.WithoutImages(), onDelta)

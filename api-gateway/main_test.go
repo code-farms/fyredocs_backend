@@ -397,10 +397,12 @@ var testUpstreams = upstreams{
 }
 
 // TestOnlyAIExtractGetsTheLargerBodyCap pins that the 4 MiB image budget is
-// scoped to extraction (both prefixes) and every other route stays at 1 MiB.
+// scoped to the image routes (extract, transcribe; both prefixes) and every
+// other route stays at 1 MiB.
 func TestOnlyAIExtractGetsTheLargerBodyCap(t *testing.T) {
 	for _, c := range withV1Aliases(serviceRoutes(testUpstreams)) {
-		isExtract := c.prefix == "/api/ai/extract" || c.prefix == "/api/v1/ai/extract"
+		isExtract := c.prefix == "/api/ai/extract" || c.prefix == "/api/v1/ai/extract" ||
+			c.prefix == "/api/ai/transcribe" || c.prefix == "/api/v1/ai/transcribe"
 		if isExtract && c.maxBodyBytes != 4<<20 {
 			t.Errorf("%s cap %d, want 4 MiB", c.prefix, c.maxBodyBytes)
 		}

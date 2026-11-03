@@ -230,6 +230,13 @@ func serviceRoutes(u upstreams) []routeConfig {
 			maxBodyBytes:   4 << 20,
 		},
 		{
+			// Handwriting transcription: the same two-page-image budget.
+			prefix:         "/api/ai/transcribe",
+			targetBasePath: "/api/ai/transcribe",
+			targetURL:      u.ai,
+			maxBodyBytes:   4 << 20,
+		},
+		{
 			prefix:         "/admin",
 			targetBasePath: "/admin",
 			targetURL:      u.analytics,

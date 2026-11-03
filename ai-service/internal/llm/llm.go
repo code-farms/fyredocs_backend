@@ -63,6 +63,11 @@ type Request struct {
 	Tier      Tier
 	Messages  []Message
 	MaxTokens int
+	// RequireImages forbids the text-only fallback: for ops whose input IS the
+	// image (handwriting transcription), dropping it would return a
+	// confident answer about nothing. Without vision such a request fails
+	// with AI_UNAVAILABLE instead.
+	RequireImages bool
 }
 
 // Usage is the token accounting for one completion. CachedTokens is the

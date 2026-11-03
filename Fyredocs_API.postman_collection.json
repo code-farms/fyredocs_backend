@@ -6202,6 +6202,35 @@
             "description": "Classify + suggested title + typed fields + tables. Add up to 2 page images as data:image/jpeg;base64 URLs (\u22641.5 MB each)."
           },
           "response": []
+        },
+        {
+          "name": "Transcribe handwriting",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"images\": [\n    \"data:image/jpeg;base64,<page image>\"\n  ],\n  \"language\": \"eng+hin\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/ai/transcribe",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "ai",
+                "transcribe"
+              ]
+            },
+            "description": "1-2 page images -> verbatim pages[] (handwriting OCR). Needs a vision model; never falls back to text-only."
+          },
+          "response": []
         }
       ]
     }

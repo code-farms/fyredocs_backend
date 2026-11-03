@@ -4369,6 +4369,55 @@ paths:
           description: AI_QUOTA_EXCEEDED
         '503':
           description: AI_UNAVAILABLE
+  /api/ai/transcribe:
+    post:
+      tags:
+      - AI
+      summary: Transcribe handwriting (and printed text) from page images, verbatim
+      description: 1–2 page images in, one verbatim text per image out. Needs a vision-capable model — never falls back to text-only (503 AI_UNAVAILABLE instead). The text is never logged or persisted server-side.
+      operationId: transcribeHandwriting
+      security:
+      - BearerAuth: []
+      - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - images
+              properties:
+                images:
+                  type: array
+                  minItems: 1
+                  maxItems: 2
+                  items:
+                    type: string
+                    description: data:image/(jpeg|png|webp);base64,… (≤1.5 MB decoded)
+                language:
+                  type: string
+                  enum:
+                  - eng
+                  - hin
+                  - eng+hin
+      responses:
+        '200':
+          description: '{pages: [string], usage}'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        '400':
+          description: INVALID_INPUT
+        '401':
+          description: AUTH_UNAUTHORIZED
+        '413':
+          description: AI_REQUEST_TOO_LARGE
+        '429':
+          description: AI_QUOTA_EXCEEDED
+        '503':
+          description: AI_UNAVAILABLE (including a model without vision)
   /api/ai/quota:
     get:
       tags:
