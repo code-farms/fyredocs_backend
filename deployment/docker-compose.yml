@@ -457,7 +457,8 @@ services:
       # GET /api/config/flags — the mobile app's no-release kill switch.
       # Flip a flag: edit this, restart the gateway. Invalid JSON degrades
       # to {} (app code defaults) with one boot log. Known keys:
-      # onDevicePdfRenderer, cloudBackup, shareLinks, premiumFeatures.
+      # onDevicePdfRenderer, cloudBackup, shareLinks, premiumFeatures,
+      # aiReading (Phase 23 AI kill switch).
       FEATURE_FLAGS_JSON: ${FEATURE_FLAGS_JSON:-{}}
       JOB_SERVICE_URL: http://job-service:8081
       AUTH_SERVICE_URL: http://auth-service:8086
