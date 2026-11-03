@@ -281,6 +281,8 @@ The client then registers the document with document-service (`POST /api/documen
 | `pages` | max 50 entries (index-aligned with `uploadIds`) |
 | `pages[i].rotation` | one of `0`, `90`, `180`, `270` |
 | `pages[i].corners` | all four of `tl`/`tr`/`br`/`bl` or omitted; each with numeric `x`,`y` in `[0, 1]` |
+| `pages[i].edgeMids` | requires `corners`; all four of `top`/`right`/`bottom`/`left` with numeric `x`,`y` in `[0, 1]` |
+| `pages[i].cleanup` | strictly booleans `shadows`/`background`/`glare`/`fingers`/`holes`/`auto` — unknown keys or non-booleans are rejected (a typo must not silently do nothing) |
 
 **ocr-pdf schema** (`validateOcrOptions`; all fields optional):
 

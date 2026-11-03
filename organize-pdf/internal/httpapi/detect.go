@@ -39,11 +39,18 @@ type detectRequest struct {
 
 // detectResponse returns the detected document quad in normalized 0..1
 // coordinates, so the client can scale it to whatever preview size it is showing.
+//
+// EdgeMids/Curvature (Phase 23 §4) suggest a curved crop: the normalized
+// midpoint of each edge where the page edge bows (straight midpoints where it
+// doesn't), and the largest bow as a fraction of its edge (0 = flat). Only
+// sent with a confident quad — curving a fallback full-frame quad is noise.
 type detectResponse struct {
-	Corners    imaging.Quad `json:"corners"`
-	Confidence float64      `json:"confidence"`
-	Width      int          `json:"width"`
-	Height     int          `json:"height"`
+	Corners    imaging.Quad      `json:"corners"`
+	Confidence float64           `json:"confidence"`
+	Width      int               `json:"width"`
+	Height     int               `json:"height"`
+	EdgeMids   *imaging.EdgeMids `json:"edgeMids,omitempty"`
+	Curvature  float64           `json:"curvature"`
 }
 
 // RegisterInternalRoutes mounts the /internal/v1 group behind the shared
@@ -106,11 +113,16 @@ func detectEdgesHandler(store ObjectGetter) gin.HandlerFunc {
 
 		quad, confidence := imaging.DetectDocumentQuad(img)
 		b := img.Bounds()
-		response.OK(c, "Edges detected", detectResponse{
+		resp := detectResponse{
 			Corners:    quad,
 			Confidence: confidence,
 			Width:      b.Dx(),
 			Height:     b.Dy(),
-		})
+		}
+		if confidence > 0 {
+			mids, curvature := imaging.DetectEdgeMidpoints(img, quad)
+			resp.EdgeMids, resp.Curvature = &mids, curvature
+		}
+		response.OK(c, "Edges detected", resp)
 	}
 }

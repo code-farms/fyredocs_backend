@@ -134,9 +134,20 @@ Converts images to PDF (similar to scanning documents), with optional per-page p
 | `pages` | array | — | — | Per-page directives, **index-aligned with `uploadIds`**; each entry optional |
 | `pages[i].corners` | object | — | `{tl,tr,br,bl}` each `{x,y}` in `[0,1]` | Normalized document quad to perspective-warp; all four corners or omitted |
 | `pages[i].rotation` | integer | `0` | `0`, `90`, `180`, `270` | Clockwise rotation, applied after the warp |
+| `pages[i].edgeMids` | object | — | `{top,right,bottom,left}` each `{x,y}` in `[0,1]` | Curved crop (dewarp): the midpoint of each edge. With `corners`, each edge becomes the quadratic Bézier through its corners and midpoint, and the page is flattened with a **Coons patch** instead of the planar homography. Incomplete → planar warp |
+| `pages[i].cleanup` | object | — | booleans `shadows`, `background`, `glare`, `fingers`, `holes`, `auto` | Classical clean-up passes (Phase 23 §4), run after warp+rotate and before `enhance` |
 | `margin` | string | none | `""`, `none`, `small`, `normal`, `large` | White margin around the image on **fixed page sizes only** (`a4`/`letter`/`id`/`card`); maps to pdfcpu import scale `1.0`/`0.95`/`0.9`/`0.85` relative on the fixed page form |
 
-Per-image preprocessing pipeline (`processing/processing_scan.go`): decode (jpeg/png/webp, ≤ 50 MP) → if corners present: validate + perspective-warp via the pure-Go homography in `internal/imaging` → rotate → enhance → re-encode (PNG for `bw`, JPEG quality 92 otherwise) → pdfcpu `ImportImagesFile` with the page-size import config (`form:A4` / `form:Letter` / `dim:243 153`pt for `id`; `auto` = nil; `margin` appends `sc:<factor> rel` to the fixed-form config).
+Per-image preprocessing pipeline (`processing/processing_scan.go`): decode (jpeg/png/webp, ≤ 50 MP) → if corners present: validate + perspective-warp via the pure-Go homography in `internal/imaging` (or the Coons-patch curved warp when `edgeMids` are complete) → rotate → **clean-up** → enhance → re-encode (PNG for `bw`, JPEG quality 92 otherwise) → pdfcpu `ImportImagesFile` with the page-size import config (`form:A4` / `form:Letter` / `dim:243 153`pt for `id`; `auto` = nil; `margin` appends `sc:<factor> rel` to the fixed-form config).
+
+**Clean-up passes** (`internal/imaging/cleanup.go`, pure Go, no cgo). Region detection runs on a ≤1024px copy and fills apply at full size; the full set costs ~0.45s on a 12 MP page:
+- `fingers`: skin-tone (YCbCr) regions **touching the page border**, 0.2–15% of the page, are filled with the surrounding paper colour. Interior skin tones (photos) are never touched.
+- `holes`: disc-shaped regions in the left/right 12% margins, 2–6% of the width, roughly round, and lined up vertically with at least one other. A lone dot or an "o" never qualifies. A hole showing a white table can't be told from paper and is left alone.
+- `glare`: blown-out, colourless highlights whose surrounding paper is clearly darker are flattened to the paper tone; any ink that survived stays. **Text the glare fully blew out cannot be recovered**, so the job's metadata gets `warnings: [{page, code: "glare"}]` for the app to suggest a re-shoot.
+- `shadows`: illumination normalization against a max-filter background estimate (it ignores ink, unlike a plain blur).
+- `background`: normalization, then paper → pure white with a soft ramp; ink keeps its colour. This is document background removal, not object segmentation.
+- `auto`: normalization + a 1st–99th percentile levels stretch.
+- Order: fingers → holes → glare → one tone pass (`background` ⊃ `auto` ⊃ `shadows`).
 
 **Caveats:**
 - **OCR path ignores `pageSize`** — Tesseract emits image-sized pages.

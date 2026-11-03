@@ -130,12 +130,14 @@ func sampleBilinear(rgba *image.RGBA, sw, sh int, sx, sy float64) (uint8, uint8,
 // Midpoint search tuning: offsets are searched along each edge's normal up
 // to midSearchRatio of the edge length; a bow is accepted only when the
 // curved path's edge response beats the straight one by midMinGain AND the
-// bow is at least midMinBow of the edge — so flat pages stay flat.
+// bow is at least midMinBow of the edge — so flat pages stay flat. midMinBow
+// sits above the 1–2% that a detected quad's own pixel error produces on a
+// flat page (measured: 0.02), and below real book-spread bows (5–15%).
 const (
 	midSearchRatio = 0.12
 	midSearchSteps = 24
 	midMinGain     = 1.15
-	midMinBow      = 0.015
+	midMinBow      = 0.03
 )
 
 // DetectEdgeMidpoints proposes curved edge midpoints for a detected

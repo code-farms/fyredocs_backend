@@ -155,7 +155,14 @@ Content-Type: application/json
     },
     "confidence": 0.83,
     "width": 3024,
-    "height": 4032
+    "height": 4032,
+    "edgeMids": {
+      "top": {"x": 0.5, "y": 0.09},
+      "right": {"x": 0.965, "y": 0.5},
+      "bottom": {"x": 0.5, "y": 0.95},
+      "left": {"x": 0.045, "y": 0.5}
+    },
+    "curvature": 0.06
   }
 }
 ```
@@ -165,6 +172,8 @@ Content-Type: application/json
 | corners | object | Detected document quad — `tl`/`tr`/`br`/`bl`, each `{x, y}` normalized `0..1` against the decoded pixel grid |
 | confidence | number | Detection confidence `0..1`. When no document is found, full-image corners with `confidence: 0` are returned (still 200) |
 | width / height | integer | Decoded image dimensions in pixels |
+| edgeMids | object | Present only with `confidence > 0`. Suggested midpoint of each edge (`top`/`right`/`bottom`/`left`, normalized). Straight midpoints where the edge is flat; moved toward the bow where the page curves (book spreads) |
+| curvature | number | Largest edge bow as a fraction of its edge length; `0` = flat. Bows under 3% are reported as flat (a detected quad's own pixel error reaches ~2%) |
 
 The `corners` value can be passed straight into the scan-to-pdf `options.pages[i].corners` field.
 
@@ -542,6 +551,8 @@ Convert images to a PDF document, with optional per-page perspective correction 
 | pages | array | — | Per-page directives, **index-aligned with `uploadIds`** (max 50 entries); each entry optional |
 | pages[i].corners | object | — | Normalized document quad to perspective-warp: `tl`/`tr`/`br`/`bl`, each `{x, y}` in `[0, 1]`. All four corners or omitted. Get suggested corners from `POST /api/organize-pdf/detect-edges` |
 | pages[i].rotation | integer | 0 | Clockwise rotation applied after the warp — `0`, `90`, `180`, or `270` |
+| pages[i].edgeMids | object | — | Curved crop: `top`/`right`/`bottom`/`left` midpoints, each `{x, y}` in `[0, 1]`; requires `corners`; all four or omitted. Pass `detect-edges`' `edgeMids` straight through |
+| pages[i].cleanup | object | — | Booleans `shadows`, `background`, `glare`, `fingers`, `holes`, `auto` (unknown keys → 400). A completed job with glare carries `metadata.warnings: [{"page": 1, "code": "glare"}]` |
 
 **Request Example:**
 ```json

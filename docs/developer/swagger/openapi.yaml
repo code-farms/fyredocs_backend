@@ -5010,6 +5010,35 @@ components:
                 - 270
                 default: 0
                 description: Clockwise rotation, applied after the perspective warp
+              edgeMids:
+                type: object
+                description: Curved crop (dewarp) — edge midpoints, normalized; requires corners; all four or omitted
+                properties:
+                  top:
+                    $ref: '#/components/schemas/NormalizedPoint'
+                  right:
+                    $ref: '#/components/schemas/NormalizedPoint'
+                  bottom:
+                    $ref: '#/components/schemas/NormalizedPoint'
+                  left:
+                    $ref: '#/components/schemas/NormalizedPoint'
+              cleanup:
+                type: object
+                additionalProperties: false
+                description: Classical clean-up passes, run after warp/rotate and before enhance. Glare on a page adds metadata.warnings [{page, code glare}] to the completed job.
+                properties:
+                  shadows:
+                    type: boolean
+                  background:
+                    type: boolean
+                  glare:
+                    type: boolean
+                  fingers:
+                    type: boolean
+                  holes:
+                    type: boolean
+                  auto:
+                    type: boolean
       example:
         ocr: true
         language: eng
@@ -5051,6 +5080,23 @@ components:
           type: integer
           description: Decoded image height in pixels
           example: 4032
+        edgeMids:
+          type: object
+          description: Suggested curved-crop midpoints (present only when confidence > 0)
+          properties:
+            top:
+              $ref: '#/components/schemas/NormalizedPoint'
+            right:
+              $ref: '#/components/schemas/NormalizedPoint'
+            bottom:
+              $ref: '#/components/schemas/NormalizedPoint'
+            left:
+              $ref: '#/components/schemas/NormalizedPoint'
+        curvature:
+          type: number
+          minimum: 0
+          description: Largest edge bow as a fraction of its edge; 0 = flat (bows under 3% report as flat)
+          example: 0.06
     PdfMetadataOptions:
       type: object
       description: 'Options for pdf-metadata jobs — at least one of the four fields is

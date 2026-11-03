@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -72,6 +73,36 @@ type metadataOptionsPayload struct {
 type scanPagePayload struct {
 	Corners  *scanCornersPayload `json:"corners"`
 	Rotation *int                `json:"rotation"`
+	// EdgeMids curve the crop (Phase 23 §4 dewarp): the midpoints of the
+	// top/right/bottom/left edges. Only meaningful with all four corners.
+	EdgeMids *scanEdgeMidsPayload `json:"edgeMids"`
+	// Cleanup selects the classical clean-up passes for this page. Booleans
+	// only — the worker owns the algorithms and their tuning. Kept raw here
+	// so a wrong type gets validateScanCleanupKeys' specific message instead
+	// of failing the whole payload as "not valid JSON".
+	Cleanup json.RawMessage `json:"cleanup"`
+}
+
+// scanEdgeMidsPayload is the curved-crop extension of the corner quad.
+// NOTE: mirrored as ScanEdgeMids in organize-pdf/processing/processing_scan.go
+// — duplicated by design, no shared DTOs across services.
+type scanEdgeMidsPayload struct {
+	Top    *scanPointPayload `json:"top"`
+	Right  *scanPointPayload `json:"right"`
+	Bottom *scanPointPayload `json:"bottom"`
+	Left   *scanPointPayload `json:"left"`
+}
+
+// scanCleanupPayload mirrors organize-pdf's ScanCleanup (duplicated by design).
+// Strict decoding below rejects unknown keys, so a typo fails at creation
+// instead of silently doing nothing in the worker.
+type scanCleanupPayload struct {
+	Shadows    bool `json:"shadows"`
+	Background bool `json:"background"`
+	Glare      bool `json:"glare"`
+	Fingers    bool `json:"fingers"`
+	Holes      bool `json:"holes"`
+	Auto       bool `json:"auto"`
 }
 
 // scanCornersPayload is the perspective-crop quad for one page, in the corner
@@ -343,7 +374,7 @@ func validateScanOptions(raw string) error {
 		return fmt.Errorf("unsupported OCR language %q — supported: eng, deu, fra, spa, hin", opts.Language)
 	}
 	if size := strings.ToLower(strings.TrimSpace(opts.PageSize)); !scanPageSizes[size] {
-		return fmt.Errorf("unsupported pageSize %q — supported: auto, a4, letter, id", opts.PageSize)
+		return fmt.Errorf("unsupported pageSize %q — supported: auto, a4, letter, id, card", opts.PageSize)
 	}
 	if enhance := strings.ToLower(strings.TrimSpace(opts.Enhance)); !scanEnhance[enhance] {
 		return fmt.Errorf("unsupported enhance mode %q — supported: none, grayscale, bw, color-boost", opts.Enhance)
@@ -387,8 +418,44 @@ func validateScanOptions(raw string) error {
 				}
 			}
 		}
+		if page.EdgeMids != nil {
+			if page.Corners == nil {
+				return fmt.Errorf("pages[%d].edgeMids requires corners", i)
+			}
+			mids := map[string]*scanPointPayload{
+				"top": page.EdgeMids.Top, "right": page.EdgeMids.Right,
+				"bottom": page.EdgeMids.Bottom, "left": page.EdgeMids.Left,
+			}
+			for name, p := range mids {
+				if p == nil || p.X == nil || p.Y == nil {
+					return fmt.Errorf("pages[%d].edgeMids must include top, right, bottom and left with numeric x and y (missing %s)", i, name)
+				}
+				if *p.X < 0 || *p.X > 1 || *p.Y < 0 || *p.Y > 1 {
+					return fmt.Errorf("pages[%d].edgeMids.%s must be normalized to [0, 1]", i, name)
+				}
+			}
+		}
 	}
 
+	return validateScanCleanupKeys(opts.Pages)
+}
+
+// validateScanCleanupKeys rejects unknown keys and non-boolean values inside
+// pages[].cleanup. The main decode is lenient (unknown top-level fields have
+// always been ignored), but a misspelt clean-up flag would silently do
+// nothing, so this block is decoded strictly on its own.
+func validateScanCleanupKeys(pages []scanPagePayload) error {
+	for i, p := range pages {
+		if len(p.Cleanup) == 0 || string(p.Cleanup) == "null" {
+			continue
+		}
+		dec := json.NewDecoder(bytes.NewReader(p.Cleanup))
+		dec.DisallowUnknownFields()
+		var c scanCleanupPayload
+		if err := dec.Decode(&c); err != nil {
+			return fmt.Errorf("pages[%d].cleanup accepts only boolean shadows, background, glare, fingers, holes, auto", i)
+		}
+	}
 	return nil
 }
 

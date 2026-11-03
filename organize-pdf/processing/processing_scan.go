@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,11 +60,73 @@ func (c *ScanCorners) quad() imaging.Quad {
 	return imaging.Quad{TL: *c.TL, TR: *c.TR, BR: *c.BR, BL: *c.BL}
 }
 
+// ScanEdgeMids curves the crop: the normalized midpoints of the top, right,
+// bottom and left edges (Phase 23 §4 dewarp). Used only together with a
+// complete corner quad; all four must be present.
+// NOTE: mirrored as scanEdgeMidsPayload in job-service/handlers/tool_options.go
+// — duplicated by design, no shared DTOs across services.
+type ScanEdgeMids struct {
+	Top    *imaging.Point `json:"top"`
+	Right  *imaging.Point `json:"right"`
+	Bottom *imaging.Point `json:"bottom"`
+	Left   *imaging.Point `json:"left"`
+}
+
+// complete reports whether all four midpoints are present (nil-safe).
+func (m *ScanEdgeMids) complete() bool {
+	return m != nil && m.Top != nil && m.Right != nil && m.Bottom != nil && m.Left != nil
+}
+
+// mids converts the wire form, clamped to 0..1; callers check complete() first.
+func (m *ScanEdgeMids) mids() imaging.EdgeMids {
+	c := func(p imaging.Point) imaging.Point {
+		return imaging.Point{X: math.Max(0, math.Min(1, p.X)), Y: math.Max(0, math.Min(1, p.Y))}
+	}
+	return imaging.EdgeMids{Top: c(*m.Top), Right: c(*m.Right), Bottom: c(*m.Bottom), Left: c(*m.Left)}
+}
+
+// ScanCleanup selects classical clean-up passes for one page.
+// NOTE: mirrored as scanCleanupPayload in job-service (duplicated by design).
+type ScanCleanup struct {
+	Shadows    bool `json:"shadows"`
+	Background bool `json:"background"`
+	Glare      bool `json:"glare"`
+	Fingers    bool `json:"fingers"`
+	Holes      bool `json:"holes"`
+	Auto       bool `json:"auto"`
+}
+
+// options converts to the imaging package's option set (nil-safe).
+func (c *ScanCleanup) options() imaging.CleanupOptions {
+	if c == nil {
+		return imaging.CleanupOptions{}
+	}
+	return imaging.CleanupOptions{
+		Shadows: c.Shadows, Background: c.Background, Glare: c.Glare,
+		Fingers: c.Fingers, Holes: c.Holes, Auto: c.Auto,
+	}
+}
+
 // ScanPage carries per-page processing directives, index-aligned with the
 // job's input files.
 type ScanPage struct {
-	Corners  *ScanCorners `json:"corners,omitempty"`
-	Rotation int          `json:"rotation,omitempty"`
+	Corners  *ScanCorners  `json:"corners,omitempty"`
+	Rotation int           `json:"rotation,omitempty"`
+	EdgeMids *ScanEdgeMids `json:"edgeMids,omitempty"`
+	Cleanup  *ScanCleanup  `json:"cleanup,omitempty"`
+}
+
+// needsWork reports whether the page requires decoding at all (nil-safe).
+func (p *ScanPage) needsWork() bool {
+	return p != nil && (p.Corners.complete() || p.Rotation != 0 || p.Cleanup.options().Any())
+}
+
+// ScanWarning is a per-page note returned in job metadata ("warnings"), for
+// outcomes the user should act on — e.g. glare that blew out text, which no
+// clean-up can recover.
+type ScanWarning struct {
+	Page int    `json:"page"` // 1-based
+	Code string `json:"code"` // "glare"
 }
 
 // ScanOptions is the full scan-to-pdf option payload.
@@ -168,8 +231,8 @@ func needsPreprocessing(opts ScanOptions) bool {
 	if opts.Enhance != "" && opts.Enhance != "none" {
 		return true
 	}
-	for _, p := range opts.Pages {
-		if p.Corners.complete() || p.Rotation != 0 {
+	for i := range opts.Pages {
+		if opts.Pages[i].needsWork() {
 			return true
 		}
 	}
@@ -191,22 +254,35 @@ func pageAspect(pageSize string) float64 {
 	return 0
 }
 
-// processOnePage applies crop/warp, rotation, and enhancement to a decoded
-// image. Returns the processed image and whether it is bilevel (bw).
-func processOnePage(img image.Image, page *ScanPage, enhance string, aspect float64) (image.Image, bool, error) {
+// processOnePage applies crop/warp (planar, or curved when edge midpoints
+// are given), rotation, clean-up, and enhancement to a decoded image, in
+// that order: clean-up runs on the final page geometry (fingers and holes
+// are detected relative to the page's border and margins). Returns the
+// processed image, whether it is bilevel (bw), and the clean-up report.
+func processOnePage(img image.Image, page *ScanPage, enhance string, aspect float64) (image.Image, bool, imaging.CleanupReport, error) {
 	out := img
+	var report imaging.CleanupReport
 
 	if page != nil && page.Corners.complete() {
 		b := out.Bounds()
 		quadNorm := page.Corners.quad().Clamp01()
 		if err := quadNorm.Validate(); err != nil {
 			slog.Warn("invalid crop quad; skipping warp", "error", err)
+		} else if page.EdgeMids.complete() {
+			quadPx := quadNorm.Denormalize(b.Dx(), b.Dy())
+			mids := page.EdgeMids.mids().Denormalize(b.Dx(), b.Dy())
+			w, h := imaging.CoonsOutputSize(quadPx, mids, aspect)
+			warped, err := imaging.CoonsWarp(out, quadPx, mids, w, h)
+			if err != nil {
+				return nil, false, report, fmt.Errorf("curved warp: %w", err)
+			}
+			out = warped
 		} else {
 			quadPx := quadNorm.Denormalize(b.Dx(), b.Dy())
 			w, h := imaging.WarpOutputSize(quadPx, aspect)
 			warped, err := imaging.WarpPerspective(out, quadPx, w, h)
 			if err != nil {
-				return nil, false, fmt.Errorf("perspective warp: %w", err)
+				return nil, false, report, fmt.Errorf("perspective warp: %w", err)
 			}
 			out = warped
 		}
@@ -214,6 +290,10 @@ func processOnePage(img image.Image, page *ScanPage, enhance string, aspect floa
 
 	if page != nil && page.Rotation != 0 {
 		out = imaging.Rotate(out, page.Rotation)
+	}
+
+	if opts := page.cleanupOptions(); opts.Any() {
+		out, report = imaging.Cleanup(out, opts)
 	}
 
 	isBilevel := false
@@ -227,18 +307,27 @@ func processOnePage(img image.Image, page *ScanPage, enhance string, aspect floa
 		out = imaging.ColorBoost(out, 1.15, 1.25)
 	}
 
-	return out, isBilevel, nil
+	return out, isBilevel, report, nil
+}
+
+// cleanupOptions is the page's clean-up selection (nil-safe).
+func (p *ScanPage) cleanupOptions() imaging.CleanupOptions {
+	if p == nil {
+		return imaging.CleanupOptions{}
+	}
+	return p.Cleanup.options()
 }
 
 // preprocessScanImages runs the per-page pipeline over every input image,
 // writing processed copies into scratchDir. PDF inputs pass through
 // untouched (they are legal scan-to-pdf inputs). The returned slice is
 // index-aligned with inputPaths.
-func preprocessScanImages(ctx context.Context, inputPaths []string, opts ScanOptions, scratchDir string) ([]string, error) {
+func preprocessScanImages(ctx context.Context, inputPaths []string, opts ScanOptions, scratchDir string) ([]string, []ScanWarning, error) {
 	processed := make([]string, len(inputPaths))
+	var warnings []ScanWarning
 	for i, inputPath := range inputPaths {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		if strings.EqualFold(filepath.Ext(inputPath), ".pdf") {
@@ -252,8 +341,7 @@ func preprocessScanImages(ctx context.Context, inputPaths []string, opts ScanOpt
 		}
 
 		// Skip decode entirely when this page needs no pixel work.
-		pageNeedsWork := (opts.Enhance != "" && opts.Enhance != "none") ||
-			(page != nil && (page.Corners.complete() || page.Rotation != 0))
+		pageNeedsWork := (opts.Enhance != "" && opts.Enhance != "none") || page.needsWork()
 		if !pageNeedsWork {
 			processed[i] = inputPath
 			continue
@@ -261,30 +349,33 @@ func preprocessScanImages(ctx context.Context, inputPaths []string, opts ScanOpt
 
 		img, _, err := imaging.DecodeFile(inputPath)
 		if err != nil {
-			return nil, fmt.Errorf("decode %s: %w", filepath.Base(inputPath), err)
+			return nil, nil, fmt.Errorf("decode %s: %w", filepath.Base(inputPath), err)
 		}
 
-		out, isBilevel, err := processOnePage(img, page, opts.Enhance, pageAspect(opts.PageSize))
+		out, isBilevel, report, err := processOnePage(img, page, opts.Enhance, pageAspect(opts.PageSize))
 		if err != nil {
-			return nil, fmt.Errorf("process %s: %w", filepath.Base(inputPath), err)
+			return nil, nil, fmt.Errorf("process %s: %w", filepath.Base(inputPath), err)
+		}
+		if report.Glare > 0 {
+			warnings = append(warnings, ScanWarning{Page: i + 1, Code: "glare"})
 		}
 
 		base := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
 		if isBilevel {
 			outPath := filepath.Join(scratchDir, fmt.Sprintf("scan_%03d_%s.png", i, base))
 			if err := imaging.EncodePNG(outPath, out); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			processed[i] = outPath
 		} else {
 			outPath := filepath.Join(scratchDir, fmt.Sprintf("scan_%03d_%s.jpg", i, base))
 			if err := imaging.EncodeJPEG(outPath, out, 92); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			processed[i] = outPath
 		}
 	}
-	return processed, nil
+	return processed, warnings, nil
 }
 
 // marginScale maps the margin preset to a pdfcpu relative-scale token: the
@@ -355,14 +446,16 @@ func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, opti
 		}
 		defer os.RemoveAll(scratchDir)
 
-		paths, err = preprocessScanImages(ctx, inputPaths, opts, scratchDir)
+		var warnings []ScanWarning
+		paths, warnings, err = preprocessScanImages(ctx, inputPaths, opts, scratchDir)
 		if err != nil {
 			return nil, fmt.Errorf("scan preprocessing: %w", err)
 		}
 
 		if opts.OCR {
 			// OCR must run inside this scope while scratch files still exist.
-			return scanToPDFWithOCR(ctx, paths, outputPath, tesseractLang(opts.Language))
+			meta, err := scanToPDFWithOCR(ctx, paths, outputPath, tesseractLang(opts.Language))
+			return withWarnings(meta, warnings), err
 		}
 
 		imp, err := importConfigForPageSize(opts.PageSize, opts.Margin)
@@ -370,7 +463,7 @@ func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, opti
 			return nil, fmt.Errorf("page size config: %w", err)
 		}
 		conf := model.NewDefaultConfiguration()
-		return nil, api.ImportImagesFile(paths, outputPath, imp, conf)
+		return withWarnings(nil, warnings), api.ImportImagesFile(paths, outputPath, imp, conf)
 	}
 
 	if opts.OCR {
@@ -486,4 +579,17 @@ func collectOCRText(txtPaths []string, capBytes int) (string, bool) {
 		cut--
 	}
 	return text[:cut], true
+}
+
+// withWarnings adds per-page warnings to job metadata (nil-safe, no-op when
+// there are none). They ride on the completed job, like extractedText.
+func withWarnings(meta map[string]interface{}, warnings []ScanWarning) map[string]interface{} {
+	if len(warnings) == 0 {
+		return meta
+	}
+	if meta == nil {
+		meta = map[string]interface{}{}
+	}
+	meta["warnings"] = warnings
+	return meta
 }

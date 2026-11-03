@@ -7,10 +7,10 @@ import (
 
 // TestCleanupBudgetOnAPhonePhoto keeps the whole clean-up pipeline inside a
 // per-page budget on a 12 MP capture — the scan worker processes up to 50
-// pages per job. Skipped under -short.
+// pages per job. Skipped under -short and -race.
 func TestCleanupBudgetOnAPhonePhoto(t *testing.T) {
-	if testing.Short() {
-		t.Skip("timing test")
+	if testing.Short() || raceEnabled {
+		t.Skip("timing test: skipped under -short and -race (make test runs with -race)")
 	}
 	img := page(4000, 3000, paperGrey)
 	ellipse(img, 0, 1500, 300, 200, skin)

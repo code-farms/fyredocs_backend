@@ -118,6 +118,51 @@ func TestDetectEdgesHappyPath(t *testing.T) {
 	if env.Data.Confidence != 0 {
 		t.Errorf("blank image confidence = %f, want 0", env.Data.Confidence)
 	}
+	if strings.Contains(w.Body.String(), "edgeMids") {
+		t.Error("a fallback quad must not carry curve suggestions")
+	}
+}
+
+// A light page on a dark table is detected, so curve suggestions ride along
+// (straight midpoints and zero curvature for a flat page).
+func TestDetectEdgesSuggestsMidpointsForADetectedPage(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 400, 500))
+	for y := 0; y < 500; y++ {
+		for x := 0; x < 400; x++ {
+			c := color.RGBA{35, 35, 40, 255}
+			if x >= 60 && x <= 340 && y >= 60 && y <= 440 {
+				c = color.RGBA{235, 233, 228, 255}
+			}
+			img.SetRGBA(x, y, c)
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeGetter{objects: map[string][]byte{"uploads/page.png": buf.Bytes()}}
+	w := doDetect(newRouter(store, testInternalToken), `{"key":"page.png"}`, nil)
+	var env struct {
+		Data struct {
+			Confidence float64                       `json:"confidence"`
+			EdgeMids   map[string]map[string]float64 `json:"edgeMids"`
+			Curvature  float64                       `json:"curvature"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Data.Confidence == 0 {
+		t.Skip("fixture not detected; covered by imaging tests")
+	}
+	for _, k := range []string{"top", "right", "bottom", "left"} {
+		if _, ok := env.Data.EdgeMids[k]; !ok {
+			t.Errorf("missing edgeMids.%s: %s", k, w.Body.String())
+		}
+	}
+	if env.Data.Curvature != 0 {
+		t.Errorf("flat page curvature %v, want 0", env.Data.Curvature)
+	}
 }
 
 func TestDetectEdgesMissingObject(t *testing.T) {

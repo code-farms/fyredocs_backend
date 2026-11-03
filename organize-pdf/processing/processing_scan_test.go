@@ -304,7 +304,7 @@ func TestPreprocessScanImagesEndToEnd(t *testing.T) {
 		},
 	}
 
-	out, err := preprocessScanImages(context.Background(), []string{in1, in2}, opts, scratch)
+	out, _, err := preprocessScanImages(context.Background(), []string{in1, in2}, opts, scratch)
 	if err != nil {
 		t.Fatalf("preprocess: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestPreprocessScanImagesPDFPassthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := preprocessScanImages(context.Background(), []string{pdf}, ScanOptions{Enhance: "bw"}, t.TempDir())
+	out, _, err := preprocessScanImages(context.Background(), []string{pdf}, ScanOptions{Enhance: "bw"}, t.TempDir())
 	if err != nil {
 		t.Fatalf("preprocess: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestPreprocessSkipsUntouchedPages(t *testing.T) {
 	writeTestPNG(t, in, 50, 50)
 
 	// No enhance, no corners, no rotation → original path returned.
-	out, err := preprocessScanImages(context.Background(), []string{in}, ScanOptions{Pages: []ScanPage{{}}}, t.TempDir())
+	out, _, err := preprocessScanImages(context.Background(), []string{in}, ScanOptions{Pages: []ScanPage{{}}}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
