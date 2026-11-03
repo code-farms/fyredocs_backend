@@ -192,7 +192,7 @@ func (h *Ops) Run(c *gin.Context) {
 		}
 		response.OK(c, "OK", opResult{Text: text.String(), Usage: usage, DocRef: docRef})
 	}
-	h.recordCompleted(c, name, spec.Tier, usage, time.Since(started))
+	h.recordCompleted(c, name, spec.Tier, usage, time.Since(started), nil)
 }
 
 // logFailure logs a failed op; a client disconnect is info, not a warning.
@@ -206,18 +206,22 @@ func (h *Ops) logFailure(c *gin.Context, op string, err error, code string) {
 
 // recordCompleted publishes the ai.op.completed analytics event — token
 // counts only, never document text or answers.
-func (h *Ops) recordCompleted(c *gin.Context, op string, tier llm.Tier, usage llm.Usage, took time.Duration) {
+func (h *Ops) recordCompleted(c *gin.Context, op string, tier llm.Tier, usage llm.Usage, took time.Duration, extra map[string]any) {
 	if h.Publish == nil {
 		return
 	}
 	auth, _ := authverify.GetGinAuth(c)
-	meta, _ := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"tier":         tier,
 		"inputTokens":  usage.InputTokens,
 		"outputTokens": usage.OutputTokens,
 		"cachedTokens": usage.CachedTokens,
 		"durationMs":   took.Milliseconds(),
-	})
+	}
+	for k, v := range extra {
+		fields[k] = v
+	}
+	meta, _ := json.Marshal(fields)
 	// Detached from the request context: the client may already have gone,
 	// and the usage happened regardless.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)

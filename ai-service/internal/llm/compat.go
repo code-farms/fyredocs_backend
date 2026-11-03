@@ -29,6 +29,9 @@ type Config struct {
 	// MaxTokensParam is "max_tokens" (most providers) or
 	// "max_completion_tokens" (newer OpenAI reasoning models reject max_tokens).
 	MaxTokensParam string
+	// Vision allows image content parts. False (a text-only model) strips
+	// images before sending; the request then runs on its text alone.
+	Vision bool
 }
 
 // ConfigFromEnv reads AI_BASE_URL, AI_API_KEY, AI_MODEL_FAST, AI_MODEL_SMART,
@@ -46,6 +49,7 @@ func ConfigFromEnv() Config {
 		Timeout:        timeout,
 		MaxRetries:     config.GetEnvInt("AI_MAX_RETRIES", 1),
 		MaxTokensParam: config.GetEnv("AI_MAX_TOKENS_PARAM", "max_tokens"),
+		Vision:         config.GetEnvBool("AI_VISION", true),
 	}
 }
 
@@ -99,7 +103,15 @@ func (c *Compat) params(req Request) openai.ChatCompletionNewParams {
 				Content: openai.ChatCompletionAssistantMessageParamContentUnion{OfString: openai.String(m.Content)},
 			}})
 		default:
-			msgs = append(msgs, openai.UserMessage(m.Content))
+			if len(m.Images) == 0 {
+				msgs = append(msgs, openai.UserMessage(m.Content))
+				continue
+			}
+			parts := []openai.ChatCompletionContentPartUnionParam{openai.TextContentPart(m.Content)}
+			for _, img := range m.Images {
+				parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: img.DataURL}))
+			}
+			msgs = append(msgs, openai.UserMessage(parts))
 		}
 	}
 	p := openai.ChatCompletionNewParams{
@@ -124,7 +136,18 @@ func (c *Compat) Stream(ctx context.Context, req Request, onDelta func(string) e
 	if err != nil {
 		return Usage{}, &Error{Code: response.CodeAIUnavailable, Message: "provider circuit open"}
 	}
+	if !c.cfg.Vision && req.HasImages() {
+		req = req.WithoutImages()
+	}
 	usage, err := c.stream(ctx, req, onDelta)
+	// A provider or model that rejects image parts answers 400; retry once on
+	// the text alone rather than failing an extraction that text can serve.
+	// Only before any output: a 400 always arrives before the first delta.
+	if e, ok := AsError(err); ok && ctx.Err() == nil && req.HasImages() &&
+		e.Status == http.StatusBadRequest && e.Code == response.CodeAIUnavailable {
+		slog.WarnContext(ctx, "provider rejected image input — retrying text-only (set AI_VISION=false for this model)")
+		usage, err = c.stream(ctx, req.WithoutImages(), onDelta)
+	}
 	if err != nil && ctx.Err() == nil {
 		if e, ok := AsError(err); ok && e.Code == response.CodeAIUnavailable {
 			done(err)
@@ -190,9 +213,9 @@ func classify(err error) *Error {
 		switch {
 		case apiErr.StatusCode == http.StatusRequestEntityTooLarge,
 			apiErr.StatusCode == http.StatusBadRequest && mentionsContextLimit(msg):
-			return &Error{Code: response.CodeAIRequestTooLarge, Message: apiErr.Error()}
+			return &Error{Code: response.CodeAIRequestTooLarge, Message: apiErr.Error(), Status: apiErr.StatusCode}
 		default:
-			return &Error{Code: response.CodeAIUnavailable, Message: apiErr.Error()}
+			return &Error{Code: response.CodeAIUnavailable, Message: apiErr.Error(), Status: apiErr.StatusCode}
 		}
 	}
 	return &Error{Code: response.CodeAIUnavailable, Message: err.Error()}
@@ -209,12 +232,19 @@ func mentionsContextLimit(msg string) bool {
 	return false
 }
 
-// EstimateTokens is the ~4 chars/token heuristic over message content, used
-// for quota reservation and when a provider omits usage.
+// ImageTokens is the flat per-image input estimate. Providers bill images by
+// tile/resolution; ~1,500 covers a ≤1600px page on the common tilings, and
+// reservation only needs an upper-ish bound — settle records the real usage.
+const ImageTokens = 1500
+
+// EstimateTokens is the ~4 chars/token heuristic over message content (plus
+// ImageTokens per image), used for quota reservation and when a provider
+// omits usage.
 func EstimateTokens(msgs []Message) int {
-	chars := 0
+	chars, images := 0, 0
 	for _, m := range msgs {
 		chars += len([]rune(m.Content)) + 4
+		images += len(m.Images)
 	}
-	return (chars + 3) / 4
+	return (chars+3)/4 + images*ImageTokens
 }

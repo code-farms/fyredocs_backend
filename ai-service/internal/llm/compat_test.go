@@ -227,7 +227,87 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("AI_MODEL_FAST", "f")
 	t.Setenv("AI_REQUEST_TIMEOUT", "nonsense")
 	cfg := ConfigFromEnv()
-	if cfg.BaseURL != "http://p/v1" || cfg.ModelFast != "f" || cfg.Timeout != 90*time.Second || cfg.MaxTokensParam != "max_tokens" || cfg.MaxRetries != 1 {
+	if cfg.BaseURL != "http://p/v1" || cfg.ModelFast != "f" || cfg.Timeout != 90*time.Second || cfg.MaxTokensParam != "max_tokens" || cfg.MaxRetries != 1 || !cfg.Vision {
 		t.Fatalf("%+v", cfg)
+	}
+}
+
+var imgReq = Request{Tier: TierFast, Messages: []Message{
+	{Role: "system", Content: "sys"},
+	{Role: "user", Content: "what is this", Images: []Image{{DataURL: "data:image/jpeg;base64,AAAA"}}},
+}}
+
+// imageParts returns the image_url parts of the last request's last message.
+func imageParts(t *testing.T, f *fakeProvider) (int, any) {
+	t.Helper()
+	msgs := f.body(t)["messages"].([]any)
+	last := msgs[len(msgs)-1].(map[string]any)
+	parts, ok := last["content"].([]any)
+	if !ok {
+		return 0, last["content"]
+	}
+	n := 0
+	for _, p := range parts {
+		if p.(map[string]any)["type"] == "image_url" {
+			n++
+		}
+	}
+	return n, parts
+}
+
+func TestImagesTravelAsStandardContentParts(t *testing.T) {
+	f := &fakeProvider{deltas: []string{"ok"}}
+	if _, _, err := collect(newTestClient(t, f, func(c *Config) { c.Vision = true }), imgReq); err != nil {
+		t.Fatal(err)
+	}
+	if n, parts := imageParts(t, f); n != 1 {
+		t.Fatalf("want one image_url part, got %v", parts)
+	}
+}
+
+func TestVisionOffStripsImages(t *testing.T) {
+	f := &fakeProvider{deltas: []string{"ok"}}
+	if _, _, err := collect(newTestClient(t, f, func(c *Config) { c.Vision = false }), imgReq); err != nil {
+		t.Fatal(err)
+	}
+	if n, content := imageParts(t, f); n != 0 || content != "what is this" {
+		t.Fatalf("text-only model must get plain text content, got %v", content)
+	}
+}
+
+// rejectImages answers 400 to any request carrying an image part and
+// delegates the rest to the plain fake provider.
+type rejectImages struct {
+	fakeProvider
+	requests atomic.Int32
+}
+
+func (r *rejectImages) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	r.requests.Add(1)
+	body, _ := io.ReadAll(req.Body)
+	if strings.Contains(string(body), "image_url") {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(400)
+		_, _ = io.WriteString(w, `{"error":{"message":"model does not support image input"}}`)
+		return
+	}
+	req.Body = io.NopCloser(strings.NewReader(string(body)))
+	r.fakeProvider.ServeHTTP(w, req)
+}
+
+func TestImageRejectionFallsBackToTextOnce(t *testing.T) {
+	f := &rejectImages{fakeProvider: fakeProvider{deltas: []string{"from text"}}}
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	c := New(Config{BaseURL: srv.URL + "/v1/", ModelFast: "m", Timeout: 5 * time.Second, Vision: true})
+	text, _, err := collect(c, imgReq)
+	if err != nil || text != "from text" || f.requests.Load() != 2 {
+		t.Fatalf("text=%q err=%v requests=%d", text, err, f.requests.Load())
+	}
+}
+
+func TestEstimateCountsImages(t *testing.T) {
+	if EstimateTokens(imgReq.Messages)-EstimateTokens(imgReq.WithoutImages().Messages) != ImageTokens {
+		t.Fatal("each image must add ImageTokens to the estimate")
 	}
 }

@@ -4318,6 +4318,57 @@ paths:
           description: AI_QUOTA_EXCEEDED
         '503':
           description: AI_UNAVAILABLE
+  /api/ai/extract:
+    post:
+      tags:
+      - AI
+      summary: Classify a document and extract typed fields and tables
+      description: One call returns docType (+ subtype for IDs), a suggested title, typed fields per doc type and tables. Input is page text and/or up to 2 page images as data URLs. Values are validated server-side; an unparseable model reply degrades to docType other. Extracted values are never logged or persisted.
+      operationId: extractDocument
+      security:
+      - BearerAuth: []
+      - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pages:
+                  type: array
+                  maxItems: 50
+                  items:
+                    type: object
+                    properties:
+                      index:
+                        type: integer
+                        minimum: 0
+                      text:
+                        type: string
+                images:
+                  type: array
+                  maxItems: 2
+                  items:
+                    type: string
+                    description: data:image/(jpeg|png|webp);base64,… (≤1.5 MB decoded)
+      responses:
+        '200':
+          description: '{docType, subtype?, confidence, title, language, fields, tables, usage}'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        '400':
+          description: INVALID_INPUT
+        '401':
+          description: AUTH_UNAUTHORIZED
+        '413':
+          description: AI_REQUEST_TOO_LARGE
+        '429':
+          description: AI_QUOTA_EXCEEDED
+        '503':
+          description: AI_UNAVAILABLE
   /api/ai/quota:
     get:
       tags:

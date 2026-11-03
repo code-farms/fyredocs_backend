@@ -396,6 +396,20 @@ var testUpstreams = upstreams{
 	ai:           "http://ai:8092",
 }
 
+// TestOnlyAIExtractGetsTheLargerBodyCap pins that the 4 MiB image budget is
+// scoped to extraction (both prefixes) and every other route stays at 1 MiB.
+func TestOnlyAIExtractGetsTheLargerBodyCap(t *testing.T) {
+	for _, c := range withV1Aliases(serviceRoutes(testUpstreams)) {
+		isExtract := c.prefix == "/api/ai/extract" || c.prefix == "/api/v1/ai/extract"
+		if isExtract && c.maxBodyBytes != 4<<20 {
+			t.Errorf("%s cap %d, want 4 MiB", c.prefix, c.maxBodyBytes)
+		}
+		if !isExtract && c.maxBodyBytes != 0 {
+			t.Errorf("%s must keep the default cap, got %d", c.prefix, c.maxBodyBytes)
+		}
+	}
+}
+
 // TestServiceRoutesSendAIToAIService pins the Phase 23 route: AI ops must reach
 // ai-service (the only holder of the provider key and the quota ledger), on
 // both the unversioned path and its /api/v1 alias.

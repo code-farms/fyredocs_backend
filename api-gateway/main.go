@@ -51,7 +51,14 @@ type routeConfig struct {
 	// "/api/v1/share" and ServeMux panics at boot on the duplicate pattern —
 	// taking the whole gateway down, not just that route.
 	noV1Alias bool
+	// maxBodyBytes overrides the default 1 MiB request-body cap. Only routes
+	// that legitimately carry inline bytes set it (AI extraction's page
+	// images); everything else keeps the JSON-sized limit.
+	maxBodyBytes int64
 }
+
+// defaultMaxBodyBytes is the JSON-sized request cap for every proxied route.
+const defaultMaxBodyBytes = 1 << 20
 
 // apiVersionPrefix is the canonical versioned root. Every public route is
 // reachable under it; the old unversioned prefixes remain as aliases.
@@ -212,6 +219,15 @@ func serviceRoutes(u upstreams) []routeConfig {
 			prefix:         "/api/ai",
 			targetBasePath: "/api/ai",
 			targetURL:      u.ai,
+		},
+		{
+			// AI extraction carries up to two downscaled page images inline.
+			// Its own, longer prefix — ServeMux picks the most specific match —
+			// so only this path gets the larger cap, not every AI op.
+			prefix:         "/api/ai/extract",
+			targetBasePath: "/api/ai/extract",
+			targetURL:      u.ai,
+			maxBodyBytes:   4 << 20,
 		},
 		{
 			prefix:         "/admin",
@@ -478,7 +494,7 @@ var proxyTransport = &http.Transport{
 }
 
 // registerServiceRoutes mounts each backend route with the standard 1 MiB
-// JSON body limit. File bytes never pass through this gateway — uploads and
+// JSON body limit (or the route's own maxBodyBytes). File bytes never pass through this gateway — uploads and
 // downloads go directly from the browser to MinIO via presigned URLs routed
 // at the Caddy edge — so /api/upload is JSON-only (init/complete) and gets
 // the same limit.
@@ -495,7 +511,11 @@ func registerServiceRoutes(mux *http.ServeMux, routes []routeConfig) {
 			breaker = circuitbreaker.NewTwoStep("upstream:" + upstreamKey)
 			breakers[upstreamKey] = breaker
 		}
-		proxy := withMaxBodySize(newProxy(cfg, breaker), 1<<20) // 1 MiB
+		limit := cfg.maxBodyBytes
+		if limit <= 0 {
+			limit = defaultMaxBodyBytes
+		}
+		proxy := withMaxBodySize(newProxy(cfg, breaker), limit)
 
 		// Record a low-cardinality route label (the fixed prefix, e.g.
 		// "/api/jobs") for Prometheus. Without this the HTTP metrics middleware

@@ -78,3 +78,37 @@ The caller's AI token quota for the current UTC month. Each op reserves its wors
 }
 ```
 **401** `AUTH_UNAUTHORIZED` for guests; **503** `AI_UNAVAILABLE` if the ledger is unreachable.
+
+---
+
+## POST /api/ai/extract
+Classify a document, suggest a title, and extract typed fields and tables in one call. Body ≤4 MiB.
+
+**Request**
+```json
+{
+  "pages": [{ "index": 0, "text": "BIG BAZAAR … TOTAL 1,250.00" }],
+  "images": ["data:image/jpeg;base64,/9j/4AAQ…"]
+}
+```
+- At least one of `pages` or `images`. At most 2 images (JPEG/PNG/WebP data URLs, ≤1.5 MB each decoded); downscale to ~1600px first.
+- With `AI_VISION=false`, or a text-only model, images are ignored and the text is used.
+
+**200 OK**
+```json
+{
+  "success": true,
+  "data": {
+    "docType": "receipt",
+    "confidence": 0.94,
+    "title": "Big Bazaar groceries March 2026",
+    "language": "en",
+    "fields": { "merchant": "Big Bazaar", "date": "2026-03-12", "total": 1250, "tax": 60, "currency": "INR", "category": "groceries" },
+    "tables": [{ "header": ["Item", "Qty"], "rows": [["Rice", "2"]] }],
+    "usage": { "inputTokens": 1900, "outputTokens": 120, "cachedTokens": 0 }
+  }
+}
+```
+`docType` ∈ `invoice, receipt, id_document, business_card, form, letter, contract, statement, other`; `subtype` (id_document only) ∈ `passport, aadhaar, pan, driver_license, voter_id, business_license, other_id`. Each type's fields are listed in `ai-service/internal/extract/schema.go`. A missing field means it was not found; values are never guessed (an ambiguous date is omitted).
+
+**Errors:** 400 `INVALID_INPUT` (no input, a non-data-URL or unsupported image type, bad base64), 401, 413 `AI_REQUEST_TOO_LARGE` (over 2 images or 1.5 MB, or the page/char limits), 429 `AI_QUOTA_EXCEEDED`, 503 `AI_UNAVAILABLE`.

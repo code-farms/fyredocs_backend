@@ -98,7 +98,7 @@ func TestBuildKeepsDocumentInStablePrefix(t *testing.T) {
 	sum, _ := Lookup("summarize")
 	a := Build(ask, "ask", in)
 	s := Build(sum, "summarize", in)
-	if a[0] != s[0] || a[0].Role != "system" || !strings.Contains(a[0].Content, "<<page 2>>") {
+	if a[0].Content != s[0].Content || a[0].Role != "system" || !strings.Contains(a[0].Content, "<<page 2>>") {
 		t.Fatalf("system prefix differs across ops or lacks the document: %+v", a[0])
 	}
 	if len(a) != 4 || a[1].Content != "hi" || a[2].Role != "assistant" {

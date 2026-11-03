@@ -22,10 +22,40 @@ const (
 )
 
 // Message is one chat message. Role is "system", "user" or "assistant" —
-// the only roles every OpenAI-compatible provider accepts.
+// the only roles every OpenAI-compatible provider accepts. Images (user
+// messages only) travel as the standard image_url content part.
 type Message struct {
 	Role    string
 	Content string
+	Images  []Image
+}
+
+// Image is one inline image, sent as a data URL.
+type Image struct {
+	// DataURL is "data:image/<jpeg|png|webp>;base64,<data>".
+	DataURL string
+}
+
+// WithoutImages returns req with every image dropped — the text-only
+// fallback for providers or models without vision.
+func (r Request) WithoutImages() Request {
+	msgs := make([]Message, len(r.Messages))
+	for i, m := range r.Messages {
+		m.Images = nil
+		msgs[i] = m
+	}
+	r.Messages = msgs
+	return r
+}
+
+// HasImages reports whether any message carries an image.
+func (r Request) HasImages() bool {
+	for _, m := range r.Messages {
+		if len(m.Images) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Request is a provider-neutral completion request.
@@ -52,9 +82,11 @@ type Client interface {
 }
 
 // Error is a provider failure already classified into an envelope code.
+// Status is the provider's HTTP status when there was one (0 otherwise).
 type Error struct {
 	Code    string
 	Message string
+	Status  int
 }
 
 // Error implements error.

@@ -19,6 +19,7 @@ graph TB
 
         subgraph Routes["Routes"]
             OPS["POST /api/ai/ops/:op<br/>(SSE or JSON)"]
+            EXT["POST /api/ai/extract<br/>(text + ≤2 images, 4 MiB)"]
             HEALTHZ["/healthz · /readyz"]
             METRICSEP["/metrics"]
         end
@@ -28,6 +29,7 @@ graph TB
             SSEW["internal/sse<br/>lazy-commit frame writer"]
             LLM["internal/llm.Compat<br/>OpenAI-compatible stream ·<br/>circuit breaker"]
             QUOTA["internal/quota<br/>atomic reserve → settle"]
+            EXTR["internal/extract<br/>schemas · tolerant parse · normalize"]
             DOCS["internal/doccache<br/>docRef → pages (per user, sliding TTL)"]
         end
 
@@ -39,6 +41,8 @@ graph TB
     GW["api-gateway<br/>/api/ai → :8092"] --> TRACE
     TRACE --> METRICS --> REQID --> AUTH --> REQUSER --> OPS
     OPS --> QUOTA --> USAGE
+    REQUSER --> EXT --> EXTR --> LLM
+    EXT --> QUOTA
     OPS --> CAT --> LLM
     OPS --> SSEW
     LLM -.->|Chat Completions| PROVIDER["Model provider<br/>(any OpenAI-compatible endpoint)"]

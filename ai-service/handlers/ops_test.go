@@ -335,7 +335,7 @@ func TestDocRefFollowUpReusesCachedDocument(t *testing.T) {
 	if rec.Code != 200 || ev[len(ev)-1].DocRef != ref {
 		t.Fatalf("follow-up: %d %s", rec.Code, rec.Body.String())
 	}
-	if f.got.Messages[0] != firstSystem {
+	if f.got.Messages[0].Content != firstSystem.Content {
 		t.Fatal("a ref turn must rebuild a byte-identical document prefix")
 	}
 	if docs.puts != 1 {

@@ -1445,6 +1445,8 @@ services:
       AI_MODEL_FAST: ${AI_MODEL_FAST:-}
       AI_MODEL_SMART: ${AI_MODEL_SMART:-}
       AI_MAX_TOKENS_PARAM: ${AI_MAX_TOKENS_PARAM:-max_tokens}
+      # Image input for /api/ai/extract; false for text-only models.
+      AI_VISION: ${AI_VISION:-true}
       AI_REQUEST_TIMEOUT: ${AI_REQUEST_TIMEOUT:-90s}
       AI_MAX_RETRIES: ${AI_MAX_RETRIES:-1}
       AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-4096}

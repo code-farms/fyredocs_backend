@@ -18,6 +18,8 @@ The **server-side proxy for every AI feature** (mobile Phase 23). It owns the op
 - `internal/llm/`: the `Client` interface, `Usage`, and the classified `Error{Code}`. `Compat` (`compat.go`) is the only implementation: streaming Chat Completions through `github.com/openai/openai-go/v3`, pointed at whatever `AI_BASE_URL` names. It uses `stream_options.include_usage` and falls back to a chars/4 estimate when a provider omits usage. Errors are classified **by HTTP status and wording, never by vendor type**: 413, or a 400 mentioning the context window → `AI_REQUEST_TOO_LARGE`; everything else → `AI_UNAVAILABLE`. A `shared/circuitbreaker` TwoStep trips on provider failures only (not oversize input or client disconnects). With no endpoint or model configured, `New` returns `Unconfigured`.
 - `internal/quota/`: the reserve/settle ledger (below).
 - `internal/doccache/`: the per-user document cache behind `docRef` (below).
+- `internal/extract/`: document understanding (below): doc types, per-type field schemas, the extraction prompt, and a tolerant parser and normalizers.
+- `handlers/extract.go`: `POST /api/ai/extract`.
 - `internal/sse/`: frame writer with **lazy header commit**, so an error before the first delta is still a normal JSON error with its HTTP status.
 - `internal/models/`, `internal/migrations/`: the `ai_usage` ledger.
 
@@ -44,6 +46,7 @@ Health: `GET /healthz`, `GET /readyz` (Postgres only: the provider is deliberate
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/ai/ops/:op` | Run an op. `Accept: text/event-stream` streams SSE frames; otherwise the answer is collected into the envelope. |
+| POST | `/api/ai/extract` | Classify + title + typed fields + tables from page text and/or ≤2 page images (see Document understanding). JSON only, not streamed. |
 | GET | `/api/ai/quota` | Caller's plan, month, limit, used, reserved and remaining tokens, and `resetsAt`, for the app's pre-run cost sheet. |
 
 SSE frames (the shape of the app's `AiEvent`, `fyredocs_app/src/lib/ai/provider.ts`): `{"type":"delta","text"}`, then `{"type":"done","usage":{inputTokens,outputTokens,cachedTokens}}`, or `{"type":"error","code","message"}` if the provider fails mid-stream.
@@ -71,6 +74,21 @@ The cache also pins the document **byte-identically** across turns, which is the
 
 Native PDF input (sending the PDF file itself) is **deliberately not built**. The app already extracts digital PDFs' text on-device and offline, so it removes no pipeline stage. File-input support also differs across OpenAI-compatible providers, which would break the configuration-only provider swap.
 
+### Document understanding (`POST /api/ai/extract`)
+One call does classification, a suggested title and typed field extraction, which is cheaper than three ops. **Input:** page text (≤50 pages, the same limits as ops) and/or up to **2 page images** (JPEG/PNG/WebP data URLs, ≤1.5 MB each, downscaled by the app). Images travel as the standard `image_url` content part.
+- **Doc types:** `invoice, receipt, id_document (subtype passport/aadhaar/pan/driver_license/voter_id/business_license/other_id), business_card, form, letter, contract, statement, other`.
+- **Schemas live in Go** (`internal/extract/schema.go`). The model is asked for JSON in plain text (no JSON mode, for portability). Everything it returns is untrusted:
+  - fields outside the doc type's schema are dropped;
+  - dates become ISO, and an ambiguous `03/04/2026` is **dropped, never guessed**;
+  - amounts accept `₹1,23,456.50` and `1.234,50`;
+  - currency becomes ISO 4217 (`¥` stays unmapped: JPY or CNY);
+  - emails, phones and URLs are validated;
+  - tables are padded or truncated to the header width.
+  - An unparseable reply returns `docType: "other"` with 200, never a 500.
+- **Vision is env-gated:** with `AI_VISION=false`, images are stripped. A provider that rejects image parts with a 400 is retried **once on the text alone**, so a text-only model still extracts from OCR text with no code change. Each image is reserved at a flat 1,500 tokens; settle records the real usage.
+- **PII posture:** extracted values (ID numbers, names, addresses) are never logged, cached or persisted server-side. The `ai.op.completed` event for extract carries the **doc type only**, and the result goes back to the device.
+- **Gateway:** the route has its own 4 MiB body cap. The `/api/ai/extract` prefix is more specific than `/api/ai`, so every other AI op keeps 1 MiB.
+
 ## Quota
 Per user and per UTC month. Plan limits are `AI_QUOTA_FREE_TOKENS` / `AI_QUOTA_PRO_TOKENS`; unknown plans get the free limit, as the gateway rate limiter does, and 0 disables a plan. Each op **reserves its worst case** (estimated input + the output cap) in a single `INSERT … ON CONFLICT … DO UPDATE … WHERE used + held + new <= limit` statement. The check and the increment are atomic, so concurrent requests cannot jointly overrun. After the stream the op **settles** to the provider's real usage (input + output count; cached tokens are recorded for visibility) on a context detached from the client, so a disconnect cannot leak the hold. A failure before any output settles at zero; a failure after output was streamed is charged by estimate. Known gap: a process crash between reserve and settle leaks that hold until the month rolls over.
 
@@ -97,6 +115,7 @@ Each completed op publishes `analytics.events.ai.op.completed` (`toolType` = op,
 | AI_MAX_OUTPUT_TOKENS | 4096 | Output cap per op |
 | AI_QUOTA_FREE_TOKENS / AI_QUOTA_PRO_TOKENS | 300000 / 5000000 | Monthly per-user token limits |
 | AI_DOC_CACHE_TTL | 30m | Sliding TTL of the `docRef` document cache |
+| AI_VISION | true | Allow image input for extract; false for text-only models |
 | TRUSTED_PROXIES, OTEL_EXPORTER_OTLP_ENDPOINT | — | Standard |
 
 ## Gateway / Deployment
