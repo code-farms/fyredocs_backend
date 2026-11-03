@@ -17,6 +17,7 @@ import (
 
 	"ai-service/internal/llm"
 	"ai-service/internal/ops"
+	"ai-service/internal/quota"
 	"ai-service/internal/sse"
 )
 
@@ -28,10 +29,22 @@ const maxBodyBytes = 1 << 20
 // boot without JetStream); a publish failure is logged and never fails the op.
 type Publisher func(ctx context.Context, event queue.AnalyticsEvent) error
 
-// Ops serves POST /api/ai/ops/:op.
+// QuotaGate is the ledger seam (quota.Ledger in production). Nil disables
+// metering — tests only; main always wires the ledger.
+type QuotaGate interface {
+	Reserve(ctx context.Context, userID, plan string, tokens int64) (quota.Reservation, error)
+	Settle(ctx context.Context, r quota.Reservation, u llm.Usage) error
+	Status(ctx context.Context, userID, plan string) (quota.Status, error)
+}
+
+// defaultMaxTokens is the output cap assumed for reservations when none is set.
+const defaultMaxTokens = 4096
+
+// Ops serves POST /api/ai/ops/:op and GET /api/ai/quota.
 type Ops struct {
 	LLM       llm.Client
 	Publish   Publisher
+	Quota     QuotaGate
 	MaxTokens int
 }
 
@@ -127,13 +140,22 @@ func (h *Ops) Run(c *gin.Context) {
 	started := time.Now()
 
 	var (
-		usage llm.Usage
-		err   error
-		text  strings.Builder
+		usage    llm.Usage
+		err      error
+		text     strings.Builder
+		outChars int
 	)
+	if h.Quota != nil {
+		settle, ok := h.reserve(c, req)
+		if !ok {
+			return
+		}
+		defer func() { settle(chargeable(usage, err, req, outChars)) }()
+	}
 	if streaming {
 		w := sse.New(c.Writer)
 		usage, err = h.LLM.Stream(ctx, req, func(delta string) error {
+			outChars += len([]rune(delta))
 			return w.Send(Event{Type: "delta", Text: delta})
 		})
 		if err != nil {
@@ -149,6 +171,7 @@ func (h *Ops) Run(c *gin.Context) {
 		_ = w.Send(Event{Type: "done", Usage: &usage})
 	} else {
 		usage, err = h.LLM.Stream(ctx, req, func(delta string) error {
+			outChars += len([]rune(delta))
 			text.WriteString(delta)
 			return nil
 		})
@@ -200,4 +223,67 @@ func (h *Ops) recordCompleted(c *gin.Context, op string, tier llm.Tier, usage ll
 	}); err != nil {
 		slog.WarnContext(ctx, "ai analytics publish failed", "op", op, "error", err)
 	}
+}
+
+// reserve holds the request's worst case (estimated input + output cap)
+// against the caller's quota and returns the settle func. On refusal it has
+// already written the response. A ledger failure fails CLOSED with
+// AI_UNAVAILABLE: answering without metering would spend provider money no
+// limit accounts for.
+func (h *Ops) reserve(c *gin.Context, req llm.Request) (func(llm.Usage), bool) {
+	auth, _ := authverify.GetGinAuth(c)
+	maxOut := req.MaxTokens
+	if maxOut <= 0 {
+		maxOut = defaultMaxTokens
+	}
+	estimate := int64(llm.EstimateTokens(req.Messages) + maxOut)
+	r, err := h.Quota.Reserve(c.Request.Context(), auth.UserID, auth.Plan, estimate)
+	if errors.Is(err, quota.ErrExceeded) {
+		response.Err(c, http.StatusTooManyRequests, response.CodeAIQuotaExceeded, "AI quota exceeded for this period.")
+		return nil, false
+	}
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "ai quota reserve failed", "error", err)
+		response.Err(c, http.StatusServiceUnavailable, response.CodeAIUnavailable, "The AI service is unavailable right now.")
+		return nil, false
+	}
+	return func(u llm.Usage) {
+		// Detached: settle must run even when the client disconnected, or
+		// the hold would leak until the month rolls over.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 5*time.Second)
+		defer cancel()
+		if err := h.Quota.Settle(ctx, r, u); err != nil {
+			slog.ErrorContext(ctx, "ai quota settle failed", "subject", r.Subject, "error", err)
+		}
+	}, true
+}
+
+// chargeable is the usage to record. A failure after output was streamed
+// still cost the provider call, so it is charged by estimate when the
+// provider reported nothing; a failure before any output charges nothing.
+func chargeable(u llm.Usage, err error, req llm.Request, outChars int) llm.Usage {
+	if err == nil || u.InputTokens > 0 || u.OutputTokens > 0 {
+		return u
+	}
+	if outChars == 0 {
+		return llm.Usage{}
+	}
+	return llm.Usage{InputTokens: llm.EstimateTokens(req.Messages), OutputTokens: (outChars + 3) / 4}
+}
+
+// GetQuota serves GET /api/ai/quota: the caller's plan limit, usage and reset
+// time for the current month, for the app's pre-run cost sheet.
+func (h *Ops) GetQuota(c *gin.Context) {
+	if h.Quota == nil {
+		response.Err(c, http.StatusServiceUnavailable, response.CodeAIUnavailable, "AI quota is not available.")
+		return
+	}
+	auth, _ := authverify.GetGinAuth(c)
+	st, err := h.Quota.Status(c.Request.Context(), auth.UserID, auth.Plan)
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "ai quota status failed", "error", err)
+		response.Err(c, http.StatusServiceUnavailable, response.CodeAIUnavailable, "AI quota is not available.")
+		return
+	}
+	response.OK(c, "OK", st)
 }

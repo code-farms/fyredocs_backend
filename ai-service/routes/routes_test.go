@@ -18,6 +18,7 @@ func TestSetupRouterRegistersRoutes(t *testing.T) {
 		"/healthz":        http.MethodGet,
 		"/readyz":         http.MethodGet,
 		"/api/ai/ops/:op": http.MethodPost,
+		"/api/ai/quota":   http.MethodGet,
 	}
 	got := map[string]string{}
 	for _, ri := range r.Routes() {

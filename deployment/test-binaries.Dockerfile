@@ -8,7 +8,7 @@
 # image (see docs/developer/architecture/testing-strategy.md).
 #
 # Build + run via: make test-binaries
-FROM golang:1.25-alpine
+FROM golang:1.26-alpine
 
 RUN apk add --no-cache \
     ca-certificates \

@@ -5960,7 +5960,7 @@
     },
     {
       "name": "15. AI",
-      "description": "ai-service (opt-in `ai` compose profile). Sign-in required; guests get 401. Until a model provider is configured every op returns 503 AI_UNAVAILABLE.",
+      "description": "ai-service (opt-in `ai` compose profile). Sign-in required; guests get 401. Provider is env-only (AI_BASE_URL/AI_API_KEY/AI_MODEL_*); unset \u2192 503 AI_UNAVAILABLE. Exhausted monthly quota \u2192 429 AI_QUOTA_EXCEEDED.",
       "item": [
         {
           "name": "Summarize (SSE stream)",
@@ -6117,6 +6117,26 @@
               ]
             },
             "description": "Plain Q:/A: lines, parsed by the app."
+          },
+          "response": []
+        },
+        {
+          "name": "Get AI quota",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/ai/quota",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "ai",
+                "quota"
+              ]
+            },
+            "description": "Plan, month, limit/used/reserved/remaining tokens, resetsAt."
           },
           "response": []
         }

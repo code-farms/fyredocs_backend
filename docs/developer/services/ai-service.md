@@ -1,7 +1,7 @@
 # AI Service
 
 ## Service Responsibility
-The **server-side proxy for every AI feature** (mobile Phase 23). It owns the op catalog, the prompt templates, input limits and (with the provider client) the per-user token quota. It talks to the model provider over the **OpenAI-compatible Chat Completions API**, so the provider and the models are configuration, not code. No client ever holds a provider key: a key in a mobile bundle or device keystore is an extractable key.
+The **server-side proxy for every AI feature** (mobile Phase 23). It owns the op catalog, the prompt templates, input limits and the per-user token quota. It talks to the model provider over the **OpenAI-compatible Chat Completions API**, so the provider and the models are configuration, not code. No client ever holds a provider key: a key in a mobile bundle or device keystore is an extractable key.
 
 ## Design Constraints
 - Independent microservice: own schema (`ai_usage`), own module (`ai-service`), no cross-service DB access or shared models.
@@ -15,7 +15,8 @@ The **server-side proxy for every AI feature** (mobile Phase 23). It owns the op
 - `main.go`: config/logger/telemetry, DB connect + migrate, NATS (publish-only, **non-fatal**: analytics is disabled with a warning rather than failing AI answers), Redis denylist, gin + metrics, graceful shutdown. Port `8092`, `streaming=true` server timeouts.
 - `handlers/ops.go`: `Ops.Run` validates, builds the prompt and streams. `RequireUser` gates `/api/ai`.
 - `internal/ops/`: the op catalog (op → model tier + task template), input limits, `FormatDocument` (1-based `<<page N>>` markers) and `Build`.
-- `internal/llm/`: the `Client` interface, `Usage`, and the classified `Error{Code}`. `Unconfigured` (the current client) always returns `AI_UNAVAILABLE`.
+- `internal/llm/`: the `Client` interface, `Usage`, and the classified `Error{Code}`. `Compat` (`compat.go`) is the only implementation: streaming Chat Completions through `github.com/openai/openai-go/v3`, pointed at whatever `AI_BASE_URL` names. It uses `stream_options.include_usage` and falls back to a chars/4 estimate when a provider omits usage. Errors are classified **by HTTP status and wording, never by vendor type**: 413, or a 400 mentioning the context window → `AI_REQUEST_TOO_LARGE`; everything else → `AI_UNAVAILABLE`. A `shared/circuitbreaker` TwoStep trips on provider failures only (not oversize input or client disconnects). With no endpoint or model configured, `New` returns `Unconfigured`.
+- `internal/quota/`: the reserve/settle ledger (below).
 - `internal/sse/`: frame writer with **lazy header commit**, so an error before the first delta is still a normal JSON error with its HTTP status.
 - `internal/models/`, `internal/migrations/`: the `ai_usage` ledger.
 
@@ -42,6 +43,7 @@ Health: `GET /healthz`, `GET /readyz` (Postgres only: the provider is deliberate
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/ai/ops/:op` | Run an op. `Accept: text/event-stream` streams SSE frames; otherwise the answer is collected into the envelope. |
+| GET | `/api/ai/quota` | Caller's plan, month, limit, used, reserved and remaining tokens, and `resetsAt`, for the app's pre-run cost sheet. |
 
 SSE frames (the shape of the app's `AiEvent`, `fyredocs_app/src/lib/ai/provider.ts`): `{"type":"delta","text"}`, then `{"type":"done","usage":{inputTokens,outputTokens,cachedTokens}}`, or `{"type":"error","code","message"}` if the provider fails mid-stream.
 
@@ -52,11 +54,16 @@ SSE frames (the shape of the app's `AiEvent`, `fyredocs_app/src/lib/ai/provider.
 | unknown op | 404 `NOT_FOUND` |
 | bad JSON / missing field | 400 `INVALID_INPUT` |
 | over limits, or the model's context | 413 `AI_REQUEST_TOO_LARGE` |
+| month's quota used | 429 `AI_QUOTA_EXCEEDED` (the provider is never called) |
+| quota ledger unreachable | 503 `AI_UNAVAILABLE`: **fails closed**, since answering unmetered spends money no limit accounts for |
 | provider unconfigured, down, or unclassified | 503 `AI_UNAVAILABLE` (the cause is logged, **never** sent: provider error bodies can echo request content or account details) |
 | failure after the first delta | SSE `error` frame (the 200 is already on the wire) |
 
 ## DB Schema (own Postgres)
 - **ai_usage**: `subject` (text, `user:<id>` today), `period` (UTC YYYYMM), `input_tokens`, `output_tokens`, `cached_tokens`, `reserved_tokens`, `updated_at`; PK `(subject, period)`. `subject` is text so per-org quota (`org:<id>`) needs no schema change once the gateway carries an org identity. Versioned migrations (`goose_db_version_ai_service`) are the authority; see [schema-migrations.md](../architecture/schema-migrations.md).
+
+## Quota
+Per user and per UTC month. Plan limits are `AI_QUOTA_FREE_TOKENS` / `AI_QUOTA_PRO_TOKENS`; unknown plans get the free limit, as the gateway rate limiter does, and 0 disables a plan. Each op **reserves its worst case** (estimated input + the output cap) in a single `INSERT … ON CONFLICT … DO UPDATE … WHERE used + held + new <= limit` statement. The check and the increment are atomic, so concurrent requests cannot jointly overrun. After the stream the op **settles** to the provider's real usage (input + output count; cached tokens are recorded for visibility) on a context detached from the client, so a disconnect cannot leak the hold. A failure before any output settles at zero; a failure after output was streamed is charged by estimate. Known gap: a process crash between reserve and settle leaks that hold until the month rolls over.
 
 ## Analytics
 Each completed op publishes `analytics.events.ai.op.completed` (`toolType` = op, `planName`, metadata `{tier, inputTokens, outputTokens, cachedTokens, durationMs}`). **It never carries document text or answers.** A publish failure is logged and never fails the op.
@@ -71,7 +78,15 @@ Each completed op publishes `analytics.events.ai.op.completed` (`toolType` = op,
 | JWT_HS256_SECRET, JWT_ALLOWED_ALGS, JWT_ISSUER, JWT_AUDIENCE, JWT_CLOCK_SKEW | — | Local token verification |
 | AUTH_DENYLIST_ENABLED | true | Check revoked tokens |
 | AUTH_TRUST_GATEWAY_HEADERS | false | **Keep false** — see Design Constraints |
+| AI_BASE_URL | — | OpenAI-compatible endpoint (empty → every op `AI_UNAVAILABLE`) |
+| AI_API_KEY | — | Provider key (may be empty for local servers like Ollama) |
+| AI_MODEL_FAST | — | Model for summarize/translate/keyPoints/actionItems/notes/flashcards |
+| AI_MODEL_SMART | = FAST | Model for ask/explain/rewrite |
+| AI_MAX_TOKENS_PARAM | max_tokens | `max_completion_tokens` for newer OpenAI reasoning models |
+| AI_REQUEST_TIMEOUT | 90s | Per provider request |
+| AI_MAX_RETRIES | 1 | Provider retries (429/5xx) |
 | AI_MAX_OUTPUT_TOKENS | 4096 | Output cap per op |
+| AI_QUOTA_FREE_TOKENS / AI_QUOTA_PRO_TOKENS | 300000 / 5000000 | Monthly per-user token limits |
 | TRUSTED_PROXIES, OTEL_EXPORTER_OTLP_ENDPOINT | — | Standard |
 
 ## Gateway / Deployment
@@ -83,5 +98,4 @@ Each completed op publishes `analytics.events.ai.op.completed` (`toolType` = op,
 Stateless apart from the ledger: replicas scale horizontally. Each op holds a DB connection only for quota reads and writes, never across the model stream, so the pool is small (10). Long streams hold an HTTP connection (WriteTimeout unset), so capacity is bound by concurrent streams and the provider's rate limits, not CPU.
 
 ## Roadmap (Phase 23)
-- **Chunk C:** the OpenAI-compatible client (`AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL_FAST`, `AI_MODEL_SMART`) behind `shared/circuitbreaker`, plus the reserve/settle quota ledger and `GET /api/ai/quota`.
 - **Chunk D:** optional native-PDF input (`AI_PDF_INPUT`), cached-token accounting, and Ask session document cache.

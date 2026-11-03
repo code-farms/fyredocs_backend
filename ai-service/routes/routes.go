@@ -19,5 +19,6 @@ func SetupRouter(r *gin.Engine, opsHandler *handlers.Ops) {
 	ai.Use(handlers.RequireUser())
 	{
 		ai.POST("/ops/:op", opsHandler.Run)
+		ai.GET("/quota", opsHandler.GetQuota)
 	}
 }

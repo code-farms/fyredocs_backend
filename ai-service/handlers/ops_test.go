@@ -17,6 +17,7 @@ import (
 	"fyredocs/shared/response"
 
 	"ai-service/internal/llm"
+	"ai-service/internal/quota"
 )
 
 // fakeLLM streams fixed deltas, optionally failing before or after them.
@@ -195,5 +196,97 @@ func TestRunRoutesAskToSmartTier(t *testing.T) {
 	do(newRouter(&Ops{LLM: f}, signedIn), "ask", `{"pages":[{"index":0,"text":"t"}],"question":"why"}`, true)
 	if f.got.Tier != llm.TierSmart {
 		t.Fatalf("tier %q", f.got.Tier)
+	}
+}
+
+// fakeQuota records reservations and settlements.
+type fakeQuota struct {
+	reserveErr error
+	reserved   []int64
+	settled    []llm.Usage
+	statusErr  error
+}
+
+func (q *fakeQuota) Reserve(_ context.Context, userID, plan string, tokens int64) (quota.Reservation, error) {
+	q.reserved = append(q.reserved, tokens)
+	return quota.Reservation{Subject: quota.Subject(userID), Tokens: tokens}, q.reserveErr
+}
+
+func (q *fakeQuota) Settle(_ context.Context, _ quota.Reservation, u llm.Usage) error {
+	q.settled = append(q.settled, u)
+	return nil
+}
+
+func (q *fakeQuota) Status(_ context.Context, _, plan string) (quota.Status, error) {
+	return quota.Status{Plan: plan, LimitTokens: 100, UsedTokens: 40, RemainingTokens: 60}, q.statusErr
+}
+
+func TestRunReservesWorstCaseThenSettlesActual(t *testing.T) {
+	q := &fakeQuota{}
+	rec := do(newRouter(&Ops{LLM: &fakeLLM{deltas: []string{"a"}}, Quota: q, MaxTokens: 100}, signedIn), "summarize", summarizeBody, true)
+	if rec.Code != 200 || len(q.reserved) != 1 || len(q.settled) != 1 {
+		t.Fatalf("code=%d reserved=%v settled=%v", rec.Code, q.reserved, q.settled)
+	}
+	if q.reserved[0] <= 100 {
+		t.Fatalf("reservation %d must cover input estimate + output cap", q.reserved[0])
+	}
+	if q.settled[0] != (llm.Usage{InputTokens: 10, OutputTokens: 1, CachedTokens: 4}) {
+		t.Fatalf("settled %+v", q.settled[0])
+	}
+}
+
+func TestRunQuotaRefusals(t *testing.T) {
+	f := &fakeLLM{deltas: []string{"a"}}
+	rec := do(newRouter(&Ops{LLM: f, Quota: &fakeQuota{reserveErr: quota.ErrExceeded}}, signedIn), "summarize", summarizeBody, true)
+	if rec.Code != http.StatusTooManyRequests || errCode(t, rec) != response.CodeAIQuotaExceeded {
+		t.Fatalf("exceeded: %d %s", rec.Code, rec.Body.String())
+	}
+	if f.got.Messages != nil {
+		t.Fatal("provider called despite exhausted quota")
+	}
+	rec = do(newRouter(&Ops{LLM: f, Quota: &fakeQuota{reserveErr: errors.New("db down")}}, signedIn), "summarize", summarizeBody, true)
+	if rec.Code != http.StatusServiceUnavailable || errCode(t, rec) != response.CodeAIUnavailable {
+		t.Fatalf("ledger failure must fail closed: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRunChargesPartialOutputOnFailure(t *testing.T) {
+	q := &fakeQuota{}
+	f := &fakeLLM{deltas: []string{"12345678"}, err: &llm.Error{Code: response.CodeAIUnavailable}, failAfter: true}
+	do(newRouter(&Ops{LLM: f, Quota: q}, signedIn), "summarize", summarizeBody, true)
+	if len(q.settled) != 1 || q.settled[0].OutputTokens != 2 || q.settled[0].InputTokens == 0 {
+		t.Fatalf("partial output must be charged by estimate: %+v", q.settled)
+	}
+
+	q = &fakeQuota{}
+	do(newRouter(&Ops{LLM: llm.Unconfigured{}, Quota: q}, signedIn), "summarize", summarizeBody, true)
+	if len(q.settled) != 1 || q.settled[0] != (llm.Usage{}) {
+		t.Fatalf("a failure before output must release the hold at zero cost: %+v", q.settled)
+	}
+}
+
+func TestGetQuota(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	route := func(h *Ops, auth *authverify.AuthContext) *httptest.ResponseRecorder {
+		r := newRouter(h, auth)
+		r.GET("/api/ai/quota", func(c *gin.Context) {
+			if auth != nil {
+				authverify.SetGinAuth(c, *auth)
+			}
+			h.GetQuota(c)
+		})
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ai/quota", nil))
+		return rec
+	}
+	rec := route(&Ops{Quota: &fakeQuota{}}, signedIn)
+	var env struct {
+		Data quota.Status `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); rec.Code != 200 || err != nil || env.Data.RemainingTokens != 60 || env.Data.Plan != "free" {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := route(&Ops{Quota: &fakeQuota{statusErr: errors.New("x")}}, signedIn); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status failure: %d", rec.Code)
 	}
 }

@@ -4312,6 +4312,26 @@ paths:
           description: AI_QUOTA_EXCEEDED
         '503':
           description: AI_UNAVAILABLE
+  /api/ai/quota:
+    get:
+      tags:
+      - AI
+      summary: Caller's AI token quota for the current UTC month
+      operationId: getAiQuota
+      security:
+      - BearerAuth: []
+      - CookieAuth: []
+      responses:
+        '200':
+          description: '{plan, period, limitTokens, usedTokens, reservedTokens, remainingTokens, resetsAt}'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        '401':
+          description: AUTH_UNAUTHORIZED (guest or signed out)
+        '503':
+          description: AI_UNAVAILABLE (ledger unreachable)
   /api/notifications:
     get:
       tags:

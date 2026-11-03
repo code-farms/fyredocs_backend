@@ -9,6 +9,7 @@ sequenceDiagram
     participant App as Mobile app (apiStream)
     participant GW as api-gateway
     participant AI as ai-service
+    participant Q as ai_usage (Postgres)
     participant P as Model provider
     participant N as NATS (ANALYTICS)
 
@@ -16,6 +17,10 @@ sequenceDiagram
     GW->>AI: proxy (FlushInterval -1)
     AI->>AI: verify JWT · RequireUser · validate limits
     AI->>AI: Build: [system+document][task]
+    AI->>Q: reserve input estimate + output cap<br/>(atomic: only if used+held+new ≤ limit)
+    alt over limit
+        AI-->>App: 429 AI_QUOTA_EXCEEDED (provider not called)
+    end
     AI->>P: chat completion (stream)
     loop each token chunk
         P-->>AI: delta
@@ -23,6 +28,7 @@ sequenceDiagram
     end
     P-->>AI: usage
     AI-->>App: data: {"type":"done","usage":{…}}
+    AI->>Q: settle: release hold, add real usage
     AI-)N: ai.op.completed {op, tier, tokens}
 ```
 

@@ -50,5 +50,28 @@ A provider failure after the first delta arrives as `data: {"type":"error","code
 | 401 | `AUTH_UNAUTHORIZED` | guest or not signed in |
 | 404 | `NOT_FOUND` | unknown op |
 | 413 | `AI_REQUEST_TOO_LARGE` | over the limits above, or the model's context |
-| 429 | `AI_QUOTA_EXCEEDED` | period quota used (with the quota ledger, chunk C) |
+| 429 | `AI_QUOTA_EXCEEDED` | this month's token quota is used (the provider is not called) |
 | 503 | `AI_UNAVAILABLE` | provider not configured, down, or breaker open |
+
+---
+
+## GET /api/ai/quota
+The caller's AI token quota for the current UTC month. Each op reserves its worst case (input estimate + output cap) before running, so `remainingTokens` already excludes in-flight holds.
+
+**200 OK**
+```json
+{
+  "success": true,
+  "message": "OK",
+  "data": {
+    "plan": "free",
+    "period": "2026-11",
+    "limitTokens": 300000,
+    "usedTokens": 41250,
+    "reservedTokens": 0,
+    "remainingTokens": 258750,
+    "resetsAt": "2026-12-01T00:00:00Z"
+  }
+}
+```
+**401** `AUTH_UNAUTHORIZED` for guests; **503** `AI_UNAVAILABLE` if the ledger is unreachable.

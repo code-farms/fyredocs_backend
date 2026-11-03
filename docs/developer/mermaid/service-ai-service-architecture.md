@@ -26,7 +26,8 @@ graph TB
         subgraph Core["Op pipeline"]
             CAT["internal/ops<br/>catalog · templates · limits ·<br/>FormatDocument · Build"]
             SSEW["internal/sse<br/>lazy-commit frame writer"]
-            LLM["internal/llm.Client<br/>(Unconfigured → AI_UNAVAILABLE;<br/>OpenAI-compatible in chunk C)"]
+            LLM["internal/llm.Compat<br/>OpenAI-compatible stream ·<br/>circuit breaker"]
+            QUOTA["internal/quota<br/>atomic reserve → settle"]
         end
 
         subgraph Models["internal/models (GORM)"]
@@ -36,6 +37,7 @@ graph TB
 
     GW["api-gateway<br/>/api/ai → :8092"] --> TRACE
     TRACE --> METRICS --> REQID --> AUTH --> REQUSER --> OPS
+    OPS --> QUOTA --> USAGE
     OPS --> CAT --> LLM
     OPS --> SSEW
     LLM -.->|Chat Completions| PROVIDER["Model provider<br/>(any OpenAI-compatible endpoint)"]

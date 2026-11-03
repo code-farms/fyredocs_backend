@@ -1,6 +1,5 @@
 // Command ai-service is the server-side proxy for every AI feature. It owns
-// the prompt templates, input limits and (from Phase 23 chunk C) the token
-// quota, and talks to the model provider over the OpenAI-compatible wire
+// the prompt templates, input limits and the per-user token quota, and talks to the model provider over the OpenAI-compatible wire
 // protocol — so the provider is configuration, and no key ever ships in a
 // client.
 package main
@@ -29,6 +28,7 @@ import (
 	"ai-service/handlers"
 	"ai-service/internal/llm"
 	"ai-service/internal/models"
+	"ai-service/internal/quota"
 	"ai-service/routes"
 )
 
@@ -80,10 +80,10 @@ func main() {
 		slog.Warn("Token denylist disabled")
 	}
 
-	// Chunk C replaces this with the OpenAI-compatible client built from
-	// AI_BASE_URL / AI_API_KEY / AI_MODEL_*. Until then every op answers
-	// AI_UNAVAILABLE, which the app already renders as a specific sentence.
-	var client llm.Client = llm.Unconfigured{}
+	// The provider is pure configuration (AI_BASE_URL / AI_API_KEY /
+	// AI_MODEL_*): any OpenAI-compatible endpoint. Unset → every op answers
+	// AI_UNAVAILABLE instead of the service refusing to boot.
+	client := llm.New(llm.ConfigFromEnv())
 
 	r := gin.New()
 	r.Use(response.GinRecovery())
@@ -104,6 +104,7 @@ func main() {
 	routes.SetupRouter(r, &handlers.Ops{
 		LLM:       client,
 		Publish:   publish,
+		Quota:     &quota.Ledger{DB: models.DB, Limits: quota.LimitsFromEnv()},
 		MaxTokens: config.GetEnvInt("AI_MAX_OUTPUT_TOKENS", 4096),
 	})
 

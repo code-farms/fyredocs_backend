@@ -1436,8 +1436,20 @@ services:
       NATS_URL: ${NATS_URL:-nats://nats:4222}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
 
-      # Model output cap per op (tokens).
+      # Model provider: any OpenAI-compatible endpoint, chosen purely by env
+      # (see .env.example for Gemini/OpenAI/Groq/OpenRouter/Ollama blocks).
+      # Empty AI_BASE_URL / AI_MODEL_FAST → every op answers AI_UNAVAILABLE.
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL_FAST: ${AI_MODEL_FAST:-}
+      AI_MODEL_SMART: ${AI_MODEL_SMART:-}
+      AI_MAX_TOKENS_PARAM: ${AI_MAX_TOKENS_PARAM:-max_tokens}
+      AI_REQUEST_TIMEOUT: ${AI_REQUEST_TIMEOUT:-90s}
+      AI_MAX_RETRIES: ${AI_MAX_RETRIES:-1}
       AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-4096}
+      # Monthly per-user token quota (input + output); 0 disables a plan.
+      AI_QUOTA_FREE_TOKENS: ${AI_QUOTA_FREE_TOKENS:-300000}
+      AI_QUOTA_PRO_TOKENS: ${AI_QUOTA_PRO_TOKENS:-5000000}
 
       # JWT Configuration — this service verifies tokens itself rather than
       # trusting gateway headers, so it needs the same signing config.
