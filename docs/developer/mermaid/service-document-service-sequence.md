@@ -162,3 +162,40 @@ sequenceDiagram
     end
     DS-->>Client: 200
 ```
+
+## AI Extraction, Content Hash & Duplicates (web roadmap D1)
+
+```mermaid
+sequenceDiagram
+    participant Client as Web / Mobile
+    participant DS as document-service
+    participant PG as Postgres
+    participant S3 as MinIO/S3
+
+    Client->>DS: POST /api/documents {storagePath, docType?, extraction?, simhash?}
+    DS->>DS: validate AI fields (docType allowlist, id_document → docType only)
+    DS->>PG: INSERT documents
+    DS-->>Client: 201
+    par background (≤4 concurrent, 2 min each)
+        DS->>S3: GetObject(outputs, storagePath) — streamed
+        DS->>DS: SHA-256
+        DS->>PG: UPDATE content_sha256 (UpdateColumn — updated_at untouched)
+    end
+
+    Client->>DS: PUT /api/documents/:id/extraction {docType, extraction}
+    DS->>PG: UPDATE doc_type, extraction (owner/org scoped)
+    DS-->>Client: 200
+
+    Client->>DS: GET /api/documents/:id/duplicates
+    DS->>PG: load row (scoped)
+    alt content_sha256 known
+        DS->>PG: SELECT same content_sha256 in scope (≤10)
+    else not hashed yet
+        DS->>DS: HashDocumentAsync (pending: true)
+    end
+    opt simhash set
+        DS->>PG: SELECT fingerprinted rows in scope (≤5000)
+        DS->>DS: Hamming ≤ 3, nearest first (≤10)
+    end
+    DS-->>Client: 200 {exact, near, pending}
+```

@@ -32,6 +32,8 @@ func SetupRouter(r *gin.Engine) {
 			docs.POST("", handlers.CreateDocument)
 			docs.GET("/:id", handlers.GetDocument)
 			docs.GET("/:id/download", handlers.DownloadDocument)
+			docs.GET("/:id/duplicates", handlers.GetDuplicates)
+			docs.PUT("/:id/extraction", handlers.PutExtraction)
 			docs.PATCH("/:id", handlers.UpdateDocument)
 			docs.DELETE("/:id", handlers.DeleteDocument)
 			docs.POST("/:id/restore", handlers.RestoreDocument)

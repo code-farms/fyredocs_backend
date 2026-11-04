@@ -15,7 +15,7 @@ Since Phase 9 (cloud backup & sync) the service also owns the **document-side li
 ## Internal Architecture
 - `main.go` — config/logger/telemetry init, DB connect + migrate, gin with metrics/trace/request-id middleware, `/metrics`, graceful shutdown. Port `8089` (env `PORT`). Also initializes the **object-storage client** (Phase 9) — see below.
 - `routes/routes.go` — health + the `/api` group guarded by `RequireUser()`.
-- `handlers/` — `auth.go` (identity + RBAC helpers), `documents.go`, `folders.go`, `tags.go`, `exports.go`, `hints.go` (workspace hints), `health.go`, `storage.go` (the `ObjectStore` interface + boot-time injection).
+- `handlers/` — `auth.go` (identity + RBAC helpers), `documents.go`, `extraction.go` (AI extraction + duplicates), `hashing.go` (background content SHA-256), `folders.go`, `tags.go`, `exports.go`, `hints.go` (workspace hints), `health.go`, `storage.go` (the `ObjectStore` interface + boot-time injection).
 
 ### Object storage client (Phase 9)
 
@@ -24,7 +24,7 @@ Since Phase 9 (cloud backup & sync) the service also owns the **document-side li
 - **Utility package, not shared business logic.** `shared/storage` is a utility package by charter (it "carries NO business logic"), so importing it here does not breach the no-shared-business-logic rule — the same way every worker imports it. The upload protocol (multipart presign, MIME sniff, the `/api/backup` copy) remains job-service's alone; document-service only presigns GETs and removes backup objects.
 - **NON-fatal when unconfigured.** Unlike job-service (which fails fast without S3), a missing/invalid S3 config here logs a warning and boots anyway: document CRUD must never depend on storage availability. With a nil store, `GET /api/documents/:id/download` degrades to a 500 `SERVER_ERROR` ("Downloads are unavailable") and a purge deletes the row but leaks the object (logged with the key for manual reclaim).
 
-`handlers/storage.go` defines the narrow `ObjectStore` interface this service actually uses — `BucketOutputs()`, `PresignGet(...)`, `RemoveObject(...)` — so tests inject a fake and the handler surface cannot quietly grow storage dependencies.
+`handlers/storage.go` defines the narrow `ObjectStore` interface this service actually uses — `BucketOutputs()`, `PresignGet(...)`, `RemoveObject(...)`, `GetObject(...)` (streamed for content hashing) — so tests inject a fake and the handler surface cannot quietly grow storage dependencies.
 - `internal/models/` — `database.go` (Connect/Migrate), `document.go`, `folder.go`, `tag.go`, `export.go`, `jobhint.go`.
 - `subscriber/subscriber.go` — **NATS is a hard dependency** (`main.go` fails fast if the connection or subscriber start fails). A durable JetStream consumer `document-job-events` on the `JOBS_EVENTS` stream (filter `jobs.events.>`, `DeliverNew`, explicit ack) finalizes every `JobCompleted` event for an authenticated user into a `documents` row — the server-side counterpart to direct creation, so any completed job becomes a library document regardless of client. Finalize is idempotent via a partial unique index on `(user_id, source_job_id)` (soft-deleted docs are not resurrected), and files the document into an org workspace when a `JobWorkspaceHint` exists.
 
@@ -37,11 +37,13 @@ All `/api/*` routes require a verified caller and are scoped to that user. Reach
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/documents` | List documents. Filters: `status`, `folderId`, `tagId`, full-text `q`, `trashed=true` (Trash view), `updatedSince` (RFC3339 — delta sync); `sort=updated` orders by `updated_at DESC`; paging `page`/`limit` (max 100). Returns `meta` with page/limit/total. |
-| POST | `/api/documents` | Create a document (metadata). Body: `name` (required), `folderId?`, `fileType?`, `mimeType?`, `fileSize?`, `storagePath?`, `status?`, `metadata?`. `storagePath` under `backups/` must sit under the caller's own `backups/{userId}/` prefix (400 otherwise). |
+| GET | `/api/documents` | List documents. Filters: `status`, `folderId`, `tagId`, full-text `q`, `trashed=true` (Trash view), `updatedSince` (RFC3339 — delta sync), `docType` (an extract type, e.g. `receipt`; unknown → 400); `sort=updated` orders by `updated_at DESC`; paging `page`/`limit` (max 100). Returns `meta` with page/limit/total. Rows carry `docType`/`extraction` when saved. |
+| POST | `/api/documents` | Create a document (metadata). Body: `name` (required), `folderId?`, `fileType?`, `mimeType?`, `fileSize?`, `storagePath?`, `status?`, `metadata?`, and the optional AI fields `docType?`, `extraction?`, `simhash?` (validated as below). `storagePath` under `backups/` must sit under the caller's own `backups/{userId}/` prefix (400 otherwise). A `storagePath` starts a background content hash. |
 | GET | `/api/documents/:id` | Get one owned document (with tags). |
 | GET | `/api/documents/:id/download` | 302 to a 5-minute presigned GET for the document's stored bytes (attachment disposition). 404 when the row has no `storage_path`; 500 `SERVER_ERROR` when storage is unconfigured. |
-| PATCH | `/api/documents/:id` | Update `name`/`folderId`/`status`/`metadata`. Empty `folderId` moves to root. |
+| PATCH | `/api/documents/:id` | Update `name`/`folderId`/`status`/`metadata`/`simhash` (16 hex chars; `""` clears). Empty `folderId` moves to root. |
+| PUT | `/api/documents/:id/extraction` | Save the AI extract result (editor+). Body: `docType` (required, allowlist) and `extraction?` (JSON object ≤ 64 KB). `id_document` takes `docType` only — sending details is 400. Replaces any previous one. |
+| GET | `/api/documents/:id/duplicates` | Other live documents in the same scope that are the same file (`exact`, by content SHA-256) or a re-scan (`near`, SimHash within 3 bits, nearest first). Each list ≤ 10. `pending: true` while this document's hash isn't computed yet (one is started). |
 | DELETE | `/api/documents/:id` | Soft-delete (move to Trash). |
 | POST | `/api/documents/:id/restore` | Restore a soft-deleted document from Trash. |
 | DELETE | `/api/documents/:id/permanent` | Permanently delete (hard delete + tag associations). Also deletes the storage object when `storage_path` starts with `backups/` — nothing else sweeps those objects. |
@@ -81,6 +83,14 @@ All `/api/*` routes require a verified caller and are scoped to that user. Reach
 
 Both are backed by the `(user_id, updated_at DESC)` index from migration `00003_updated_at_index.sql` — without it every sync poll would be a per-user sequential scan.
 
+### AI extraction & duplicate detection (web roadmap D1)
+
+**Extraction.** `PUT /api/documents/:id/extraction` (and the optional create fields, used by mobile backup) stores the ai-service extract result so the web can list every receipt (`GET /api/documents?docType=receipt`) and export expenses. `docType` must be one of `invoice, receipt, id_document, business_card, form, letter, contract, statement, other` — the same set as ai-service, kept as this service's own copy by design and enforced again by the `chk_document_doc_type` constraint. **ID documents store `docType` only**: an extraction for `id_document` is rejected, preserving ai-service's guarantee that ID values are never persisted server-side; ID details stay on the device.
+
+**Exact duplicates — content SHA-256.** Computed by this service, never accepted from a client (so a match can't be forged), by streaming the stored object through SHA-256 (`handlers/hashing.go`). It runs in the background after `POST /api/documents` with a `storagePath`, after the finalize subscriber creates a job document, and lazily from the duplicates endpoint for older rows. At most 4 hashes run at once, each bounded to 2 minutes; failures only log (`document hash failed`) and leave the column NULL. The write uses `UpdateColumn`, so hashing never bumps `updated_at` and delta-sync clients don't re-pull hashed rows.
+
+**Near duplicates — SimHash.** The 64-bit text fingerprint is computed by clients that have the text (`fyredocs_app/src/lib/dedupe/simhash.ts`; the web reader sends the same) and sent as 16 hex characters on create or `PATCH`. Re-scans never share bytes but do share words; a Hamming distance ≤ 3 counts as "re-scan of". Matching runs in Go over at most 5,000 fingerprinted rows of the caller's scope.
+
 ### Schema migrations
 
 The schema is applied by **versioned SQL migrations** embedded in the binary
@@ -91,7 +101,7 @@ Postgres advisory lock and recorded in `goose_db_version_document_service`). GOR
 See [schema-migrations.md](../architecture/schema-migrations.md).
 
 ## DB Schema (own Postgres)
-- **documents**: id (uuid v7), user_id, organization_id?, folder_id?, name, file_type, mime_type, file_size, storage_path, thumbnail_path, status (`uploaded|processing|ready|failed`), source_job_id? (links a doc finalized from a completed job), extracted_content, metadata (jsonb), uploaded_at?, processed_at?, created_at, updated_at, deleted_at (soft delete). Plus a generated `search_vector tsvector` over name+extracted_content with a GIN index. Indexes: `(user_id, created_at)`, `(user_id, status, created_at)`, GIN on `search_vector`, a **partial unique index on `(user_id, source_job_id)`** that makes finalize idempotent, and `idx_documents_user_updated` on `(user_id, updated_at DESC)` (migration `00003_updated_at_index.sql`, Phase 9) backing the `updatedSince` filter and `sort=updated` ordering.
+- **documents**: id (uuid v7), user_id, organization_id?, folder_id?, name, file_type, mime_type, file_size, storage_path, thumbnail_path, status (`uploaded|processing|ready|failed`), source_job_id? (links a doc finalized from a completed job), extracted_content, metadata (jsonb), uploaded_at?, processed_at?, created_at, updated_at, deleted_at (soft delete). Plus a generated `search_vector tsvector` over name+extracted_content with a GIN index. Indexes: `(user_id, created_at)`, `(user_id, status, created_at)`, GIN on `search_vector`, a **partial unique index on `(user_id, source_job_id)`** that makes finalize idempotent, and `idx_documents_user_updated` on `(user_id, updated_at DESC)` (migration `00003_updated_at_index.sql`, Phase 9) backing the `updatedSince` filter and `sort=updated` ordering. Migration `00004_extraction_and_fingerprints.sql` adds `doc_type` (CHECK allowlist), `extraction` (jsonb), `content_sha256` (CHECK lowercase 64-hex) and `simhash` (bigint), with a partial `(user_id, doc_type)` index for live typed rows and a partial index on `content_sha256`.
 - **folders**: id, user_id, parent_id? (self-ref tree), name, created_at, updated_at, deleted_at.
 - **tags**: id, user_id, name, color, created_at. Unique `(user_id, name)`.
 - **document_tags**: many2many join (document_id, tag_id), managed by GORM.

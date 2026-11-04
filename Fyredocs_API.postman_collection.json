@@ -4554,7 +4554,7 @@
                 "documents"
               ]
             },
-            "description": "Create a document (metadata only; bytes live in object storage). organizationId is optional (editor+)."
+            "description": "Create a document (metadata only; bytes live in object storage). organizationId is optional (editor+). Optional AI fields (used by mobile backup): docType, extraction (refused for id_document), simhash (16 hex). A storagePath starts a background content SHA-256."
           },
           "response": []
         },
@@ -4608,7 +4608,7 @@
                 "{{document_id}}"
               ]
             },
-            "description": "Update name/folderId/status/metadata. Empty folderId moves to root."
+            "description": "Update name/folderId/status/metadata. Empty folderId moves to root. simhash: 16-hex text fingerprint for near-duplicate detection (\"\" clears)."
           },
           "response": []
         },
@@ -5055,6 +5055,91 @@
             },
             "description": "302-redirects to a 5-minute presigned URL for the document's stored bytes (Phase 22). Only rows with a storagePath (backup documents) have bytes here \u2014 job-era rows 404 and clients fall back to the job download route. Disable 'Automatically follow redirects' to inspect the presigned Location header."
           }
+        },
+        {
+          "name": "Save Document Extraction",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/documents/{{document_id}}/extraction",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "documents",
+                "{{document_id}}",
+                "extraction"
+              ]
+            },
+            "description": "Save the AI extract result (editor+ when org-scoped). docType from the ai-service set; id_document accepts docType only (ID values are never stored server-side). Replaces any previous extraction.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"docType\": \"receipt\",\n  \"extraction\": {\n    \"docType\": \"receipt\",\n    \"confidence\": 0.92,\n    \"title\": \"Cafe Coffee Day\",\n    \"fields\": {\n      \"merchant\": \"Cafe Coffee Day\",\n      \"total\": 240,\n      \"tax\": 12,\n      \"currency\": \"INR\",\n      \"date\": \"2026-10-31\",\n      \"category\": \"food\"\n    },\n    \"tables\": []\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Find Duplicates",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/documents/{{document_id}}/duplicates",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "documents",
+                "{{document_id}}",
+                "duplicates"
+              ]
+            },
+            "description": "Same-file (exact, by server-computed content SHA-256) and re-scan (near, SimHash within 3 bits) documents in the same scope, up to 10 each. pending=true while this document's hash is still being computed."
+          },
+          "response": []
+        },
+        {
+          "name": "List Receipts (docType filter)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/documents?docType=receipt&limit=100",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "documents"
+              ],
+              "query": [
+                {
+                  "key": "docType",
+                  "value": "receipt"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                }
+              ]
+            },
+            "description": "Documents with a saved extraction of this type; the web's expense CSV pages through these."
+          },
+          "response": []
         }
       ]
     },

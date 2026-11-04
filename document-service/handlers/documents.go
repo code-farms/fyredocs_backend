@@ -9,6 +9,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -120,6 +121,11 @@ func ListDocuments(c *gin.Context) {
 		updatedSince = &parsed
 	}
 	sortUpdated := c.Query("sort") == "updated"
+	docType := strings.TrimSpace(c.Query("docType"))
+	if docType != "" && !validDocType(docType) {
+		response.BadRequest(c, response.CodeInvalidInput, "docType is not a known document type.")
+		return
+	}
 
 	// buildQuery returns a fresh, fully-filtered query. Each call builds an
 	// independent *gorm.DB statement, so the count and the page fetch can run
@@ -151,6 +157,9 @@ func ListDocuments(c *gin.Context) {
 		}
 		if updatedSince != nil {
 			q = q.Where("documents.updated_at > ?", *updatedSince)
+		}
+		if docType != "" {
+			q = q.Where("documents.doc_type = ?", docType)
 		}
 		return q
 	}
@@ -204,6 +213,11 @@ type createDocumentReq struct {
 	StoragePath    string         `json:"storagePath" binding:"omitempty,max=1024"`
 	Status         string         `json:"status" binding:"omitempty,oneof=uploaded processing ready failed"`
 	Metadata       datatypes.JSON `json:"metadata"`
+	// Optional AI fields a backup carries along (web roadmap D3): the device's
+	// extract result and SimHash. Validated like PutExtraction / UpdateDocument.
+	DocType    *string         `json:"docType"`
+	Extraction json.RawMessage `json:"extraction"`
+	SimHash    *string         `json:"simhash"`
 }
 
 // CreateDocument registers a new document (metadata only; bytes live in storage).
@@ -239,6 +253,11 @@ func CreateDocument(c *gin.Context) {
 		response.BadRequest(c, response.CodeInvalidInput, "storagePath does not belong to this account.")
 		return
 	}
+	docType, extraction, simhash, msg := parseAIFields(req.DocType, req.Extraction, req.SimHash)
+	if msg != "" {
+		response.BadRequest(c, response.CodeInvalidInput, msg)
+		return
+	}
 	doc := models.Document{
 		UserID:         uid,
 		OrganizationID: orgID,
@@ -250,12 +269,16 @@ func CreateDocument(c *gin.Context) {
 		StoragePath:    req.StoragePath,
 		Status:         status,
 		Metadata:       req.Metadata,
+		DocType:        docType,
+		Extraction:     extraction,
+		SimHash:        simhash,
 	}
 	if err := models.DB.Create(&doc).Error; err != nil {
 		response.InternalErrorf(c, response.CodeServerError, "Could not create document.", err,
 			"op", "db.documents.create", "userId", uid)
 		return
 	}
+	HashDocumentAsync(doc.ID, doc.StoragePath)
 	response.Created(c, "Document created", doc)
 }
 
@@ -365,6 +388,9 @@ type updateDocumentReq struct {
 	FolderID *string        `json:"folderId" binding:"omitempty,uuid"`
 	Status   *string        `json:"status" binding:"omitempty,oneof=uploaded processing ready failed"`
 	Metadata datatypes.JSON `json:"metadata"`
+	// SimHash is the 16-hex text fingerprint from a client that has the text;
+	// "" clears it.
+	SimHash *string `json:"simhash"`
 	// Move the document between scopes: an org id (editor+ in the target org
 	// required), or "" to move it to the caller's personal space.
 	OrganizationID *string `json:"organizationId"`
@@ -408,6 +434,18 @@ func UpdateDocument(c *gin.Context) {
 	}
 	if len(req.Metadata) > 0 {
 		updates["metadata"] = req.Metadata
+	}
+	if req.SimHash != nil {
+		if strings.TrimSpace(*req.SimHash) == "" {
+			updates["simhash"] = nil
+		} else {
+			v, err := parseSimHash(*req.SimHash)
+			if err != nil {
+				response.BadRequest(c, response.CodeInvalidInput, err.Error()+".")
+				return
+			}
+			updates["simhash"] = v
+		}
 	}
 	if req.OrganizationID != nil {
 		// Moving scope: verify the caller can write in the target (editor+),

@@ -154,6 +154,7 @@ func handleJobEvent(ctx context.Context, msg jetstream.Msg) {
 	if orgID != nil {
 		handlers.ClearJobWorkspace(models.DB, jobID)
 	}
+	handlers.HashDocumentAsync(doc.ID, doc.StoragePath)
 	slog.Info("document finalized from job", "jobId", event.JobID, "documentId", doc.ID, "orgScoped", orgID != nil)
 	_ = msg.Ack()
 }

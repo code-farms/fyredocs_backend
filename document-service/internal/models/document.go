@@ -43,12 +43,24 @@ type Document struct {
 	SourceJobID      *uuid.UUID     `gorm:"type:uuid" json:"-"`
 	ExtractedContent string         `gorm:"type:text" json:"-"`
 	Metadata         datatypes.JSON `gorm:"type:jsonb" json:"metadata,omitempty"`
-	UploadedAt       *time.Time     `json:"uploadedAt,omitempty"`
-	ProcessedAt      *time.Time     `json:"processedAt,omitempty"`
-	CreatedAt        time.Time      `gorm:"index:idx_doc_user_created,priority:2;default:CURRENT_TIMESTAMP" json:"createdAt"`
-	UpdatedAt        time.Time      `gorm:"default:CURRENT_TIMESTAMP" json:"updatedAt"`
-	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
-	Tags             []Tag          `gorm:"many2many:document_tags;" json:"tags,omitempty"`
+	// DocType is the ai-service extract classification a client saved (see
+	// handlers/extraction.go for the allowlist, mirrored by a CHECK constraint).
+	DocType *string `gorm:"type:text" json:"docType,omitempty"`
+	// Extraction is the saved extract result. Always nil for id_document: ID
+	// values are never persisted server-side (ai-service PII posture).
+	Extraction datatypes.JSON `gorm:"type:jsonb" json:"extraction,omitempty"`
+	// ContentSHA256 is computed by this service from the stored object (lowercase
+	// hex); never accepted from a client, so exact-duplicate matches can't be forged.
+	ContentSHA256 *string `gorm:"column:content_sha256;type:text" json:"-"`
+	// SimHash is the client-computed 64-bit text fingerprint (stored signed; the
+	// wire form is 16 hex chars) for near-duplicate detection.
+	SimHash     *int64         `gorm:"column:simhash" json:"-"`
+	UploadedAt  *time.Time     `json:"uploadedAt,omitempty"`
+	ProcessedAt *time.Time     `json:"processedAt,omitempty"`
+	CreatedAt   time.Time      `gorm:"index:idx_doc_user_created,priority:2;default:CURRENT_TIMESTAMP" json:"createdAt"`
+	UpdatedAt   time.Time      `gorm:"default:CURRENT_TIMESTAMP" json:"updatedAt"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	Tags        []Tag          `gorm:"many2many:document_tags;" json:"tags,omitempty"`
 }
 
 // BeforeCreate assigns a time-ordered UUIDv7 primary key when one was not set.

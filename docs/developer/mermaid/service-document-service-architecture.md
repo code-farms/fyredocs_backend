@@ -32,6 +32,8 @@ graph TB
             TH["tags.go"]
             EH["exports.go"]
             HH["hints.go<br/>(SetJobWorkspaceHint · WorkspaceForJob · ClearJobWorkspace)"]
+            XH["extraction.go<br/>(PutExtraction · GetDuplicates)"]
+            HASH["hashing.go<br/>(HashDocumentAsync — SHA-256 of stored object, ≤4 at once)"]
             AUTHH["auth.go<br/>(userID · resolveOrg RBAC)"]
         end
 
@@ -40,7 +42,7 @@ graph TB
         end
 
         subgraph Models["internal/models (GORM)"]
-            DOC_MODEL["documents (id, user_id, organization_id?, folder_id?,<br/>storage_path, status, source_job_id?, search_vector)"]
+            DOC_MODEL["documents (id, user_id, organization_id?, folder_id?,<br/>storage_path, status, source_job_id?, search_vector,<br/>doc_type?, extraction?, content_sha256?, simhash?)"]
             FOLDER_MODEL["folders (self-ref tree)"]
             TAG_MODEL["tags + document_tags join"]
             EXPORT_MODEL["exports (csv|json, status, content)"]

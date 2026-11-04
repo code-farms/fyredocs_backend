@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"io"
 	"net/url"
 	"time"
 )
@@ -15,6 +16,8 @@ type ObjectStore interface {
 	BucketOutputs() string
 	PresignGet(ctx context.Context, bucket, key string, expiry time.Duration, reqParams url.Values) (string, error)
 	RemoveObject(ctx context.Context, bucket, key string) error
+	// GetObject streams an object — used to compute content SHA-256 (hashing.go).
+	GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 }
 
 // objStore is injected at boot via SetObjectStore. A nil store degrades the

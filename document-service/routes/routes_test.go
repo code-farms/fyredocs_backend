@@ -28,6 +28,8 @@ var documentedRoutes = []struct {
 	{http.MethodPost, "/api/documents"},
 	{http.MethodGet, "/api/documents/:id"},
 	{http.MethodGet, "/api/documents/:id/download"},
+	{http.MethodGet, "/api/documents/:id/duplicates"},
+	{http.MethodPut, "/api/documents/:id/extraction"},
 	{http.MethodPatch, "/api/documents/:id"},
 	{http.MethodDelete, "/api/documents/:id"},
 	{http.MethodPost, "/api/documents/:id/restore"},

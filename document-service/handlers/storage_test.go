@@ -9,8 +9,10 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"sync"
 	"testing"
@@ -28,6 +30,9 @@ type fakeObjectStore struct {
 	presignErr error
 	// removeErr, when set, is returned by RemoveObject.
 	removeErr error
+	// objects backs GetObject by key; a missing key returns getErr or an error.
+	objects map[string][]byte
+	getErr  error
 }
 
 // Compile-time pin: the fake must keep satisfying the interface, so a change
@@ -41,6 +46,19 @@ func (f *fakeObjectStore) PresignGet(_ context.Context, bucket, key string, _ ti
 		return "", f.presignErr
 	}
 	return fmt.Sprintf("http://minio.test/%s/%s?%s", bucket, key, reqParams.Encode()), nil
+}
+
+func (f *fakeObjectStore) GetObject(_ context.Context, _ string, key string) (io.ReadCloser, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.objects[key]
+	if !ok {
+		return nil, fmt.Errorf("no object %q", key)
+	}
+	return io.NopCloser(bytes.NewReader(b)), nil
 }
 
 func (f *fakeObjectStore) RemoveObject(_ context.Context, bucket, key string) error {

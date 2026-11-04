@@ -3477,6 +3477,12 @@ paths:
           type: string
           enum:
           - updated
+      - name: docType
+        in: query
+        description: Only documents with this saved extract type (e.g. receipt for the expense export).
+          Unknown values are 400.
+        schema:
+          $ref: '#/components/schemas/DocType'
       - name: orgId
         in: query
         description: Org-scope the listing (viewer+)
@@ -3543,6 +3549,16 @@ paths:
                   type: string
                 metadata:
                   type: object
+                docType:
+                  $ref: '#/components/schemas/DocType'
+                extraction:
+                  type: object
+                  description: AI extract result (≤ 64 KB, needs docType). Refused for id_document — ID
+                    values are never stored server-side.
+                simhash:
+                  type: string
+                  pattern: ^[0-9a-fA-F]{16}$
+                  description: 64-bit text fingerprint as 16 hex chars (near-duplicate detection)
       responses:
         '201':
           description: Document created
@@ -3600,6 +3616,9 @@ paths:
                   type: string
                 metadata:
                   type: object
+                simhash:
+                  type: string
+                  description: 16 hex chars; empty string clears it
       responses:
         '200':
           description: Updated
@@ -3667,6 +3686,83 @@ paths:
           or has no stored file: null
         '500':
           description: Downloads unavailable (object storage unconfigured) or presign failure
+  /api/documents/{id}/extraction:
+    put:
+      tags:
+      - Documents
+      summary: Save the AI extract result for a document
+      description: Stores docType + extraction (replaces any previous). Editor+ when org-scoped.
+        id_document accepts docType only.
+      operationId: putDocumentExtraction
+      security:
+      - BearerAuth: []
+      - CookieAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: orgId
+        in: query
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - docType
+              properties:
+                docType:
+                  $ref: '#/components/schemas/DocType'
+                extraction:
+                  type: object
+                  description: ≤ 64 KB JSON object; omit for id_document
+      responses:
+        '200':
+          description: Saved — data {id, docType}
+        '400':
+          description: Unknown docType, non-object/oversized extraction, or details sent for id_document
+        '404':
+          description: Document not found
+  /api/documents/{id}/duplicates:
+    get:
+      tags:
+      - Documents
+      summary: Same-file and re-scan duplicates of a document
+      description: exact = same content SHA-256 (computed server-side from the stored bytes); near =
+        SimHash within 3 bits, nearest first. Same scope, live rows only, ≤10 each. pending is true
+        while this document's hash is still being computed.
+      operationId: getDocumentDuplicates
+      security:
+      - BearerAuth: []
+      - CookieAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: orgId
+        in: query
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: data {exact:[{id,name}], near:[{id,name,distance}], pending}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        '404':
+          description: Document not found
   /api/documents/{id}/restore:
     post:
       tags:
@@ -4942,6 +5038,19 @@ components:
           minimum: 0
           maximum: 1
           example: 0.06
+    DocType:
+      type: string
+      description: ai-service extract classification (document-service keeps its own copy)
+      enum:
+      - invoice
+      - receipt
+      - id_document
+      - business_card
+      - form
+      - letter
+      - contract
+      - statement
+      - other
     DocumentCorners:
       type: object
       required:
