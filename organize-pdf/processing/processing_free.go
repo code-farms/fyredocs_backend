@@ -336,10 +336,49 @@ func splitEqualGroups(pageCount int, n int) [][]int {
 }
 
 // parsePageOrder parses an explicit page sequence for organizePDF. Unlike
-// parsePageRange this preserves duplicates and order, since repeating a page is a
-// legitimate reordering request.
+// parsePageRange it preserves the caller's order and repeats, since "3,1,2" or
+// "1,1" is the whole point of a reordering request — delegating to
+// parsePageRange (which sorts and de-duplicates) made organize-pdf return the
+// pages unchanged. Ranges expand in place ("2-4" → 2,3,4). Invalid components
+// are skipped with the same leniency as parsePageRange; "" or "all" keeps every
+// page in its original order.
+//
+// NOTE: fyredocs_frontend/src/lib/localTools.ts (pageOrderList) implements the
+// same rule for the in-browser reorder, so both paths produce the same pages.
 func parsePageOrder(order string, maxPages int) []int {
-	return parsePageRange(order, maxPages)
+	order = strings.TrimSpace(order)
+	if order == "" || order == "all" {
+		return parsePageRange(order, maxPages)
+	}
+
+	var pages []int
+	for _, part := range strings.Split(order, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.Contains(part, "-") {
+			bounds := strings.Split(part, "-")
+			if len(bounds) != 2 {
+				continue
+			}
+			start, err1 := strconv.Atoi(strings.TrimSpace(bounds[0]))
+			end, err2 := strconv.Atoi(strings.TrimSpace(bounds[1]))
+			if err1 != nil || err2 != nil || start < 1 || end > maxPages || start > end {
+				continue
+			}
+			for i := start; i <= end; i++ {
+				pages = append(pages, i)
+			}
+			continue
+		}
+		page, err := strconv.Atoi(part)
+		if err != nil || page < 1 || page > maxPages {
+			continue
+		}
+		pages = append(pages, page)
+	}
+	return pages
 }
 
 // zipDirectory archives every file under sourceDir into a ZIP, using paths

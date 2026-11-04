@@ -88,7 +88,7 @@ Reorders pages in a PDF according to a specified order.
 **Input:** Single PDF file
 **Output:** PDF file with reordered pages
 **Options:**
-- `order`: New page order (e.g., "3,1,2,4")
+- `order`: New page sequence, kept exactly as given (e.g., "3,1,2,4"). Ranges expand in place ("2-4" → 2,3,4), a page may repeat ("1,1,2"), and pages left out are dropped. Out-of-range or malformed parts are skipped; an order naming no valid page fails the job. Empty or `all` keeps the original order.
 
 **Example:**
 ```bash

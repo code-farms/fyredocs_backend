@@ -3020,7 +3020,7 @@
                 "organize-pdf"
               ]
             },
-            "description": "Reorder pages in PDF according to specified order. Format: \"3,1,2,4\""
+            "description": "Reorder pages in PDF according to specified order, kept as given. Format: \"3,1,2,4\"; ranges expand in place (\"2-4\"), pages may repeat, omitted pages are dropped"
           },
           "response": [
             {
