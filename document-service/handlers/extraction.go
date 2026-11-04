@@ -32,7 +32,7 @@ const (
 	// the cap stops the column becoming a general blob store.
 	maxExtractionBytes = 64 << 10
 	// nearDuplicateDistance is the SimHash Hamming threshold for "re-scan of",
-	// matching NEAR_DUPLICATE_DISTANCE in fyredocs_app/src/lib/dedupe/simhash.ts.
+	// matching NEAR_DUP_BITS in fyredocs_app/src/lib/dedupe/simhash.ts.
 	nearDuplicateDistance = 3
 	// maxNearCandidates bounds the near-duplicate scan of one scope.
 	maxNearCandidates = 5000
