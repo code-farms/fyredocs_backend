@@ -51,9 +51,9 @@ func main() {
 	// inside a job if the config dir is unusable. Disabling it pins the
 	// deterministic in-code defaults; protect-pdf sets every security field
 	// explicitly anyway (processing/processing_edit.go encryptPDF).
-	// NOTE: optimize-pdf, convert-from-pdf and convert-to-pdf also use
-	// pdfcpu and share this hazard; they are separate modules and get the
-	// same one-liner in their own change.
+	// NOTE: optimize-pdf, convert-from-pdf and convert-to-pdf also use pdfcpu
+	// and make the same call in their own main.go (duplicated by design,
+	// CLAUDE.md §1) — keep all four in step.
 	pdfcpuapi.DisableConfigDir()
 	shutdownTracer := telemetry.Init("organize-pdf")
 	defer shutdownTracer(context.Background())

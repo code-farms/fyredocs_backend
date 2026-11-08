@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"fyredocs/shared/metrics"
+	"fyredocs/shared/procexec"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 )
@@ -25,6 +25,11 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
+// daemonDialTimeout bounds the pre-flight dial to a pooled daemon in
+// tryUnoconvert. The daemon is on the same host (loopback), so a live one
+// answers in microseconds; 200 ms only matters when the port is filtered.
+const daemonDialTimeout = 200 * time.Millisecond
+
 // tryUnoconvert attempts a conversion through a pooled unoserver daemon. It
 // blocks until a daemon port is free (bounding concurrency to the pool size),
 // runs unoconvert against it, then releases the port BEFORE returning so the
@@ -37,10 +42,24 @@ func tryUnoconvert(ctx context.Context, inputPath, outputPath, convertTo string)
 	}
 	defer pool.release(port)
 
+	// Check the daemon is listening before handing the job to unoconvert. The
+	// unoconvert client does not fail fast on a dead port: it retries the
+	// connection 5 times with a 10 s sleep (unoserver/client.py _connect, no CLI
+	// flag), so without this check every job on a dead pool burned the full 30 s
+	// deadline below before even starting the cold fallback — measured
+	// 2026-11-08 in the test-binaries image. A local dial costs well under a
+	// millisecond when the daemon is up.
+	if DaemonsUp(pool.host, []string{port}, daemonDialTimeout) == 0 {
+		metrics.ConvertFallback.WithLabelValues("convert-to-pdf", "no_daemon").Inc()
+		slog.Warn("unoserver daemon not listening, falling back to direct libreoffice",
+			"port", port, "convertTo", convertTo, "reason", "no_daemon")
+		return false
+	}
+
 	// Use a 30s timeout so a hung daemon falls back faster.
 	unoCtx, unoCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer unoCancel()
-	cmd := exec.CommandContext(unoCtx, "unoconvert",
+	cmd := procexec.Command(unoCtx, "unoconvert",
 		"--host", pool.host, "--port", port,
 		"--convert-to", convertTo,
 		inputPath, outputPath)
@@ -87,7 +106,7 @@ func officeToPDF(ctx context.Context, inputPath string, outputPath string, fileT
 
 	// Slow fallback: spawn a fresh LibreOffice process.
 	outputDir := filepath.Dir(outputPath)
-	cmd := exec.CommandContext(ctx, "libreoffice", "--headless", "--convert-to", "pdf", "--outdir", outputDir, inputPath)
+	cmd := procexec.Command(ctx, "libreoffice", "--headless", "--convert-to", "pdf", "--outdir", outputDir, inputPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		slog.ErrorContext(ctx, "libreoffice convert failed", "error", err, "op", "libreoffice.convert", "type", fileType, "output", string(output))
@@ -113,7 +132,7 @@ func officeToOffice(ctx context.Context, inputPath string, outputPath string, ou
 
 	// Slow fallback: spawn a fresh LibreOffice process.
 	outputDir := filepath.Dir(outputPath)
-	cmd := exec.CommandContext(ctx, "libreoffice", "--headless", "--convert-to", outputFormat, "--outdir", outputDir, inputPath)
+	cmd := procexec.Command(ctx, "libreoffice", "--headless", "--convert-to", outputFormat, "--outdir", outputDir, inputPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		slog.ErrorContext(ctx, "libreoffice convert failed", "error", err, "op", "libreoffice.convert", "format", outputFormat, "output", string(output))

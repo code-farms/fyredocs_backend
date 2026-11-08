@@ -18,6 +18,7 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 
+	"fyredocs/shared/procexec"
 	"organize-pdf/internal/imaging"
 )
 
@@ -523,7 +524,7 @@ func scanToPDFWithOCR(ctx context.Context, inputPaths []string, outputPath strin
 		nameWithoutExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 		outputBase := filepath.Join(tempDir, fmt.Sprintf("ocr_%d_%s", i, nameWithoutExt))
 
-		cmd := exec.CommandContext(ctx, "tesseract", imgPath, outputBase, "-l", lang, "pdf", "txt")
+		cmd := procexec.Command(ctx, "tesseract", imgPath, outputBase, "-l", lang, "pdf", "txt")
 		if err := cmd.Run(); err != nil {
 			slog.Warn("OCR failed, falling back to non-OCR", "image", imgPath, "error", err)
 			pdfFile := outputBase + ".pdf"

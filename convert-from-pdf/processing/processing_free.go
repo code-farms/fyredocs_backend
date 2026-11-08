@@ -8,12 +8,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"fyredocs/shared/procexec"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 )
 
@@ -123,7 +123,7 @@ func computeSafeDPI(widthPts, heightPts float64, requestedDPI, maxDim int) int {
 // `pdfinfo` (poppler-utils). Used only to bound render DPI; errors non-fatal.
 // NOTE: duplicated from optimize-pdf/processing/processing_free.go by design.
 func pdfPageDimensions(ctx context.Context, inputPath string) (float64, float64, error) {
-	out, err := exec.CommandContext(ctx, "pdfinfo", inputPath).Output()
+	out, err := procexec.Command(ctx, "pdfinfo", inputPath).Output()
 	if err != nil {
 		return 0, 0, fmt.Errorf("pdfinfo failed: %w", err)
 	}
@@ -178,7 +178,7 @@ func pdfToImages(ctx context.Context, inputPath string, outputDir string, baseNa
 	// Convert all pages in a single pdftoppm invocation — spawning one process
 	// per page dominated conversion time on large PDFs. pdftoppm zero-pads the
 	// page index, so the globs below stay in page order.
-	cmd := exec.CommandContext(ctx, "pdftoppm", formatFlag, "-r", strconv.Itoa(dpi), inputPath, filepath.Join(tempDir, "page"))
+	cmd := procexec.Command(ctx, "pdftoppm", formatFlag, "-r", strconv.Itoa(dpi), inputPath, filepath.Join(tempDir, "page"))
 	if err := cmd.Run(); err != nil {
 		slog.ErrorContext(ctx, "pdftoppm failed", "error", err, "op", "pdftoppm.render")
 		return "", fmt.Errorf("PDF to image conversion requires pdftoppm (poppler-utils): %w", err)
@@ -209,7 +209,7 @@ func pdfToImages(ctx context.Context, inputPath string, outputDir string, baseNa
 func pdfToPdfa(ctx context.Context, inputPath string, outputPath string) error {
 	slog.Info("converting PDF to PDF/A", "input", inputPath)
 
-	cmd := exec.CommandContext(ctx, "gs",
+	cmd := procexec.Command(ctx, "gs",
 		"-dPDFA=2",
 		"-dBATCH",
 		"-dNOPAUSE",
@@ -241,7 +241,7 @@ func pdfToOffice(ctx context.Context, inputPath string, outputPath string, outpu
 
 	outputDir := filepath.Dir(outputPath)
 
-	cmd := exec.CommandContext(ctx, "libreoffice",
+	cmd := procexec.Command(ctx, "libreoffice",
 		"--headless",
 		"--infilter=writer_pdf_import",
 		"--convert-to", outputFormat,
@@ -301,7 +301,7 @@ func pdfToPptImages(ctx context.Context, inputPath string, outputPath string, on
 	// page); synthetic ticking covers progress while the subprocess runs.
 	// pdftoppm zero-pads the page index, so the builder's glob stays in order.
 	if err := runWithProgressTicking(ctx, onProgress, func(ctx context.Context) error {
-		return exec.CommandContext(ctx, "pdftoppm", "-png", inputPath, filepath.Join(tempDir, "page")).Run()
+		return procexec.Command(ctx, "pdftoppm", "-png", inputPath, filepath.Join(tempDir, "page")).Run()
 	}); err != nil {
 		return fmt.Errorf("pdftoppm failed: %w", err)
 	}
@@ -339,7 +339,7 @@ func pdfToXlsxScript() string {
 // a spreadsheet, so a real extractor is used instead.
 func pdfToXlsx(ctx context.Context, inputPath string, outputPath string) error {
 	slog.Info("converting PDF to XLSX via pdfplumber", "input", inputPath)
-	cmd := exec.CommandContext(ctx, "python3", pdfToXlsxScript(), inputPath, outputPath)
+	cmd := procexec.Command(ctx, "python3", pdfToXlsxScript(), inputPath, outputPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		slog.ErrorContext(ctx, "pdf_to_xlsx failed", "error", err, "op", "pdf_to_xlsx", "output", string(output))
@@ -400,7 +400,7 @@ func pdfToOdp(ctx context.Context, inputPath string, outputPath string, onProgre
 // conversions (e.g. xlsx→ods, pptx→odp), then renames to the requested output.
 func officeConvertTo(ctx context.Context, inputPath string, outputPath string, outputFormat string) error {
 	outputDir := filepath.Dir(outputPath)
-	cmd := exec.CommandContext(ctx, "libreoffice", "--headless",
+	cmd := procexec.Command(ctx, "libreoffice", "--headless",
 		"--convert-to", outputFormat, "--outdir", outputDir, inputPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		slog.ErrorContext(ctx, "libreoffice convert failed", "error", err, "op", "libreoffice.convert", "format", outputFormat, "output", string(output))
@@ -463,7 +463,7 @@ func runWithProgressTicking(ctx context.Context, onProgress ProgressFunc, conver
 func pdfToDocxNative(ctx context.Context, inputPath string, outputPath string) error {
 	slog.Info("converting PDF to DOCX via pdf2docx", "input", inputPath)
 
-	cmd := exec.CommandContext(ctx, "pdf2docx", "convert", inputPath, outputPath)
+	cmd := procexec.Command(ctx, "pdf2docx", "convert", inputPath, outputPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		// CombinedOutput already includes stderr; surface it for debugging
@@ -500,7 +500,7 @@ func pdfToHTML(ctx context.Context, inputPath string, outputPath string) error {
 	defer os.RemoveAll(tempDir)
 
 	outputBase := filepath.Join(tempDir, "output")
-	cmd := exec.CommandContext(ctx, "pdftohtml", "-s", "-noframes", inputPath, outputBase)
+	cmd := procexec.Command(ctx, "pdftohtml", "-s", "-noframes", inputPath, outputBase)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -517,7 +517,7 @@ func pdfToHTML(ctx context.Context, inputPath string, outputPath string) error {
 func pdfToText(ctx context.Context, inputPath string, outputPath string) error {
 	slog.Info("converting PDF to text", "input", inputPath)
 
-	cmd := exec.CommandContext(ctx, "pdftotext", "-layout", inputPath, outputPath)
+	cmd := procexec.Command(ctx, "pdftotext", "-layout", inputPath, outputPath)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {

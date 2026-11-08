@@ -55,6 +55,7 @@ The container image runs a persistent LibreOffice instance via `unoserver`, star
 The pool is visible, not just best-effort:
 
 - **Readiness:** `/readyz` returns 503 when no pooled daemon port accepts a connection. A partial pool stays ready and reports `ok (n/m daemons up)`. The compose healthcheck uses `/healthz`, so a dead pool never triggers a restart; jobs keep completing on the cold path.
+- **Fast fallback:** before calling `unoconvert`, the worker dials the pooled daemon port (200 ms). If nothing listens it falls back at once with reason `no_daemon`. Without this check the `unoconvert` client retries the connection for about 40 s (5 tries, 10 s apart), so every job on a dead pool lost the full 30 s per-call deadline before the cold conversion even began.
 - **Metric:** every cold fallback increments `convert_fallback_total{service="convert-to-pdf",reason}` with `reason` one of `no_daemon` (nothing listening on the pooled port), `timeout` (unoconvert deadline fired) or `daemon_error`. The `OfficeConversionsOnColdFallback` alert fires on a sustained rate.
 
 `entrypoint.sh` starts each daemon with three load-bearing arguments:
@@ -169,6 +170,17 @@ Identical conversions are deduplicated. Before downloading inputs, the worker de
 Caching is **best-effort**: any cache-path error (Redis down, stat/copy failure, expired output) logs and falls through to a normal conversion, so it can never fail a job. Disabled when Redis is unavailable or `RESULT_CACHE_TTL_SECONDS=0`.
 
 ## Dependencies
+
+### External processes and cancellation
+
+Every external tool this worker runs (`unoconvert`, `libreoffice`) is started through
+`shared/procexec.Command` rather than `exec.CommandContext`. Each command runs as the
+leader of its own process group, and cancelling the job context (timeout, shutdown)
+SIGKILLs the whole group, so descendants such as the `soffice.bin` that the `libreoffice` launcher forks die with it instead of
+outliving the failed job. `WaitDelay` (5 s) stops a cancelled command's output
+pipes from holding the job open. `main.go` also calls pdfcpu's `DisableConfigDir()`
+at boot, so pdfcpu never reads or writes a `config.yml` under the user config dir
+(it can otherwise `os.Exit(1)` mid-job when that directory is unusable).
 
 ### LibreOffice + unoserver
 Used for Office and HTML conversions. Installed in the container via the `fyredocs-base` image (full LibreOffice suite, ttf-liberation, `unoserver` from PyPI).

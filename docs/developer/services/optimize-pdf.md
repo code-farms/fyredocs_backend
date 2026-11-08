@@ -159,6 +159,17 @@ Caching is **best-effort**: any cache-path error (Redis down, stat/copy failure,
 
 ## Dependencies
 
+### External processes and cancellation
+
+Every external tool this worker runs (`gs`, `pdftoppm`, `pdfinfo`, `tesseract`) is started through
+`shared/procexec.Command` rather than `exec.CommandContext`. Each command runs as the
+leader of its own process group, and cancelling the job context (timeout, shutdown)
+SIGKILLs the whole group, so descendants such as Ghostscript and Tesseract children die with it instead of
+outliving the failed job. `WaitDelay` (5 s) stops a cancelled command's output
+pipes from holding the job open. `main.go` also calls pdfcpu's `DisableConfigDir()`
+at boot, so pdfcpu never reads or writes a `config.yml` under the user config dir
+(it can otherwise `os.Exit(1)` mid-job when that directory is unusable).
+
 ### Go Packages
 - `github.com/gin-gonic/gin` - HTTP framework
 - `github.com/pdfcpu/pdfcpu` - PDF manipulation

@@ -477,6 +477,15 @@ Caching is **best-effort**: any cache-path error (Redis down, stat/copy failure,
 
 ## Dependencies
 
+### External processes and cancellation
+
+Every external tool this worker runs (`tesseract` for scan-to-pdf OCR) is started through
+`shared/procexec.Command` rather than `exec.CommandContext`. Each command runs as the
+leader of its own process group, and cancelling the job context (timeout, shutdown)
+SIGKILLs the whole group, so descendants such as Tesseract children die with it instead of
+outliving the failed job. `WaitDelay` (5 s) stops a cancelled command's output
+pipes from holding the job open. (pdfcpu's `DisableConfigDir()` is covered under Protect PDF above.)
+
 ### Go Packages
 - **github.com/pdfcpu/pdfcpu** - PDF manipulation library
 - **github.com/gin-gonic/gin** - Web framework

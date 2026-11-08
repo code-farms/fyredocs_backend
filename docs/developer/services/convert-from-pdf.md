@@ -458,6 +458,17 @@ Caching is **best-effort**: any cache-path error (Redis down, stat/copy failure,
 
 ## Dependencies
 
+### External processes and cancellation
+
+Every external tool this worker runs (`libreoffice`, `gs`, `pdftoppm`, `pdfinfo`, `pdftohtml`, `pdftotext`, `pdf2docx`, `python3`) is started through
+`shared/procexec.Command` rather than `exec.CommandContext`. Each command runs as the
+leader of its own process group, and cancelling the job context (timeout, shutdown)
+SIGKILLs the whole group, so descendants such as `soffice.bin` and the Python/MuPDF processes behind `pdf2docx` die with it instead of
+outliving the failed job. `WaitDelay` (5 s) stops a cancelled command's output
+pipes from holding the job open. `main.go` also calls pdfcpu's `DisableConfigDir()`
+at boot, so pdfcpu never reads or writes a `config.yml` under the user config dir
+(it can otherwise `os.Exit(1)` mid-job when that directory is unusable).
+
 ### LibreOffice (Optimized Installation)
 
 Used for PDF to Office format conversions.

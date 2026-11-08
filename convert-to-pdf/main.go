@@ -25,6 +25,8 @@ import (
 	"fyredocs/shared/storage"
 	"fyredocs/shared/telemetry"
 
+	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
+
 	"convert-to-pdf/internal/models"
 	"convert-to-pdf/internal/worker"
 	"convert-to-pdf/processing"
@@ -42,6 +44,13 @@ import (
 func main() {
 	config.LoadConfig()
 	logger.Init("convert-to-pdf", os.Getenv("LOG_MODE"))
+	// Without this, pdfcpu's NewDefaultConfiguration loads — and on first use
+	// WRITES — a config.yml under os.UserConfigDir() and calls os.Exit(1) from
+	// inside a job if that directory is unusable (it is in a read-only or
+	// HOME-less container). Disabling it pins pdfcpu's in-code defaults.
+	// NOTE: duplicated by design in every pdfcpu-using worker's main.go
+	// (CLAUDE.md §1); organize-pdf/main.go carries the full rationale.
+	pdfcpuapi.DisableConfigDir()
 	shutdownTracer := telemetry.Init("convert-to-pdf")
 	defer shutdownTracer(context.Background())
 	models.Connect()

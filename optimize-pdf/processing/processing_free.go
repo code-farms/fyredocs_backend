@@ -16,6 +16,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"fyredocs/shared/procexec"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"golang.org/x/sync/errgroup"
 )
@@ -70,7 +71,7 @@ func compressPDF(ctx context.Context, inputPath string, outputPath string, optio
 	args := buildCompressArgs(quality, outputPath, inputPath)
 
 	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, gsPath, args...)
+	cmd := procexec.Command(ctx, gsPath, args...)
 	cmd.Stderr = &stderr
 	cmd.Stdout = io.Discard
 
@@ -193,7 +194,7 @@ func repairPDF(ctx context.Context, inputPath string, outputPath string) error {
 	}
 
 	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, gsPath, args...)
+	cmd := procexec.Command(ctx, gsPath, args...)
 	cmd.Stderr = &stderr
 	cmd.Stdout = io.Discard
 
@@ -248,7 +249,7 @@ func flattenPDF(ctx context.Context, inputPath string, outputPath string) error 
 	args := buildFlattenArgs(outputPath, inputPath)
 
 	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, gsPath, args...)
+	cmd := procexec.Command(ctx, gsPath, args...)
 	cmd.Stderr = &stderr
 	cmd.Stdout = io.Discard
 
@@ -328,7 +329,7 @@ func computeSafeDPI(widthPts, heightPts float64, requestedDPI, maxDim int) int {
 // document's first page by parsing `pdfinfo` output (poppler-utils). It is used
 // only to bound the render DPI, so callers treat errors as non-fatal.
 func pdfPageDimensions(ctx context.Context, inputPath string) (float64, float64, error) {
-	out, err := exec.CommandContext(ctx, "pdfinfo", inputPath).Output()
+	out, err := procexec.Command(ctx, "pdfinfo", inputPath).Output()
 	if err != nil {
 		return 0, 0, fmt.Errorf("pdfinfo failed: %w", err)
 	}
@@ -441,7 +442,7 @@ func resolveLanguage(requested string, available []string) string {
 // from `tesseract --list-langs`. Errors yield an empty slice (callers then keep
 // the requested language).
 func availableTesseractLangs(ctx context.Context) []string {
-	out, err := exec.CommandContext(ctx, "tesseract", "--list-langs").CombinedOutput()
+	out, err := procexec.Command(ctx, "tesseract", "--list-langs").CombinedOutput()
 	if err != nil {
 		return nil
 	}
@@ -528,7 +529,7 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 	slog.Info("converting PDF to images for OCR", "dpi", dpi, "input", inputPath)
 
 	imagePrefix := filepath.Join(tempDir, "page")
-	cmd := exec.CommandContext(ctx, "pdftoppm",
+	cmd := procexec.Command(ctx, "pdftoppm",
 		"-png",
 		"-r", strconv.Itoa(dpi),
 		inputPath,
@@ -576,7 +577,7 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 			nameWithoutExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 			outputBase := filepath.Join(tempDir, fmt.Sprintf("ocr_%d_%s", i, nameWithoutExt))
 
-			cmd := exec.CommandContext(gctx, "tesseract",
+			cmd := procexec.Command(gctx, "tesseract",
 				imgPath,
 				outputBase,
 				"-l", language,

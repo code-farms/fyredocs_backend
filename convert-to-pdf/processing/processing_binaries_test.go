@@ -2,9 +2,10 @@
 
 // Real-binary exec-path tests for the convert-to-pdf worker. No unoserver
 // daemon runs in the test container (entrypoint.sh launches those in
-// production), so tryUnoconvert exercises the real unoconvert client against
-// a dead port and officeToPDF then takes its direct `libreoffice --headless`
-// fallback — the exact degraded-daemon shape the fallback exists for. Run via
+// production), so tryUnoconvert's pre-flight dial finds nothing listening,
+// skips the unoconvert client, and officeToPDF takes its direct
+// `libreoffice --headless` fallback — the exact degraded-daemon shape the
+// fallback exists for. Run via
 // `make test-binaries` (dockerized — see deployment/test-binaries.Dockerfile);
 // fixtures are generated in-code per
 // docs/developer/architecture/testing-strategy.md.
@@ -16,7 +17,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"fyredocs/shared/procexec"
 
 	"github.com/google/uuid"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
@@ -56,8 +61,8 @@ func assertValidPDFOutput(t *testing.T, path string) {
 }
 
 // TestHTMLToPDFBinaries drives the full ProcessFile dispatch for html-to-pdf:
-// unoconvert is tried first (and fails fast — no daemon), then the direct
-// LibreOffice fallback converts the generated HTML.
+// unoconvert is skipped at once (no daemon listening — see tryUnoconvert),
+// then the direct LibreOffice fallback converts the generated HTML.
 func TestHTMLToPDFBinaries(t *testing.T) {
 	dir := t.TempDir()
 	input := filepath.Join(dir, "page.html")
@@ -123,5 +128,70 @@ func TestOfficeToPDFCorruptInputBinaries(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(outDir); len(entries) != 0 {
 		t.Errorf("corrupt input left %d files in the output dir", len(entries))
+	}
+}
+
+// sofficeProcesses returns the PIDs of running LibreOffice processes by scanning
+// /proc, so the check needs no pgrep in the image. Zombies are excluded: a
+// reaped-pending process holds no CPU, memory or files.
+func sofficeProcesses(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Fatalf("read /proc: %v", err)
+	}
+	var pids []string
+	for _, e := range entries {
+		comm, err := os.ReadFile(filepath.Join("/proc", e.Name(), "comm"))
+		if err != nil || !strings.HasPrefix(strings.TrimSpace(string(comm)), "soffice") {
+			continue
+		}
+		status, _ := os.ReadFile(filepath.Join("/proc", e.Name(), "status"))
+		if strings.Contains(string(status), "State:\tZ") {
+			continue
+		}
+		pids = append(pids, e.Name())
+	}
+	return pids
+}
+
+// TestCancelledLibreOfficeLeavesNoOrphansBinaries is the Stage 1 Q3 acceptance
+// check (docs/developer/architecture/next-generation-document-engine/
+// 20-implementation-roadmap.md): cancelling a job mid-conversion must stop the
+// whole LibreOffice tree. Before shared/procexec, CommandContext killed only the
+// `libreoffice` launcher and soffice.bin kept running after the job had failed.
+func TestCancelledLibreOfficeLeavesNoOrphansBinaries(t *testing.T) {
+	if before := sofficeProcesses(t); len(before) != 0 {
+		t.Skipf("soffice already running (%v); cannot attribute orphans", before)
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source.txt")
+	if err := os.WriteFile(src, []byte(strings.Repeat("Fyredocs orphan check line\n", 20000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 5; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cmd := procexec.Command(ctx, "libreoffice", "--headless",
+			"-env:UserInstallation=file://"+filepath.Join(dir, "profile"),
+			"--convert-to", "pdf", "--outdir", t.TempDir(), src)
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("start libreoffice: %v", err)
+		}
+		// Wait until soffice.bin is actually up, so the cancel lands mid-run.
+		deadline := time.Now().Add(10 * time.Second)
+		for len(sofficeProcesses(t)) == 0 && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		cancel()
+		_ = cmd.Wait()
+
+		deadline = time.Now().Add(3 * time.Second)
+		for len(sofficeProcesses(t)) != 0 && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if left := sofficeProcesses(t); len(left) != 0 {
+			t.Fatalf("run %d: soffice still running after cancel: %v", i, left)
+		}
 	}
 }
