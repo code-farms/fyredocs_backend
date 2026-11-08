@@ -15,8 +15,10 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"golang.org/x/image/font"
@@ -257,5 +259,118 @@ func TestOCRPDFCorruptInputBinaries(t *testing.T) {
 	}
 	if _, err := os.Stat(output); err == nil {
 		t.Error("corrupt input left an output file behind")
+	}
+}
+
+// ocrTempSample is one observation of the OCR job's temp directory.
+type ocrTempSample struct {
+	pngs  int
+	bytes int64
+}
+
+// sampleTempDir walks root and returns how many page PNGs exist and the total
+// bytes under it. Files may disappear mid-walk (that is the point), so walk
+// errors are ignored.
+func sampleTempDir(root string) ocrTempSample {
+	var s ocrTempSample
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			s.bytes += info.Size()
+		}
+		if strings.HasSuffix(path, ".png") {
+			s.pngs++
+		}
+		return nil
+	})
+	return s
+}
+
+// TestOCRPDFBoundsPageImagesBinaries is the Q7 acceptance check
+// (docs/developer/architecture/next-generation-document-engine/
+// 20-implementation-roadmap.md): OCR must never hold more rendered page images
+// than it has workers. The previous pipeline rendered every page up front, so a
+// long scan filled the job's tmpfs before recognition began. It also logs the
+// peak temp-dir size and wall time, which is how the before/after numbers in
+// the roadmap were measured (OCR_MEASURE_PAGES overrides the page count).
+func TestOCRPDFBoundsPageImagesBinaries(t *testing.T) {
+	pages := 24
+	if v := os.Getenv("OCR_MEASURE_PAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			pages = n
+		}
+	}
+	t.Setenv("OCR_MAX_WORKERS", "2")
+	workers := ocrMaxWorkers()
+
+	fixtures := t.TempDir()
+	png := filepath.Join(fixtures, "page.png")
+	writeTextPNG(t, png, "FYREDOCS OCR MEMORY CHECK PAGE", 6)
+	imgs := make([]string, pages)
+	for i := range imgs {
+		imgs[i] = png
+	}
+	input := filepath.Join(fixtures, "input.pdf")
+	if err := api.ImportImagesFile(imgs, input, nil, nil); err != nil {
+		t.Fatalf("build input pdf: %v", err)
+	}
+	// OCR_MEASURE_INPUT swaps in a real scan for measurement runs; the
+	// generated text pages compress far better than scanned paper does.
+	if v := os.Getenv("OCR_MEASURE_INPUT"); v != "" {
+		input = v
+		n, err := api.PageCountFile(input)
+		if err != nil {
+			t.Fatalf("OCR_MEASURE_INPUT: %v", err)
+		}
+		pages = n
+	}
+
+	jobTmp := t.TempDir()
+	t.Setenv("TMPDIR", jobTmp)
+	output := filepath.Join(fixtures, "out.pdf")
+
+	var peak ocrTempSample
+	done := make(chan struct{})
+	sampled := make(chan struct{})
+	go func() {
+		defer close(sampled)
+		tick := time.NewTicker(100 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			s := sampleTempDir(jobTmp)
+			if s.pngs > peak.pngs {
+				peak.pngs = s.pngs
+			}
+			if s.bytes > peak.bytes {
+				peak.bytes = s.bytes
+			}
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+
+	start := time.Now()
+	meta, err := ocrPDF(context.Background(), input, output, map[string]interface{}{"language": "en", "dpi": "150"})
+	elapsed := time.Since(start)
+	close(done)
+	<-sampled
+	if err != nil {
+		t.Fatalf("ocrPDF: %v", err)
+	}
+	t.Logf("pages=%d workers=%d peakPNGs=%d peakTempBytes=%d wall=%v", pages, workers, peak.pngs, peak.bytes, elapsed.Round(time.Millisecond))
+
+	if peak.pngs > workers {
+		t.Errorf("peak rendered page images = %d, want <= %d workers", peak.pngs, workers)
+	}
+	if got := meta["pagesOCRed"]; got != pages {
+		t.Errorf("pagesOCRed = %v, want %d", got, pages)
+	}
+	if n, err := api.PageCountFile(output); err != nil || n != pages {
+		t.Errorf("output pages = %d (err %v), want %d", n, err, pages)
 	}
 }

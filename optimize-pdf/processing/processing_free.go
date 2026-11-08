@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -353,6 +352,44 @@ func pdfPageDimensions(ctx context.Context, inputPath string) (float64, float64,
 	return 0, 0, fmt.Errorf("could not parse page size from pdfinfo output")
 }
 
+// pdfPageCount returns the page count poppler's pdfinfo reports for inputPath.
+// Poppler is also what renders the pages, so a PDF counts here exactly when
+// pdftoppm can render it; pdfcpu rejects some damaged files poppler accepts.
+func pdfPageCount(ctx context.Context, inputPath string) (int, error) {
+	out, err := procexec.Command(ctx, "pdfinfo", inputPath).Output()
+	if err != nil {
+		return 0, fmt.Errorf("pdfinfo failed: %w", err)
+	}
+	return parsePdfinfoPages(string(out))
+}
+
+// parsePdfinfoPages extracts the "Pages:" value from pdfinfo output. Zero pages
+// is an error: there would be nothing to OCR.
+func parsePdfinfoPages(out string) (int, error) {
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "Pages:") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "Pages:")))
+		if err != nil {
+			return 0, fmt.Errorf("could not parse page count from pdfinfo: %w", err)
+		}
+		if n < 1 {
+			return 0, fmt.Errorf("PDF has no pages")
+		}
+		return n, nil
+	}
+	return 0, fmt.Errorf("pdfinfo reported no page count")
+}
+
+// ocrRenderArgs returns pdftoppm arguments that render exactly one page (1-based)
+// of inputPath at dpi to <outBase>.png. -singlefile drops pdftoppm's page-number
+// suffix, so the caller knows the file name without globbing.
+func ocrRenderArgs(dpi, page int, inputPath, outBase string) []string {
+	p := strconv.Itoa(page)
+	return []string{"-png", "-r", strconv.Itoa(dpi), "-f", p, "-l", p, "-singlefile", inputPath, outBase}
+}
+
 // ocrLangMap maps ISO 639-1 codes (as the frontend sends) to tesseract's ISO
 // 639-2/T codes.
 var ocrLangMap = map[string]string{
@@ -526,57 +563,51 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 	}
 	defer os.RemoveAll(tempDir)
 
-	slog.Info("converting PDF to images for OCR", "dpi", dpi, "input", inputPath)
-
-	imagePrefix := filepath.Join(tempDir, "page")
-	cmd := procexec.Command(ctx, "pdftoppm",
-		"-png",
-		"-r", strconv.Itoa(dpi),
-		inputPath,
-		imagePrefix,
-	)
-	if err := cmd.Run(); err != nil {
-		slog.ErrorContext(ctx, "pdftoppm ocr-render failed", "error", err, "op", "pdftoppm.ocr_render")
+	// Count pages with poppler (the library that renders them) rather than
+	// pdfcpu, so OCR accepts exactly the PDFs pdftoppm can render.
+	pageCount, err := pdfPageCount(ctx, inputPath)
+	if err != nil {
+		slog.ErrorContext(ctx, "could not count PDF pages for OCR", "error", err, "op", "pdfinfo.page_count")
 		return nil, fmt.Errorf("pdftoppm conversion failed: %w", err)
 	}
+	slog.Info("OCR rendering page by page", "dpi", dpi, "pages", pageCount, "input", inputPath)
 
-	imageFiles, err := filepath.Glob(filepath.Join(tempDir, "page-*.png"))
-	if err != nil || len(imageFiles) == 0 {
-		imageFiles, _ = filepath.Glob(filepath.Join(tempDir, "page*.png"))
-	}
-	if len(imageFiles) == 0 {
-		return nil, fmt.Errorf("no images generated from PDF")
-	}
-
-	sort.Strings(imageFiles)
-	slog.Info("PDF to image conversion complete", "imageCount", len(imageFiles))
-
-	// Process pages in parallel using a worker pool. Defaults to a CPU-sized
-	// pool capped at 4 to bound tesseract memory on small hosts; OCR_MAX_WORKERS
-	// raises (or lowers) that cap on larger boxes where memory is not the
-	// constraint.
+	// Render, OCR and delete one page at a time inside the worker pool. The
+	// previous pipeline rendered every page up front, so the job's tmpfs held
+	// all page images before recognition began and long scans exhausted it
+	// (measured 2026-11-08: 60 pages → 60 images on disk with 2 workers). Now at
+	// most `workers` page images exist at once. Defaults to a CPU-sized pool
+	// capped at 4 to bound tesseract memory on small hosts; OCR_MAX_WORKERS
+	// raises (or lowers) that cap on larger boxes.
 	workers := ocrMaxWorkers()
 
-	pdfFiles := make([]string, len(imageFiles))
+	pdfFiles := make([]string, pageCount)
 	// Per-page plain-text sidecars (tesseract's `txt` output config). Indexed
 	// by page so the concatenated text follows merged-PDF page order, not
 	// goroutine completion order; a fallback page leaves its slot empty.
-	txtFiles := make([]string, len(imageFiles))
+	txtFiles := make([]string, pageCount)
 	var mu sync.Mutex // guards slog calls for cleaner output
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(workers)
 
-	for i, imgPath := range imageFiles {
-		i, imgPath := i, imgPath
+	for i := 0; i < pageCount; i++ {
+		i := i
 		g.Go(func() error {
 			mu.Lock()
-			slog.Info("processing OCR page", "page", i+1, "total", len(imageFiles))
+			slog.Info("processing OCR page", "page", i+1, "total", pageCount)
 			mu.Unlock()
 
-			baseName := filepath.Base(imgPath)
-			nameWithoutExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
-			outputBase := filepath.Join(tempDir, fmt.Sprintf("ocr_%d_%s", i, nameWithoutExt))
+			pageBase := filepath.Join(tempDir, fmt.Sprintf("page-%05d", i+1))
+			imgPath := pageBase + ".png"
+			// Deleted however the page ends: success, fallback or error.
+			defer os.Remove(imgPath)
+			render := procexec.Command(gctx, "pdftoppm", ocrRenderArgs(dpi, i+1, inputPath, pageBase)...)
+			if err := render.Run(); err != nil {
+				slog.ErrorContext(gctx, "pdftoppm ocr-render failed", "error", err, "op", "pdftoppm.ocr_render", "page", i+1)
+				return fmt.Errorf("pdftoppm conversion failed on page %d: %w", i+1, err)
+			}
 
+			outputBase := filepath.Join(tempDir, fmt.Sprintf("ocr_%05d", i+1))
 			cmd := procexec.Command(gctx, "tesseract",
 				imgPath,
 				outputBase,
@@ -615,7 +646,7 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 	metadata := map[string]interface{}{
 		"language":   language,
 		"dpi":        dpi,
-		"pagesOCRed": len(imageFiles),
+		"pagesOCRed": pageCount,
 	}
 	// The extracted text rides back on the job's metadata jsonb — a job has
 	// exactly one output file, and the searchable PDF claims it. The cap keeps
@@ -628,7 +659,7 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 		}
 	}
 
-	slog.Info("OCR complete", "pagesProcessed", len(imageFiles), "language", language)
+	slog.Info("OCR complete", "pagesProcessed", pageCount, "language", language)
 	return metadata, nil
 }
 

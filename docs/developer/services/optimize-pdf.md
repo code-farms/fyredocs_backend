@@ -44,8 +44,11 @@ curl -X POST http://localhost/api/optimize-pdf/repair-pdf \
 Adds a searchable text layer to scanned PDFs using Tesseract OCR.
 
 **Options:**
-- `language`: OCR language code (default: `eng`): `eng`, `hin`, or `eng+hin` (either order) for mixed English/Hindi documents. The image installs those five packs, and job-service's allowlist is pinned to them by a test that reads this service's Dockerfile. As defense-in-depth the worker still resolves the language against what is actually installed (`tesseract --list-langs`); if a pack is missing it falls back to `eng` (then the first available), so a missing language pack never fails the job.
+- `language`: OCR language code (default: `eng`): `eng`, `hin`, or `eng+hin` (either order) for mixed English/Hindi documents. The image installs those two packs (`tesseract-ocr-data-eng`, `-hin`), and job-service's allowlist is pinned to them by a test that reads this service's Dockerfile. As defense-in-depth the worker still resolves the language against what is actually installed (`tesseract --list-langs`); if a pack is missing it falls back to `eng` (then the first available), so a missing language pack never fails the job.
 - `dpi`: Resolution for conversion (default: `150`, from `OCR_DEFAULT_DPI`). job-service accepts 72–600 at job creation. The effective DPI is additionally capped so the longest edge of a rendered page stays within `OCR_MAX_IMAGE_DIM` pixels (default `10000`) — this prevents oversized rasters (e.g. large banner PDFs) from making Tesseract/pdfcpu fail. The size bound wins over resolution, so very large pages may render below the requested DPI.
+  Hindi uses the same 150 DPI default. Measured 2026-11-08 on rendered Hindi text: 0.00% character error at 150 and 300 DPI for 8–12 pt, and 1.86% → 0.31% only at 6 pt, while 300 DPI costs about twice the time per page. Users who need it can request 300 DPI. Real noisy scans may differ; that is the Stage 6 OCR comparison.
+
+**How pages are processed:** the worker counts pages with `pdfinfo`, then each pool worker renders one page (`pdftoppm -png -r <dpi> -f N -l N -singlefile`), OCRs it, and deletes the page image at once. At most `OCR_MAX_WORKERS` page images exist at a time. Before 2026-11-08 every page was rendered up front; a 60-page scan then peaked at 1.66 GB of temp files, above the worker's 1 GB tmpfs. Per-page searchable PDFs still accumulate until the merge.
 
 **Job metadata:** on success the worker returns metadata that job-service stores on the job row (`metadata` jsonb):
 - `language` (string), `dpi` (number), `pagesOCRed` (number) — as before.
@@ -325,21 +328,21 @@ sequenceDiagram
     participant PC as pdfcpu
 
     W->>FS: Read input PDF (downloaded to scratch/in)
-    W->>PP: Convert PDF pages to PNG images (configurable DPI)
-    PP-->>FS: page1.png, page2.png, ...
+    W->>W: pdfinfo → page count N
 
-    W->>Pool: Launch parallel OCR (capped at NumCPU, max 4)
-    par Parallel OCR
-        Pool->>TS: tesseract page_1.png ... pdf txt
-        Pool->>TS: tesseract page_2.png ... pdf txt
-        Pool->>TS: tesseract page_N.png ... pdf txt
+    W->>Pool: Launch per-page tasks (OCR_MAX_WORKERS, default min(NumCPU,4))
+    par One page per task
+        Pool->>PP: pdftoppm -f i -l i -singlefile (configurable DPI)
+        PP-->>FS: page-i.png
+        Pool->>TS: tesseract page-i.png ... pdf txt
+        TS-->>FS: ocr_i.pdf + ocr_i.txt
+        Pool->>FS: delete page-i.png
     end
-    TS-->>FS: page_N.pdf (searchable PDF pages) + page_N.txt (text sidecars)
 
     W->>PC: Merge all page PDFs into final output
     PC-->>FS: scratch/out/output.pdf (searchable PDF)
     W->>W: collectOCRText: concatenate .txt sidecars in page order (\f-separated, 512 KB cap)
-    W->>FS: Cleanup temporary PNG, PDF, and TXT files
+    W->>FS: Cleanup temporary PDF and TXT files
     W-->>W: Return outputPath + metadata (extractedText / textTruncated when text was produced)
 ```
 

@@ -88,7 +88,7 @@ sequenceDiagram
     Worker->>S3: Download scanned.pdf key → scratch/in
     Worker->>Processing: ProcessFile(ctx, jobId, "ocr-pdf",<br/>[scratch/in/scanned.pdf], {language: "en"}, scratch/out)
 
-    Processing->>Processing: Run OCR engine per page<br/>(tesseract output configs "pdf txt" — searchable page PDF + .txt text sidecar)
+    Processing->>Processing: pdfinfo page count, then per page in the worker pool:<br/>pdftoppm one page → tesseract "pdf txt" → delete the page PNG<br/>(at most OCR_MAX_WORKERS page images on disk)
     Processing->>Processing: Merge page PDFs (searchable text layer)
     Processing->>Processing: collectOCRText: concat .txt sidecars in page order<br/>(\f-separated, 512 KB cap)
     Processing-->>Worker: {OutputPath in scratch/out, Metadata:<br/>{language, dpi, pagesOCRed, extractedText?, textTruncated?}}

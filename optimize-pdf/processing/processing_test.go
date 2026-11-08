@@ -2,6 +2,7 @@ package processing
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -228,4 +229,39 @@ func TestBuildCompressArgs(t *testing.T) {
 			t.Errorf("expected input path last, got %s", args[n-1])
 		}
 	})
+}
+
+// TestParsePdfinfoPages: the page count drives how many pages OCR renders, so a
+// malformed or zero count must be an error, never a silent empty OCR.
+func TestParsePdfinfoPages(t *testing.T) {
+	cases := []struct {
+		name    string
+		out     string
+		want    int
+		wantErr bool
+	}{
+		{"normal", "Producer: x\nPages:           60\nPage size:  595 x 842 pts (A4)\n", 60, false},
+		{"one page", "Pages: 1\n", 1, false},
+		{"zero pages", "Pages: 0\n", 0, true},
+		{"garbled", "Pages: many\n", 0, true},
+		{"missing", "Producer: x\n", 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parsePdfinfoPages(tc.out)
+			if (err != nil) != tc.wantErr || got != tc.want {
+				t.Errorf("parsePdfinfoPages(%q) = %d, %v; want %d, err=%v", tc.out, got, err, tc.want, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestOCRRenderArgs pins single-page rendering: -f/-l bound the page range and
+// -singlefile makes the output name predictable (<base>.png, no page suffix).
+func TestOCRRenderArgs(t *testing.T) {
+	got := strings.Join(ocrRenderArgs(150, 7, "/in.pdf", "/tmp/page-00007"), " ")
+	want := "-png -r 150 -f 7 -l 7 -singlefile /in.pdf /tmp/page-00007"
+	if got != want {
+		t.Errorf("ocrRenderArgs = %q, want %q", got, want)
+	}
 }
