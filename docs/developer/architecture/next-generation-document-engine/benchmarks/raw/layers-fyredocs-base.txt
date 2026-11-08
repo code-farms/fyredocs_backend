@@ -1,0 +1,9 @@
+4.1kB	RUN /bin/sh -c rm -rf /tmp/* /var/cache/apk/* # buildkit
+12.3kB	RUN /bin/sh -c libreoffice --version &&     pdftoppm -v &&     unoconvert --help > /dev/null 2>&1 # buildkit
+6.64MB	RUN /bin/sh -c pip3 install --break-system-packages unoserver # buildkit
+749MB	RUN /bin/sh -c apk add --no-cache     ca-certificates     poppler-utils     libreoffice     ttf-liberation     python3     py3-pip # buildkit
+0B	LABEL version=3.19
+0B	LABEL description=Alpine Linux with LibreOffice and PDF tools pre-installed
+0B	LABEL maintainer=fyredocs
+0B	CMD ["/bin/sh"]
+8.42MB	ADD alpine-minirootfs-3.19.9-aarch64.tar.gz / # buildkit

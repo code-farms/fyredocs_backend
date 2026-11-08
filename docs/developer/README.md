@@ -52,6 +52,7 @@ All service ports except the Caddy edge (80/443) are internal-only — reachable
 | Security hardening | [architecture/backend-hardening.md](architecture/backend-hardening.md) |
 | Load testing (k6) | [architecture/load-testing.md](architecture/load-testing.md) |
 | Production readiness (audit + deployment review) | [architecture/production-readiness.md](architecture/production-readiness.md) |
+| Next-generation document engine study (audit, 20 design docs, measured baseline) | [architecture/next-generation-document-engine/](architecture/next-generation-document-engine/) |
 | Backups & restore | [architecture/backup-and-restore.md](architecture/backup-and-restore.md) |
 | DB migration to a dedicated host (no data loss) | [architecture/db-migration.md](architecture/db-migration.md) |
 | Object storage (MinIO) | [architecture/object-storage.md](architecture/object-storage.md) |

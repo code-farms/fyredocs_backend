@@ -1,0 +1,15 @@
+fyredocs-base	9	ok
+fyredocs-go-builder	454	ok
+api-gateway	17	ok
+auth-service	6	ok
+job-service	5	ok
+convert-from-pdf	225	ok
+convert-to-pdf	11	ok
+organize-pdf	20	ok
+optimize-pdf	35	ok
+analytics-service	5	ok
+document-service	4	ok
+user-service	4	ok
+notification-service	3	ok
+ai-service	7	ok
+test-binaries	293	ok

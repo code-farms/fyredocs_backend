@@ -1,0 +1,16 @@
+2026/11/07 17:56:13 INFO No .env file found, relying on environment variables
+{"time":"2026-11-07T17:56:13.118366342Z","level":"WARN","msg":"OTLP collector unreachable, tracing disabled","service":"organize-pdf","endpoint":"http://otel-collector:4318"}
+{"time":"2026-11-07T17:56:13.132350967Z","level":"INFO","msg":"Database connection established","service":"organize-pdf"}
+{"time":"2026-11-07T17:56:13.133511009Z","level":"INFO","msg":"Redis connection established","service":"organize-pdf"}
+{"time":"2026-11-07T17:56:13.136457009Z","level":"INFO","msg":"NATS JetStream connection established","service":"organize-pdf","url":"nats://nats:4222"}
+{"time":"2026-11-07T17:56:13.142188967Z","level":"INFO","msg":"NATS JetStream streams ensured","service":"organize-pdf","streams":["JOBS_DISPATCH","JOBS_EVENTS","JOBS_DLQ","ANALYTICS"]}
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] GET    /metrics                  --> main.main.MetricsHandler.func9 (6 handlers)
+[GIN-debug] GET    /healthz                  --> main.main.func3 (6 handlers)
+[GIN-debug] POST   /internal/v1/detect-edges --> organize-pdf/internal/httpapi.RegisterInternalRoutes.detectEdgesHandler.func1 (7 handlers)
+[GIN-debug] GET    /readyz                   --> main.main.func4 (6 handlers)
+{"time":"2026-11-07T17:56:13.14244405Z","level":"INFO","msg":"worker starting","service":"organize-pdf","service":"organize-pdf","concurrency":4}
+{"time":"2026-11-07T17:56:13.142538467Z","level":"INFO","msg":"organize-pdf listening","service":"organize-pdf","port":"8084"}

@@ -1,0 +1,76 @@
+engine	fixture	size_bytes	run	wall_ms	peak_rss_bytes	status
+unoserver-daemon-start-corrected-arg(2 daemons)	-	0	1	10786	158MiB	ok
+unoserver-daemon-start-corrected-arg(2 daemons)	-	0	2	10754	195.5MiB	ok
+unoserver-daemon-start-corrected-arg(2 daemons)	-	0	3	10737	233.3MiB	ok
+libreoffice-warm-unoconvert	docx/small.docx	800321	1	210	0	ok
+libreoffice-cold-headless	docx/small.docx	800321	1	867	0	ok
+libreoffice-warm-unoconvert	docx/small.docx	800321	2	173	0	ok
+libreoffice-cold-headless	docx/small.docx	800321	2	793	276824064	ok
+libreoffice-warm-unoconvert	docx/small.docx	800321	3	168	0	ok
+libreoffice-cold-headless	docx/small.docx	800321	3	798	272734617	ok
+libreoffice-warm-unoconvert	docx/medium.docx	8000321	1	163	0	ok
+libreoffice-cold-headless	docx/medium.docx	8000321	1	663	248617369	ok
+libreoffice-warm-unoconvert	docx/medium.docx	8000321	2	194	248931942	ok
+libreoffice-cold-headless	docx/medium.docx	8000321	2	669	0	ok
+libreoffice-warm-unoconvert	docx/medium.docx	8000321	3	171	248512512	ok
+libreoffice-cold-headless	docx/medium.docx	8000321	3	667	0	ok
+libreoffice-warm-unoconvert	docx/large.docx	40000321	1	180	263716864	ok
+libreoffice-cold-headless	docx/large.docx	40000321	1	651	0	ok
+libreoffice-warm-unoconvert	docx/large.docx	40000321	2	165	262982860	ok
+libreoffice-cold-headless	docx/large.docx	40000321	2	637	0	ok
+libreoffice-warm-unoconvert	docx/large.docx	40000321	3	160	249665945	ok
+libreoffice-cold-headless	docx/large.docx	40000321	3	647	0	ok
+libreoffice-warm-unoconvert	xlsx/small.xlsx	800461	1	336	292972134	ok
+libreoffice-cold-headless	xlsx/small.xlsx	800461	1	626	0	ok
+libreoffice-warm-unoconvert	xlsx/small.xlsx	800461	2	208	292447846	ok
+libreoffice-cold-headless	xlsx/small.xlsx	800461	2	594	0	ok
+libreoffice-warm-unoconvert	xlsx/small.xlsx	800461	3	191	293286707	ok
+libreoffice-cold-headless	xlsx/small.xlsx	800461	3	579	0	ok
+libreoffice-warm-unoconvert	xlsx/medium.xlsx	8000461	1	186	302723891	ok
+libreoffice-cold-headless	xlsx/medium.xlsx	8000461	1	573	0	ok
+libreoffice-warm-unoconvert	xlsx/medium.xlsx	8000461	2	214	306918195	ok
+libreoffice-cold-headless	xlsx/medium.xlsx	8000461	2	579	0	ok
+libreoffice-warm-unoconvert	xlsx/medium.xlsx	8000461	3	195	307652198	ok
+libreoffice-cold-headless	xlsx/medium.xlsx	8000461	3	803	0	ok
+libreoffice-warm-unoconvert	pptx/small.pptx	800950	1	251	0	ok
+libreoffice-cold-headless	pptx/small.pptx	800950	1	560	0	ok
+libreoffice-warm-unoconvert	pptx/small.pptx	800950	2	189	0	ok
+libreoffice-cold-headless	pptx/small.pptx	800950	2	549	0	ok
+libreoffice-warm-unoconvert	pptx/small.pptx	800950	3	191	311007641	ok
+libreoffice-cold-headless	pptx/small.pptx	800950	3	574	0	ok
+libreoffice-warm-unoconvert	pptx/medium.pptx	8000950	1	300	0	ok
+libreoffice-cold-headless	pptx/medium.pptx	8000950	1	680	342779494	ok
+libreoffice-warm-unoconvert	pptx/medium.pptx	8000950	2	196	0	ok
+libreoffice-cold-headless	pptx/medium.pptx	8000950	2	676	470705766	ok
+libreoffice-warm-unoconvert	pptx/medium.pptx	8000950	3	221	0	ok
+libreoffice-cold-headless	pptx/medium.pptx	8000950	3	637	470915481	ok
+libreoffice-warm-unoconvert	html/small.html	801209	1	252	0	ok
+libreoffice-cold-headless	html/small.html	801209	1	740	405694054	ok
+libreoffice-warm-unoconvert	html/small.html	801209	2	202	0	ok
+libreoffice-cold-headless	html/small.html	801209	2	691	473327206	ok
+libreoffice-warm-unoconvert	html/small.html	801209	3	253	0	ok
+libreoffice-cold-headless	html/small.html	801209	3	754	320235110	ok
+libreoffice-warm-unoconvert	odt/small.odt	9065	1	217	313629081	ok
+libreoffice-cold-headless	odt/small.odt	9065	1	1013	313943654	ok
+libreoffice-warm-unoconvert	odt/small.odt	9065	2	394	0	ok
+libreoffice-cold-headless	odt/small.odt	9065	2	968	406008627	ok
+libreoffice-warm-unoconvert	odt/small.odt	9065	3	256	326945996	ok
+libreoffice-cold-headless	odt/small.odt	9065	3	916	360919859	ok
+ghostscript-compress-ebook	pdf/small.pdf	800003	1	207	0	ok
+ghostscript-compress-ebook	pdf/small.pdf	800003	2	158	0	ok
+ghostscript-compress-ebook	pdf/small.pdf	800003	3	156	0	ok
+ghostscript-compress-ebook	pdf/medium.pdf	8000005	1	186	0	ok
+ghostscript-compress-ebook	pdf/medium.pdf	8000005	2	185	2191523	ok
+ghostscript-compress-ebook	pdf/medium.pdf	8000005	3	178	0	ok
+ghostscript-compress-ebook	pdf/large.pdf	40000007	1	359	0	ok
+ghostscript-compress-ebook	pdf/large.pdf	40000007	2	343	13526630	ok
+ghostscript-compress-ebook	pdf/large.pdf	40000007	3	342	0	ok
+pdftoppm150+tesseract-eng-sequential(1 pages)	scanned-pdf/small.pdf	2176329	1	8913	182032793	ok
+pdftoppm150+tesseract-eng-sequential(1 pages)	scanned-pdf/small.pdf	2176329	2	8731	196608000	ok
+pdftoppm150+tesseract-eng-sequential(1 pages)	scanned-pdf/small.pdf	2176329	3	8656	210554060	ok
+pdftoppm150+tesseract-eng-sequential(4 pages)	scanned-pdf/medium.pdf	2177115	1	34516	295279001	ok
+pdftoppm150+tesseract-eng-sequential(4 pages)	scanned-pdf/medium.pdf	2177115	2	34889	277348352	ok
+pdftoppm150+tesseract-eng-sequential(4 pages)	scanned-pdf/medium.pdf	2177115	3	35191	278501785	ok
+pdftoppm150+tesseract-eng-sequential(12 pages)	scanned-pdf/large.pdf	2179228	1	104369	510132224	ok
+pdftoppm150+tesseract-eng-sequential(12 pages)	scanned-pdf/large.pdf	2179228	2	106304	513592524	ok
+pdftoppm150+tesseract-eng-sequential(12 pages)	scanned-pdf/large.pdf	2179228	3	104409	513068236	ok

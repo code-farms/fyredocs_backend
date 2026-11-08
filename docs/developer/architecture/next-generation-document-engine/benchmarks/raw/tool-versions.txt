@@ -1,0 +1,34 @@
+== convert-to-pdf (fyredocs-base) ==
+3.19.9
+LibreOffice 7.6.7.2 60(Build:2)
+Version: 3.7
+pdftoppm version 23.10.0
+Python 3.11.14
+16
+liberation
+liberation-sans-narrow
+== convert-from-pdf ==
+12.15
+LibreOffice 7.4.7.2 40(Build:2)
+10.00.0
+pdftoppm version 22.12.0
+Python 3.11.18
+Name: pdf2docx
+Version: 0.5.8
+Name: pymupdf
+Version: 2.1
+Name: pdfplumber
+Version: 0.11.4
+Name: openpyxl
+Version: 3.1.5
+122
+== optimize-pdf ==
+3.19.9
+10.05.1
+tesseract 5.3.3
+List of available languages in "/usr/share/tessdata/" (2): eng hin 
+pdftoppm version 23.10.0
+== organize-pdf ==
+3.19.9
+tesseract 5.3.3
+List of available languages in "/usr/share/tessdata/" (2): eng hin 

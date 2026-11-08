@@ -1,0 +1,12 @@
+0B	CMD ["./organize-pdf"]
+0B	VOLUME [/app/uploads /app/outputs]
+0B	EXPOSE [8084/tcp]
+0B	USER appuser
+40.7MB	RUN /bin/sh -c chown appuser:appuser organize-pdf # buildkit
+40.7MB	COPY /app/bin/organize-pdf . # buildkit
+16.4kB	RUN /bin/sh -c mkdir -p uploads outputs &&     chown -R appuser:appuser /app # buildkit
+8.19kB	WORKDIR /app
+41kB	RUN /bin/sh -c adduser -D -u 10001 appuser # buildkit
+68.3MB	RUN /bin/sh -c apk add --no-cache     ca-certificates     tesseract-ocr     tesseract-ocr-data-eng     tesseract-ocr-data-hin     && rm -rf /var/cache/apk/* # buildkit
+0B	CMD ["/bin/sh"]
+8.42MB	ADD alpine-minirootfs-3.19.9-aarch64.tar.gz / # buildkit

@@ -1,0 +1,35 @@
+[23:12:57] 1. image sizes
+[23:12:58] 2. binary sizes (cross-compiled, CGO_ENABLED=0 -trimpath -ldflags='-s -w')
+[23:15:53] 3. tool versions
+[23:15:59] 4/5. idle RSS + cold start (essentials stack: db redis nats minio)
+[23:23:03] 4/5. idle RSS + cold start (essentials stack: db redis nats minio)
+[23:27:17] 6. single-conversion timings
+[23:37:08] 6. single-conversion timings
+Error response from daemon: Could not find the file /tmp/fx in container 6fa2027ad23df419e1269c3861a674b551438e1b7259e6dd54650661edf0435b
+Error response from daemon: Could not find the file /tmp/fx in container 6fa2027ad23df419e1269c3861a674b551438e1b7259e6dd54650661edf0435b
+time="2026-11-07T23:45:17+05:30" level=error msg="Can't add file /Users/shivam/Desktop/projects/fyredocs/fyredocs_backend/scripts/k6/fixtures/out/docx/medium.docx to tar: io: read/write on closed pipe"
+Error response from daemon: Could not find the file /tmp/fx in container 6fa2027ad23df419e1269c3861a674b551438e1b7259e6dd54650661edf0435b
+time="2026-11-07T23:45:20+05:30" level=error msg="Can't add file /Users/shivam/Desktop/projects/fyredocs/fyredocs_backend/scripts/k6/fixtures/out/docx/large.docx to tar: io: read/write on closed pipe"
+Error response from daemon: Could not find the file /tmp/fx in container 6fa2027ad23df419e1269c3861a674b551438e1b7259e6dd54650661edf0435b
+Error response from daemon: Could not find the file /tmp/fx in container 6fa2027ad23df419e1269c3861a674b551438e1b7259e6dd54650661edf0435b
+time="2026-11-07T23:45:26+05:30" level=error msg="Can't add file /Users/shivam/Desktop/projects/fyredocs/fyredocs_backend/scripts/k6/fixtures/out/xlsx/medium.xlsx to tar: io: read/write on closed pipe"
+Error response from daemon: Could not find the file /tmp/fx in container 6fa2027ad23df419e1269c3861a674b551438e1b7259e6dd54650661edf0435b
+Error response from daemon: Could not find the file /tmp/fx in container 6fa2027ad23df419e1269c3861a674b551438e1b7259e6dd54650661edf0435b
+time="2026-11-07T23:45:32+05:30" level=error msg="Can't add file /Users/shivam/Desktop/projects/fyredocs/fyredocs_backend/scripts/k6/fixtures/out/pptx/medium.pptx to tar: io: read/write on closed pipe"
+Error response from daemon: Could not find the file /tmp/fx in container 6fa2027ad23df419e1269c3861a674b551438e1b7259e6dd54650661edf0435b
+Error response from daemon: Could not find the file /tmp/fx in container 6fa2027ad23df419e1269c3861a674b551438e1b7259e6dd54650661edf0435b
+Error response from daemon: Could not find the file /tmp/fx in container 6fa2027ad23df419e1269c3861a674b551438e1b7259e6dd54650661edf0435b
+Error response from daemon: Could not find the file /tmp/fx in container 820a5c523a7d9467df8050e6b6b341d0d938341b06ead52e633fcd267851e88f
+time="2026-11-07T23:45:52+05:30" level=error msg="Can't add file /Users/shivam/Desktop/projects/fyredocs/fyredocs_backend/scripts/k6/fixtures/out/pdf/medium.pdf to tar: io: read/write on closed pipe"
+Error response from daemon: Could not find the file /tmp/fx in container 820a5c523a7d9467df8050e6b6b341d0d938341b06ead52e633fcd267851e88f
+time="2026-11-07T23:45:53+05:30" level=error msg="Can't add file /Users/shivam/Desktop/projects/fyredocs/fyredocs_backend/scripts/k6/fixtures/out/pdf/large.pdf to tar: io: read/write on closed pipe"
+Error response from daemon: Could not find the file /tmp/fx in container 820a5c523a7d9467df8050e6b6b341d0d938341b06ead52e633fcd267851e88f
+time="2026-11-07T23:45:53+05:30" level=error msg="Can't add file /Users/shivam/Desktop/projects/fyredocs/fyredocs_backend/scripts/k6/fixtures/out/scanned-pdf/small.pdf to tar: io: read/write on closed pipe"
+Error response from daemon: Could not find the file /tmp/fx in container 820a5c523a7d9467df8050e6b6b341d0d938341b06ead52e633fcd267851e88f
+time="2026-11-07T23:45:54+05:30" level=error msg="Can't add file /Users/shivam/Desktop/projects/fyredocs/fyredocs_backend/scripts/k6/fixtures/out/scanned-pdf/medium.pdf to tar: io: read/write on closed pipe"
+Error response from daemon: Could not find the file /tmp/fx in container 820a5c523a7d9467df8050e6b6b341d0d938341b06ead52e633fcd267851e88f
+time="2026-11-07T23:45:54+05:30" level=error msg="Can't add file /Users/shivam/Desktop/projects/fyredocs/fyredocs_backend/scripts/k6/fixtures/out/scanned-pdf/large.pdf to tar: io: read/write on closed pipe"
+Error response from daemon: Could not find the file /tmp/fx in container 820a5c523a7d9467df8050e6b6b341d0d938341b06ead52e633fcd267851e88f
+[23:46:03] done — raw results in /Users/shivam/Desktop/projects/fyredocs/fyredocs_backend/docs/developer/architecture/next-generation-document-engine/benchmarks/raw
+[07:58:55] 6. single-conversion timings
+[08:07:36] done — raw results in /Users/shivam/Desktop/projects/fyredocs/fyredocs_backend/docs/developer/architecture/next-generation-document-engine/benchmarks/raw

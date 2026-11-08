@@ -1,0 +1,15 @@
+2026/11/07 17:56:45 INFO No .env file found, relying on environment variables
+{"time":"2026-11-07T17:56:45.55851551Z","level":"WARN","msg":"OTLP collector unreachable, tracing disabled","service":"optimize-pdf","endpoint":"http://otel-collector:4318"}
+{"time":"2026-11-07T17:56:45.57200576Z","level":"INFO","msg":"Database connection established","service":"optimize-pdf"}
+{"time":"2026-11-07T17:56:45.572705385Z","level":"INFO","msg":"Redis connection established","service":"optimize-pdf"}
+{"time":"2026-11-07T17:56:45.574560302Z","level":"INFO","msg":"NATS JetStream connection established","service":"optimize-pdf","url":"nats://nats:4222"}
+{"time":"2026-11-07T17:56:45.576606843Z","level":"INFO","msg":"NATS JetStream streams ensured","service":"optimize-pdf","streams":["JOBS_DISPATCH","JOBS_EVENTS","JOBS_DLQ","ANALYTICS"]}
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] GET    /metrics                  --> main.main.MetricsHandler.func9 (6 handlers)
+[GIN-debug] GET    /healthz                  --> main.main.func3 (6 handlers)
+[GIN-debug] GET    /readyz                   --> main.main.func4 (6 handlers)
+{"time":"2026-11-07T17:56:45.576757802Z","level":"INFO","msg":"worker starting","service":"optimize-pdf","service":"optimize-pdf","concurrency":2}
+{"time":"2026-11-07T17:56:45.57681401Z","level":"INFO","msg":"optimize-pdf listening","service":"optimize-pdf","port":"8085"}

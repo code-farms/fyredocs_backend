@@ -1,0 +1,39 @@
+Starting unoserver on 127.0.0.1:2002 (profile file:///tmp/uno-profile-2002)...
+Starting unoserver on 127.0.0.1:2003 (profile file:///tmp/uno-profile-2003)...
+Traceback (most recent call last):
+  File "/usr/bin/unoserver", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/server.py", line 673, in main
+    user_installation = Path(args.user_installation).as_uri()
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/pathlib.py", line 566, in as_uri
+    raise ValueError("relative path can't be expressed as a file URI")
+ValueError: relative path can't be expressed as a file URI
+Traceback (most recent call last):
+  File "/usr/bin/unoserver", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/server.py", line 673, in main
+    user_installation = Path(args.user_installation).as_uri()
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/pathlib.py", line 566, in as_uri
+    raise ValueError("relative path can't be expressed as a file URI")
+ValueError: relative path can't be expressed as a file URI
+first unoserver process died during startup
+WARNING: unoserver did not become ready; conversions will use direct LibreOffice fallback
+2026/11/07 17:53:51 INFO No .env file found, relying on environment variables
+{"time":"2026-11-07T17:53:51.833000305Z","level":"WARN","msg":"OTLP collector unreachable, tracing disabled","service":"convert-to-pdf","endpoint":"http://otel-collector:4318"}
+{"time":"2026-11-07T17:53:51.847879263Z","level":"INFO","msg":"Database connection established","service":"convert-to-pdf"}
+{"time":"2026-11-07T17:53:51.857087346Z","level":"INFO","msg":"Redis connection established","service":"convert-to-pdf"}
+{"time":"2026-11-07T17:53:51.897875555Z","level":"INFO","msg":"NATS JetStream connection established","service":"convert-to-pdf","url":"nats://nats:4222"}
+{"time":"2026-11-07T17:53:51.949938638Z","level":"INFO","msg":"NATS JetStream streams ensured","service":"convert-to-pdf","streams":["JOBS_DISPATCH","JOBS_EVENTS","JOBS_DLQ","ANALYTICS"]}
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+{"time":"2026-11-07T17:53:51.950386055Z","level":"INFO","msg":"worker starting","service":"convert-to-pdf","service":"convert-to-pdf","concurrency":2}
+[GIN-debug] GET    /metrics                  --> main.main.MetricsHandler.func9 (6 handlers)
+[GIN-debug] GET    /healthz                  --> main.main.func3 (6 handlers)
+[GIN-debug] GET    /readyz                   --> main.main.func4 (6 handlers)
+{"time":"2026-11-07T17:53:51.951994263Z","level":"INFO","msg":"convert-to-pdf listening","service":"convert-to-pdf","port":"8083"}

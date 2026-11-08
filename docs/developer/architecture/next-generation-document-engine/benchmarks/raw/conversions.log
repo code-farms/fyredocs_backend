@@ -1,0 +1,1044 @@
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.docx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.docx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.docx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/medium.docx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/medium.docx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/medium.docx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/large.docx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/large.docx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/large.docx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.xlsx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.xlsx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.xlsx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/medium.xlsx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/medium.xlsx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/medium.xlsx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.pptx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.pptx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.pptx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/medium.pptx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/medium.pptx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/medium.pptx does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.html does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.html does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.html does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.odt does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.odt does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+Traceback (most recent call last):
+  File "/usr/bin/unoconvert", line 8, in <module>
+    sys.exit(converter_main())
+             ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 442, in converter_main
+    result = client.convert(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/site-packages/unoserver/client.py", line 158, in convert
+    result = proxy.convert(
+             ^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1122, in __call__
+    return self.__send(self.__name, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1464, in __request
+    response = self.__transport.request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1166, in request
+    return self.single_request(host, handler, request_body, verbose)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1182, in single_request
+    return self.parse_response(resp)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 1354, in parse_response
+    return u.close()
+           ^^^^^^^^^
+  File "/usr/lib/python3.11/xmlrpc/client.py", line 668, in close
+    raise Fault(**self._stack[0])
+xmlrpc.client.Fault: <Fault 1: "<class 'RuntimeError'>:Path /tmp/fx/small.odt does not exist.">
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+Error: source file could not be loaded
+GPL Ghostscript 10.05.1: Unrecoverable error, exit code 1
+GPL Ghostscript 10.05.1: Unrecoverable error, exit code 1
+GPL Ghostscript 10.05.1: Unrecoverable error, exit code 1
+GPL Ghostscript 10.05.1: Unrecoverable error, exit code 1
+GPL Ghostscript 10.05.1: Unrecoverable error, exit code 1
+GPL Ghostscript 10.05.1: Unrecoverable error, exit code 1
+GPL Ghostscript 10.05.1: Unrecoverable error, exit code 1
+GPL Ghostscript 10.05.1: Unrecoverable error, exit code 1
+GPL Ghostscript 10.05.1: Unrecoverable error, exit code 1
+I/O Error: Couldn't open file '/tmp/fx/scan-small.pdf': No such file or directory.
+I/O Error: Couldn't open file '/tmp/fx/scan-small.pdf': No such file or directory.
+I/O Error: Couldn't open file '/tmp/fx/scan-small.pdf': No such file or directory.
+I/O Error: Couldn't open file '/tmp/fx/scan-medium.pdf': No such file or directory.
+I/O Error: Couldn't open file '/tmp/fx/scan-medium.pdf': No such file or directory.
+I/O Error: Couldn't open file '/tmp/fx/scan-medium.pdf': No such file or directory.
+I/O Error: Couldn't open file '/tmp/fx/scan-large.pdf': No such file or directory.
+I/O Error: Couldn't open file '/tmp/fx/scan-large.pdf': No such file or directory.
+I/O Error: Couldn't open file '/tmp/fx/scan-large.pdf': No such file or directory.
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.docx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.docx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.docx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/medium.docx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/medium.docx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/medium.docx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/large.docx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/large.docx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/large.docx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.xlsx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.xlsx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.xlsx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/medium.xlsx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/medium.xlsx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/medium.xlsx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.pptx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.pptx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.pptx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/medium.pptx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/medium.pptx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/medium.pptx.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.html.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.html.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.html.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.odt.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.odt.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Connecting.
+INFO:unoserver:Converting.
+INFO:unoserver:Saved to /tmp/out/small.odt.warm.pdf.
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx

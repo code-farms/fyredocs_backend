@@ -1,0 +1,5 @@
+worker	idle_rss_bytes	idle_cpu_pct	settle_seconds
+convert-to-pdf	22.03MiB / 1GiB	0.02%	20
+convert-from-pdf	58.69MiB / 1GiB	0.28%	20
+organize-pdf	10.8MiB / 1GiB	0.02%	20
+optimize-pdf	44.51MiB / 1GiB	0.01%	20

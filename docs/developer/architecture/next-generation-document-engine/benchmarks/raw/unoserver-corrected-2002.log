@@ -1,0 +1,13 @@
+INFO:unoserver:Starting unoserver 3.7.
+INFO:unoserver:Command: /usr/bin/soffice --headless --invisible --nocrashreport --nodefault --nologo --nofirststartwizard --norestore -env:UserInstallation=file:///tmp/uno-fixed-2002 --accept=socket,host=127.0.0.1,port=2102,tcpNoDelay=1;urp;StarOffice.ComponentContext
+javaldx: Could not find a Java Runtime Environment!
+Warning: failed to read path from javaldx
+INFO:unoserver:Starting UnoConverter.
+INFO:unoserver:Starting UnoComparer.
+INFO:unoserver:Started.
+INFO:unoserver:Server PID: 258
+127.0.0.1 - - [08/Nov/2026 02:29:32] "POST /RPC2 HTTP/1.1" 200 -
+INFO:unoserver:Opening /fx/odt/small.odt for input
+INFO:unoserver:Exporting to /tmp/out/probe.pdf
+INFO:unoserver:Using writer_pdf_Export export filter from None to pdf_Portable_Document_Format
+127.0.0.1 - - [08/Nov/2026 02:29:32] "POST /RPC2 HTTP/1.1" 200 -
