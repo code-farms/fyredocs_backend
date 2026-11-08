@@ -34,7 +34,7 @@ graph TB
         subgraph Processing["processing package"]
             PROC["ProcessFile(toolType, ...)"]
             OFFICE["officeToPDF()"]
-            UNO["unoconvert<br/>(UNOSERVER_HOST:UNOSERVER_PORT)"]
+            UNO["unoconvert → unoserver pool<br/>(UNOSERVER_HOST:UNOSERVER_PORT…)<br/>daemons started, restarted and recycled<br/>by the worker's Supervisor (daemons.go)"]
             FALLBACK["libreoffice --headless<br/>(fallback)"]
             IMG["image-to-pdf / img-to-pdf<br/>(pdfcpu, multi-image → multi-page)"]
         end
@@ -59,7 +59,7 @@ graph TB
 
     PROC --> OFFICE
     OFFICE --> UNO
-    OFFICE -.->|on connect failure| FALLBACK
+    OFFICE -.->|no daemon, timeout or error| FALLBACK
     PROC --> IMG
 
     DISPATCH -->|status updates| JOB_MODEL

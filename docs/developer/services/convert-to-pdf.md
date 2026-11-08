@@ -50,15 +50,17 @@ Inputs and outputs live in S3-compatible object storage (MinIO in compose), not 
 
 ### unoserver Daemon
 
-The container image runs a persistent LibreOffice instance via `unoserver`, started by `entrypoint.sh` before the Go binary. The `officeToPDF()` function dispatches via `unoconvert` over a local socket (`UNOSERVER_HOST:UNOSERVER_PORT`, default `127.0.0.1:2002`), eliminating LibreOffice cold-start cost per conversion. If the daemon is unreachable, the function falls back to spawning `libreoffice --headless` directly.
+The worker runs a pool of persistent LibreOffice instances via `unoserver`, which it starts and supervises itself before taking jobs (`processing/daemons.go`). The `officeToPDF()` function dispatches via `unoconvert` over a local socket (`UNOSERVER_HOST:UNOSERVER_PORT`, default `127.0.0.1:2002`), eliminating LibreOffice cold-start cost per conversion. If the daemon is unreachable, the function falls back to spawning `libreoffice --headless` directly.
 
 The pool is visible, not just best-effort:
 
 - **Readiness:** `/readyz` returns 503 when no pooled daemon port accepts a connection. A partial pool stays ready and reports `ok (n/m daemons up)`. The compose healthcheck uses `/healthz`, so a dead pool never triggers a restart; jobs keep completing on the cold path.
 - **Fast fallback:** before calling `unoconvert`, the worker dials the pooled daemon port (200 ms). If nothing listens it falls back at once with reason `no_daemon`. Without this check the `unoconvert` client retries the connection for about 40 s (5 tries, 10 s apart), so every job on a dead pool lost the full 30 s per-call deadline before the cold conversion even began.
+- **Size-scaled deadline:** each `unoconvert` call gets `max(30 s, 2 s + 1.5 s/MB)` (the documented LibreOffice cost model), still capped by the 10-minute job context. The old fixed 30 s failed every warm conversion above roughly 18 MB.
+- **No ghost work:** if a call hits its deadline or the job is cancelled mid-conversion, the worker kills that daemon's whole process group (`recycleDaemon`) before returning the port. Otherwise the daemon keeps converting the abandoned file and the next job on that port queues behind it. Cancellations are not counted as fallbacks.
 - **Metric:** every cold fallback increments `convert_fallback_total{service="convert-to-pdf",reason}` with `reason` one of `no_daemon` (nothing listening on the pooled port), `timeout` (unoconvert deadline fired) or `daemon_error`. The `OfficeConversionsOnColdFallback` alert fires on a sustained rate.
 
-`entrypoint.sh` starts each daemon with three load-bearing arguments:
+The supervisor starts one daemon per port from `UnoserverPorts()` — the same list the pool hands out, so the two can no longer disagree — with three load-bearing arguments:
 
 | Argument | Value | Why |
 |---|---|---|
@@ -66,7 +68,24 @@ The pool is visible, not just best-effort:
 | `--uno-port` | `<port> + UNOSERVER_UNO_PORT_OFFSET` | unoserver 3.x defaults it to 2002 and refuses to start when it equals `--port` |
 | one profile per daemon | — | a shared profile lock lets only the first daemon start |
 
-The entrypoint gates on the first daemon with `unoping`, then starts the Go worker. unoserver is pinned (`unoserver==3.7` in `deployment/base-alpine-libreoffice.Dockerfile`) because the entrypoint is written against that CLI.
+Each daemon also gets `--conversion-timeout $UNOSERVER_CONVERSION_TIMEOUT` as a daemon-side backstop. Before taking jobs the worker waits up to 30 s for the first daemon to answer `unoping`; if it does not, the worker starts anyway on the cold path. unoserver is pinned (`unoserver==3.7` in `deployment/base-alpine-libreoffice.Dockerfile`) because the supervisor is written against that CLI.
+
+**Daemon lifecycle** (`processing/daemons.go`, `Supervisor`):
+
+| Event | What happens |
+|---|---|
+| Daemon exits (LibreOffice crash, `--conversion-timeout`, worker recycle) | The supervisor SIGKILLs anything left in the daemon's process group, then restarts it. An orphaned `soffice.bin` would otherwise hold the profile lock and stop the new daemon starting. |
+| Restart delay | 0 s after a deliberate recycle. After a crash, 1 s plus 1 s per consecutive quick crash, capped at 30 s, reset after a minute of uptime. |
+| Container stop (`TERM`) | The worker drains in-flight jobs first, then each daemon's group gets TERM and, after 2 s, KILL. Measured about 6.5 s, exit 0. |
+| Worker exits | The worker is the container's main process (`entrypoint.sh` only `exec`s it), so the container exits with it. |
+
+Each daemon leads its own process group (`Setpgid`) holding unoserver, `oosplash` and `soffice.bin`, and every operation signals the whole group. Signalling unoserver alone does not stop LibreOffice: `oosplash` lingers and unoserver waits on it.
+
+Metrics: `engine_daemons_running{service}` (processes running; a process serves only once LibreOffice is up, so readiness still dials the ports) and `engine_daemon_restarts_total{service,reason}` with `reason` `crash` or `recycle`. The `EngineDaemonCrashLoop` alert fires on sustained crashes.
+
+Measured on the 2026-11-08 image (arm64 VM): ready in about 6 s; a recycled daemon serves again in 7–8 s, with no orphaned `soffice.bin`.
+
+**Rollback (one release only):** `UNOSERVER_SUPERVISOR=shell` restores the previous shell supervisor in `entrypoint.sh` and the Go worker leaves the daemons alone; recycling then uses the PID file `/tmp/uno-lo-<port>.pid` the shell daemons write. Verified on 2026-11-08 with the same checks. The shell path, the flag and the PID-file code are to be deleted after a release in production.
 
 > **History:** until the fix for finding D23/D23b the entrypoint passed a `file://` profile and no `--uno-port`, so no daemon ever started, the `/dev/null` startup probe could not succeed, and every Office/HTML job ran cold while `/readyz` stayed green. See `docs/developer/architecture/next-generation-document-engine/01-existing-system-audit.md`.
 
@@ -155,8 +174,10 @@ This worker writes to `processing_jobs` and `file_metadata` (the same tables own
 | `WORKER_CONCURRENCY` | `2` | Max concurrent jobs processed in parallel |
 | `UNOSERVER_HOST` | `127.0.0.1` | unoserver daemon host |
 | `UNOSERVER_PORT` | `2002` | unoserver daemon port |
-| `UNOSERVER_INSTANCES` | `WORKER_CONCURRENCY + 1` | Size of the unoserver daemon pool. When unset, auto-sizes to one warm daemon per concurrent job plus a spare so the cold-start fallback is unreachable. Set explicitly to pin. **Note:** `entrypoint.sh` defaults to 2 when unset, so set it explicitly (`deploy.sh` does). |
-| `UNOSERVER_UNO_PORT_OFFSET` | `100` | Offset from each daemon's XML-RPC port to its LibreOffice UNO port (`--uno-port`). Must be ≥ `UNOSERVER_INSTANCES`. Read by `entrypoint.sh` only. |
+| `UNOSERVER_INSTANCES` | `WORKER_CONCURRENCY + 1` | Size of the unoserver daemon pool. When unset, auto-sizes to one warm daemon per concurrent job plus a spare so the cold-start fallback is unreachable. Set explicitly to pin (`deploy.sh` does, sized to the memory cap). **Note:** unset now really means `WORKER_CONCURRENCY + 1` daemons (3 at the default), because the supervisor reads this same value; the old shell default of 2 applies only under `UNOSERVER_SUPERVISOR=shell`. |
+| `UNOSERVER_UNO_PORT_OFFSET` | `100` | Offset from each daemon's XML-RPC port to its LibreOffice UNO port (`--uno-port`). Must be ≥ `UNOSERVER_INSTANCES`. Read by the supervisor (and the shell fallback). |
+| `UNOSERVER_CONVERSION_TIMEOUT` | `600` | Seconds. Daemon-side backstop (`--conversion-timeout`): unoserver kills its LibreOffice and exits, and the supervisor restarts it. The worker's size-scaled deadline normally fires first. |
+| `UNOSERVER_SUPERVISOR` | `go` | `go`: the worker supervises the daemons. `shell`: one-release rollback to the shell supervisor in `entrypoint.sh`. Read by both `entrypoint.sh` and the worker. |
 | `RESULT_CACHE_TTL_SECONDS` | `3600` | Lifetime of result-cache entries. Keep ≤ outputs bucket TTL. `0` disables caching. |
 | `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing (currently honoured via `AckWait` rather than a context deadline in code) |
 
@@ -385,19 +406,19 @@ Office→PDF conversions run via `unoconvert` against a **pool** of unoserver
 (LibreOffice) daemons rather than a single one, so conversions run in parallel
 instead of serializing on one port.
 
-- The entrypoint launches `UNOSERVER_INSTANCES` daemons (default 2) on
-  consecutive ports from `UNOSERVER_PORT` (2002, 2003, …), each with its own
-  LibreOffice `--user-installation` profile (required — a shared profile
-  conflicts on the lock). `deploy.sh` always **pins** `UNOSERVER_INSTANCES`
-  explicitly (see Sizing below), so the entrypoint's daemon count and the Go
-  pool's `UnoserverPorts()` always agree — leaving it unset risks the Go pool
-  expecting `WORKER_CONCURRENCY + 1` ports while the entrypoint launches only 2.
+- The worker's supervisor launches one daemon per port in `UnoserverPorts()`
+  (`UNOSERVER_INSTANCES` daemons on consecutive ports from `UNOSERVER_PORT`:
+  2002, 2003, …), each with its own LibreOffice `--user-installation` profile
+  (required — a shared profile conflicts on the lock). The pool hands out the
+  same list, so daemon count and pool size always agree.
 - `processing.tryUnoconvert` acquires a port from a buffered-channel pool
   (`unopool.go`), bounding concurrent conversions to the pool size and blocking
   when all daemons are busy; the port is released **before** any direct-LibreOffice
   fallback so the fallback never holds a daemon slot.
 - `UnoserverPorts()` is the single source of truth shared by the pool and the
-  `/healthz` check (healthy if ≥1 daemon port is reachable).
+  `/readyz` check (ready only if ≥1 daemon port is reachable).
+- Daemons are supervised and restarted individually; see "Daemon lifecycle"
+  under "unoserver Daemon" above.
 - **Sizing**: handled automatically by `deploy.sh`'s 70% resource budget — it
   derives `UNOSERVER_INSTANCES` from this container's *scaled* memory cap
   (~300 MB per daemon + ~200 MB Go overhead), bounded by its CPU allowance and

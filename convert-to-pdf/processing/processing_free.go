@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,86 @@ func envOrDefault(key, fallback string) string {
 // tryUnoconvert. The daemon is on the same host (loopback), so a live one
 // answers in microseconds; 200 ms only matters when the port is filtered.
 const daemonDialTimeout = 200 * time.Millisecond
+
+// Size-scaled unoconvert deadline: the documented LibreOffice cost model is
+// ~2 s + ~1.5 s per MB of input (docs/developer/architecture/
+// production-readiness.md). The old fixed 30 s deadline therefore failed every
+// warm conversion above roughly 18 MB, sending large files to a cold
+// LibreOffice that then had to redo the work from scratch.
+const (
+	// unoconvertMinTimeout is the floor, so small files keep the old budget.
+	unoconvertMinTimeout = 30 * time.Second
+	// unoconvertBaseCost is the fixed per-conversion cost in the model.
+	unoconvertBaseCost = 2 * time.Second
+	// unoconvertPerMB is the per-megabyte cost in the model.
+	unoconvertPerMB = 1500 * time.Millisecond
+)
+
+// unoconvertTimeout returns max(unoconvertMinTimeout, base + perMB × MB) for an
+// input of inputBytes. It is not capped here: context.WithTimeout on the job
+// context keeps the job deadline (10 minutes, internal/worker) as the ceiling.
+// A non-positive size (unknown) gets the floor.
+func unoconvertTimeout(inputBytes int64) time.Duration {
+	if inputBytes <= 0 {
+		return unoconvertMinTimeout
+	}
+	scaled := unoconvertBaseCost + time.Duration(float64(unoconvertPerMB)*float64(inputBytes)/(1<<20))
+	if scaled < unoconvertMinTimeout {
+		return unoconvertMinTimeout
+	}
+	return scaled
+}
+
+// recycleDaemon makes the daemon on port start fresh, abandoning whatever it is
+// converting. Under Go supervision (the default) it asks the Supervisor, which
+// owns the daemon's process group. Under the one-release shell fallback
+// (UNOSERVER_SUPERVISOR=shell) it uses the PID file the shell daemons write.
+func recycleDaemon(port string) {
+	if s := activeSupervisor.Load(); s != nil {
+		s.Recycle(port)
+		return
+	}
+	recycleShellDaemon(port)
+}
+
+// daemonPIDFile is where a shell-supervised daemon on port records its
+// LibreOffice PID (--libreoffice-pid-file). NOTE: contract with supervise() in
+// convert-to-pdf/entrypoint.sh, which passes this exact path; change both
+// together. A var so tests can point it at a temp dir. Remove with the shell
+// fallback.
+var daemonPIDFile = func(port string) string {
+	return filepath.Join(os.TempDir(), "uno-lo-"+port+".pid")
+}
+
+// recycleShellDaemon kills a shell-supervised daemon's whole process group, so
+// its shell supervisor starts a fresh one.
+//
+// It kills the group, not the PID in the file: that PID is LibreOffice's
+// oosplash launcher, and killing only the launcher orphans soffice.bin, which
+// keeps the profile lock and UNO port so the restarted daemon cannot start
+// (measured 2026-11-08). The shell starts each daemon under setsid, so the group
+// holds exactly unoserver, oosplash and soffice.bin.
+//
+// Best-effort: a missing or stale PID file (daemon already restarting) is
+// logged and ignored — the pre-flight dial covers the gap.
+func recycleShellDaemon(port string) {
+	path := daemonPIDFile(port)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		slog.Warn("cannot recycle unoserver daemon: no LibreOffice PID file", "port", port, "path", path, "error", err)
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 0 {
+		slog.Warn("cannot recycle unoserver daemon: bad LibreOffice PID file", "port", port, "path", path, "content", string(raw))
+		return
+	}
+	if err := killDaemonGroup(pid); err != nil {
+		slog.Warn("cannot recycle unoserver daemon: kill failed", "port", port, "pid", pid, "error", err)
+		return
+	}
+	slog.Warn("recycled unoserver daemon after abandoned conversion", "port", port, "libreofficePid", pid)
+}
 
 // tryUnoconvert attempts a conversion through a pooled unoserver daemon. It
 // blocks until a daemon port is free (bounding concurrency to the pool size),
@@ -56,8 +137,11 @@ func tryUnoconvert(ctx context.Context, inputPath, outputPath, convertTo string)
 		return false
 	}
 
-	// Use a 30s timeout so a hung daemon falls back faster.
-	unoCtx, unoCancel := context.WithTimeout(ctx, 30*time.Second)
+	var inputBytes int64
+	if info, err := os.Stat(inputPath); err == nil {
+		inputBytes = info.Size()
+	}
+	unoCtx, unoCancel := context.WithTimeout(ctx, unoconvertTimeout(inputBytes))
 	defer unoCancel()
 	cmd := procexec.Command(unoCtx, "unoconvert",
 		"--host", pool.host, "--port", port,
@@ -66,6 +150,20 @@ func tryUnoconvert(ctx context.Context, inputPath, outputPath, convertTo string)
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		return true
+	}
+	if unoCtx.Err() != nil {
+		// The client was killed, but the daemon is still converting the file
+		// and would make the next job on this port queue behind work nobody
+		// wants. Restart it (see recycleDaemon) before the deferred
+		// release hands the port out again; the pre-flight dial then routes jobs
+		// to the cold path until the fresh daemon is listening.
+		recycleDaemon(port)
+	}
+	if ctx.Err() != nil {
+		// The job itself was cancelled or ran out of time: there is nothing to
+		// fall back for, and counting it would make the fallback metric
+		// report cancellations as pool problems.
+		return false
 	}
 	reason := fallbackReason(unoCtx.Err(), string(output))
 	metrics.ConvertFallback.WithLabelValues("convert-to-pdf", reason).Inc()

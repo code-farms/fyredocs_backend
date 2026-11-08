@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -65,5 +67,46 @@ func TestTryUnoconvertDeadDaemonFailsFast(t *testing.T) {
 	}
 	if got := len(pool.ports); got != 1 {
 		t.Errorf("pool has %d free ports after the call, want 1 (port not released)", got)
+	}
+}
+
+// TestUnoconvertTimeout pins the size-scaled deadline (2 s + 1.5 s/MB, floor
+// 30 s). The 20 MB and 100 MB rows are the cases the old fixed 30 s deadline
+// failed on every time, sending large files to a cold LibreOffice.
+func TestUnoconvertTimeout(t *testing.T) {
+	const mb = 1 << 20
+	cases := []struct {
+		bytes int64
+		want  time.Duration
+	}{
+		{-1, 30 * time.Second},
+		{0, 30 * time.Second},
+		{1 * mb, 30 * time.Second},
+		{18 * mb, 30 * time.Second},
+		{20 * mb, 32 * time.Second},
+		{100 * mb, 152 * time.Second},
+		{500 * mb, 752 * time.Second},
+	}
+	for _, tc := range cases {
+		if got := unoconvertTimeout(tc.bytes); got != tc.want {
+			t.Errorf("unoconvertTimeout(%d) = %v, want %v", tc.bytes, got, tc.want)
+		}
+	}
+}
+
+// TestRecycleDaemonToleratesMissingOrBadPIDFile: recycling is best-effort and
+// must never panic or kill something arbitrary when the file is absent or junk.
+func TestRecycleDaemonToleratesMissingOrBadPIDFile(t *testing.T) {
+	dir := t.TempDir()
+	saved := daemonPIDFile
+	daemonPIDFile = func(port string) string { return filepath.Join(dir, "uno-lo-"+port+".pid") }
+	t.Cleanup(func() { daemonPIDFile = saved })
+
+	recycleDaemon("2002") // missing file
+	for _, junk := range []string{"", "abc", "0", "-5"} {
+		if err := os.WriteFile(daemonPIDFile("2003"), []byte(junk), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		recycleDaemon("2003")
 	}
 }

@@ -153,3 +153,16 @@ func TestConvertFallbackLabels(t *testing.T) {
 		t.Errorf("metric name changed: %s", desc)
 	}
 }
+
+// TestEngineDaemonMetricNames guards the names and labels the dashboards and
+// alerts use for supervised engine daemons.
+func TestEngineDaemonMetricNames(t *testing.T) {
+	restarts := EngineDaemonRestarts.WithLabelValues("svc", "recycle").Desc().String()
+	if !strings.Contains(restarts, `"engine_daemon_restarts_total"`) || !strings.Contains(restarts, "reason") {
+		t.Errorf("restart counter changed: %s", restarts)
+	}
+	running := EngineDaemonsRunning.WithLabelValues("svc").Desc().String()
+	if !strings.Contains(running, `"engine_daemons_running"`) {
+		t.Errorf("running gauge changed: %s", running)
+	}
+}

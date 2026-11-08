@@ -195,3 +195,52 @@ func TestCancelledLibreOfficeLeavesNoOrphansBinaries(t *testing.T) {
 		}
 	}
 }
+
+// TestSupervisorRealUnoserverBinaries runs the Go supervisor against real
+// unoserver + LibreOffice: daemons become ready, a conversion goes through the
+// warm path, a recycle brings a fresh daemon back, and Stop leaves no
+// soffice.bin behind. Uses the default ports (2002…), which the package-level
+// pool was built from at init.
+func TestSupervisorRealUnoserverBinaries(t *testing.T) {
+	if before := sofficeProcesses(t); len(before) != 0 {
+		t.Skipf("soffice already running (%v)", before)
+	}
+	s := NewSupervisor()
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(s.Stop)
+	if !s.WaitReady(context.Background(), 90*time.Second) {
+		t.Fatal("daemon did not become ready")
+	}
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source.txt")
+	if err := os.WriteFile(src, []byte("Fyredocs supervisor check\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out.pdf")
+	start := time.Now()
+	if !tryUnoconvert(context.Background(), src, out, "pdf") {
+		t.Fatal("warm conversion through the supervised daemon failed")
+	}
+	assertValidPDFOutput(t, out)
+	t.Logf("warm conversion: %v", time.Since(start))
+
+	port := s.daemons[0].port
+	if !s.Recycle(port) {
+		t.Fatal("Recycle reported no running daemon")
+	}
+	if !s.WaitReady(context.Background(), 90*time.Second) {
+		t.Fatal("recycled daemon did not come back")
+	}
+
+	s.Stop()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(sofficeProcesses(t)) != 0 && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if left := sofficeProcesses(t); len(left) != 0 {
+		t.Fatalf("soffice still running after Stop: %v", left)
+	}
+}

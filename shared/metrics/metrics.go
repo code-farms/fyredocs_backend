@@ -68,6 +68,24 @@ var (
 		Help: "Conversions that fell back from a warm engine to a cold one.",
 	}, []string{"service", "reason"})
 
+	// EngineDaemonRestarts counts restarts of supervised engine daemons (today:
+	// unoserver in convert-to-pdf). reason is "recycle" when the worker killed the
+	// daemon on purpose (a conversion overran or was cancelled) and "crash" for
+	// every other exit. A steady crash rate means LibreOffice keeps dying; a high
+	// recycle rate means conversions keep exceeding their size-scaled deadline.
+	EngineDaemonRestarts = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "engine_daemon_restarts_total",
+		Help: "Restarts of supervised engine daemons, by reason (crash, recycle).",
+	}, []string{"service", "reason"})
+
+	// EngineDaemonsRunning is the number of supervised engine daemon processes
+	// currently running. A process can be running before it serves requests
+	// (LibreOffice takes seconds to start); readiness checks the ports instead.
+	EngineDaemonsRunning = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "engine_daemons_running",
+		Help: "Supervised engine daemon processes currently running.",
+	}, []string{"service"})
+
 	// JobDuration is end-to-end job latency: queued (dispatch) → terminal
 	// event, including retries and DLQ dwell. Observed once per terminal
 	// outcome in shared/queue.recordTerminalJobMetric. Buckets span seconds

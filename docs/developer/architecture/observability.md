@@ -50,6 +50,13 @@ The Go services are instrumented for observability out of the box:
   dead pool once went unnoticed for months. convert-to-pdf's `/readyz` also
   returns 503 while no daemon is up.
 
+  `engine_daemons_running` (label `service`) and
+  `engine_daemon_restarts_total` (labels `service`/`reason`) come from the
+  worker's own daemon supervisor (convert-to-pdf's unoserver pool). `reason` is
+  `recycle` when the worker killed a daemon on purpose to abandon an overrunning
+  or cancelled conversion, and `crash` otherwise. The `EngineDaemonCrashLoop`
+  alert watches crashes only.
+
   **Low-cardinality route labels.** The api-gateway labels
   `http_request_duration_seconds` by the **route template** (e.g. `/api/jobs`), not
   the raw request path. Raw paths carry per-resource UUIDs

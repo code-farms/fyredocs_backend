@@ -215,6 +215,22 @@ groups:
           summary: "convert-to-pdf is converting Office files on the cold LibreOffice fallback"
           description: "Fallback reason {{ $labels.reason }} at {{ $value | humanize }}/s. no_daemon means the unoserver pool is down; timeout means conversions exceed the unoconvert deadline. Office jobs are several times slower until fixed."
 
+      # A supervised engine daemon keeps crashing. Deliberate recycles
+      # (reason="recycle") are excluded: they are the worker abandoning an
+      # overrunning conversion, which OfficeConversionsOnColdFallback covers.
+      # Each crash costs the daemon's restart time (~8 s for LibreOffice) plus the
+      # supervisor's backoff, during which jobs on that port take the cold path.
+      # More than one crash every 5 minutes for 15 minutes is a broken daemon,
+      # not bad luck. Check the worker log for "unoserver daemon exited".
+      - alert: EngineDaemonCrashLoop
+        expr: sum by (service) (rate(engine_daemon_restarts_total{reason="crash"}[15m])) > 0.0033
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} engine daemons keep crashing"
+          description: "Engine daemons in {{ $labels.service }} are crashing at {{ $value | humanize }}/s. Jobs fall back to the cold path during each restart."
+
   - name: database
     rules:
       # A service's connection pool is running out of headroom (in-use vs max).

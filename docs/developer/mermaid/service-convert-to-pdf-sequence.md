@@ -59,9 +59,17 @@ sequenceDiagram
         end
         W->>W: startProgressReporter(20→90% ease-out)
         W->>Proc: ProcessFile(toolType, local inputs, scratch/out)
-        Proc->>Uno: unoconvert --convert-to pdf input output
-        alt unoserver unreachable
-            Proc->>LO: libreoffice --headless --convert-to pdf
+        Proc->>Uno: TCP dial pooled daemon port (200 ms)
+        alt daemon not listening
+            Proc->>LO: libreoffice --headless --convert-to pdf (convert_fallback_total{reason=no_daemon})
+        else daemon up
+            Proc->>Uno: unoconvert --convert-to pdf input output (deadline max(30s, 2s + 1.5s/MB))
+            alt deadline hit or job cancelled
+                Proc->>Uno: SIGKILL daemon process group (supervisor restarts it)
+                Proc->>LO: libreoffice --headless --convert-to pdf (deadline only; reason=timeout)
+            else unoconvert error
+                Proc->>LO: libreoffice --headless --convert-to pdf (reason=daemon_error)
+            end
         end
         Proc-->>W: {OutputPath in scratch/out, Metadata}
         W->>W: stopProgressReporter
