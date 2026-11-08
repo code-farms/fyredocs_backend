@@ -17,6 +17,8 @@
 > (`TestHindiWordToPDFEmbedsDevanagariFontBinaries`); before, LibreOffice dropped Hindi entirely.
 > fyredocs-base grew about 471 MB (Qt/GTK/mesa now required by Alpine's libreoffice-common) while daemon
 > RAM fell; see `benchmarks/raw-2026-11-08/NOTES.md`.
+>
+> **Also done 2026-11-08:** Q5. pdf-to-pdfa now embeds an sRGB OutputIntent and uses the documented flags; output passes veraPDF PDF/A-2b on Ghostscript 10.00 (production) and 10.08, with every page kept. veraPDF 1.30.3 runs in the test image only (`TestPdfToPdfaPassesVeraPDFBinaries`). Before, production wrote files veraPDF rejects.
 
 Siblings this roadmap sequences: `01-existing-system-audit.md` (defects D1–D23), `02-document-capability-matrix.md`
 (per-row gates), `03-heavy-dependency-analysis.md` (removal order), `04-libreoffice-replacement-strategy.md` (gates
@@ -492,7 +494,7 @@ Kubernetes migration beyond the validated mapping; no team-written Rust; office2
 | Q2 | **Partly done 2026-11-08:** one port list (Go supervisor), `unoping` gate; instance sizing still open. Single source of truth for instances; probe every port with `unoping`; drop dead ports; recycle | `entrypoint.sh:30,51-65`; `processing/unopool.go:65-75`; `docker-compose.yml:897` | 3 d (brief) | 1 | G-POOL; `office_pool_ready` = instances |
 | Q3 | **Done 2026-11-08.** `shared/procexec` at all 20 exec sites | all `exec.CommandContext` sites in the four workers (`01-…` §2.4); new `shared/procexec` | 2 d (brief); Contract B `13-…` §5.3 | 1 | 0 orphans after 100 forced cancels |
 | Q4 | **Done 2026-11-08.** `DisableConfigDir()` in three mains | present only at `organize-pdf/main.go:57` | 1 h (brief) | 1 | pdfcpu tests; prerequisite for `read_only` (`18-…` §5.11) |
-| Q5 | PDF/A invocation + veraPDF | `convert-from-pdf/processing/processing_free.go:212-221` | 3 d (brief); 0.15 EM (`08-…` §5.3) | 1 | veraPDF 2b pass |
+| Q5 | **Done 2026-11-08.** PDF/A invocation + veraPDF | `convert-from-pdf/processing/processing_free.go:212-221` | 3 d (brief); 0.15 EM (`08-…` §5.3) | 1 | veraPDF 2b pass |
 | Q6 | **Done 2026-11-08.** Noto + Devanagari + fontconfig + `fc-cache` | `deployment/base-alpine-libreoffice.Dockerfile:14-20`; `convert-from-pdf/Dockerfile:30-36` | 1 d (`02-…` §2.4); 0.05 EM (`07-…` §6) | 1 | G-FONT |
 | Q7 | OCR per-page render in the pool, `-gray`, 300 DPI `hin`, `--oem 1`, tessdata_best; organize-pdf pool | `optimize-pdf/processing/processing_free.go:531-536,565-588`; `organize-pdf/processing/processing_scan.go:515-538` | 3 d (brief); 0.3 EM (`11-…` §6) | 1 | tmpfs peak ≤ 200 MB; CER not worse |
 | Q8 | `pdfinfo` → pdfcpu `PageDimsFile` | `optimize-pdf/processing/processing_free.go:331`; `convert-from-pdf/processing/processing_free.go:126` | 1 d (brief); 0.1 EM (`03-…` §2.2) | 1 | identical page sizes on the corpus (`08-…` §7.1) |

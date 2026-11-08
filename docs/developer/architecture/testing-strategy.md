@@ -13,7 +13,7 @@ Exactly three tiers, selected by Go build tags:
 |---|---|---|---|
 | Unit | *(none)* | Nothing — fully offline | Every `make test`, every PR |
 | Integration | `//go:build integration` | The essentials infra stack (Postgres, Redis, NATS, MinIO on loopback) | `make test-integration`, after `make test-infra-up` |
-| Binaries | `//go:build integration && binaries` | Additionally gs / libreoffice / tesseract / poppler / python3 | `make test-binaries` (dockerized; added with the first binaries-tagged tests) |
+| Binaries | `//go:build integration && binaries` | Additionally gs / libreoffice / tesseract / poppler / python3, and veraPDF (PDF/A validator, Java; test image only) | `make test-binaries` (dockerized; added with the first binaries-tagged tests) |
 
 Untagged tests must never dial the network, touch a real database, or shell
 out to external binaries. The historical ad-hoc gates (`S3_TEST_ENDPOINT` in

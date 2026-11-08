@@ -201,36 +201,6 @@ func pdfToImages(ctx context.Context, inputPath string, outputDir string, baseNa
 	return outputPath, zipDirectory(tempDir, outputPath)
 }
 
-// pdfToPdfa converts a PDF to the archival PDF/A profile via Ghostscript.
-//
-// Conversion can be lossy where the source uses features PDF/A forbids — notably
-// transparency and non-embedded fonts, which get flattened or substituted. That is
-// inherent to the format, not a defect here.
-func pdfToPdfa(ctx context.Context, inputPath string, outputPath string) error {
-	slog.Info("converting PDF to PDF/A", "input", inputPath)
-
-	cmd := procexec.Command(ctx, "gs",
-		"-dPDFA=2",
-		"-dBATCH",
-		"-dNOPAUSE",
-		"-dNOOUTERSAVE",
-		"-sProcessColorModel=DeviceRGB",
-		"-sDEVICE=pdfwrite",
-		"-sPDFACompatibilityPolicy=1",
-		fmt.Sprintf("-sOutputFile=%s", outputPath),
-		inputPath,
-	)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		slog.ErrorContext(ctx, "ghostscript PDF/A conversion failed", "error", err, "op", "ghostscript.pdfa", "output", string(output))
-		return fmt.Errorf("Ghostscript not available or conversion failed: %w", err)
-	}
-
-	slog.Info("PDF/A conversion completed", "output", outputPath)
-	return nil
-}
-
 // pdfToOffice converts a PDF into a Word/Excel/PowerPoint format via LibreOffice.
 //
 // This direction is inherently approximate: a PDF describes positioned glyphs, not

@@ -12,6 +12,13 @@
 # Pinned to the runtime images' Alpine (3.24) so the tested LibreOffice,
 # Ghostscript, Poppler and Tesseract versions are the shipped ones. NOTE: keep
 # in sync with deployment/base-alpine-libreoffice.Dockerfile.
+
+# veraPDF (the reference PDF/A validator) as a test-only oracle for pdf-to-pdfa;
+# it never ships in a runtime image. The official image is amd64-only, but the
+# application is plain Java, so its files are copied out and run on this image's
+# own JRE on any architecture. Pinned: bump deliberately, it decides pass/fail.
+FROM --platform=linux/amd64 verapdf/cli:v1.30.3 AS verapdf
+
 FROM golang:1.26-alpine3.24
 
 RUN apk add --no-cache \
@@ -29,9 +36,14 @@ RUN apk add --no-cache \
     ttf-liberation \
     font-noto-devanagari \
     fontconfig \
+    openjdk21-jre-headless \
     python3 \
     py3-pip \
  && fc-cache -f \
  && pip3 install --break-system-packages unoserver==3.7
+
+COPY --from=verapdf /opt/verapdf /opt/verapdf
+RUN ln -s /opt/verapdf/verapdf /usr/local/bin/verapdf \
+ && verapdf --version
 
 WORKDIR /src

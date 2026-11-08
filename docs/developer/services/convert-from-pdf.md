@@ -334,8 +334,26 @@ curl -X POST http://localhost/api/convert-from-pdf/pdf-to-text \
 Converts PDF to PDF/A-2b archival format.
 
 **Input**: `.pdf`
-**Output**: `.pdf` (PDF/A-2b compliant)
-**Implementation**: Ghostscript
+**Output**: `.pdf` (PDF/A-2b; validated with veraPDF in `make test-binaries`)
+**Implementation**: Ghostscript (`processing/pdfa.go`)
+
+**How it works.** PDF/A needs an OutputIntent: an embedded ICC profile that fixes what the document's colours mean. The worker finds an sRGB profile, writes a small PostScript definition file that embeds it, and runs:
+
+```bash
+gs -dPDFA=2 -dBATCH -dNOPAUSE -dSAFER -sDEVICE=pdfwrite \
+   -dPDFACompatibilityPolicy=1 -sColorConversionStrategy=RGB \
+   --permit-file-read=<srgb.icc> -sOutputFile=out.pdf PDFA_def.ps in.pdf
+```
+
+Profile discovery, first match wins: `PDFA_ICC_PROFILE` (env override; must exist), `/usr/share/color/icc/ghostscript/srgb.icc` (Debian, this image), `/usr/share/ghostscript/iccprofiles/srgb.icc` (Alpine), `/usr/share/ghostscript/*/iccprofiles/srgb.icc`. With no profile the job fails with "PDF/A conversion unavailable" rather than producing a file validators reject.
+
+Ghostscript produces level **b** only (visual preservation); levels a and u need document tagging it cannot generate. Features PDF/A forbids (transparency, non-embedded fonts) are flattened or substituted with a warning.
+
+> **History:** before 2026-11-08 the invocation had no profile or definition file and used the string form `-sPDFACompatibilityPolicy`. This image's Ghostscript 10.00 then wrote files that fail PDF/A-2b (veraPDF clause 6.2.4.3), and Ghostscript 10.08 aborted with a one-page stub.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PDFA_ICC_PROFILE` | unset | Absolute path of the sRGB ICC profile to embed; overrides discovery. |
 
 **What is PDF/A?**
 PDF/A is an ISO-standardized version of PDF designed for long-term archival:

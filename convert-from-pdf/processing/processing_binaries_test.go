@@ -259,3 +259,51 @@ func TestPdfConvertCorruptInputBinaries(t *testing.T) {
 		}
 	})
 }
+
+// TestPdfToPdfaPassesVeraPDFBinaries is the Q5 acceptance check
+// (docs/developer/architecture/next-generation-document-engine/
+// 20-implementation-roadmap.md): pdf-to-pdfa output must pass veraPDF's PDF/A-2b
+// profile and keep every page. Two inputs cover the two ways conversion goes
+// wrong: an RGB image PDF (colour spaces need the sRGB OutputIntent) and a
+// LibreOffice text PDF (fonts must be embedded). veraPDF is the test image's
+// reference validator; it never ships in a runtime image.
+func TestPdfToPdfaPassesVeraPDFBinaries(t *testing.T) {
+	if _, err := exec.LookPath("verapdf"); err != nil {
+		t.Skip("verapdf not installed (see deployment/test-binaries.Dockerfile)")
+	}
+	cases := map[string]func(dir string) string{
+		"image pdf": func(dir string) string { return buildImagePDF(t, dir, 3) },
+		"text pdf":  func(dir string) string { return buildTextPDF(t, dir, "Fyredocs PDF/A acceptance text") },
+	}
+	for name, build := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			input := build(dir)
+			output := filepath.Join(t.TempDir(), "out.pdf")
+			if err := pdfToPdfa(context.Background(), input, output); err != nil {
+				t.Fatalf("pdfToPdfa: %v", err)
+			}
+
+			report, err := exec.Command("verapdf", "--flavour", "2b", "--format", "text", output).CombinedOutput()
+			if err != nil && !bytes.Contains(report, []byte("PASS")) {
+				t.Fatalf("verapdf: %v (%s)", err, report)
+			}
+			if !strings.HasPrefix(strings.TrimSpace(string(report)), "PASS") {
+				details, _ := exec.Command("verapdf", "--flavour", "2b", "--format", "xml", output).CombinedOutput()
+				t.Fatalf("output is not PDF/A-2b:\n%s\n%s", report, details)
+			}
+
+			inPages, err := api.PageCountFile(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outPages, err := api.PageCountFile(output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if inPages != outPages {
+				t.Errorf("pages: input %d, output %d — conversion dropped pages", inPages, outPages)
+			}
+		})
+	}
+}
