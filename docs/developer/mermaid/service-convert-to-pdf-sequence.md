@@ -185,6 +185,6 @@ sequenceDiagram
     W->>Redis: PING
     W->>NATS: Conn.IsConnected
     W->>PG: SELECT 1
-    W->>Uno: TCP dial UNOSERVER_HOST:PORT (1s, informational)
-    W-->>Probe: 200 with checks {redis, nats, postgres, unoserver}
+    W->>Uno: TCP dial each pooled UNOSERVER port (1s each)
+    W-->>Probe: 200 with checks {redis, nats, postgres, unoserver}, or 503 if any check fails (incl. zero daemons up)
 ```

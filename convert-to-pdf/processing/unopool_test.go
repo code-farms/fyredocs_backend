@@ -2,6 +2,7 @@ package processing
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 )
@@ -88,5 +89,35 @@ func TestPoolAcquireReleaseBounds(t *testing.T) {
 	got, ok := p.acquire(ctx)
 	if !ok || got != a {
 		t.Fatalf("after release, acquire = (%s,%v), want (%s,true)", got, ok, a)
+	}
+}
+
+// TestDaemonsUpCountsOnlyListeningPorts guards the readiness gate: a port with a
+// listener counts as a live daemon, a closed one does not. /readyz returns 503
+// when this is zero, so a false positive would hide a dead pool again (D23).
+func TestDaemonsUpCountsOnlyListeningPorts(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	_, live, _ := net.SplitHostPort(ln.Addr().String())
+
+	// Reserve a port, then close it so nothing listens there.
+	dead, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	_, deadPort, _ := net.SplitHostPort(dead.Addr().String())
+	dead.Close()
+
+	if got := DaemonsUp("127.0.0.1", []string{live, deadPort}, 200*time.Millisecond); got != 1 {
+		t.Errorf("DaemonsUp(live, dead) = %d, want 1", got)
+	}
+	if got := DaemonsUp("127.0.0.1", []string{deadPort}, 200*time.Millisecond); got != 0 {
+		t.Errorf("DaemonsUp(dead) = %d, want 0", got)
+	}
+	if got := DaemonsUp("127.0.0.1", nil, 200*time.Millisecond); got != 0 {
+		t.Errorf("DaemonsUp(no ports) = %d, want 0", got)
 	}
 }

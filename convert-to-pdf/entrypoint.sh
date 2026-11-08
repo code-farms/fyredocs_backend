@@ -28,19 +28,33 @@ set -e
 UNOSERVER_HOST="${UNOSERVER_HOST:-127.0.0.1}"
 UNOSERVER_PORT="${UNOSERVER_PORT:-2002}"
 UNOSERVER_INSTANCES="${UNOSERVER_INSTANCES:-2}"
+# Offset from each daemon's XML-RPC port to the port its LibreOffice listens on
+# for UNO. Must be >= UNOSERVER_INSTANCES so no UNO port lands on another
+# daemon's XML-RPC port.
+UNOSERVER_UNO_PORT_OFFSET="${UNOSERVER_UNO_PORT_OFFSET:-100}"
 
 # Launch a pool of unoserver (LibreOffice) daemons on consecutive ports starting
 # at UNOSERVER_PORT. Each daemon MUST get its own LibreOffice user profile
 # (--user-installation) — sharing one profile causes a lock conflict and only
 # the first instance starts. This must stay in sync with the Go pool, which
 # derives its port list from UNOSERVER_PORT + UNOSERVER_INSTANCES.
+#
+# Two flags here are load-bearing, and getting either wrong kills every daemon
+# while the container stays "up" on the cold fallback (finding D23/D23b —
+# docs/developer/architecture/next-generation-document-engine/01-existing-system-audit.md):
+#   --user-installation takes a filesystem PATH. unoserver converts it to a URI
+#     itself (Path(arg).as_uri()); passing "file:///…" raises ValueError at start.
+#   --uno-port defaults to 2002 in unoserver 3.x and must differ from --port, so
+#     the daemon on UNOSERVER_PORT=2002 refuses to start unless it is set.
 UNOSERVER_PIDS=""
 i=0
 while [ "$i" -lt "$UNOSERVER_INSTANCES" ]; do
   port=$((UNOSERVER_PORT + i))
-  profile="file:///tmp/uno-profile-${port}"
-  echo "Starting unoserver on ${UNOSERVER_HOST}:${port} (profile ${profile})..."
-  unoserver --interface "$UNOSERVER_HOST" --port "$port" --user-installation "$profile" &
+  uno_port=$((port + UNOSERVER_UNO_PORT_OFFSET))
+  profile="/tmp/uno-profile-${port}"
+  echo "Starting unoserver on ${UNOSERVER_HOST}:${port} (uno-port ${uno_port}, profile ${profile})..."
+  unoserver --interface "$UNOSERVER_HOST" --port "$port" --uno-port "$uno_port" \
+    --user-installation "$profile" &
   UNOSERVER_PIDS="$UNOSERVER_PIDS $!"
   i=$((i + 1))
 done
@@ -48,12 +62,16 @@ done
 # Wait for the first daemon to accept connections (LibreOffice init takes ~2-5s).
 # The remaining daemons start in parallel; the Go side falls back to direct
 # LibreOffice for any daemon that is not yet ready, so we only gate on one.
+#
+# unoping is the probe because it asks the daemon itself. The previous probe
+# converted /dev/null, which LibreOffice rejects ("source file could not be
+# loaded") even when the daemon is healthy, so it could never report ready.
 FIRST_PORT="$UNOSERVER_PORT"
 FIRST_PID=$(echo "$UNOSERVER_PIDS" | awk '{print $1}')
 READY=0
 for _ in $(seq 1 30); do
   if kill -0 "$FIRST_PID" 2>/dev/null; then
-    if unoconvert --host "$UNOSERVER_HOST" --port "$FIRST_PORT" /dev/null /dev/null 2>/dev/null; then
+    if unoping --host "$UNOSERVER_HOST" --port "$FIRST_PORT" >/dev/null 2>&1; then
       READY=1
       break
     fi
@@ -67,6 +85,9 @@ done
 if [ "$READY" -eq 1 ]; then
   echo "unoserver pool ready ($UNOSERVER_INSTANCES instance(s) from port $UNOSERVER_PORT)"
 else
+  # The worker still starts so jobs complete on the cold path, but /readyz now
+  # reports 503 while no daemon is up (convert-to-pdf/main.go) and every cold
+  # conversion increments convert_fallback_total, so this state is visible.
   echo "WARNING: unoserver did not become ready; conversions will use direct LibreOffice fallback"
 fi
 

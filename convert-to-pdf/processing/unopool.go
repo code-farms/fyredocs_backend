@@ -2,8 +2,10 @@ package processing
 
 import (
 	"context"
+	"net"
 	"os"
 	"strconv"
+	"time"
 )
 
 // unoserverPool bounds concurrent unoconvert calls to the number of running
@@ -107,4 +109,21 @@ func UnoserverPorts() []string {
 // UnoserverHost returns the configured unoserver bind host.
 func UnoserverHost() string {
 	return envOrDefault("UNOSERVER_HOST", "127.0.0.1")
+}
+
+// DaemonsUp returns how many of ports accept a TCP connection on host within
+// timeout each. A listening port is taken as a live daemon: unoserver only binds
+// its XML-RPC port once LibreOffice has started, and a crashed daemon releases it.
+// Dials run sequentially, so the worst case is len(ports) × timeout; keep the
+// timeout short when calling from a probe.
+func DaemonsUp(host string, ports []string, timeout time.Duration) int {
+	up := 0
+	for _, p := range ports {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, p), timeout)
+		if err == nil {
+			conn.Close()
+			up++
+		}
+	}
+	return up
 }

@@ -3,6 +3,7 @@ package metrics
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -125,5 +126,30 @@ func TestHTTPStatusWriterCapturesStatus(t *testing.T) {
 
 	if sw.status != http.StatusNotFound {
 		t.Errorf("expected status %d, got %d", http.StatusNotFound, sw.status)
+	}
+}
+
+// TestConvertFallbackLabels guards the convert_fallback_total contract that the
+// alert and dashboards rely on: name and the (service, reason) label pair.
+func TestConvertFallbackLabels(t *testing.T) {
+	c := ConvertFallback.WithLabelValues("test-service", "no_daemon")
+	c.Inc()
+	var d dto.Metric
+	if err := c.Write(&d); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got := d.GetCounter().GetValue(); got < 1 {
+		t.Errorf("counter = %v, want >= 1", got)
+	}
+	labels := map[string]string{}
+	for _, l := range d.GetLabel() {
+		labels[l.GetName()] = l.GetValue()
+	}
+	if labels["service"] != "test-service" || labels["reason"] != "no_daemon" {
+		t.Errorf("labels = %v, want service=test-service reason=no_daemon", labels)
+	}
+	desc := ConvertFallback.WithLabelValues("x", "y").Desc().String()
+	if !strings.Contains(desc, `"convert_fallback_total"`) {
+		t.Errorf("metric name changed: %s", desc)
 	}
 }

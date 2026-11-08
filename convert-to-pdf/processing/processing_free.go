@@ -2,6 +2,7 @@ package processing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"fyredocs/shared/metrics"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 )
@@ -45,9 +48,27 @@ func tryUnoconvert(ctx context.Context, inputPath, outputPath, convertTo string)
 	if err == nil {
 		return true
 	}
+	reason := fallbackReason(unoCtx.Err(), string(output))
+	metrics.ConvertFallback.WithLabelValues("convert-to-pdf", reason).Inc()
 	slog.Warn("unoconvert failed, falling back to direct libreoffice",
-		"port", port, "convertTo", convertTo, "output", string(output), "error", err)
+		"port", port, "convertTo", convertTo, "reason", reason, "output", string(output), "error", err)
 	return false
+}
+
+// fallbackReason maps a failed unoconvert call to the closed label set of
+// convert_fallback_total. "no_daemon" means nothing listened on the pooled port
+// (the pool is broken or a daemon died); "timeout" means the per-call deadline
+// fired; anything else is "daemon_error". Keep this set closed — the value is a
+// Prometheus label, so free text here would explode cardinality.
+func fallbackReason(ctxErr error, output string) string {
+	switch {
+	case errors.Is(ctxErr, context.DeadlineExceeded):
+		return "timeout"
+	case strings.Contains(output, "Connection refused"):
+		return "no_daemon"
+	default:
+		return "daemon_error"
+	}
 }
 
 // officeToPDF converts an office document to PDF, preferring a warm unoserver

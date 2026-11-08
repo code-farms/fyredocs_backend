@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -128,7 +127,8 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// Readiness probe: reports 503 unless Redis, NATS, and Postgres are all reachable.
+	// Readiness probe: reports 503 unless Redis, NATS, Postgres and at least one
+	// unoserver daemon are all reachable.
 	r.GET("/readyz", func(c *gin.Context) {
 		checks := gin.H{}
 		ready := true
@@ -163,21 +163,20 @@ func main() {
 			checks["postgres"] = "ok"
 		}
 
-		// Check the unoserver daemon pool (informational — does not affect
-		// readiness since officeToPDF falls back to direct LibreOffice). Healthy
-		// if at least one pooled daemon port is accepting connections.
-		host := processing.UnoserverHost()
-		up := 0
+		// The unoserver pool gates readiness: with zero daemons up, every Office
+		// job runs on the cold `libreoffice --headless` fallback — correct but
+		// several times slower and a fresh LibreOffice per job. Treating the pool
+		// as informational is how a dead pool stayed green for months (finding
+		// D23, docs/developer/architecture/next-generation-document-engine/
+		// 01-existing-system-audit.md). Partial pools stay ready; the count is
+		// reported and each cold conversion increments convert_fallback_total.
+		// /healthz (the compose healthcheck) is unaffected, so this never
+		// triggers a restart.
 		ports := processing.UnoserverPorts()
-		for _, p := range ports {
-			conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, p), 1*time.Second)
-			if err == nil {
-				conn.Close()
-				up++
-			}
-		}
+		up := processing.DaemonsUp(processing.UnoserverHost(), ports, 1*time.Second)
 		if up == 0 {
-			checks["unoserver"] = "unavailable (fallback active)"
+			checks["unoserver"] = "unavailable (cold fallback active)"
+			ready = false
 		} else {
 			checks["unoserver"] = fmt.Sprintf("ok (%d/%d daemons up)", up, len(ports))
 		}

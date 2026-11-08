@@ -54,6 +54,20 @@ var (
 		Help: "Requests allowed without a rate-limit check because Redis was unavailable.",
 	}, []string{"service", "limiter"})
 
+	// ConvertFallback counts conversions that could not use a warm engine and
+	// fell back to a cold one (today: unoserver daemon → `libreoffice --headless`
+	// in convert-to-pdf). The fallback is correct but several times slower and
+	// allocates a fresh LibreOffice per job, so a sustained non-zero rate means
+	// the warm pool is broken — exactly the state that went unnoticed for months
+	// (finding D23, docs/developer/architecture/next-generation-document-engine/
+	// 01-existing-system-audit.md). Labels: service, and reason — a small closed
+	// set chosen by the caller (convert-to-pdf uses "no_daemon", "timeout",
+	// "daemon_error"; see fallbackReason in convert-to-pdf/processing/processing_free.go).
+	ConvertFallback = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "convert_fallback_total",
+		Help: "Conversions that fell back from a warm engine to a cold one.",
+	}, []string{"service", "reason"})
+
 	// JobDuration is end-to-end job latency: queued (dispatch) → terminal
 	// event, including retries and DLQ dwell. Observed once per terminal
 	// outcome in shared/queue.recordTerminalJobMetric. Buckets span seconds

@@ -197,6 +197,24 @@ groups:
           summary: "Rate limiting is failing open"
           description: "Requests are bypassing rate limits because the limiter's Redis backend is unavailable — abuse protection is effectively off. Check Redis."
 
+      # Office conversions are running on the cold LibreOffice path instead of the
+      # warm unoserver pool in convert-to-pdf. The fallback still produces correct
+      # output, which is exactly why this needs an alert: from June to November
+      # 2026 every Office job ran cold because the pool never started, and nothing
+      # noticed (finding D23, docs/developer/architecture/next-generation-document-
+      # engine/01-existing-system-audit.md). A healthy pool keeps this at zero;
+      # isolated "timeout" or "daemon_error" fallbacks on a broken input are
+      # possible, hence a rate over 15m rather than any single increment. Check
+      # /readyz on convert-to-pdf and the entrypoint log for the reason label.
+      - alert: OfficeConversionsOnColdFallback
+        expr: sum by (reason) (rate(convert_fallback_total{service="convert-to-pdf"}[15m])) > 0.01
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "convert-to-pdf is converting Office files on the cold LibreOffice fallback"
+          description: "Fallback reason {{ $labels.reason }} at {{ $value | humanize }}/s. no_daemon means the unoserver pool is down; timeout means conversions exceed the unoconvert deadline. Office jobs are several times slower until fixed."
+
   - name: database
     rules:
       # A service's connection pool is running out of headroom (in-use vs max).

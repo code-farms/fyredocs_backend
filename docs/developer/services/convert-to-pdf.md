@@ -50,7 +50,24 @@ Inputs and outputs live in S3-compatible object storage (MinIO in compose), not 
 
 ### unoserver Daemon
 
-The container image runs a persistent LibreOffice instance via `unoserver`, started by `entrypoint.sh` before the Go binary. The `officeToPDF()` function dispatches via `unoconvert` over a local socket (`UNOSERVER_HOST:UNOSERVER_PORT`, default `127.0.0.1:2002`), eliminating LibreOffice cold-start cost per conversion. If the daemon is unreachable, the function falls back to spawning `libreoffice --headless` directly. The `/readyz` probe reports the unoserver state as informational only — it does not affect readiness, since the fallback path is always available.
+The container image runs a persistent LibreOffice instance via `unoserver`, started by `entrypoint.sh` before the Go binary. The `officeToPDF()` function dispatches via `unoconvert` over a local socket (`UNOSERVER_HOST:UNOSERVER_PORT`, default `127.0.0.1:2002`), eliminating LibreOffice cold-start cost per conversion. If the daemon is unreachable, the function falls back to spawning `libreoffice --headless` directly.
+
+The pool is visible, not just best-effort:
+
+- **Readiness:** `/readyz` returns 503 when no pooled daemon port accepts a connection. A partial pool stays ready and reports `ok (n/m daemons up)`. The compose healthcheck uses `/healthz`, so a dead pool never triggers a restart; jobs keep completing on the cold path.
+- **Metric:** every cold fallback increments `convert_fallback_total{service="convert-to-pdf",reason}` with `reason` one of `no_daemon` (nothing listening on the pooled port), `timeout` (unoconvert deadline fired) or `daemon_error`. The `OfficeConversionsOnColdFallback` alert fires on a sustained rate.
+
+`entrypoint.sh` starts each daemon with three load-bearing arguments:
+
+| Argument | Value | Why |
+|---|---|---|
+| `--user-installation` | `/tmp/uno-profile-<port>` (a **path**) | unoserver converts it to a URI itself; passing `file:///…` makes it exit at startup |
+| `--uno-port` | `<port> + UNOSERVER_UNO_PORT_OFFSET` | unoserver 3.x defaults it to 2002 and refuses to start when it equals `--port` |
+| one profile per daemon | — | a shared profile lock lets only the first daemon start |
+
+The entrypoint gates on the first daemon with `unoping`, then starts the Go worker. unoserver is pinned (`unoserver==3.7` in `deployment/base-alpine-libreoffice.Dockerfile`) because the entrypoint is written against that CLI.
+
+> **History:** until the fix for finding D23/D23b the entrypoint passed a `file://` profile and no `--uno-port`, so no daemon ever started, the `/dev/null` startup probe could not succeed, and every Office/HTML job ran cold while `/readyz` stayed green. See `docs/developer/architecture/next-generation-document-engine/01-existing-system-audit.md`.
 
 ## Supported Tools
 
@@ -137,7 +154,8 @@ This worker writes to `processing_jobs` and `file_metadata` (the same tables own
 | `WORKER_CONCURRENCY` | `2` | Max concurrent jobs processed in parallel |
 | `UNOSERVER_HOST` | `127.0.0.1` | unoserver daemon host |
 | `UNOSERVER_PORT` | `2002` | unoserver daemon port |
-| `UNOSERVER_INSTANCES` | `WORKER_CONCURRENCY + 1` | Size of the unoserver daemon pool. When unset, auto-sizes to one warm daemon per concurrent job plus a spare so the cold-start fallback is unreachable. Set explicitly to pin. |
+| `UNOSERVER_INSTANCES` | `WORKER_CONCURRENCY + 1` | Size of the unoserver daemon pool. When unset, auto-sizes to one warm daemon per concurrent job plus a spare so the cold-start fallback is unreachable. Set explicitly to pin. **Note:** `entrypoint.sh` defaults to 2 when unset, so set it explicitly (`deploy.sh` does). |
+| `UNOSERVER_UNO_PORT_OFFSET` | `100` | Offset from each daemon's XML-RPC port to its LibreOffice UNO port (`--uno-port`). Must be ≥ `UNOSERVER_INSTANCES`. Read by `entrypoint.sh` only. |
 | `RESULT_CACHE_TTL_SECONDS` | `3600` | Lifetime of result-cache entries. Keep ≤ outputs bucket TTL. `0` disables caching. |
 | `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing (currently honoured via `AckWait` rather than a context deadline in code) |
 
@@ -173,7 +191,7 @@ Pure-Go PDF library used for `image-to-pdf` / `img-to-pdf`. No external runtime 
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /healthz` | Liveness — static `200 {"status":"ok"}`, **no dependency checks** (a dependency blip must not flip liveness and trigger a restart cascade) |
-| `GET /readyz` | Readiness — Redis + NATS + Postgres + unoserver (informational) |
+| `GET /readyz` | Readiness — Redis + NATS + Postgres + at least one unoserver daemon (503 when the pool is down) |
 | `GET /metrics` | Prometheus metrics |
 
 ## Sequence Diagrams
@@ -269,7 +287,12 @@ sequenceDiagram
         alt NATS disconnected
             W-->>LB: 503 {"status":"not ready","checks":{"nats":"disconnected"}}
         else
-            W-->>LB: 200 {"status":"ready"}
+            W->>W: TCP dial each pooled unoserver port (1s each)
+            alt zero daemons up
+                W-->>LB: 503 {"status":"not ready","checks":{"unoserver":"unavailable (cold fallback active)"}}
+            else
+                W-->>LB: 200 {"status":"ready","checks":{"unoserver":"ok (n/m daemons up)"}}
+            end
         end
     end
 ```

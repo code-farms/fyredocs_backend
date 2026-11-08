@@ -24,6 +24,6 @@ RUN apk add --no-cache \
     ttf-liberation \
     python3 \
     py3-pip \
- && pip3 install --break-system-packages unoserver
+ && pip3 install --break-system-packages unoserver==3.7
 
 WORKDIR /src

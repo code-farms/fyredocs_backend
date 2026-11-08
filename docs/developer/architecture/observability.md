@@ -42,6 +42,14 @@ The Go services are instrumented for observability out of the box:
   but it means throttling is silently off, so the `RateLimitFailingOpen` alert
   treats any sustained rate as critical.
 
+  `convert_fallback_total` (labels `service`/`reason`) counts conversions that
+  fell back from a warm engine to a cold one — today, convert-to-pdf jobs that
+  could not use the unoserver pool and spawned `libreoffice --headless`.
+  `reason` is `no_daemon`, `timeout` or `daemon_error`. The output is still
+  correct, which is why the `OfficeConversionsOnColdFallback` alert exists: a
+  dead pool once went unnoticed for months. convert-to-pdf's `/readyz` also
+  returns 503 while no daemon is up.
+
   **Low-cardinality route labels.** The api-gateway labels
   `http_request_duration_seconds` by the **route template** (e.g. `/api/jobs`), not
   the raw request path. Raw paths carry per-resource UUIDs
