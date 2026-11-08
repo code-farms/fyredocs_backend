@@ -25,6 +25,7 @@ import (
 	"fyredocs/shared/response"
 	"fyredocs/shared/telemetry"
 
+	"auth-service/handlers"
 	"auth-service/internal/email"
 	"auth-service/internal/models"
 	"auth-service/internal/token"
@@ -137,6 +138,15 @@ func main() {
 	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
 	defer cancelCleanup()
 	var cleanupWG sync.WaitGroup
+
+	// Publish the guest plan row for the gateway (anonymous requests have no
+	// user ID to look up). Refreshed on the plan-cache interval so a DB edit to
+	// the guest row propagates without a restart.
+	cleanupWG.Add(1)
+	go func() {
+		defer cleanupWG.Done()
+		handlers.RunGuestPlanPublisher(cleanupCtx, redisClient, config.GetEnvDuration("PLAN_CACHE_TTL", 5*time.Minute))
+	}()
 	cleanupWG.Add(1)
 	go func() {
 		defer cleanupWG.Done()

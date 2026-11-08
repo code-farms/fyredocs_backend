@@ -60,7 +60,14 @@ Content-Type: application/json
       "phone": "+1234567890",
       "image": "https://example.com/avatar.jpg",
       "role": "user",
-      "planName": "free"
+      "planName": "free",
+      "planLimits": {
+        "name": "free",
+        "maxFileSizeMb": 50,
+        "maxFilesPerJob": 10,
+        "maxJobInputMb": 300,
+        "retentionDays": 7
+      }
     },
     "accessExpiresAt": 1705324800000
   }
@@ -197,7 +204,8 @@ Cookie: access_token=<JWT>
       "phone": "+1234567890",
       "image": "https://example.com/avatar.jpg",
       "role": "user",
-      "planName": "free"
+      "planName": "free",
+      "planLimits": { "name": "free", "maxFileSizeMb": 50, "maxFilesPerJob": 10, "maxJobInputMb": 300, "retentionDays": 7 }
     }
   }
 }
@@ -291,7 +299,9 @@ Content-Type: application/json
 
 ## GET /auth/plans
 
-List all non-anonymous subscription plans (no auth required).
+List every subscription plan, guest included (no auth required). These rows are the only
+definition of plan limits; guest clients use the `guest` row, signed-in clients get their own
+row as `user.planLimits` in the login, signup, refresh and `/auth/me` responses.
 
 ### Response
 
@@ -302,8 +312,9 @@ List all non-anonymous subscription plans (no auth required).
   "message": "Plans retrieved",
   "data": {
     "plans": [
-      { "name": "free", "maxFileSizeMb": 25,  "maxFilesPerJob": 10, "retentionDays": 7  },
-      { "name": "pro",  "maxFileSizeMb": 500, "maxFilesPerJob": 50, "retentionDays": 30 }
+      { "name": "guest", "maxFileSizeMb": 20,  "maxFilesPerJob": 5,  "maxJobInputMb": 100, "retentionDays": 0  },
+      { "name": "free",  "maxFileSizeMb": 50,  "maxFilesPerJob": 10, "maxJobInputMb": 300, "retentionDays": 7  },
+      { "name": "pro",   "maxFileSizeMb": 300, "maxFilesPerJob": 50, "maxJobInputMb": 300, "retentionDays": 30 }
     ]
   }
 }
@@ -317,7 +328,7 @@ These are reachable from inside the cluster only. They are mounted under `/inter
 
 ### GET /internal/users/:id/plan
 
-Returns `{userId, plan: {name, maxFileSizeMb, maxFilesPerJob, retentionDays}}`. Falls back to the `free` plan defaults if `subscription_plans` lookup fails.
+Returns `{userId, plan: {name, maxFileSizeMb, maxFilesPerJob, maxJobInputMb, retentionDays}}`. A plan name with no row falls back to the `free` row; only if no row can be read does it use the built-in copy of the seeded free row.
 
 ### POST /internal/users/:id/revoke-sessions
 
@@ -341,3 +352,4 @@ Revokes a single session by its `user_sessions.id` (= JWT `jti`). Returns the st
 | image | string | Profile image URL (optional) |
 | role | string | User role (`user` or `super-admin`) |
 | planName | string | Current plan name (`free`, `pro`, ...) |
+| planLimits | object | The user's `subscription_plans` row: `name`, `maxFileSizeMb`, `maxFilesPerJob`, `maxJobInputMb` (total MB of all files in one job), `retentionDays`. Clients validate every file selection against it before uploading |

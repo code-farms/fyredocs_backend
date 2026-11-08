@@ -255,6 +255,12 @@ func CreateJobFromTool(c *gin.Context) {
 					"op", "consume_upload", "uploadId", uploadID, "tool", toolType, "jobId", jobID)
 				return
 			}
+			// Upload complete only checked the plan's per-file limit; the tool
+			// cap is known only now.
+			if maxMB, scope := effectiveMaxFileMB(c, toolType); consumed.Size > int64(maxMB)*bytesPerMB {
+				rejectFileTooLarge(c, toolType, maxMB, scope)
+				return
+			}
 			consumedUploadIDs = append(consumedUploadIDs, uploadID)
 			totalSize += consumed.Size
 			inputPaths = append(inputPaths, consumed.Key)
@@ -269,6 +275,13 @@ func CreateJobFromTool(c *gin.Context) {
 			if originalName == "" {
 				originalName = consumed.OriginalName
 			}
+		}
+		// Rejected before the job row and dispatch. consumeUpload has no side
+		// effects and the deferred releaseUploadClaims frees the claims, so the
+		// client can resubmit a subset of the same uploads.
+		if maxJobMB := effectiveMaxJobMB(c); totalSize > int64(maxJobMB)*bytesPerMB {
+			rejectJobTooLarge(c, toolType, totalSize, maxJobMB)
+			return
 		}
 	} else {
 		form, err := c.MultipartForm()
@@ -312,15 +325,23 @@ func CreateJobFromTool(c *gin.Context) {
 			originalName = "merged.pdf"
 		}
 
-		maxFileSizeMB := planMaxFileSizeMB(c)
-		maxSize := int64(maxFileSizeMB) * 1024 * 1024
+		// All size checks run before any file is stored, so a rejected job
+		// leaves nothing in object storage.
+		maxFileSizeMB, scope := effectiveMaxFileMB(c, toolType)
+		maxSize := int64(maxFileSizeMB) * bytesPerMB
+		var requestBytes int64
 		for _, file := range files {
 			if file.Size > maxSize {
-				publishPlanLimitHit(c, "max_file_size", toolType)
-				response.Err(c, http.StatusRequestEntityTooLarge, response.CodeFileTooLarge,
-					fmt.Sprintf("File size exceeds the %dMB limit for your plan", maxFileSizeMB))
+				rejectFileTooLarge(c, toolType, maxFileSizeMB, scope)
 				return
 			}
+			requestBytes += file.Size
+		}
+		if maxJobMB := effectiveMaxJobMB(c); requestBytes > int64(maxJobMB)*bytesPerMB {
+			rejectJobTooLarge(c, toolType, requestBytes, maxJobMB)
+			return
+		}
+		for _, file := range files {
 			if err := validateFileType(toolType, file.Filename); err != nil {
 				response.Errorf(c, http.StatusBadRequest, response.CodeInvalidInput, err.Error(), err,
 					"op", "validate_file_type", "tool", toolType, "fileName", file.Filename)
@@ -1221,6 +1242,89 @@ func planMaxFilesPerJob(c *gin.Context) int {
 		return config.GuestMaxFilesPerJob()
 	}
 	return n
+}
+
+// planMaxJobInputMB reads the plan's cap on the total size of all files in one
+// job from X-User-Plan-Max-Job-MB (the max_job_input_mb column of auth-service's
+// subscription_plans row, forwarded by the gateway). A missing or invalid header
+// falls back to the guest value and is logged, because the gateway always sends
+// it: absence means a stale gateway or a request that bypassed it, and the
+// fallback is the strictest plan so the failure mode is "too strict", never
+// "unlimited".
+//
+// Same provenance model and residual quota-bypass caveat as planMaxFileSizeMB.
+func planMaxJobInputMB(c *gin.Context) int {
+	val := c.GetHeader("X-User-Plan-Max-Job-MB")
+	mb, err := strconv.Atoi(val)
+	if val == "" || err != nil || mb <= 0 {
+		logger.LogWarn(c.Request.Context(), "plan_limits.job_mb_header_missing",
+			fmt.Errorf("X-User-Plan-Max-Job-MB missing or invalid: %q", val))
+		return config.GuestMaxJobInputMB()
+	}
+	return mb
+}
+
+// bytesPerMB converts plan limits (whole MB) to bytes. MB means MiB here and in
+// both clients' validators, so a file exactly at the limit is accepted everywhere.
+const bytesPerMB = 1024 * 1024
+
+// toolMaxFileMB caps single files for tools whose inputs are images, regardless
+// of plan. This is tool data, not plan data: a phone photo above 20 MB is almost
+// always a mistake, and these tools hold every page image in memory.
+//
+// NOTE: mirrored in fyredocs_frontend src/config/tools.ts and fyredocs_app
+// src/config/tools.ts (maxFileSize on scan-to-pdf and image-to-pdf); keep the
+// three in step. img-to-pdf is the legacy alias of image-to-pdf (see
+// internal/routing/routing.go).
+var toolMaxFileMB = map[string]int{
+	"scan-to-pdf":  20,
+	"image-to-pdf": 20,
+	"img-to-pdf":   20,
+}
+
+// ceilingMB is the worker-capacity ceiling (MAX_UPLOAD_MB) in whole MB.
+func ceilingMB() int {
+	return int(maxUploadBytes() / bytesPerMB)
+}
+
+// effectiveMaxFileMB is the largest single file this request may submit:
+// min(plan per-file, plan per-job total, worker ceiling, tool cap). The plan
+// job total is included because one file larger than the whole job budget can
+// never be used. scope names which limit won, for the error message. An empty
+// toolType (upload init/complete, before the tool is known) skips the tool cap,
+// which job creation applies.
+func effectiveMaxFileMB(c *gin.Context, toolType string) (mb int, scope string) {
+	mb = min(planMaxFileSizeMB(c), planMaxJobInputMB(c), ceilingMB())
+	scope = "your plan"
+	if toolCap, ok := toolMaxFileMB[toolType]; ok && toolCap < mb {
+		mb, scope = toolCap, "this tool"
+	}
+	return mb, scope
+}
+
+// effectiveMaxJobMB is the largest total input one job may have:
+// min(plan per-job total, worker ceiling). Workers reject a job whose input × 3
+// exceeds their tmpfs budget, so admitting more here would only move the
+// failure from this request to minutes later in the worker.
+func effectiveMaxJobMB(c *gin.Context) int {
+	return min(planMaxJobInputMB(c), ceilingMB())
+}
+
+// rejectJobTooLarge writes the 413 JOB_TOO_LARGE response for a job whose
+// files fit individually but not together.
+func rejectJobTooLarge(c *gin.Context, toolType string, totalBytes int64, maxJobMB int) {
+	publishPlanLimitHit(c, "max_job_size", toolType)
+	response.Err(c, http.StatusRequestEntityTooLarge, response.CodeJobTooLarge,
+		fmt.Sprintf("These files total %dMB; your plan allows %dMB per job. Remove some files and try again.",
+			(totalBytes+bytesPerMB-1)/bytesPerMB, maxJobMB))
+}
+
+// rejectFileTooLarge writes the 413 FILE_TOO_LARGE response naming the limit
+// that applied (plan or tool).
+func rejectFileTooLarge(c *gin.Context, toolType string, maxMB int, scope string) {
+	publishPlanLimitHit(c, "max_file_size", toolType)
+	response.Err(c, http.StatusRequestEntityTooLarge, response.CodeFileTooLarge,
+		fmt.Sprintf("File size exceeds the %dMB limit for %s", maxMB, scope))
 }
 
 // validateFileType rejects a file whose EXTENSION cannot be right for the tool.

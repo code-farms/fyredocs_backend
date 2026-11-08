@@ -10,15 +10,17 @@ import (
 	"fyredocs/shared/config"
 )
 
-// guestPlanContext returns the limits applied to requests with no valid token.
-// The values come from shared/config, which also seeds the "guest" row in the
-// subscription_plans table — so guest enforcement matches what /auth/plans
-// serves to the frontend (the DB is the source of truth).
+// guestPlanContext returns the starting limits for a request with no valid
+// token. They are fallbacks only: the gateway's PlanResolver then replaces them
+// with the guest row of auth-service's subscription_plans table (Redis key
+// plan:guest, see api-gateway/internal/plancache), which is the source of truth.
+// These config defaults apply only when that lookup has nothing.
 func guestPlanContext() AuthContext {
 	return AuthContext{
 		Plan:               "guest",
 		PlanMaxFileSizeMB:  config.GuestMaxFileSizeMB(),
 		PlanMaxFilesPerJob: config.GuestMaxFilesPerJob(),
+		PlanMaxJobInputMB:  config.GuestMaxJobInputMB(),
 	}
 }
 
@@ -133,15 +135,44 @@ func HTTPAuthMiddleware(options HTTPMiddlewareOptions) func(http.Handler) http.H
 				return
 			}
 
+			// Guests (guest cookie or no credentials at all) go through the same
+			// PlanResolver as users, so their limits come from the guest plan row
+			// rather than the config defaults. Without this the gateway never
+			// consulted the guest row and a DB edit to it had no effect.
 			if guestCtx != nil {
-				next.ServeHTTP(w, SetRequestAuth(r, *guestCtx))
+				authCtx := *guestCtx
+				resolveGuestPlan(r, &authCtx, options.ResolvePlan)
+				next.ServeHTTP(w, SetRequestAuth(r, authCtx))
 				return
 			}
 
 			// No token — unauthenticated request. Apply guest plan limits.
-			next.ServeHTTP(w, SetRequestAuth(r, guestPlanContext()))
+			authCtx := guestPlanContext()
+			resolveGuestPlan(r, &authCtx, options.ResolvePlan)
+			next.ServeHTTP(w, SetRequestAuth(r, authCtx))
 		})
 	}
+}
+
+// resolveGuestPlan fills a guest context's plan limits: config fallbacks
+// first, then the resolver (the gateway's lookup of the guest plan row), which
+// sees IsGuest=true. The context's identity fields are left as they were; only
+// IsGuest is forced for the resolver call and restored afterwards, so a
+// credential-less context does not start reporting itself as a guest-token
+// holder to authorization checks.
+func resolveGuestPlan(r *http.Request, authCtx *AuthContext, resolve PlanResolver) {
+	fallback := guestPlanContext()
+	authCtx.Plan = fallback.Plan
+	authCtx.PlanMaxFileSizeMB = fallback.PlanMaxFileSizeMB
+	authCtx.PlanMaxFilesPerJob = fallback.PlanMaxFilesPerJob
+	authCtx.PlanMaxJobInputMB = fallback.PlanMaxJobInputMB
+	if resolve == nil {
+		return
+	}
+	wasGuest := authCtx.IsGuest
+	authCtx.IsGuest = true
+	resolve(r, authCtx)
+	authCtx.IsGuest = wasGuest
 }
 
 // SplitScopes parses a space/comma-delimited scope header into a cleaned slice.
@@ -194,6 +225,7 @@ func authContextFromGatewayHeaders(header http.Header) (AuthContext, bool) {
 	plan := strings.TrimSpace(header.Get("X-User-Plan"))
 	maxFileMB, _ := strconv.Atoi(header.Get("X-User-Plan-Max-File-MB"))
 	maxFiles, _ := strconv.Atoi(header.Get("X-User-Plan-Max-Files"))
+	maxJobMB, _ := strconv.Atoi(header.Get("X-User-Plan-Max-Job-MB"))
 	return AuthContext{
 		UserID:             userID,
 		Role:               role,
@@ -201,6 +233,7 @@ func authContextFromGatewayHeaders(header http.Header) (AuthContext, bool) {
 		Plan:               plan,
 		PlanMaxFileSizeMB:  maxFileMB,
 		PlanMaxFilesPerJob: maxFiles,
+		PlanMaxJobInputMB:  maxJobMB,
 	}, true
 }
 

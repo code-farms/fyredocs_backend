@@ -406,10 +406,18 @@ func main() {
 		// redeem route carries noV1Alias for the same reason — see the route table.
 		PublicPrefixes: []string{"/share/"},
 		ResolvePlan: func(r *http.Request, authCtx *authverify.AuthContext) {
-			info := plancache.GetPlanInfo(r.Context(), redisClient, authCtx.UserID)
+			// Guests have no per-user entry; their limits are the guest plan row
+			// that auth-service publishes. Both come from subscription_plans.
+			var info plancache.PlanInfo
+			if authCtx.IsGuest {
+				info = plancache.GetGuestPlanInfo(r.Context(), redisClient)
+			} else {
+				info = plancache.GetPlanInfo(r.Context(), redisClient, authCtx.UserID)
+			}
 			authCtx.Plan = info.Plan
 			authCtx.PlanMaxFileSizeMB = info.MaxFileMB
 			authCtx.PlanMaxFilesPerJob = info.MaxFiles
+			authCtx.PlanMaxJobInputMB = info.MaxJobMB
 		},
 	})
 

@@ -214,9 +214,13 @@ paths:
       tags:
       - Authentication
       summary: List subscription plans
-      description: 'Returns all non-anonymous subscription plans with their file size and
+      description: 'Returns every subscription plan, guest included, with its per-file,
 
-        file count limits. No authentication required.
+        per-job and file-count limits. These rows are the only definition of plan
+
+        limits; guest clients validate uploads against the guest row. No authentication
+
+        required.
 
         '
       operationId: getPlans
@@ -733,13 +737,13 @@ paths:
 
         directly to object storage — they never pass through the application.
 
-        The declared `fileSize` is validated against the caller''s plan limit
+        The declared `fileSize` is validated **before** any URL is issued against
 
-        from the `X-User-Plan-Max-File-MB` header (default: 10 MB for
+        the smallest of the plan per-file limit (`X-User-Plan-Max-File-MB`), the
 
-        anonymous users) **before** any URL is issued; the true object size is
+        plan per-job total (`X-User-Plan-Max-Job-MB`) and the `MAX_UPLOAD_MB` worker
 
-        re-verified on complete.
+        ceiling (300); the true object size is re-verified on complete.
 
         '
       operationId: initUpload
@@ -780,7 +784,7 @@ paths:
                       $ref: '#/components/schemas/APIError'
                       example:
                         code: FILE_TOO_LARGE
-                        details: File size exceeds the 25MB limit for your plan
+                        details: File size exceeds the 300MB limit for your plan
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -1002,7 +1006,7 @@ paths:
                       $ref: '#/components/schemas/APIError'
                       example:
                         code: FILE_TOO_LARGE
-                        details: File size exceeds the 25MB limit for your plan
+                        details: File size exceeds the 300MB limit for your plan
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -1106,6 +1110,8 @@ paths:
                       $ref: '#/components/schemas/CreateJobResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PlanLimitExceeded'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '429':
@@ -1356,6 +1362,8 @@ paths:
                       $ref: '#/components/schemas/CreateJobResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PlanLimitExceeded'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '429':
@@ -1728,6 +1736,8 @@ paths:
                       $ref: '#/components/schemas/CreateJobResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PlanLimitExceeded'
         '500':
           $ref: '#/components/responses/InternalError'
     get:
@@ -1964,6 +1974,8 @@ paths:
                       $ref: '#/components/schemas/CreateJobResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PlanLimitExceeded'
         '500':
           $ref: '#/components/responses/InternalError'
     get:
@@ -4903,6 +4915,9 @@ components:
           - pro
           example: free
           description: The user's current subscription plan name
+        planLimits:
+          $ref: '#/components/schemas/SubscriptionPlan'
+          description: The user's subscription_plans row. Clients validate every file selection against it before uploading.
     SubscriptionPlan:
       type: object
       properties:
@@ -4911,12 +4926,16 @@ components:
           example: free
         maxFileSizeMb:
           type: integer
-          example: 25
-          description: Maximum file size in megabytes
+          example: 50
+          description: Maximum size of one file in MiB
         maxFilesPerJob:
           type: integer
           example: 10
           description: Maximum number of files per job
+        maxJobInputMb:
+          type: integer
+          example: 300
+          description: Maximum total size of all files in one job in MiB (at most 300, the PDF workers' capacity)
         retentionDays:
           type: integer
           example: 7
@@ -5880,6 +5899,32 @@ components:
           description: Content type derived from the file extension (application/octet-stream when unknown)
           example: application/pdf
   responses:
+    PlanLimitExceeded:
+      description: 'A plan or tool size limit was exceeded. FILE_TOO_LARGE: one file is
+
+        over the smallest of the plan per-file limit, the plan per-job total, the
+
+        MAX_UPLOAD_MB worker ceiling (300) and the 20 MB cap of scan-to-pdf and
+
+        image-to-pdf. JOB_TOO_LARGE: the files fit one by one but their total is
+
+        over the plan per-job total (X-User-Plan-Max-Job-MB). Limits come from the
+
+        subscription_plans table. Rejected before any job row or dispatch.
+
+        '
+      content:
+        application/json:
+          schema:
+            allOf:
+            - $ref: '#/components/schemas/APIResponse'
+            - type: object
+              properties:
+                error:
+                  $ref: '#/components/schemas/APIError'
+                  example:
+                    code: JOB_TOO_LARGE
+                    details: These files total 320MB; your plan allows 300MB per job. Remove some files and try again.
     BadRequest:
       description: Invalid input or missing required fields
       headers:

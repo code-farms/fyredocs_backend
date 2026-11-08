@@ -125,10 +125,7 @@ func (ae *AuthEndpoints) ProxyLogin(c *gin.Context) {
 // for the target user and sets it as the access cookie. Mirrors
 // respondWithTokens but omits the refresh token entirely.
 func (ae *AuthEndpoints) respondWithImpersonationToken(c *gin.Context, target models.User, adminID string) {
-	var plan models.SubscriptionPlan
-	if err := models.DB.Where("name = ?", target.PlanName).First(&plan).Error; err != nil {
-		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
-	}
+	plan := resolvePlan(c.Request.Context(), target.PlanName)
 
 	role := target.Role
 	if role == "" {

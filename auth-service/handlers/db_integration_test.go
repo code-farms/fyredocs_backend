@@ -602,8 +602,9 @@ func TestInternalRevokeUserSessions_DB(t *testing.T) {
 
 // TestInternalGetUserPlan_DB pins both plan resolution paths of the internal
 // API: a real subscription_plans row is served verbatim, a user whose plan
-// has no catalogue row falls back to the hardcoded free limits, and a missing
-// user is a 404 (not a silent free fallback).
+// has no catalogue row (and no free row to fall back to) gets lastResortPlan,
+// which mirrors the seeded free row, and a missing user is a 404 (not a silent
+// free fallback).
 func TestInternalGetUserPlan_DB(t *testing.T) {
 	withDB(t)
 	r := newAuthRouter(t)
@@ -612,7 +613,7 @@ func TestInternalGetUserPlan_DB(t *testing.T) {
 	internalHeader := map[string]string{authverify.InternalTokenHeader: testInternalToken}
 
 	t.Run("plan resolved from catalogue row", func(t *testing.T) {
-		pro := models.SubscriptionPlan{Name: "pro", MaxFileSizeMB: 500, MaxFilesPerJob: 50, RetentionDays: 30}
+		pro := models.SubscriptionPlan{Name: "pro", MaxFileSizeMB: 300, MaxFilesPerJob: 50, MaxJobInputMB: 300, RetentionDays: 30}
 		if err := models.DB.Create(&pro).Error; err != nil {
 			t.Fatalf("seed pro plan: %v", err)
 		}
@@ -626,12 +627,12 @@ func TestInternalGetUserPlan_DB(t *testing.T) {
 			t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
 		}
 		plan, _ := env.Data["plan"].(map[string]any)
-		if plan == nil || plan["name"] != "pro" || plan["maxFileSizeMb"] != float64(500) {
+		if plan == nil || plan["name"] != "pro" || plan["maxFileSizeMb"] != float64(300) || plan["maxJobInputMb"] != float64(300) {
 			t.Errorf("plan = %v, want the seeded pro row", env.Data["plan"])
 		}
 	})
 
-	t.Run("missing catalogue row falls back to free limits", func(t *testing.T) {
+	t.Run("no readable plan row falls back to the last-resort free limits", func(t *testing.T) {
 		if err := models.DB.Model(&models.User{}).Where("id = ?", user.ID).Update("plan_name", "free").Error; err != nil {
 			t.Fatalf("assign free plan: %v", err)
 		}
@@ -642,8 +643,9 @@ func TestInternalGetUserPlan_DB(t *testing.T) {
 			t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
 		}
 		plan, _ := env.Data["plan"].(map[string]any)
-		if plan == nil || plan["name"] != "free" || plan["maxFileSizeMb"] != float64(25) {
-			t.Errorf("plan = %v, want the hardcoded free fallback (25MB)", env.Data["plan"])
+		if plan == nil || plan["name"] != "free" || plan["maxFileSizeMb"] != float64(lastResortPlan.MaxFileSizeMB) ||
+			plan["maxJobInputMb"] != float64(lastResortPlan.MaxJobInputMB) {
+			t.Errorf("plan = %v, want lastResortPlan %+v", env.Data["plan"], lastResortPlan)
 		}
 	})
 

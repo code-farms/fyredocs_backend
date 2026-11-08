@@ -207,8 +207,10 @@ unset), which makes org-scoped document authorization fail safe rather than open
 #### Still open: plan quotas are header-derived
 
 Identity no longer depends on network isolation, but **plan quotas still do.**
-`planMaxFileSizeMB` / `planMaxFilesPerJob` (`job-service/handlers/jobs.go`) read
-`X-User-Plan-Max-File-MB` / `X-User-Plan-Max-Files` directly from the request. They
+`planMaxFileSizeMB` / `planMaxFilesPerJob` / `planMaxJobInputMB` (`job-service/handlers/jobs.go`) read
+`X-User-Plan-Max-File-MB` / `X-User-Plan-Max-Files` / `X-User-Plan-Max-Job-MB` directly from
+the request. The `MAX_UPLOAD_MB` worker ceiling (default 300) bounds what a forged header can
+gain: one job can never exceed what the workers hold. They
 cannot use the verified `AuthContext`, because plan data is resolved by the gateway
 from its Redis plancache and is deliberately **not** in the JWT claims
 (`Claims.ToAuthContext`), so local verification cannot reconstruct it.

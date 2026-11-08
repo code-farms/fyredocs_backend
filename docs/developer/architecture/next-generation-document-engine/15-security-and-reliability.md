@@ -94,7 +94,7 @@ shared code), **to be validated against `benchmarks/baseline-2026-11.md` before 
 
 | Limit | Proposed default | Where enforced |
 |---|---|---|
-| File size by plan | guest 20 MB, free 50 MB (UI already says 50 MB), pro 500 MB ceiling (`MAX_UPLOAD_MB`); **office inputs capped at 150 MB on every plan** until size-scaled contexts (Q12) | job-service `planMaxFileSizeMB` + per-tool table; worker `tmpfs.go` |
+| File size by plan | From the `subscription_plans` table (Q12, done 2026-11-08): guest 20 MB per file / 100 MB per job, free 50 / 300, pro 300 / 300; `MAX_UPLOAD_MB` 300 is the worker-capacity ceiling; image tools 20 MB | job-service `planMaxFileSizeMB` + per-tool table; worker `tmpfs.go` |
 | Zip (OOXML/ODF) | `ZIP_MAX_TOTAL_MB` 2 000, `ZIP_MAX_RATIO` 100, `ZIP_MAX_ENTRIES` 10 000, no nested zip, names must pass `fs.ValidPath` | job-service sniff stage (central directory read via `GetObjectRange` tail), worker pre-exec |
 | XML (future readers) | `XML_MAX_PART_MB` 64, depth 256, attribute value 64 KiB, no `<!ENTITY` | reader package |
 | Page count | `PDF_MAX_PAGES` 2 000 for OCR and pdf→image, 5 000 for pdfcpu ops (from `api.PageCountFile`, Q8/Q9) | job-service at upload (Q9) + worker |

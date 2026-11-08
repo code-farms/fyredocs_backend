@@ -31,18 +31,14 @@ func GetUserPlan(c *gin.Context) {
 		return
 	}
 
-	plan, ok := lookupPlan(c.Request.Context(), user.PlanName)
-	if !ok {
-		logger.LogWarn(c.Request.Context(), "db.subscription_plans.lookup_fallback", nil,
-			"userId", user.ID, "planName", user.PlanName)
-		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
-	}
+	plan := resolvePlan(c.Request.Context(), user.PlanName)
 
 	response.OK(c, "User plan retrieved", gin.H{
 		"userId": user.ID.String(),
 		"plan": gin.H{
 			"name":           plan.Name,
 			"maxFileSizeMb":  plan.MaxFileSizeMB,
+			"maxJobInputMb":  plan.MaxJobInputMB,
 			"maxFilesPerJob": plan.MaxFilesPerJob,
 			"retentionDays":  plan.RetentionDays,
 		},

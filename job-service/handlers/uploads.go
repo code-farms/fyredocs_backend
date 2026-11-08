@@ -92,10 +92,13 @@ func InitUpload(c *gin.Context) {
 		return
 	}
 
-	maxFileSizeMB := planMaxFileSizeMB(c)
-	if req.FileSize > int64(maxFileSizeMB)*1024*1024 {
+	// Reject before any storage is allocated. The tool is not known yet, so this
+	// is the plan limit (capped by the job total and worker ceiling); job
+	// creation adds the tool cap.
+	maxFileSizeMB, scope := effectiveMaxFileMB(c, "")
+	if req.FileSize > int64(maxFileSizeMB)*bytesPerMB {
 		response.Err(c, http.StatusRequestEntityTooLarge, response.CodeFileTooLarge,
-			fmt.Sprintf("File size exceeds the %dMB limit for your plan", maxFileSizeMB))
+			fmt.Sprintf("File size exceeds the %dMB limit for %s", maxFileSizeMB, scope))
 		return
 	}
 
@@ -286,12 +289,12 @@ func CompleteUpload(c *gin.Context) {
 
 	// Re-verify against the plan limit using the TRUE size — the declared size
 	// at init time is client-supplied and cannot be trusted.
-	maxFileSizeMB := planMaxFileSizeMB(c)
-	if info.Size > int64(maxFileSizeMB)*1024*1024 {
+	maxFileSizeMB, scope := effectiveMaxFileMB(c, "")
+	if info.Size > int64(maxFileSizeMB)*bytesPerMB {
 		_ = objStore.RemoveObject(ctx, bucket, key)
 		_ = redisstore.Client.Del(ctx, uploadStateKey(uploadID)).Err()
 		response.Err(c, http.StatusRequestEntityTooLarge, response.CodeFileTooLarge,
-			fmt.Sprintf("File size exceeds the %dMB limit for your plan", maxFileSizeMB))
+			fmt.Sprintf("File size exceeds the %dMB limit for %s", maxFileSizeMB, scope))
 		return
 	}
 

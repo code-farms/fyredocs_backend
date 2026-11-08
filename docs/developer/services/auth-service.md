@@ -169,23 +169,37 @@ CREATE TABLE subscription_plans (
     name              TEXT UNIQUE NOT NULL,
     max_file_size_mb  INT NOT NULL,
     max_files_per_job INT NOT NULL,
+    max_job_input_mb  BIGINT NOT NULL DEFAULT 300,  -- total MB of all files in one job (migration 00002)
     retention_days    INT NOT NULL,
     created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
-Three rows are seeded at startup:
+#### Plan limits
 
-These rows are the **single source of truth** for plan limits, served to the frontend via
-`GET /auth/plans` and used for enforcement. `seedPlans` upserts them on boot (updating limit
-columns), so changing the seed/DB propagates. Guest limits come from `shared/config`
-(`GUEST_MAX_FILE_MB` / `GUEST_MAX_FILES`).
+These rows are the **single source of every plan limit**: the web app, the mobile app, the
+gateway and job-service all enforce the numbers in this table, and nothing else defines them.
 
-| name | max_file_size_mb | max_files_per_job | retention_days |
-|------|------------------|-------------------|----------------|
-| `guest` | 20 | 5 | 0 |
-| `free` | 50 | 10 | 7 |
-| `pro` | 500 | 50 | 30 |
+| name | max_file_size_mb | max_files_per_job | max_job_input_mb | retention_days |
+|------|------------------|-------------------|------------------|----------------|
+| `guest` | 20 | 5 | 100 | 0 |
+| `free` | 50 | 10 | 300 | 7 |
+| `pro` | 300 | 50 | 300 | 30 |
+
+- **Seeding is insert-only.** `seedPlans` (`internal/models/database.go`) inserts these rows
+  when they are missing and never touches existing rows, so an edit made in the table survives
+  restarts. Changing the values for existing databases is done with a migration
+  (`00002_plan_job_input_limit.sql` set pro to 300 MB and added `max_job_input_mb`).
+- **Worker capacity bounds the table.** Every PDF worker rejects a job whose total input × 3
+  exceeds its 900 MB tmpfs budget, so no row should allow more than 300 MB per file or per job.
+  job-service also caps every limit at `MAX_UPLOAD_MB` (default 300), so a row set too high
+  cannot admit a job the workers will reject.
+- **How a change propagates.** auth-service caches plan rows in-process for `PLAN_CACHE_TTL`
+  (default 5m). Users get new limits in their next login, refresh or `/auth/me` response
+  (`user.planLimits`) and in the gateway once their `user:plan:<id>` entry is rewritten at the
+  next login or refresh. The guest row is republished to `plan:guest` every `PLAN_CACHE_TTL`.
+- **Fallbacks.** A user whose plan has no row gets the `free` row. Only if no row can be read
+  at all (database down) is the built-in `lastResortPlan` used; it mirrors the seeded free row.
 
 ### user_sessions (refresh-token rotation)
 
@@ -243,7 +257,8 @@ CREATE INDEX        idx_password_reset_tokens_expires_at ON password_reset_token
 | Key Pattern | Type | TTL | Purpose |
 |-------------|------|-----|---------|
 | `denylist:jwt:<token-hash>` | String | Remaining token TTL | Revoked access tokens (cross-service) |
-| `user:plan:<userId>` | String (JSON) | Access-token TTL (8h) | Cached plan info for the gateway: `{plan, max_file_mb, max_files}` |
+| `user:plan:<userId>` | String (JSON) | Access-token TTL (8h) | Cached plan info for the gateway: `{plan, max_file_mb, max_files, max_job_mb}` |
+| `plan:guest` | String (JSON) | None (republished every `PLAN_CACHE_TTL`) | The guest plan row for the gateway, same shape as `user:plan:*` |
 | `ratelimit:login:<ip>` | String | Rate limit window | Login attempt counter |
 | `ratelimit:signup:<ip>` | String | Rate limit window | Signup attempt counter |
 | `ratelimit:refresh:<ip>` | String | Rate limit window | Refresh attempt counter |
@@ -279,7 +294,7 @@ sequenceDiagram
         AS->>DB: SELECT subscription_plans WHERE name='free'
         AS->>AS: Issuer.IssueAccessToken (8h) + IssueRefreshToken (7d)
         AS->>DB: INSERT user_sessions (id=jti, hashes, expiries)
-        AS->>R: SET user:plan:<id> {free, 25, 10} EX=accessTTL
+        AS->>R: SET user:plan:<id> {free, 50, 10, 300} EX=accessTTL
         AS-->>C: 200 + Set-Cookie access_token (Path=/) + Set-Cookie refresh_token (Path=/auth)
     end
 ```
@@ -557,16 +572,19 @@ All errors follow the standard response format:
 }
 ```
 
-Plan info (`plan`, `max_file_mb`, `max_files`) is **not** embedded in the JWT. It is cached in Redis and read by the API gateway, so plan changes take effect immediately without waiting for token expiry.
+Plan info (`plan`, `max_file_mb`, `max_files`, `max_job_mb`) is **not** embedded in the JWT. It is cached in Redis and read by the API gateway, so plan changes take effect immediately without waiting for token expiry.
 
 ### Plan Cache (Redis)
 
-- **Key**: `user:plan:<userId>` → JSON `{"plan":"free","max_file_mb":25,"max_files":10}`
+- **Key**: `user:plan:<userId>` → JSON `{"plan":"free","max_file_mb":50,"max_files":10,"max_job_mb":300}`
 - **TTL**: Same as access-token TTL (default 8h)
 - **Written by**: auth-service on signup, login, refresh, and `PUT /auth/plan`
 - **Deleted on**: logout
 - **Read by**: api-gateway via the `ResolvePlan` callback in the auth middleware
 - **Fallback**: If the key is missing, the gateway treats the user as the `free` plan defaults
+- **Guest row**: `plan:guest` holds the guest plan in the same shape. auth-service writes it at
+  startup and every `PLAN_CACHE_TTL` (`RunGuestPlanPublisher`); it has no TTL, so the last
+  published value survives an auth-service outage. The gateway reads it for every guest request.
 
 ### JWT Configuration
 
@@ -797,12 +815,23 @@ Set-Cookie: refresh_token=eyJhbGc...; HttpOnly; Secure; SameSite=Lax; Max-Age=60
       "country": "US",
       "image": "https://...",
       "role": "user",
-      "planName": "free"
+      "planName": "free",
+      "planLimits": {
+        "name": "free",
+        "maxFileSizeMb": 50,
+        "maxFilesPerJob": 10,
+        "maxJobInputMb": 300,
+        "retentionDays": 7
+      }
     },
     "accessExpiresAt": 1705324800000
   }
 }
 ```
+
+`user.planLimits` is the user's `subscription_plans` row. It appears in the signup, login,
+refresh, `/auth/me` and profile responses, and the clients validate every file selection
+against it before uploading.
 
 ### POST /auth/login
 
@@ -828,7 +857,7 @@ Returns 204. Side effects: deletes the matching `user_sessions` row, denies the 
 
 ### GET /auth/plans
 
-Returns all plans (`guest`, `free`, `pro`).
+Returns all plans (`guest`, `free`, `pro`), each with `maxFileSizeMb`, `maxFilesPerJob`, `maxJobInputMb` and `retentionDays`. Guest clients read their limits from the `guest` row.
 
 ### POST /auth/forgot-password
 
@@ -897,7 +926,7 @@ Side effects on success:
 
 ### Internal — GET /internal/users/:id/plan
 
-Returns `{userId, plan: {name, maxFileSizeMb, maxFilesPerJob, retentionDays}}`. Used by other services that need plan info without going through the gateway / Redis cache.
+Returns `{userId, plan: {name, maxFileSizeMb, maxFilesPerJob, maxJobInputMb, retentionDays}}`. Used by other services that need plan info without going through the gateway / Redis cache.
 
 ### Internal — POST /internal/users/:id/revoke-sessions
 

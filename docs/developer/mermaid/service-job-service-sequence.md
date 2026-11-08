@@ -18,7 +18,7 @@ sequenceDiagram
 
     Client->>GW: POST /api/uploads/init {fileName, fileSize, contentType}
     GW->>JS: Proxy
-    JS->>JS: plan limit on declared size (413 FILE_TOO_LARGE) · partSize=UPLOAD_PART_SIZE_MB · totalParts=ceil (cap 1000)
+    JS->>JS: min(plan file MB, plan job MB, MAX_UPLOAD_MB) on declared size (413 FILE_TOO_LARGE) · partSize=UPLOAD_PART_SIZE_MB · totalParts=ceil (cap 1000)
     JS->>S3: CreateMultipartUpload uploads/&lt;uploadId&gt;/&lt;fileName&gt;
     JS->>JS: presign PUT URL per part (30m expiry)
     JS->>Redis: HSET upload:&lt;uploadId&gt; (fileName, declaredSize, contentType, bucket, key, s3UploadId, partSize, totalParts, createdAt) EX UPLOAD_TTL (30m)
@@ -43,7 +43,7 @@ sequenceDiagram
     else
         JS->>S3: CompleteMultipartUpload(etags)
         JS->>S3: StatObject → TRUE size
-        alt true size > plan limit
+        alt true size > per-file limit
             JS->>S3: RemoveObject
             JS->>Redis: DEL upload:&lt;uploadId&gt;
             JS-->>Client: 413 FILE_TOO_LARGE
@@ -96,6 +96,10 @@ sequenceDiagram
                 JS->>S3: StatObject(uploads, key) — existence + TRUE size
                 JS->>S3: GetObjectRange(key, 0, 512)
                 JS->>JS: validateMIMEHead(toolType, head)
+                JS->>JS: size > per-file limit incl. 20 MB image-tool cap → 413 FILE_TOO_LARGE
+            end
+            alt total size > min(X-User-Plan-Max-Job-MB, MAX_UPLOAD_MB)
+                JS-->>GW: 413 JOB_TOO_LARGE (no row, no dispatch; claims released, uploads kept)
             end
             Note over JS,S3: Object stays at uploads/&lt;uploadId&gt;/... — workers read it from there. InputPaths = object keys.
 

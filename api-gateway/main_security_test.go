@@ -158,6 +158,7 @@ var identityHeaders = []string{
 	"X-User-Plan",
 	"X-User-Plan-Max-File-MB",
 	"X-User-Plan-Max-Files",
+	"X-User-Plan-Max-Job-MB",
 	"X-Impersonated-By",
 }
 
@@ -237,7 +238,7 @@ func TestProxyStripsForgedIdentityHeaders(t *testing.T) {
 		// Fields the verified context does not carry must be ABSENT, not the
 		// forged value: ApplyUserHeaders only sets non-empty fields, so a
 		// leftover forged header would prove ClearUserHeaders was skipped.
-		for _, name := range []string{"X-User-Scope", "X-Impersonated-By", "X-User-Plan-Max-File-MB", "X-User-Plan-Max-Files"} {
+		for _, name := range []string{"X-User-Scope", "X-Impersonated-By", "X-User-Plan-Max-File-MB", "X-User-Plan-Max-Files", "X-User-Plan-Max-Job-MB"} {
 			if v := got.Get(name); v != "" {
 				t.Errorf("upstream received forged %s = %q, want empty", name, v)
 			}

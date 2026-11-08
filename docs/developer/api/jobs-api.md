@@ -80,7 +80,8 @@ options: <stringified JSON>
 | 400 | INVALID_OPTIONS | `options` fails the per-tool schema (`scan-to-pdf`, `pdf-metadata`, `ocr-pdf`, `pdf-to-image`, `sign-pdf`, `protect-pdf`, `unlock-pdf`) |
 | 400 | TOO_MANY_FILES | More files than the user's plan permits |
 | 401 | UNAUTHORIZED | Auth required for non-guest tools |
-| 413 | FILE_TOO_LARGE | File exceeds the plan's max-file-size |
+| 413 | FILE_TOO_LARGE | A file exceeds the plan's per-file limit, or the 20 MB cap of `scan-to-pdf` / `image-to-pdf` |
+| 413 | JOB_TOO_LARGE | The files fit one by one but together exceed the plan's per-job total (`maxJobInputMb`, at most 300 MB) |
 | 500 | SERVER_ERROR | Object storage / DB / NATS publish failure |
 
 ---

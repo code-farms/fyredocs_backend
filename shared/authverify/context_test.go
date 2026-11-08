@@ -69,6 +69,7 @@ func TestApplyUserHeaders(t *testing.T) {
 		Plan:               "pro",
 		PlanMaxFileSizeMB:  500,
 		PlanMaxFilesPerJob: 50,
+		PlanMaxJobInputMB:  300,
 	}
 	ApplyUserHeaders(header, authCtx)
 
@@ -89,6 +90,9 @@ func TestApplyUserHeaders(t *testing.T) {
 	}
 	if got := header.Get("X-User-Plan-Max-Files"); got != "50" {
 		t.Errorf("expected X-User-Plan-Max-Files '50', got %q", got)
+	}
+	if got := header.Get("X-User-Plan-Max-Job-MB"); got != "300" {
+		t.Errorf("expected X-User-Plan-Max-Job-MB '300', got %q", got)
 	}
 }
 
@@ -113,11 +117,12 @@ func TestClearUserHeaders(t *testing.T) {
 	header.Set("X-User-Plan", "pro")
 	header.Set("X-User-Plan-Max-File-MB", "500")
 	header.Set("X-User-Plan-Max-Files", "50")
+	header.Set("X-User-Plan-Max-Job-MB", "300")
 	header.Set("X-Other", "keep-me")
 
 	ClearUserHeaders(header)
 
-	for _, h := range []string{"X-User-ID", "X-User-Role", "X-User-Scope", "X-User-Plan", "X-User-Plan-Max-File-MB", "X-User-Plan-Max-Files"} {
+	for _, h := range []string{"X-User-ID", "X-User-Role", "X-User-Scope", "X-User-Plan", "X-User-Plan-Max-File-MB", "X-User-Plan-Max-Files", "X-User-Plan-Max-Job-MB"} {
 		if got := header.Get(h); got != "" {
 			t.Errorf("expected empty %s, got %q", h, got)
 		}

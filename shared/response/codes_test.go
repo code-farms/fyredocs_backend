@@ -18,6 +18,7 @@ func TestErrorCodeValuesAreStable(t *testing.T) {
 		CodeConflict:            "CONFLICT",
 		CodeFileTooLarge:        "FILE_TOO_LARGE",
 		CodeTooManyFiles:        "TOO_MANY_FILES",
+		CodeJobTooLarge:         "JOB_TOO_LARGE",
 		CodeRateLimited:         "RATE_LIMIT_EXCEEDED",
 		CodeServerError:         "SERVER_ERROR",
 		CodeUpstreamUnavailable: "UPSTREAM_UNAVAILABLE",

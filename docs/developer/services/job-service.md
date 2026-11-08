@@ -116,7 +116,7 @@ Operational notes:
 - `file_metadata.path` values starting with `/` are pre-object-storage legacy filesystem paths — skipped and logged; migrate with `scripts/migrate-files-to-minio.sh`.
 - Logs/metrics ship with the job-service container (`docker compose logs -f job-service`, grep `cleanup`); sweep activity appears in job-service's `/metrics`.
 
-Retention TTL fallbacks (`GUEST_JOB_TTL` 30m, `FREE_JOB_TTL` 7d, `PRO_JOB_TTL` 30d, `UPLOAD_TTL` 30m, `CLEANUP_INTERVAL` 15m, `MULTIPART_ABORT_TTL` 24h, `MAX_UPLOAD_MB` 500, guest plan `GUEST_MAX_FILE_MB` 20 / `GUEST_MAX_FILES` 5) live once in `shared/config/defaults.go`, read by both the handlers and the sweep, so the values cannot drift.
+Retention TTL fallbacks (`GUEST_JOB_TTL` 30m, `FREE_JOB_TTL` 7d, `PRO_JOB_TTL` 30d, `UPLOAD_TTL` 30m, `CLEANUP_INTERVAL` 15m, `MULTIPART_ABORT_TTL` 24h, `MAX_UPLOAD_MB` 300, guest fallbacks `GUEST_MAX_FILE_MB` 20 / `GUEST_MAX_FILES` 5 / `GUEST_MAX_JOB_MB` 100) live once in `shared/config/defaults.go`, read by both the handlers and the sweep, so the values cannot drift.
 
 ### ToolServiceMap (routing.go)
 
@@ -379,14 +379,42 @@ The SSE endpoint creates an ephemeral NATS JetStream consumer on the `JOBS_EVENT
 
 ## Plan-Based Limits Enforcement
 
-`CreateJobFromTool` enforces per-user plan limits using headers injected by the API Gateway:
+Plan limits come from auth-service's `subscription_plans` table; this service never defines
+them. The gateway forwards them as headers, and this service enforces the effective limit:
 
-| Header | Default (absent) | Enforcement |
-|--------|-----------------|-------------|
-| `X-User-Plan-Max-Files` | `5` | Rejects jobs whose file count exceeds the limit; error code `TOO_MANY_FILES` |
-| `X-User-Plan-Max-File-MB` | `10` | Rejects files that exceed the size limit; error code `FILE_TOO_LARGE` (413) |
+| Header | Plan column | Fallback when absent |
+|--------|-------------|----------------------|
+| `X-User-Plan-Max-File-MB` | `max_file_size_mb` | `GUEST_MAX_FILE_MB` (20) |
+| `X-User-Plan-Max-Files` | `max_files_per_job` | `GUEST_MAX_FILES` (5) |
+| `X-User-Plan-Max-Job-MB` | `max_job_input_mb` (total of all files in one job) | `GUEST_MAX_JOB_MB` (100), logged |
 
-Both the JSON (uploadId) and multipart form paths check the file-count limit. The per-file size limit is enforced three times on the presigned path — on the declared size at `/init` (before any presigned URL is issued), on the **true** object size at `/complete` (oversized objects are deleted), and against the `MAX_UPLOAD_MB` hard cap when the job consumes the upload — and once on `file.Size` for the direct multipart path.
+The fallbacks apply only when the gateway sent nothing, and they are the strictest plan, so a
+missing header makes limits too strict, never absent. MB means MiB (1024 × 1024 bytes) here and
+in both clients, and a file or job exactly at a limit is accepted.
+
+**Effective limits** (`effectiveMaxFileMB` / `effectiveMaxJobMB` in `handlers/jobs.go`):
+
+- **Per file:** min(plan per-file, plan per-job total, `MAX_UPLOAD_MB`, tool cap). The job total
+  is included because a single file larger than the whole job budget can never be used.
+- **Per job:** min(plan per-job total, `MAX_UPLOAD_MB`). `MAX_UPLOAD_MB` (default 300) is the
+  worker-capacity ceiling: every PDF worker rejects a job whose total input × 3 exceeds its
+  900 MB tmpfs budget, so admitting more here would only move the failure to the worker.
+- **Tool cap:** `scan-to-pdf` and `image-to-pdf` (and its alias `img-to-pdf`) accept images up
+  to 20 MB regardless of plan. This is tool data, mirrored in both clients' tool config.
+
+**Where each check runs:**
+
+| Step | Check | Error |
+|------|-------|-------|
+| `POST /api/uploads/init` | declared size > per-file limit (without tool cap; the tool is not known yet) | 413 `FILE_TOO_LARGE` before any storage is allocated |
+| `POST /api/uploads/:id/complete` | true object size > per-file limit | 413 `FILE_TOO_LARGE`, object deleted |
+| Job creation (JSON `uploadIds`) | file count; each file > per-file limit including tool cap; total > per-job limit | 400 `TOO_MANY_FILES`, 413 `FILE_TOO_LARGE`, 413 `JOB_TOO_LARGE` |
+| Job creation (multipart) | file count; each file; total — all before any file is stored | same codes |
+
+Every rejection happens before the job row is inserted and before dispatch. On the JSON path
+the upload claims are released and the uploads stay valid, so the client can resubmit fewer
+files. Each rejection publishes a `plan.limit_hit` analytics event (`max_files`,
+`max_file_size` or `max_job_size`).
 
 ## NATS Events / Queues
 
@@ -558,7 +586,7 @@ sequenceDiagram
 
     C->>GW: POST /api/uploads/init {fileName, fileSize, contentType}
     GW->>JS: Proxy request
-    JS->>JS: Enforce plan size limit on declared size (413 FILE_TOO_LARGE)
+    JS->>JS: Enforce per-file limit (plan, job total, MAX_UPLOAD_MB) on declared size (413 FILE_TOO_LARGE)
     JS->>S3: CreateMultipartUpload uploads/<uploadId>/<fileName>
     JS->>JS: Presign PUT URL for every part (signed against S3_PUBLIC_ENDPOINT)
     JS->>R: HSET upload:<id> {fileName, declaredSize, bucket, key, s3UploadId, partSize, totalParts}
@@ -773,7 +801,8 @@ sequenceDiagram
 | `INVALID_INPUT` | 400 | File MIME content type (sniffed from the object's first 512 bytes) does not match the expected type for the tool |
 | `INVALID_INPUT` | 400 | Uploaded object missing from the uploads bucket (upload never completed) |
 | `INVALID_OPTIONS` | 400 | `options` payload fails the per-tool schema (scan-to-pdf: bad JSON, non-whitelisted language/pageSize/enhance/margin, >50 pages entries, invalid rotation, partial corners, coordinates outside [0,1]; pdf-metadata: missing options, none of title/author/subject/keywords present, a field >512 chars after trimming, or NUL bytes; ocr-pdf: bad JSON, language outside `en`/`eng`, non-integer dpi, or dpi outside 72–600; pdf-to-image: bad JSON, format outside `png`/`jpg`/`jpeg`/`tiff`, non-integer dpi, or dpi outside 72–600; sign-pdf: missing options, bad JSON, missing/empty `signatureData`, a data URL that is not `image/png`/`image/jpeg` base64, decoded size >256 KB, invalid base64, non-whitelisted position, non-integer page, or page <0; protect-pdf: missing options, bad JSON, no password supplied, `password` mixed with `userPassword`/`ownerPassword`, a password outside 4–128 chars, or `encryption` outside `aes-256`/`aes-128`/`rc4-128`; unlock-pdf: missing options, bad JSON, missing/empty `password`, or password >128 chars) |
-| `FILE_TOO_LARGE` | 413 | File size exceeds plan limit from `X-User-Plan-Max-File-MB` (direct multipart path; default 10 MB) |
+| `FILE_TOO_LARGE` | 413 | A file exceeds the effective per-file limit (plan, worker ceiling, or the 20 MB image-tool cap); the message names the limit |
+| `JOB_TOO_LARGE` | 413 | The files fit individually but their total exceeds the effective per-job limit from `X-User-Plan-Max-Job-MB` |
 | `TOO_MANY_FILES` | 400 | Number of files exceeds plan limit from `X-User-Plan-Max-Files` (default 5 files) |
 | `RATE_LIMIT_EXCEEDED` | 429 | More than `RATE_LIMIT_JOB_CREATE` job creations per IP per window |
 | `SERVER_ERROR` | 500 | Object storage put/stat failed |
@@ -786,7 +815,7 @@ sequenceDiagram
 |------------|-------------|-----------|
 | `INVALID_INPUT` | 400 | Missing/invalid fileName or fileSize at init; invalid part-number list |
 | `INVALID_INPUT` | 400 | File needs more than 1000 parts at the configured part size |
-| `FILE_TOO_LARGE` | 413 | Declared size (init) or true object size (complete) exceeds the plan limit |
+| `FILE_TOO_LARGE` | 413 | Declared size (init) or true object size (complete) exceeds the effective per-file limit |
 | `NOT_FOUND` | 404 | Upload session expired or not found in Redis |
 | `UPLOAD_INCOMPLETE` | 400 | Part count mismatch, or S3 rejected CompleteMultipartUpload (missing/invalid parts) |
 | `UPLOAD_PROTOCOL_CHANGED` | 410 | Legacy `PUT /:uploadId/chunk` called — client must refresh to the presigned protocol |
@@ -849,7 +878,8 @@ The service fails fast at boot if object storage is misconfigured or the buckets
 | `S3_REGION` | `us-east-1` | Signing region |
 | `S3_USE_SSL` | `false` | TLS to the internal endpoint |
 | `UPLOAD_PART_SIZE_MB` | `8` | Multipart part size in MiB (clamped to the S3 5 MiB minimum) |
-| `MAX_UPLOAD_MB` | `500` | Absolute server-side hard cap on file size in MB — must be ≥ the largest plan (pro 500) or that plan is unreachable. Per-plan limits are enforced via the `X-User-Plan-Max-File-MB` header |
+| `MAX_UPLOAD_MB` | `300` | Worker-capacity ceiling in MB, applied as min(plan, ceiling) to every file and every job. Not a plan limit: plan limits come from the `X-User-Plan-*` headers. 300 matches the PDF workers' tmpfs budget (total input × 3 ≤ 900 MB) |
+| `GUEST_MAX_FILE_MB` / `GUEST_MAX_FILES` / `GUEST_MAX_JOB_MB` | `20` / `5` / `100` | Fallbacks used only when the gateway sent no plan headers |
 | `UPLOAD_TTL` | `30m` | Upload session expiration (fallback from `shared/config/defaults.go`) |
 | `GUEST_JOB_TTL` | `30m` | Guest job expiration (no user) |
 | `FREE_JOB_TTL` | `168h` (7d) | Free plan user job expiration |
@@ -903,7 +933,7 @@ job-service:
     S3_PUBLIC_ENDPOINT: http://localhost   # the Caddy edge (PUBLIC_ORIGIN)
     S3_ACCESS_KEY: ${S3_ACCESS_KEY}
     S3_SECRET_KEY: ${S3_SECRET_KEY}
-    MAX_UPLOAD_MB: "500"
+    MAX_UPLOAD_MB: "300"
     GUEST_JOB_TTL: "30m"
     FREE_JOB_TTL: "168h"
   depends_on:

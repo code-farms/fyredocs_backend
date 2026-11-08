@@ -105,6 +105,9 @@ func TestHTTPAuthMiddlewareAnonymousPlanDefaults(t *testing.T) {
 	if gotCtx.PlanMaxFilesPerJob != config.GuestMaxFilesPerJob() {
 		t.Errorf("expected PlanMaxFilesPerJob %d for guest, got %d", config.GuestMaxFilesPerJob(), gotCtx.PlanMaxFilesPerJob)
 	}
+	if gotCtx.PlanMaxJobInputMB != config.GuestMaxJobInputMB() {
+		t.Errorf("expected PlanMaxJobInputMB %d for guest, got %d", config.GuestMaxJobInputMB(), gotCtx.PlanMaxJobInputMB)
+	}
 }
 
 func TestAuthContextFromGatewayHeadersMissingUserID(t *testing.T) {
@@ -292,5 +295,53 @@ func TestSplitScopes(t *testing.T) {
 	got := SplitScopes("read write admin")
 	if len(got) != 3 {
 		t.Errorf("expected 3 scopes, got %d", len(got))
+	}
+}
+
+// TestHTTPAuthMiddlewareGuestsUseResolvedPlan pins that guest requests, with
+// or without a guest cookie, get their limits from the PlanResolver (the
+// gateway's guest plan row lookup), not the config fallbacks, and that the
+// resolver sees them as guests.
+func TestHTTPAuthMiddlewareGuestsUseResolvedPlan(t *testing.T) {
+	resolver := func(r *http.Request, authCtx *AuthContext) {
+		if !authCtx.IsGuest {
+			t.Errorf("resolver saw IsGuest=false for a guest request")
+		}
+		authCtx.Plan = "guest"
+		authCtx.PlanMaxFileSizeMB = 15
+		authCtx.PlanMaxFilesPerJob = 3
+		authCtx.PlanMaxJobInputMB = 45
+	}
+	cases := []struct {
+		name        string
+		cookie      *http.Cookie
+		wantIsGuest bool
+	}{
+		{"no credentials", nil, false},
+		{"guest cookie", &http.Cookie{Name: "guest_token", Value: "g1"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotCtx AuthContext
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotCtx, _ = FromContext(r.Context())
+			})
+			mw := HTTPAuthMiddleware(HTTPMiddlewareOptions{
+				GuestStore:  &fakeGuestStore{valid: "g1"},
+				ResolvePlan: resolver,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/api/uploads/init", nil)
+			if tc.cookie != nil {
+				req.AddCookie(tc.cookie)
+			}
+			mw(next).ServeHTTP(httptest.NewRecorder(), req)
+			if gotCtx.PlanMaxFileSizeMB != 15 || gotCtx.PlanMaxFilesPerJob != 3 || gotCtx.PlanMaxJobInputMB != 45 {
+				t.Errorf("limits = %d/%d/%d, want the resolved 15/3/45",
+					gotCtx.PlanMaxFileSizeMB, gotCtx.PlanMaxFilesPerJob, gotCtx.PlanMaxJobInputMB)
+			}
+			if gotCtx.IsGuest != tc.wantIsGuest {
+				t.Errorf("IsGuest = %v, want %v (identity must not change)", gotCtx.IsGuest, tc.wantIsGuest)
+			}
+		})
 	}
 }

@@ -62,15 +62,21 @@ func (a *AuthMetadata) BeforeCreate(tx *gorm.DB) (err error) {
 }
 
 // SubscriptionPlan defines the file-size, per-job, and retention limits that a
-// named plan (e.g. free, pro) grants. auth-service owns these limits and
-// publishes them to the gateway's plan cache.
+// named plan (guest, free, pro) grants. The database row is the single source of
+// these limits: auth-service reads it, returns it to clients (login, /auth/me,
+// /auth/plans) and publishes it to the gateway's plan cache, so the web app, the
+// mobile app, the gateway and job-service all enforce the same numbers.
 type SubscriptionPlan struct {
 	ID             uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
 	Name           string    `gorm:"type:text;unique;not null" json:"name"`
 	MaxFileSizeMB  int       `gorm:"not null" json:"maxFileSizeMb"`
 	MaxFilesPerJob int       `gorm:"not null" json:"maxFilesPerJob"`
-	RetentionDays  int       `gorm:"not null" json:"retentionDays"`
-	CreatedAt      time.Time `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
+	// MaxJobInputMB caps the total size of all files in one job. Must stay at or
+	// below what the PDF workers can hold (300 MB: total input × 3 within their
+	// 900 MB tmpfs budget), or jobs pass upload checks and fail in the worker.
+	MaxJobInputMB int       `gorm:"not null;default:300" json:"maxJobInputMb"`
+	RetentionDays int       `gorm:"not null" json:"retentionDays"`
+	CreatedAt     time.Time `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
 }
 
 // BeforeCreate assigns a time-ordered UUIDv7 primary key when one was not set.

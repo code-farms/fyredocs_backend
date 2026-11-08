@@ -91,7 +91,10 @@ func initUpload(t *testing.T, r *gin.Engine, fileName string, fileSize int64, pl
 	t.Helper()
 	headers := map[string]string{}
 	if planMB != "" {
+		// The gateway always sends the plan's per-file and per-job limits
+		// together; mirror that so tests exercise the per-file limit alone.
 		headers["X-User-Plan-Max-File-MB"] = planMB
+		headers["X-User-Plan-Max-Job-MB"] = planMB
 	}
 	return doJSON(t, r, http.MethodPost, "/api/uploads/init", UploadInitRequest{
 		FileName:    fileName,
@@ -186,7 +189,10 @@ func TestInitUpload_PartCountCap(t *testing.T) {
 	fs := withFakeStore(t)
 	r := newUploadTestRouter()
 
-	// 1001 parts at the default 8 MiB part size.
+	// 1001 parts at the default 8 MiB part size. The part cap is only reachable
+	// when the worker ceiling is raised above it; at the default 300 MB ceiling
+	// the size check rejects first.
+	t.Setenv("MAX_UPLOAD_MB", "100000")
 	fileSize := int64(8*1024*1024)*1000 + 1
 	rec, env := initUpload(t, r, "huge.pdf", fileSize, "100000")
 	if rec.Code != http.StatusBadRequest {

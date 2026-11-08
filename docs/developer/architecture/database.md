@@ -507,7 +507,9 @@ the round-trip itself is now sub-millisecond, so absolute latency is tiny.
   managed Postgres to avoid OOM.
 - All 11 DB-using services `depends_on: db {condition: service_healthy}`;
   schema + `subscription_plans` seed are created automatically on first boot by
-  each service's `Migrate()`/`seedPlans()`.
+  each service's `Migrate()`/`seedPlans()`. The plan seed is insert-only: it fills
+  a fresh database and never overwrites an existing row, because that table is the
+  single source of plan limits (see `docs/developer/services/auth-service.md`).
 - **DSN fix:** `shared/config/postgres_dsn.go` no longer appends libpq
   keepalive params (`keepalives*`). The pgx driver forwards them to the server,
   and a standard Postgres rejects them (`FATAL: unrecognized configuration

@@ -71,6 +71,19 @@ type authUser struct {
 	Image    string `json:"image,omitempty"`
 	Role     string `json:"role,omitempty"`
 	PlanName string `json:"planName,omitempty"`
+	// PlanLimits carries the user's plan row so clients can reject an oversized
+	// upload the moment a file is chosen, with the same numbers job-service
+	// enforces. Additive: older clients keep reading planName.
+	PlanLimits *planLimits `json:"planLimits,omitempty"`
+}
+
+// planLimits is the client-facing view of a subscription_plans row.
+type planLimits struct {
+	Name           string `json:"name"`
+	MaxFileSizeMB  int    `json:"maxFileSizeMb"`
+	MaxFilesPerJob int    `json:"maxFilesPerJob"`
+	MaxJobInputMB  int    `json:"maxJobInputMb"`
+	RetentionDays  int    `json:"retentionDays"`
 }
 
 // AuthEndpoints groups the dependencies shared by the authentication handlers:
@@ -278,10 +291,7 @@ func (ae *AuthEndpoints) Refresh(c *gin.Context) {
 		return
 	}
 
-	plan, planOK := lookupPlan(c.Request.Context(), user.PlanName)
-	if !planOK {
-		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
-	}
+	plan := resolvePlan(c.Request.Context(), user.PlanName)
 
 	role := user.Role
 	if role == "" {
@@ -417,10 +427,7 @@ func (ae *AuthEndpoints) Me(c *gin.Context) {
 		return
 	}
 
-	plan, ok := lookupPlan(c.Request.Context(), user.PlanName)
-	if !ok {
-		plan = models.SubscriptionPlan{Name: user.PlanName}
-	}
+	plan := resolvePlan(c.Request.Context(), user.PlanName)
 
 	response.OK(c, "Profile loaded", gin.H{
 		"user": buildUserResponse(user, authCtx.Role, plan),
@@ -434,10 +441,7 @@ func (ae *AuthEndpoints) Profile(c *gin.Context) {
 		return
 	}
 
-	plan, ok := lookupPlan(c.Request.Context(), user.PlanName)
-	if !ok {
-		plan = models.SubscriptionPlan{Name: user.PlanName}
-	}
+	plan := resolvePlan(c.Request.Context(), user.PlanName)
 
 	response.OK(c, "Profile loaded", gin.H{
 		"profile": buildUserResponse(user, authCtx.Role, plan),
@@ -474,10 +478,7 @@ func (ae *AuthEndpoints) Logout(c *gin.Context) {
 // the session, populates the gateway's plan cache, and sets the auth cookies.
 // Shared by the signup and login success paths.
 func (ae *AuthEndpoints) respondWithTokens(c *gin.Context, user models.User) {
-	plan, ok := lookupPlan(c.Request.Context(), user.PlanName)
-	if !ok {
-		plan = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 25, MaxFilesPerJob: 10, RetentionDays: 7}
-	}
+	plan := resolvePlan(c.Request.Context(), user.PlanName)
 
 	role := user.Role
 	if role == "" {
@@ -565,14 +566,30 @@ func buildUserResponse(user models.User, role string, plan models.SubscriptionPl
 		planName = user.PlanName
 	}
 	return authUser{
-		ID:       user.ID.String(),
-		Email:    user.Email,
-		FullName: user.FullName,
-		Phone:    user.Phone,
-		Country:  user.Country,
-		Image:    user.ImageURL,
-		Role:     role,
-		PlanName: planName,
+		ID:         user.ID.String(),
+		Email:      user.Email,
+		FullName:   user.FullName,
+		Phone:      user.Phone,
+		Country:    user.Country,
+		Image:      user.ImageURL,
+		Role:       role,
+		PlanName:   planName,
+		PlanLimits: limitsFromPlan(plan),
+	}
+}
+
+// limitsFromPlan converts a plan row for the client, or nil when no row was
+// resolved (plan.Name empty) so the field is omitted rather than all zeros.
+func limitsFromPlan(plan models.SubscriptionPlan) *planLimits {
+	if strings.TrimSpace(plan.Name) == "" {
+		return nil
+	}
+	return &planLimits{
+		Name:           plan.Name,
+		MaxFileSizeMB:  plan.MaxFileSizeMB,
+		MaxFilesPerJob: plan.MaxFilesPerJob,
+		MaxJobInputMB:  plan.MaxJobInputMB,
+		RetentionDays:  plan.RetentionDays,
 	}
 }
 
@@ -903,6 +920,9 @@ type planCacheEntry struct {
 	Plan      string `json:"plan"`
 	MaxFileMB int    `json:"max_file_mb"`
 	MaxFiles  int    `json:"max_files"`
+	// MaxJobMB is the plan's total-per-job limit (subscription_plans.max_job_input_mb).
+	// NOTE: same field name in api-gateway/internal/plancache/plancache.go.
+	MaxJobMB int `json:"max_job_mb"`
 }
 
 // cachePlanInfo publishes a user's plan limits to Redis for the gateway to read,
@@ -916,11 +936,7 @@ func (ae *AuthEndpoints) cachePlanInfo(ctx context.Context, userID string, plan 
 	if ae.RedisClient == nil {
 		return
 	}
-	entry := planCacheEntry{
-		Plan:      plan.Name,
-		MaxFileMB: plan.MaxFileSizeMB,
-		MaxFiles:  plan.MaxFilesPerJob,
-	}
+	entry := planCacheEntryFor(plan)
 	data, err := json.Marshal(entry)
 	if err != nil {
 		slog.Warn("failed to marshal plan cache entry", "error", err)

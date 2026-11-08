@@ -83,14 +83,14 @@ Content-Type: application/json
 ### Notes
 
 - Upload session state (Redis `upload:<uploadId>`) expires after `UPLOAD_TTL` (default **30m**); job-service's in-process cleanup loop reaps stale sessions at 2× that age.
-- The declared `fileSize` is checked against the caller's plan limit (`X-User-Plan-Max-File-MB`) before URLs are issued.
+- The declared `fileSize` is checked before URLs are issued against the smallest of the plan's per-file limit (`X-User-Plan-Max-File-MB`), its per-job total (`X-User-Plan-Max-Job-MB`) and the `MAX_UPLOAD_MB` worker ceiling (default 300). Image-tool caps are applied later, at job creation.
 
 ### Errors
 
 | Status | Code | Description |
 |--------|------|-------------|
 | 400 | INVALID_INPUT | Missing required fields, or the file would need more than 1000 parts |
-| 413 | FILE_TOO_LARGE | Declared file size exceeds the plan limit |
+| 413 | FILE_TOO_LARGE | Declared file size exceeds the per-file limit; the message names it |
 | 429 | RATE_LIMITED | Upload rate limit exceeded |
 
 ---
@@ -226,7 +226,7 @@ The `parts` count must equal `totalParts` from init; each entry carries the `ETa
 | Status | Code | Description |
 |--------|------|-------------|
 | 400 | UPLOAD_INCOMPLETE | Part count mismatch, or object storage rejected the part list |
-| 413 | FILE_TOO_LARGE | True object size exceeds the plan limit (object is deleted) |
+| 413 | FILE_TOO_LARGE | True object size exceeds the per-file limit (object is deleted) |
 | 404 | NOT_FOUND | Upload session not found or expired |
 
 ---
@@ -253,7 +253,7 @@ One-release migration stub for the old chunk-streaming protocol. Always returns 
 
 | Constraint | Value |
 |------------|-------|
-| Plan file-size limit | `X-User-Plan-Max-File-MB` (enforced on declared size at init and true size at complete) |
+| Per-file limit | min(`X-User-Plan-Max-File-MB`, `X-User-Plan-Max-Job-MB`, `MAX_UPLOAD_MB`), enforced on declared size at init and true size at complete. Values come from the `subscription_plans` table |
 | Part size | `UPLOAD_PART_SIZE_MB` (default **8 MiB**), clamped to the S3 5 MiB minimum |
 | Max parts | 1000 (`totalParts = ceil(fileSize / partSize)`) |
 | Upload session TTL | `UPLOAD_TTL` (default **30m**) |

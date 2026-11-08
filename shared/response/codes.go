@@ -25,6 +25,9 @@ const (
 	CodeFileTooLarge = "FILE_TOO_LARGE"
 	CodeTooManyFiles = "TOO_MANY_FILES"
 	CodeRateLimited  = "RATE_LIMIT_EXCEEDED"
+	// CodeJobTooLarge: every file fits the per-file limit but together they
+	// exceed the plan's per-job total (413).
+	CodeJobTooLarge = "JOB_TOO_LARGE"
 
 	// Server / dependency (5xx).
 	CodeServerError         = "SERVER_ERROR"         // unexpected internal failure (incl. recovered panics)

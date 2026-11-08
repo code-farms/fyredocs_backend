@@ -104,11 +104,13 @@ func legacyAutoMigrate() {
 	slog.Info("Database migration completed")
 }
 
-// seedPlans upserts the canonical subscription plans so their limits are the
-// single source of truth in the DB. Runs on every startup: it UPDATES existing
-// rows (so changed limits propagate) and inserts any missing ones. The guest
-// limits come from shared/config so the seeded DB row, the frontend (/auth/plans),
-// and the gateway's guest fallback all agree.
+// seedPlans inserts the canonical subscription plans when they are missing and
+// never touches existing rows. The DB row is the single source of plan limits,
+// so an operator's edit must survive restarts; the previous upsert rewrote the
+// limit columns from these literals on every start, silently undoing any change
+// made in the table. Changing limits for existing databases is done with a
+// migration (internal/migrations), not here. These values only describe a
+// brand-new database and match 00002_plan_job_input_limit.sql.
 func seedPlans() {
 	// One-time rename of the legacy "anonymous" plan to "guest".
 	if err := DB.Model(&SubscriptionPlan{}).
@@ -118,17 +120,18 @@ func seedPlans() {
 	}
 
 	plans := []SubscriptionPlan{
-		{ID: uuid.New(), Name: "guest", MaxFileSizeMB: config.GuestMaxFileSizeMB(), MaxFilesPerJob: config.GuestMaxFilesPerJob(), RetentionDays: 0},
-		{ID: uuid.New(), Name: "free", MaxFileSizeMB: 50, MaxFilesPerJob: 10, RetentionDays: 7},
-		{ID: uuid.New(), Name: "pro", MaxFileSizeMB: 500, MaxFilesPerJob: 50, RetentionDays: 30},
+		{ID: uuid.New(), Name: "guest", MaxFileSizeMB: 20, MaxFilesPerJob: 5, MaxJobInputMB: 100, RetentionDays: 0},
+		{ID: uuid.New(), Name: "free", MaxFileSizeMB: 50, MaxFilesPerJob: 10, MaxJobInputMB: 300, RetentionDays: 7},
+		{ID: uuid.New(), Name: "pro", MaxFileSizeMB: 300, MaxFilesPerJob: 50, MaxJobInputMB: 300, RetentionDays: 30},
 	}
-	// Upsert on the unique plan name: update the limit columns, keep the existing id.
+	// Insert-only on the unique plan name: existing rows (and any edits made to
+	// them) are left alone.
 	if err := DB.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "name"}},
-		DoUpdates: clause.AssignmentColumns([]string{"max_file_size_mb", "max_files_per_job", "retention_days"}),
+		DoNothing: true,
 	}).Create(&plans).Error; err != nil {
 		slog.Warn("Plan seeding encountered an error", "error", err)
 	} else {
-		slog.Info("Subscription plans seeded")
+		slog.Info("Subscription plans present")
 	}
 }

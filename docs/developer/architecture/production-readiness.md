@@ -102,7 +102,7 @@ The risks are almost entirely **operational and architectural-physical**, not co
 1. **No CI/CD whatsoever** — no `.github/workflows/`, nothing runs the 85 test files, builds happen on the deploy host. Every deploy is an untested artifact by definition.
 2. **Single host, five single points of failure** — Postgres, Redis, NATS, MinIO, gateway. No replication, no failover, no zero-downtime deploy (compose recreate = dropped connections), no rollback strategy beyond `git checkout && deploy.sh`.
 3. **Conversion throughput ceiling** — 2 concurrent conversions per worker service (`worker.go:195-202`, compose replicas default 1). LibreOffice conversions run 2s + 1.5s/MB (`worker.go:156-172`); the math in §6 shows this saturates at a small fraction of 1M-req/day job volume.
-4. **`PUT /auth/plan` has no entitlement check** — any authenticated user upgrades themselves to `pro` (`auth-service/handlers/auth.go:530-584`): 500MB uploads, 600 req/min, 30-day retention, for free.
+4. **`PUT /auth/plan` has no entitlement check** — any authenticated user upgrades themselves to `pro` (`auth-service/handlers/auth.go:530-584`): 300 MB uploads (500 MB before 2026-11-08), 600 req/min, 30-day retention, for free.
 5. **No API versioning** — all routes unversioned; breaking changes will hurt once mobile/third-party clients exist.
 6. **Schema management is `AutoMigrate` at boot** (`job-service/internal/models/database.go:89-118` and equivalents in all services) — no versioned migrations, no rollback, concurrent DDL from 11 services racing at every stack start.
 7. **`analytics_events` grows unboundedly** — one row per event, no partitioning, no retention job (cleanup-worker never touches it), and every admin dashboard aggregates over it (`analytics-service/subscriber/subscriber.go:129-135`).
@@ -299,7 +299,7 @@ Lean and modern: gin, gorm, go-redis v9, nats.go (current jetstream API — not 
 ## 8. Critical Issues (🔴 must fix before scaling traffic)
 
 1. **No CI/CD pipeline** — nothing runs 85 test files; deploys are unverified builds. *(DevOps)*
-2. **`PUT /auth/plan` allows free self-upgrade to pro** — `auth-service/handlers/auth.go:530-584`. Revenue and abuse-limit bypass (500MB files, 600 req/min). *(Security/Business)*
+2. **`PUT /auth/plan` allows free self-upgrade to pro** — `auth-service/handlers/auth.go:530-584`. Revenue and abuse-limit bypass (300 MB files, 600 req/min). *(Security/Business)*
 3. **Worker throughput ceiling** — 2 concurrent conversions per tool family (`worker.go:195-202`, compose replicas 1) vs ~30 needed at 1M-req/day peak; `JOBS_DISPATCH` silently drops queued jobs after 24h (`natsconn.go:68`) with no stuck-job reconciliation. *(Scalability)*
 4. **Postgres connection budget over-committed** — ~275 potential pool connections vs `max_connections=200` (`database.go:28-35` × 11 services; `docker-compose.yml:29`). *(Reliability)*
 5. **Unmanaged schema migrations** — 11 services race `AutoMigrate` DDL at boot with warn-and-continue failure handling (`database.go:89-118`). *(Reliability)*

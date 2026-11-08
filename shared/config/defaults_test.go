@@ -89,19 +89,34 @@ func TestStaleMultipartAge(t *testing.T) {
 
 func TestMaxUploadBytes(t *testing.T) {
 	t.Setenv("MAX_UPLOAD_MB", "")
-	if got := MaxUploadBytes(); got != 500*1024*1024 {
-		t.Errorf("default MaxUploadBytes = %d, want 500MiB", got)
+	if got := MaxUploadBytes(); got != 300*1024*1024 {
+		t.Errorf("default MaxUploadBytes = %d, want 300MiB", got)
 	}
 	t.Setenv("MAX_UPLOAD_MB", "100")
 	if got := MaxUploadBytes(); got != 100*1024*1024 {
 		t.Errorf("MaxUploadBytes = %d, want 100MiB", got)
 	}
 	t.Setenv("MAX_UPLOAD_MB", "-5")
-	if got := MaxUploadBytes(); got != 500*1024*1024 {
-		t.Errorf("negative MaxUploadBytes = %d, want fallback 500MiB", got)
+	if got := MaxUploadBytes(); got != 300*1024*1024 {
+		t.Errorf("negative MaxUploadBytes = %d, want fallback 300MiB", got)
 	}
 	t.Setenv("MAX_UPLOAD_MB", "abc")
-	if got := MaxUploadBytes(); got != 500*1024*1024 {
-		t.Errorf("invalid MaxUploadBytes = %d, want fallback 500MiB", got)
+	if got := MaxUploadBytes(); got != 300*1024*1024 {
+		t.Errorf("invalid MaxUploadBytes = %d, want fallback 300MiB", got)
+	}
+}
+
+func TestGuestMaxJobInputMB(t *testing.T) {
+	t.Setenv("GUEST_MAX_JOB_MB", "")
+	if got := GuestMaxJobInputMB(); got != 100 {
+		t.Errorf("default GuestMaxJobInputMB = %d, want 100", got)
+	}
+	t.Setenv("GUEST_MAX_JOB_MB", "60")
+	if got := GuestMaxJobInputMB(); got != 60 {
+		t.Errorf("GuestMaxJobInputMB = %d, want 60", got)
+	}
+	t.Setenv("GUEST_MAX_JOB_MB", "0")
+	if got := GuestMaxJobInputMB(); got != 100 {
+		t.Errorf("zero GuestMaxJobInputMB = %d, want fallback 100", got)
 	}
 }

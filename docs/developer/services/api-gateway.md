@@ -37,7 +37,7 @@ Telemetry → Metrics → Request-ID → SecurityHeaders
     ↓
     CORS → Auth middleware
             ├─ Auth: Bearer header > access_token cookie > guest_token cookie (issues new if absent)
-            └─ ResolvePlan: read user:plan:<userId> from Redis (defaults to free)
+            └─ ResolvePlan: read user:plan:<userId> (users) or plan:guest (guests) from Redis
             ↓
         Body-size limit (1 MiB on all service routes — uploads are JSON-only)
             ↓
@@ -193,28 +193,27 @@ The middleware:
 3. Checks token expiration
 4. Verifies issuer and audience (if configured)
 5. Checks token denylist (if logout was called)
-6. Sets `X-User-ID`, `X-User-Plan`, `X-User-Plan-Max-File-MB`, and `X-User-Plan-Max-Files` headers for downstream services
+6. Sets `X-User-ID`, `X-User-Plan`, `X-User-Plan-Max-File-MB`, `X-User-Plan-Max-Files` and `X-User-Plan-Max-Job-MB` headers for downstream services
 
 ### Plan Headers Forwarded to Downstream Services
 
-For authenticated requests the gateway reads the user's plan info from **Redis** (key `user:plan:{userID}`, written by auth-service) and forwards:
+Every plan limit comes from auth-service's `subscription_plans` table. auth-service publishes
+the rows to **Redis** and the gateway forwards them:
 
-| Header | Source | Example |
-|--------|--------|---------|
-| `X-User-Plan` | Redis cache `plan` | `free` |
-| `X-User-Plan-Max-File-MB` | Redis cache `max_file_mb` | `25` |
-| `X-User-Plan-Max-Files` | Redis cache `max_files` | `10` |
+- **Users:** key `user:plan:{userID}`, written at login, refresh and plan change.
+- **Guests** (guest cookie or no credentials): key `plan:guest`, the guest row, republished by
+  auth-service every `PLAN_CACHE_TTL`.
 
-If the Redis key is missing (e.g., cache expired), defaults to the free plan (50 MB, 10 files).
+| Header | Redis field | Example (pro) |
+|--------|-------------|---------------|
+| `X-User-Plan` | `plan` | `pro` |
+| `X-User-Plan-Max-File-MB` | `max_file_mb` | `300` |
+| `X-User-Plan-Max-Files` | `max_files` | `50` |
+| `X-User-Plan-Max-Job-MB` | `max_job_mb` (total MB of all files in one job) | `300` |
 
-For guest requests (no valid token, no guest token), the gateway forwards guest-plan defaults
-(from `shared/config`: `GUEST_MAX_FILE_MB` / `GUEST_MAX_FILES`, matching the DB `guest` row):
-
-| Header | Default Value |
-|--------|---------------|
-| `X-User-Plan` | `guest` |
-| `X-User-Plan-Max-File-MB` | `20` |
-| `X-User-Plan-Max-Files` | `5` |
+If the key is missing or a field is absent, the gateway uses a built-in default that mirrors
+the seeded row and logs the miss: free (50 MB, 10 files, 300 MB per job) for users, guest
+(20 MB, 5 files, 100 MB per job) for guests (`api-gateway/internal/plancache`).
 
 These headers are cleared from incoming client requests before proxying (`ClearUserHeaders`) to prevent spoofing.
 

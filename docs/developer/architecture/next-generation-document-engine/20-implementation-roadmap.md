@@ -27,6 +27,20 @@
 > rendered Hindi text (0.00% CER at 150 and 300 DPI for 8–12 pt; 1.86% → 0.31% only at 6 pt; 300 DPI ≈ 2× time).
 > `-gray`, `--oem 1` and `tessdata_best` were not adopted: the first changes output colour, the second is already the
 > effective mode, the third needs the real-scan bake-off.
+>
+> **Q8 dropped 2026-11-08.** Both `pdfinfo` calls only size the page before poppler renders it, so the
+> renderer stays poppler either way. pdfcpu would save milliseconds per job and could reject PDFs that
+> poppler opens, failing jobs that work today.
+>
+> **Q12 done 2026-11-08, scope changed by decision.** Instead of a 150 MB office-only cap, every job is
+> capped at what the PDF workers can hold: total input × 3 must fit the 900 MB tmpfs, so 300 MB per job.
+> Pro went from 500 to 300 MB per file. All plan limits now live in auth-service's `subscription_plans`
+> table (new `max_job_input_mb` column, migration `00002`; the seed is insert-only so DB edits stick)
+> and reach the gateway, job-service and both clients from there. job-service returns 413
+> `FILE_TOO_LARGE` or the new `JOB_TOO_LARGE` before any job row; the web app and the mobile app reject
+> the same selections before uploading. `MAX_UPLOAD_MB` (default 300) is the worker-capacity ceiling.
+> The 10-minute job context for office files near 300 MB is still unmeasured; the size-scaled timeout
+> (Q1) covers the conversion itself.
 
 Siblings this roadmap sequences: `01-existing-system-audit.md` (defects D1–D23), `02-document-capability-matrix.md`
 (per-row gates), `03-heavy-dependency-analysis.md` (removal order), `04-libreoffice-replacement-strategy.md` (gates
@@ -505,11 +519,11 @@ Kubernetes migration beyond the validated mapping; no team-written Rust; office2
 | Q5 | **Done 2026-11-08.** PDF/A invocation + veraPDF | `convert-from-pdf/processing/processing_free.go:212-221` | 3 d (brief); 0.15 EM (`08-…` §5.3) | 1 | veraPDF 2b pass |
 | Q6 | **Done 2026-11-08.** Noto + Devanagari + fontconfig + `fc-cache` | `deployment/base-alpine-libreoffice.Dockerfile:14-20`; `convert-from-pdf/Dockerfile:30-36` | 1 d (`02-…` §2.4); 0.05 EM (`07-…` §6) | 1 | G-FONT |
 | Q7 | **Memory part done 2026-11-08** (Hindi DPI kept at 150 by measurement). OCR per-page render in the pool, `-gray`, 300 DPI `hin`, `--oem 1`, tessdata_best; organize-pdf pool | `optimize-pdf/processing/processing_free.go:531-536,565-588`; `organize-pdf/processing/processing_scan.go:515-538` | 3 d (brief); 0.3 EM (`11-…` §6) | 1 | tmpfs peak ≤ 200 MB; CER not worse |
-| Q8 | `pdfinfo` → pdfcpu `PageDimsFile` | `optimize-pdf/processing/processing_free.go:331`; `convert-from-pdf/processing/processing_free.go:126` | 1 d (brief); 0.1 EM (`03-…` §2.2) | 1 | identical page sizes on the corpus (`08-…` §7.1) |
+| Q8 | **Dropped 2026-11-08** (see status above). `pdfinfo` → pdfcpu `PageDimsFile` | `optimize-pdf/processing/processing_free.go:331`; `convert-from-pdf/processing/processing_free.go:126` | 1 d (brief); 0.1 EM (`03-…` §2.2) | 1 | identical page sizes on the corpus (`08-…` §7.1) |
 | Q9 | Page count in every result; `PageCountFile` at upload | worker result metadata; job-service `consumeUpload` (`job-service/handlers/jobs.go:731`) | 2 d (`02-…` §2.4) | 2 | page count present 100 % |
 | Q10 | Thumbnails on `document.uploaded` | `document-service/subscriber/subscriber.go:57-64`; `document-service/internal/models/document.go:39` | 1 wk (`02-…` §2.4); 0.25 EM (`08-…` §5.3) | 2 | 100 % of uploaded PDFs within 10 s |
 | Q11 | Cancellation | `job-service/handlers/jobs.go:553-603`; `job-service/internal/migrations/00001_baseline.sql:50`; `*/internal/worker/worker.go` | 1.5 wk (`02-…` §2.4); 0.4 EM (`14-…` §4 F) | 2 | cancel → tool dead ≤ 2 s |
-| Q12 | Office input cap vs 10-min ctx | `shared/config/defaults.go:54-56` (500 MB) vs `convert-to-pdf/internal/worker/worker.go:546` | 1 d (brief) | 1 | 413 `FILE_TOO_LARGE_FOR_TOOL`; no office job can exceed ctx |
+| Q12 | **Done 2026-11-08** as a 300 MB per-job cap on every plan, from the DB plan table (see status above). Office input cap vs 10-min ctx | `shared/config/defaults.go:54-56` (500 MB) vs `convert-to-pdf/internal/worker/worker.go:546` | 1 d (brief) | 1 | 413 `FILE_TOO_LARGE_FOR_TOOL`; no office job can exceed ctx |
 | Q13 | Fidelity harness ≥ 200 files | new `scripts/bench-engine/`; results in `benchmarks/` | 1.5 wk (brief); 0.6 EM (`16-…` §4 B) | 1 | `make bench-engine` report; `compare.sh` noise ±5 % |
 
 ### 3.8 Rollback and feature-flag strategy
