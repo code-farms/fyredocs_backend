@@ -25,6 +25,10 @@ RUN cd convert-from-pdf && \
 # (pdf→pdfa). Base is python:3.11-slim-bookworm because pdf2docx's deps
 # (PyMuPDF, opencv-python-headless) do not publish musllinux wheels for aarch64
 # and would otherwise have to compile MuPDF from source.
+# Fonts: fonts-liberation keeps Latin Office layouts; fonts-noto-core adds Noto
+# Sans/Serif Devanagari so Hindi survives LibreOffice's PDF import and the
+# Ghostscript PDF/A rewrite (which embeds fonts). Bookworm stays: it is still
+# security-supported, and LibreOffice/Python leave this image in Stage 3.
 FROM python:3.11-slim-bookworm
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -33,6 +37,9 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     poppler-utils \
     ghostscript \
     fonts-liberation \
+    fonts-noto-core \
+    fontconfig \
+    && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
 # pdf2docx: PDF→DOCX. pdfplumber+openpyxl: PDF→XLSX table extraction

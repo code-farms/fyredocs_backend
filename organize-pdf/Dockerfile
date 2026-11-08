@@ -21,10 +21,14 @@ RUN cd organize-pdf && \
 
 # ---- Runtime Stage ----
 # This service only uses pdfcpu (Go library) and Tesseract — no LibreOffice needed.
-FROM alpine:3.19
+# Alpine 3.24 (3.19 reached end-of-life on 2025-11-01). NOTE: keep in sync with
+# deployment/base-alpine-libreoffice.Dockerfile and deployment/test-binaries.Dockerfile.
+FROM alpine:3.24
 
 # Tesseract language packs match the scan-to-pdf `language` whitelist
-# (eng/deu/fra/spa/hin) enforced in job-service and processing_scan.go.
+# (eng, hin, eng+hin) enforced in job-service and processing_scan.go.
+# No system fonts: Tesseract's PDF renderer embeds its own glyphless font and
+# pdfcpu stamps use built-in core fonts.
 RUN apk add --no-cache \
     ca-certificates \
     tesseract-ocr \

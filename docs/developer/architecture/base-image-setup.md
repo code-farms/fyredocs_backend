@@ -12,6 +12,12 @@ modules have drifted from the copy baked into it:
 
 The Go builder base is documented in its own section below ("Go Builder Base Image").
 
+## Current base (2026-11-08)
+
+`fyredocs-base` is built from `alpine:3.24` (3.19 reached end-of-life on 2025-11-01). It carries LibreOffice 25.8, Poppler 25.12, Python 3.14 with `unoserver==3.7`, and the fonts `ttf-liberation` (Latin, metric-compatible with Arial/Times) and `font-noto-devanagari` (Hindi) registered with `fc-cache`. The build fails if fontconfig cannot see Noto Sans Devanagari.
+
+Alpine version is kept in step across four files: `deployment/base-alpine-libreoffice.Dockerfile`, `organize-pdf/Dockerfile`, `optimize-pdf/Dockerfile` and `deployment/test-binaries.Dockerfile` (`golang:1.26-alpine3.24`). Track the newest Alpine branch: LibreOffice and Tesseract come from the community repository, which is supported only until the next stable release.
+
 ## Problem
 LibreOffice installation is slow (~2-5 minutes) and adds ~500MB to the image. Installing it on every build wastes time.
 
@@ -28,7 +34,7 @@ cd fyredocs_backend
 # Build the base image
 docker build \
   -f deployment/base-alpine-libreoffice.Dockerfile \
-  -t your-username/alpine-libreoffice:3.19 \
+  -t your-username/alpine-libreoffice:3.24 \
   .
 ```
 
@@ -37,21 +43,21 @@ docker build \
 **Option A: Docker Hub (Public)**
 ```bash
 docker login
-docker push your-username/alpine-libreoffice:3.19
+docker push your-username/alpine-libreoffice:3.24
 ```
 
 **Option B: GitHub Container Registry (Private/Public)**
 ```bash
 echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
-docker tag your-username/alpine-libreoffice:3.19 ghcr.io/your-username/alpine-libreoffice:3.19
-docker push ghcr.io/your-username/alpine-libreoffice:3.19
+docker tag your-username/alpine-libreoffice:3.24 ghcr.io/your-username/alpine-libreoffice:3.24
+docker push ghcr.io/your-username/alpine-libreoffice:3.24
 ```
 
 **Option C: Private Registry**
 ```bash
 docker login your-registry.com
-docker tag your-username/alpine-libreoffice:3.19 your-registry.com/alpine-libreoffice:3.19
-docker push your-registry.com/alpine-libreoffice:3.19
+docker tag your-username/alpine-libreoffice:3.24 your-registry.com/alpine-libreoffice:3.24
+docker push your-registry.com/alpine-libreoffice:3.24
 ```
 
 ### Step 3: Update deploy.sh
@@ -60,7 +66,7 @@ Edit `deploy.sh` and update the BASE_IMAGE variable:
 
 ```bash
 # Near the top of deploy.sh
-BASE_IMAGE="your-username/alpine-libreoffice:3.19"
+BASE_IMAGE="your-username/alpine-libreoffice:3.24"
 
 # Then use it in docker build:
 docker build \
@@ -76,7 +82,7 @@ docker build \
 ```bash
 # After one-time setup above
 docker build \
-  --build-arg BASE_IMAGE=your-username/alpine-libreoffice:3.19 \
+  --build-arg BASE_IMAGE=your-username/alpine-libreoffice:3.24 \
   -f convert-from-pdf/Dockerfile \
   -t convert-from-pdf:latest \
   .
@@ -85,7 +91,7 @@ docker build \
 
 ### Fallback Build (without base image)
 ```bash
-# Uses default alpine:3.19 and installs everything
+# Uses default alpine:3.24 and installs everything
 docker build \
   -f convert-from-pdf/Dockerfile \
   -t convert-from-pdf:latest \
@@ -103,18 +109,18 @@ docker build \
 ## Updating the Base Image
 
 Only rebuild when:
-- Alpine version changes (3.19 → 3.20)
+- Alpine version changes (3.24 → 3.25)
 - LibreOffice needs updating
 - Adding new system dependencies
 
 ```bash
 # Rebuild with new version
-docker build -f deployment/base-alpine-libreoffice.Dockerfile -t your-username/alpine-libreoffice:3.20 .
-docker push your-username/alpine-libreoffice:3.20
+docker build -f deployment/base-alpine-libreoffice.Dockerfile -t your-username/alpine-libreoffice:3.25 .
+docker push your-username/alpine-libreoffice:3.25
 
 # Update Dockerfile ARG default
 # In convert-from-pdf/Dockerfile:
-# ARG BASE_IMAGE=your-username/alpine-libreoffice:3.20
+# ARG BASE_IMAGE=your-username/alpine-libreoffice:3.25
 ```
 
 ## Cost Considerations

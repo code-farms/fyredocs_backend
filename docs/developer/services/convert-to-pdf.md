@@ -201,7 +201,7 @@ at boot, so pdfcpu never reads or writes a `config.yml` under the user config di
 (it can otherwise `os.Exit(1)` mid-job when that directory is unusable).
 
 ### LibreOffice + unoserver
-Used for Office and HTML conversions. Installed in the container via the `fyredocs-base` image (full LibreOffice suite, ttf-liberation, `unoserver` from PyPI).
+Used for Office and HTML conversions. Installed in the container via the `fyredocs-base` image (Alpine 3.24: full LibreOffice 25.8 suite, `unoserver==3.7` from PyPI). Fonts: `ttf-liberation` (metric-compatible with Arial/Times/Courier, so Latin documents keep their layout) and `font-noto-devanagari` (Hindi). Without a Devanagari font LibreOffice falls back to a WinAnsi-encoded Latin font and drops Hindi text from the PDF entirely (measured 2026-11-08; guarded by `TestHindiWordToPDFEmbedsDevanagariFontBinaries`).
 
 Fast path:
 ```bash

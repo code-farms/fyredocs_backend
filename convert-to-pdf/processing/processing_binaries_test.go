@@ -244,3 +244,65 @@ func TestSupervisorRealUnoserverBinaries(t *testing.T) {
 		t.Fatalf("soffice still running after Stop: %v", left)
 	}
 }
+
+// TestHindiWordToPDFEmbedsDevanagariFontBinaries is the Q6 acceptance check
+// (docs/developer/architecture/next-generation-document-engine/
+// 20-implementation-roadmap.md): Hindi in an Office document must come out of
+// LibreOffice rendered with a real Devanagari font, not missing-glyph boxes.
+// It asserts what survives PDF text extraction reliably: an embedded Noto Sans
+// Devanagari font, and Devanagari characters in the text layer. Exact word
+// matching is deliberately avoided — extraction can reorder vowel signs and
+// conjuncts even when the page renders correctly.
+func TestHindiWordToPDFEmbedsDevanagariFontBinaries(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "hindi.txt")
+	text := "नमस्ते दुनिया। यह फायरडॉक्स का हिंदी परीक्षण है।\n"
+	if err := os.WriteFile(src, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.CommandContext(context.Background(), "libreoffice", "--headless",
+		"--infilter=Text (encoded):UTF8", "--convert-to", "docx", "--outdir", dir, src).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docx fixture generation failed: %v (output: %s)", err, out)
+	}
+	docx := filepath.Join(dir, "hindi.docx")
+	if info, err := os.Stat(docx); err != nil || info.Size() == 0 {
+		t.Fatalf("libreoffice produced no fixture docx: %v (output: %s)", err, out)
+	}
+
+	outDir := t.TempDir()
+	res, err := ProcessFile(context.Background(), uuid.New(), "word-to-pdf", []string{docx}, nil, outDir, nil)
+	if err != nil {
+		t.Fatalf("ProcessFile word-to-pdf: %v", err)
+	}
+	assertValidPDFOutput(t, res.OutputPath)
+
+	fonts, err := exec.Command("pdffonts", res.OutputPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("pdffonts: %v (%s)", err, fonts)
+	}
+	embeddedDevanagari := false
+	for _, line := range strings.Split(string(fonts), "\n") {
+		// pdffonts columns: name type encoding emb sub uni object ID
+		if strings.Contains(line, "NotoSansDevanagari") && strings.Contains(line, " yes ") {
+			embeddedDevanagari = true
+		}
+	}
+	if !embeddedDevanagari {
+		t.Fatalf("PDF does not embed Noto Sans Devanagari; pdffonts:\n%s", fonts)
+	}
+
+	extracted, err := exec.Command("pdftotext", "-enc", "UTF-8", res.OutputPath, "-").Output()
+	if err != nil {
+		t.Fatalf("pdftotext: %v", err)
+	}
+	devanagari := 0
+	for _, r := range string(extracted) {
+		if r >= 0x0900 && r <= 0x097F {
+			devanagari++
+		}
+	}
+	if devanagari < 20 {
+		t.Errorf("text layer has %d Devanagari characters, want >= 20; got %q", devanagari, extracted)
+	}
+}

@@ -473,14 +473,11 @@ at boot, so pdfcpu never reads or writes a `config.yml` under the user config di
 
 Used for PDF to Office format conversions.
 
-**Installed Packages** (minimal, not full suite):
-- `libreoffice-writer` - PDF to Word
-- `libreoffice-calc` - PDF to Excel
-- `libreoffice-impress` - PDF to PowerPoint
-- `libreoffice-common` - Shared components
-- `ttf-liberation` - Font support
-
-**Optimization**: Unused assets removed (gallery, templates, wizards, icons) to reduce image size.
+**Installed packages** (Debian bookworm, `python:3.11-slim-bookworm`; not the full suite):
+- `libreoffice-core`, `libreoffice-writer`, `libreoffice-calc`, `libreoffice-impress`
+- `fonts-liberation` - Latin fonts, metric-compatible with Arial/Times/Courier
+- `fonts-noto-core` - Noto Sans/Serif, including Devanagari for Hindi
+- `fontconfig` - font discovery (`fc-cache` runs at build)
 
 **Command Line**:
 ```bash

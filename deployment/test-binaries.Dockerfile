@@ -8,7 +8,11 @@
 # image (see docs/developer/architecture/testing-strategy.md).
 #
 # Build + run via: make test-binaries
-FROM golang:1.26-alpine
+#
+# Pinned to the runtime images' Alpine (3.24) so the tested LibreOffice,
+# Ghostscript, Poppler and Tesseract versions are the shipped ones. NOTE: keep
+# in sync with deployment/base-alpine-libreoffice.Dockerfile.
+FROM golang:1.26-alpine3.24
 
 RUN apk add --no-cache \
     ca-certificates \
@@ -20,10 +24,14 @@ RUN apk add --no-cache \
     tesseract-ocr \
     tesseract-ocr-data-eng \
     tesseract-ocr-data-deu \
+    tesseract-ocr-data-hin \
     libreoffice \
     ttf-liberation \
+    font-noto-devanagari \
+    fontconfig \
     python3 \
     py3-pip \
+ && fc-cache -f \
  && pip3 install --break-system-packages unoserver==3.7
 
 WORKDIR /src

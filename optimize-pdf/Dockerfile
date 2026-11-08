@@ -21,7 +21,9 @@ RUN cd optimize-pdf && \
 
 # ---- Runtime Stage ----
 # This service uses Ghostscript, Tesseract, and pdftoppm — no LibreOffice needed.
-FROM alpine:3.19
+# Alpine 3.24 (3.19 reached end-of-life on 2025-11-01). NOTE: keep in sync with
+# deployment/base-alpine-libreoffice.Dockerfile and deployment/test-binaries.Dockerfile.
+FROM alpine:3.24
 
 RUN apk add --no-cache \
     ca-certificates \
