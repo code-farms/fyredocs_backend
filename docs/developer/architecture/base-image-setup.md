@@ -16,6 +16,8 @@ The Go builder base is documented in its own section below ("Go Builder Base Ima
 
 `fyredocs-base` is built from `alpine:3.24` (3.19 reached end-of-life on 2025-11-01). It carries LibreOffice 25.8, Poppler 25.12, Python 3.14 with `unoserver==3.7`, and the fonts `ttf-liberation` (Latin, metric-compatible with Arial/Times) and `font-noto-devanagari` (Hindi) registered with `fc-cache`. The build fails if fontconfig cannot see Noto Sans Devanagari.
 
+Size: about 1.5 GB, up from about 1.07 GB on 3.19. In Alpine 3.24 `libreoffice-common` depends on Qt 6 and GTK, which pull mesa and LLVM (about 377 MB a headless server never loads); installing only the writer/calc/impress components does not avoid them. Resident memory went down (two daemons idle: 193 MiB on 3.19, 122 MiB on 3.24). Measurements: `next-generation-document-engine/benchmarks/raw-2026-11-08/NOTES.md`.
+
 Alpine version is kept in step across four files: `deployment/base-alpine-libreoffice.Dockerfile`, `organize-pdf/Dockerfile`, `optimize-pdf/Dockerfile` and `deployment/test-binaries.Dockerfile` (`golang:1.26-alpine3.24`). Track the newest Alpine branch: LibreOffice and Tesseract come from the community repository, which is supported only until the next stable release.
 
 ## Problem

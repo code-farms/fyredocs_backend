@@ -1,0 +1,12 @@
+0B	CMD ["./optimize-pdf"]
+0B	VOLUME [/app/uploads /app/outputs]
+0B	EXPOSE [8085/tcp]
+0B	USER appuser
+40MB	RUN /bin/sh -c chown appuser:appuser optimize-pdf # buildkit
+40MB	COPY /app/bin/optimize-pdf . # buildkit
+16.4kB	RUN /bin/sh -c mkdir -p uploads outputs &&     chown -R appuser:appuser /app # buildkit
+8.19kB	WORKDIR /app
+41kB	RUN /bin/sh -c adduser -D -u 10001 appuser # buildkit
+152MB	RUN /bin/sh -c apk add --no-cache     ca-certificates     poppler-utils     ghostscript     tesseract-ocr     tesseract-ocr-data-eng     tesseract-ocr-data-hin     && rm -rf /var/cache/apk/* # buildkit
+0B	CMD ["/bin/sh"]
+9.31MB	ADD alpine-minirootfs-3.24.4-aarch64.tar.gz / # buildkit

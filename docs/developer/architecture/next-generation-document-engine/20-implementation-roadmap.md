@@ -10,6 +10,13 @@
 > moved into Go (`convert-to-pdf/processing/daemons.go`) and **`convert-to-pdf/entrypoint.sh`
 > was deleted**; the image runs `./convert-to-pdf` directly. Citations of `entrypoint.sh:<line>`
 > in these documents refer to the code as audited on 2026-11-07 and are kept as evidence.
+>
+> **Also done 2026-11-08:** Q6 and the base bump (M1.5 part). Alpine 3.19 → 3.24 for fyredocs-base, organize-pdf,
+> optimize-pdf and the test image (LibreOffice 25.8.7, Ghostscript 10.08.0, Tesseract 5.5.2); Noto Sans
+> Devanagari in the two LibreOffice images. Hindi DOCX → PDF now embeds the font and keeps the text
+> (`TestHindiWordToPDFEmbedsDevanagariFontBinaries`); before, LibreOffice dropped Hindi entirely.
+> fyredocs-base grew about 471 MB (Qt/GTK/mesa now required by Alpine's libreoffice-common) while daemon
+> RAM fell; see `benchmarks/raw-2026-11-08/NOTES.md`.
 
 Siblings this roadmap sequences: `01-existing-system-audit.md` (defects D1–D23), `02-document-capability-matrix.md`
 (per-row gates), `03-heavy-dependency-analysis.md` (removal order), `04-libreoffice-replacement-strategy.md` (gates
@@ -486,7 +493,7 @@ Kubernetes migration beyond the validated mapping; no team-written Rust; office2
 | Q3 | **Done 2026-11-08.** `shared/procexec` at all 20 exec sites | all `exec.CommandContext` sites in the four workers (`01-…` §2.4); new `shared/procexec` | 2 d (brief); Contract B `13-…` §5.3 | 1 | 0 orphans after 100 forced cancels |
 | Q4 | **Done 2026-11-08.** `DisableConfigDir()` in three mains | present only at `organize-pdf/main.go:57` | 1 h (brief) | 1 | pdfcpu tests; prerequisite for `read_only` (`18-…` §5.11) |
 | Q5 | PDF/A invocation + veraPDF | `convert-from-pdf/processing/processing_free.go:212-221` | 3 d (brief); 0.15 EM (`08-…` §5.3) | 1 | veraPDF 2b pass |
-| Q6 | Noto + Devanagari + fontconfig + `fc-cache` | `deployment/base-alpine-libreoffice.Dockerfile:14-20`; `convert-from-pdf/Dockerfile:30-36` | 1 d (`02-…` §2.4); 0.05 EM (`07-…` §6) | 1 | G-FONT |
+| Q6 | **Done 2026-11-08.** Noto + Devanagari + fontconfig + `fc-cache` | `deployment/base-alpine-libreoffice.Dockerfile:14-20`; `convert-from-pdf/Dockerfile:30-36` | 1 d (`02-…` §2.4); 0.05 EM (`07-…` §6) | 1 | G-FONT |
 | Q7 | OCR per-page render in the pool, `-gray`, 300 DPI `hin`, `--oem 1`, tessdata_best; organize-pdf pool | `optimize-pdf/processing/processing_free.go:531-536,565-588`; `organize-pdf/processing/processing_scan.go:515-538` | 3 d (brief); 0.3 EM (`11-…` §6) | 1 | tmpfs peak ≤ 200 MB; CER not worse |
 | Q8 | `pdfinfo` → pdfcpu `PageDimsFile` | `optimize-pdf/processing/processing_free.go:331`; `convert-from-pdf/processing/processing_free.go:126` | 1 d (brief); 0.1 EM (`03-…` §2.2) | 1 | identical page sizes on the corpus (`08-…` §7.1) |
 | Q9 | Page count in every result; `PageCountFile` at upload | worker result metadata; job-service `consumeUpload` (`job-service/handlers/jobs.go:731`) | 2 d (`02-…` §2.4) | 2 | page count present 100 % |

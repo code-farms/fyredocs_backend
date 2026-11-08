@@ -2,7 +2,7 @@
 # measure-images.sh — reproducible baseline measurements for the document workers.
 #
 # Measures, against the images tagged $TAG (default baseline-2026-11):
-#   1. image sizes + top layers            → raw/image-sizes.tsv, raw/layers-<img>.txt
+#   1. image sizes + top layers            → $RAW_DIR/image-sizes.tsv, layers-<img>.txt
 #   2. stripped binary sizes (linux/arm64 + linux/amd64 cross-builds) → raw/binary-sizes.tsv
 #   3. tool versions inside each worker image → raw/tool-versions.txt
 #   4. idle RSS of each worker (one at a time, against the essentials stack) → raw/idle-rss.tsv
@@ -18,7 +18,9 @@
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../../../.." && pwd)"          # fyredocs_backend
-RAW="$HERE/raw"; mkdir -p "$RAW"
+# RAW_DIR keeps each measurement run in its own folder (default raw/, the
+# 2026-11-07 baseline); pass e.g. RAW_DIR=$HERE/raw-2026-11-08 for a re-measure.
+RAW="${RAW_DIR:-$HERE/raw}"; mkdir -p "$RAW"
 TAG="${TAG:-baseline-2026-11}"
 RUNS="${RUNS:-3}"
 FIX="$ROOT/scripts/k6/fixtures/out"

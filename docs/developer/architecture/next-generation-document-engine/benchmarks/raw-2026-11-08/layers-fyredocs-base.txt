@@ -1,0 +1,9 @@
+4.1kB	RUN /bin/sh -c rm -rf /tmp/* /var/cache/apk/* # buildkit
+12.3kB	RUN /bin/sh -c libreoffice --version &&     pdftoppm -v &&     unoconvert --help > /dev/null 2>&1 &&     fc-list :lang=hi family | grep -qi "Noto Sans Devanagari" # buildkit
+430kB	RUN /bin/sh -c pip3 install --break-system-packages unoserver==3.7 # buildkit
+1.1GB	RUN /bin/sh -c apk add --no-cache     ca-certificates     poppler-utils     libreoffice     ttf-liberation     font-noto-devanagari     fontconfig     python3     py3-pip &&     fc-cache -f # buildkit
+0B	LABEL version=3.24
+0B	LABEL description=Alpine Linux with LibreOffice and PDF tools pre-installed
+0B	LABEL maintainer=fyredocs
+0B	CMD ["/bin/sh"]
+9.31MB	ADD alpine-minirootfs-3.24.4-aarch64.tar.gz / # buildkit
