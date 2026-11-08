@@ -16,13 +16,11 @@ import (
 )
 
 // Daemon supervision. The worker starts, restarts, recycles and stops the
-// unoserver (LibreOffice) daemons itself instead of leaving that to
-// entrypoint.sh. Owning the processes in Go removes three problems the shell
-// version had: the port list was computed twice (shell defaulted to 2 daemons,
-// Go to WORKER_CONCURRENCY + 1), recycling needed a PID-file contract between
-// the two, and every lifecycle bug was a shell pitfall no Go test could reach
-// (docs/developer/architecture/next-generation-document-engine/
-// 20-implementation-roadmap.md, M1.4).
+// unoserver (LibreOffice) daemons itself; there is no shell entrypoint. This
+// replaced a shell supervisor that computed the port list a second time (with a
+// different default), needed a PID-file contract to recycle a daemon, and hid
+// every lifecycle bug from the Go tests (docs/developer/architecture/
+// next-generation-document-engine/20-implementation-roadmap.md, M1.4).
 //
 // Each daemon runs as the leader of its own process group, which holds
 // unoserver, LibreOffice's oosplash launcher and soffice.bin. The group is the
@@ -47,20 +45,9 @@ const (
 	readyPollInterval = 500 * time.Millisecond
 )
 
-// supervisorEnv is the rollback switch: "shell" leaves supervision to the
-// one-release fallback in entrypoint.sh; anything else (default) supervises in
-// Go. NOTE: entrypoint.sh reads the same variable; change both together.
-const supervisorEnv = "UNOSERVER_SUPERVISOR"
-
-// GoSupervisionEnabled reports whether this process should supervise the
-// unoserver daemons (true unless UNOSERVER_SUPERVISOR=shell).
-func GoSupervisionEnabled() bool {
-	return os.Getenv(supervisorEnv) != "shell"
-}
-
 // activeSupervisor is the running Supervisor, read by tryUnoconvert to recycle a
-// daemon. nil means shell supervision (or none), and recycling then falls back
-// to the PID-file path in recycleDaemon.
+// daemon. nil means no daemons are supervised (unoserver missing, e.g. a local
+// `go run`, or the supervisor has stopped); recycling is then a no-op.
 var activeSupervisor atomic.Pointer[Supervisor]
 
 // daemon is one supervised unoserver. All mutable fields are guarded by mu.
@@ -94,7 +81,7 @@ type Supervisor struct {
 
 // NewSupervisor builds a supervisor for every port in UnoserverPorts(), reading
 // UNOSERVER_UNO_PORT_OFFSET (default 100) and UNOSERVER_CONVERSION_TIMEOUT
-// (seconds, default 600) as entrypoint.sh did.
+// (seconds, default 600).
 func NewSupervisor() *Supervisor {
 	host := UnoserverHost()
 	ports := UnoserverPorts()

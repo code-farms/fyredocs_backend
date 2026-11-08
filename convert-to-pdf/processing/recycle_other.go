@@ -28,6 +28,3 @@ func killGroup(pgid int) error {
 	}
 	return proc.Kill()
 }
-
-// killDaemonGroup kills pid; there is no group to reach its children.
-func killDaemonGroup(pid int) error { return killGroup(pid) }

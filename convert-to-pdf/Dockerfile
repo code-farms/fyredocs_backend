@@ -30,9 +30,7 @@ RUN mkdir -p uploads outputs && \
     chown -R appuser:appuser /app
 
 COPY --from=builder /app/bin/convert-to-pdf .
-COPY convert-to-pdf/entrypoint.sh .
-RUN chown appuser:appuser convert-to-pdf entrypoint.sh && \
-    chmod +x entrypoint.sh
+RUN chown appuser:appuser convert-to-pdf
 
 USER appuser
 
@@ -40,4 +38,8 @@ EXPOSE 8083
 
 VOLUME /app/uploads /app/outputs
 
-CMD ["sh", "entrypoint.sh"]
+# The worker starts and supervises its own unoserver (LibreOffice) daemons
+# (processing/daemons.go), so it runs directly — no shell entrypoint. Exec form
+# so SIGTERM reaches it; compose sets init: true, so docker-init is PID 1 and
+# reaps zombies left by LibreOffice.
+CMD ["./convert-to-pdf"]

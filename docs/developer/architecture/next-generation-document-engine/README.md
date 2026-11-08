@@ -4,6 +4,15 @@ Status: **ANALYSIS AND ARCHITECTURE ONLY.** No production code, dependency or AP
 document cites the repository (`path:line`), a measured file under `benchmarks/`, or a dated external
 source; anything else is marked "to be measured" or "unverified".
 
+> **Status update (2026-11-08) — Stage 1 work has started.** Implemented on branch
+> `docs/next-gen-document-engine`: Q0 (unoserver pool starts: profile path, distinct
+> `--uno-port`, unoserver pinned, `/readyz` fails on a dead pool, `convert_fallback_total`),
+> Q1 (size-scaled unoconvert deadline, recycle on timeout or cancel), Q3 (`shared/procexec`
+> at every exec site) and Q4 (`DisableConfigDir` in all four workers). Daemon supervision
+> moved into Go (`convert-to-pdf/processing/daemons.go`) and **`convert-to-pdf/entrypoint.sh`
+> was deleted**; the image runs `./convert-to-pdf` directly. Citations of `entrypoint.sh:<line>`
+> in these documents refer to the code as audited on 2026-11-07 and are kept as evidence.
+
 Start with `EXECUTIVE-SUMMARY.md`, then `20-implementation-roadmap.md`. The audience is Fyredocs backend
 engineers and the technical lead deciding the roadmap.
 

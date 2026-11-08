@@ -338,8 +338,8 @@ do_rollback() {
 # Worker pools (concurrency / OCR workers / unoserver instances) are then
 # derived from each worker's SCALED memory cap, so a pool can never be sized
 # past the RAM its own container is allowed — no per-container OOM-kill on any
-# host, and the unoserver instance count is pinned (entrypoint and Go pool
-# agree, fixing the port/daemon mismatch).
+# host, and the unoserver instance count is pinned (the Go supervisor in
+# convert-to-pdf launches exactly the ports its pool hands out).
 # ---------------------------------------------------------------------------
 compute_resource_budget() {
     # Parallel indexed arrays (bash 3.2 safe — macOS system bash has no

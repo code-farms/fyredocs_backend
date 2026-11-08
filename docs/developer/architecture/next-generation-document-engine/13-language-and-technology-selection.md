@@ -23,8 +23,8 @@ designed in `04-libreoffice-replacement-strategy.md` and docs `05`–`10`; stage
   (Alpine + LibreOffice, `deployment/base-alpine-libreoffice.Dockerfile`); `convert-from-pdf` on
   `python:3.11-slim-bookworm` (`convert-from-pdf/Dockerfile:28`) — the only Python runtime, for pdf2docx and
   `convert-from-pdf/scripts/pdf_to_xlsx.py` (`processing_free.go:342`); `optimize-pdf`/`organize-pdf` Alpine + tesseract/gs/poppler.
-- **Languages in production code**: Go, shell (`convert-to-pdf/entrypoint.sh`), Python (one script + two pip
-  tools). No Rust, no C/C++ written by the team; C/C++ only as exec'd binaries (LibreOffice, Ghostscript,
+- **Languages in production code**: Go, Python (one script + two pip tools). (The shell entrypoint
+  `convert-to-pdf/entrypoint.sh` was removed on 2026-11-08; the Go worker supervises unoserver.) No Rust, no C/C++ written by the team; C/C++ only as exec'd binaries (LibreOffice, Ghostscript,
   Poppler, Tesseract).
 - **Integration today**: in-process Go (pdfcpu, `organize-pdf/internal/imaging`, `x/image`); `exec.CommandContext`
   at 20 sites (audit table) with no `Setpgid`/`cmd.Cancel`/`WaitDelay`; daemon over XML-RPC (unoserver via the

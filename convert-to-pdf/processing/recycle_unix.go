@@ -4,7 +4,6 @@ package processing
 
 import (
 	"errors"
-	"fmt"
 	"os/exec"
 	"syscall"
 )
@@ -45,18 +44,3 @@ func termGroup(pgid int) error { return signalGroup(pgid, syscall.SIGTERM) }
 // sweep an orphaned soffice.bin, which would otherwise keep the profile lock
 // and UNO port so the restarted daemon could not start.
 func killGroup(pgid int) error { return signalGroup(pgid, syscall.SIGKILL) }
-
-// killDaemonGroup SIGKILLs the process group containing pid. Used by the
-// one-release shell-supervision fallback, where the worker only knows the
-// LibreOffice PID from the daemon's PID file. A stale PID that was reused in
-// the worker's own group is refused (see signalGroup).
-func killDaemonGroup(pid int) error {
-	pgid, err := syscall.Getpgid(pid)
-	if errors.Is(err, syscall.ESRCH) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("getpgid %d: %w", pid, err)
-	}
-	return killGroup(pgid)
-}

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -94,19 +92,10 @@ func TestUnoconvertTimeout(t *testing.T) {
 	}
 }
 
-// TestRecycleDaemonToleratesMissingOrBadPIDFile: recycling is best-effort and
-// must never panic or kill something arbitrary when the file is absent or junk.
-func TestRecycleDaemonToleratesMissingOrBadPIDFile(t *testing.T) {
-	dir := t.TempDir()
-	saved := daemonPIDFile
-	daemonPIDFile = func(port string) string { return filepath.Join(dir, "uno-lo-"+port+".pid") }
-	t.Cleanup(func() { daemonPIDFile = saved })
-
-	recycleDaemon("2002") // missing file
-	for _, junk := range []string{"", "abc", "0", "-5"} {
-		if err := os.WriteFile(daemonPIDFile("2003"), []byte(junk), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		recycleDaemon("2003")
-	}
+// TestRecycleDaemonWithoutSupervisor: with no supervisor running (unoserver
+// missing, e.g. a local `go run`) recycling is a logged no-op, never a panic.
+func TestRecycleDaemonWithoutSupervisor(t *testing.T) {
+	saved := activeSupervisor.Swap(nil)
+	t.Cleanup(func() { activeSupervisor.Store(saved) })
+	recycleDaemon("2002")
 }

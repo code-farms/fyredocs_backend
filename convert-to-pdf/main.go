@@ -78,21 +78,17 @@ func main() {
 	defer cancel()
 
 	// Start the unoserver (LibreOffice) daemons before taking jobs, so the first
-	// Office conversion finds a warm daemon. The worker owns them (start,
-	// restart, recycle, stop) unless UNOSERVER_SUPERVISOR=shell selects the
-	// one-release fallback in entrypoint.sh. Not becoming ready is not fatal:
-	// jobs run on the cold path, and /readyz plus convert_fallback_total say so.
-	var daemons *processing.Supervisor
-	if processing.GoSupervisionEnabled() {
-		daemons = processing.NewSupervisor()
-		if err := daemons.Start(); err != nil {
-			slog.Warn("unoserver not available; Office conversions will use the cold LibreOffice path", "error", err)
-			daemons = nil
-		} else if daemons.WaitReady(ctx, 30*time.Second) {
-			slog.Info("unoserver pool ready", "instances", len(processing.UnoserverPorts()))
-		} else {
-			slog.Warn("unoserver did not become ready; conversions will use the cold LibreOffice path until it does")
-		}
+	// Office conversion finds a warm daemon. The worker owns them — start,
+	// restart, recycle, stop — and is the container's command; there is no shell
+	// entrypoint. Not becoming ready is not fatal: jobs run on the cold path,
+	// and /readyz plus convert_fallback_total say so.
+	daemons := processing.NewSupervisor()
+	if err := daemons.Start(); err != nil {
+		slog.Warn("unoserver not available; Office conversions will use the cold LibreOffice path", "error", err)
+	} else if daemons.WaitReady(ctx, 30*time.Second) {
+		slog.Info("unoserver pool ready", "instances", len(processing.UnoserverPorts()))
+	} else {
+		slog.Warn("unoserver did not become ready; conversions will use the cold LibreOffice path until it does")
 	}
 
 	processFunc := func(ctx context.Context, jobID uuid.UUID, toolType string, inputPaths []string, options map[string]interface{}, outputDir string, onProgress worker.ProgressFunc) (*worker.ProcessResult, error) {
@@ -247,10 +243,8 @@ func main() {
 	}
 	// Daemons stop only after the drain: stopping them first would push the
 	// last in-flight Office jobs onto the cold LibreOffice path.
-	if daemons != nil {
-		daemons.Stop()
-		slog.Info("unoserver daemons stopped")
-	}
+	daemons.Stop()
+	slog.Info("unoserver daemons stopped")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {

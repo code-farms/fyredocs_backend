@@ -22,8 +22,8 @@ RUN apk add --no-cache \
 # Install unoserver for persistent LibreOffice daemon mode
 # unoserver provides: unoserver (daemon) + unoconvert (client CLI) + unoping.
 # Pinned: the daemon's CLI contract (--user-installation takes a path,
-# --uno-port must differ from --port) is what convert-to-pdf/entrypoint.sh is
-# written against. NOTE: keep in sync with deployment/test-binaries.Dockerfile.
+# --uno-port must differ from --port) is what the convert-to-pdf daemon
+# supervisor (convert-to-pdf/processing/daemons.go) is written against. NOTE: keep in sync with deployment/test-binaries.Dockerfile.
 RUN pip3 install --break-system-packages unoserver==3.7
 
 # Verify installations

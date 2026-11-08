@@ -205,7 +205,8 @@ groups:
       # engine/01-existing-system-audit.md). A healthy pool keeps this at zero;
       # isolated "timeout" or "daemon_error" fallbacks on a broken input are
       # possible, hence a rate over 15m rather than any single increment. Check
-      # /readyz on convert-to-pdf and the entrypoint log for the reason label.
+      # /readyz on convert-to-pdf and the worker log ("unoserver daemon exited",
+      # fallback warnings) for the reason label.
       - alert: OfficeConversionsOnColdFallback
         expr: sum by (reason) (rate(convert_fallback_total{service="convert-to-pdf"}[15m])) > 0.01
         for: 15m

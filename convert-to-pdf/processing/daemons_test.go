@@ -34,16 +34,6 @@ func TestRestartDelay(t *testing.T) {
 	}
 }
 
-// TestGoSupervisionEnabled pins the rollback switch shared with entrypoint.sh.
-func TestGoSupervisionEnabled(t *testing.T) {
-	for value, want := range map[string]bool{"": true, "go": true, "shell": false, "anything": true} {
-		t.Setenv(supervisorEnv, value)
-		if got := GoSupervisionEnabled(); got != want {
-			t.Errorf("%s=%q: GoSupervisionEnabled() = %v, want %v", supervisorEnv, value, got, want)
-		}
-	}
-}
-
 // TestNewSupervisorPortsAndOffset guards the single source of truth: the
 // supervisor launches exactly the ports the Go pool hands out, each with a
 // distinct UNO port (D23b) and its own profile path (D23).

@@ -1,8 +1,8 @@
 //go:build integration && binaries
 
-// Real-binary exec-path tests for the convert-to-pdf worker. No unoserver
-// daemon runs in the test container (entrypoint.sh launches those in
-// production), so tryUnoconvert's pre-flight dial finds nothing listening,
+// Real-binary exec-path tests for the convert-to-pdf worker. Unless a test
+// starts the Supervisor itself, no unoserver daemon runs in the test container,
+// so tryUnoconvert's pre-flight dial finds nothing listening,
 // skips the unoconvert client, and officeToPDF takes its direct
 // `libreoffice --headless` fallback — the exact degraded-daemon shape the
 // fallback exists for. Run via

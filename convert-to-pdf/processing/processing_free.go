@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -61,54 +60,16 @@ func unoconvertTimeout(inputBytes int64) time.Duration {
 }
 
 // recycleDaemon makes the daemon on port start fresh, abandoning whatever it is
-// converting. Under Go supervision (the default) it asks the Supervisor, which
-// owns the daemon's process group. Under the one-release shell fallback
-// (UNOSERVER_SUPERVISOR=shell) it uses the PID file the shell daemons write.
+// converting, by asking the Supervisor that owns the daemon's process group.
+// Without a running supervisor (unoserver missing, e.g. a local `go run`) there
+// is no daemon to recycle and this only logs.
 func recycleDaemon(port string) {
-	if s := activeSupervisor.Load(); s != nil {
-		s.Recycle(port)
+	s := activeSupervisor.Load()
+	if s == nil {
+		slog.Warn("cannot recycle unoserver daemon: no supervisor running", "port", port)
 		return
 	}
-	recycleShellDaemon(port)
-}
-
-// daemonPIDFile is where a shell-supervised daemon on port records its
-// LibreOffice PID (--libreoffice-pid-file). NOTE: contract with supervise() in
-// convert-to-pdf/entrypoint.sh, which passes this exact path; change both
-// together. A var so tests can point it at a temp dir. Remove with the shell
-// fallback.
-var daemonPIDFile = func(port string) string {
-	return filepath.Join(os.TempDir(), "uno-lo-"+port+".pid")
-}
-
-// recycleShellDaemon kills a shell-supervised daemon's whole process group, so
-// its shell supervisor starts a fresh one.
-//
-// It kills the group, not the PID in the file: that PID is LibreOffice's
-// oosplash launcher, and killing only the launcher orphans soffice.bin, which
-// keeps the profile lock and UNO port so the restarted daemon cannot start
-// (measured 2026-11-08). The shell starts each daemon under setsid, so the group
-// holds exactly unoserver, oosplash and soffice.bin.
-//
-// Best-effort: a missing or stale PID file (daemon already restarting) is
-// logged and ignored — the pre-flight dial covers the gap.
-func recycleShellDaemon(port string) {
-	path := daemonPIDFile(port)
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		slog.Warn("cannot recycle unoserver daemon: no LibreOffice PID file", "port", port, "path", path, "error", err)
-		return
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || pid <= 0 {
-		slog.Warn("cannot recycle unoserver daemon: bad LibreOffice PID file", "port", port, "path", path, "content", string(raw))
-		return
-	}
-	if err := killDaemonGroup(pid); err != nil {
-		slog.Warn("cannot recycle unoserver daemon: kill failed", "port", port, "pid", pid, "error", err)
-		return
-	}
-	slog.Warn("recycled unoserver daemon after abandoned conversion", "port", port, "libreofficePid", pid)
+	s.Recycle(port)
 }
 
 // tryUnoconvert attempts a conversion through a pooled unoserver daemon. It
