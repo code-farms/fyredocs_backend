@@ -55,7 +55,7 @@ func assertValidPDFOutput(t *testing.T, path string) {
 	if _, err := f.Read(head); err != nil || !bytes.HasPrefix(head, []byte("%PDF-")) {
 		t.Fatalf("output lacks %%PDF- header (got %q, err %v)", head, err)
 	}
-	if err := api.ValidateFile(path, nil); err != nil {
+	if err := api.ValidateFile(t.Context(), path, nil, nil); err != nil {
 		t.Fatalf("output does not validate: %v", err)
 	}
 }

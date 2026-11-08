@@ -41,11 +41,11 @@ func TestOrganizePDFReordersPages(t *testing.T) {
 		pngs = append(pngs, p)
 	}
 	input := filepath.Join(dir, "in.pdf")
-	if err := api.ImportImagesFile(pngs, input, nil, nil); err != nil {
+	if err := api.ImportImagesFile(t.Context(), pngs, input, nil, nil); err != nil {
 		t.Fatalf("build input: %v", err)
 	}
 	widths := func(path string) []float64 {
-		dims, err := api.PageDimsFile(path)
+		dims, err := api.PageDimsFile(t.Context(), path)
 		if err != nil {
 			t.Fatalf("page dims %s: %v", path, err)
 		}
@@ -61,7 +61,7 @@ func TestOrganizePDFReordersPages(t *testing.T) {
 	}
 
 	output := filepath.Join(dir, "out.pdf")
-	if err := organizePDF(input, output, "3,1,1"); err != nil {
+	if err := organizePDF(t.Context(), input, output, "3,1,1"); err != nil {
 		t.Fatalf("organizePDF: %v", err)
 	}
 	want := []float64{src[2], src[0], src[0]}
@@ -72,7 +72,7 @@ func TestOrganizePDFReordersPages(t *testing.T) {
 
 func TestOrganizePDFRejectsEmptyOrder(t *testing.T) {
 	input := buildProtectInput(t)
-	if err := organizePDF(input, filepath.Join(t.TempDir(), "out.pdf"), "7,9"); err == nil {
+	if err := organizePDF(t.Context(), input, filepath.Join(t.TempDir(), "out.pdf"), "7,9"); err == nil {
 		t.Error("expected an error when no requested page exists")
 	}
 }

@@ -463,6 +463,13 @@ NATS JetStream handles retries via `AckWait` and `MaxDeliver`:
 
 When retries are exhausted (MaxDeliver reached), the failed job payload is published to `jobs.dlq.optimize-pdf` on the `JOBS_DLQ` stream (7-day retention) before the original message is acknowledged. This preserves failed jobs for debugging and replay.
 
+**Job timeout vs shutdown** (`processErrForRetry` in `internal/worker/worker.go`, same rule in all four
+PDF workers): every job runs under a 10-minute context that both `procexec` children and pdfcpu (v0.16+,
+which checks the context inside its parse and page loops) honour. If that deadline expires the job fails
+permanently with the timeout code. Retrying would hit the same limit, and `context.DeadlineExceeded`
+would otherwise look like a retryable network timeout. If instead the worker itself is shutting down and
+the drain timeout cancels the job, it is marked recoverable and redelivered to another replica.
+
 ## Processing Details
 
 ### Compress PDF

@@ -68,7 +68,7 @@ func TestSignPDFRoundTrip(t *testing.T) {
 	writeTestPNG(t, p1, 200, 260)
 	writeTestPNG(t, p2, 200, 260)
 	input := filepath.Join(dir, "in.pdf")
-	if err := api.ImportImagesFile([]string{p1, p2}, input, nil, nil); err != nil {
+	if err := api.ImportImagesFile(t.Context(), []string{p1, p2}, input, nil, nil); err != nil {
 		t.Fatalf("build input pdf: %v", err)
 	}
 
@@ -86,11 +86,11 @@ func TestSignPDFRoundTrip(t *testing.T) {
 		"position":      "br",
 		"page":          "1",
 	}
-	if err := signPDF(input, output, options); err != nil {
+	if err := signPDF(t.Context(), input, output, options); err != nil {
 		t.Fatalf("signPDF: %v", err)
 	}
 
-	ctx, err := api.ReadContextFile(output)
+	ctx, err := api.ReadContextFile(t.Context(), output)
 	if err != nil {
 		t.Fatalf("output does not parse: %v", err)
 	}
@@ -107,11 +107,11 @@ func TestSignPDFRoundTrip(t *testing.T) {
 func TestSignPDFRejectsBadInput(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out.pdf")
-	if err := signPDF(filepath.Join(dir, "in.pdf"), out, map[string]interface{}{}); err == nil ||
+	if err := signPDF(t.Context(), filepath.Join(dir, "in.pdf"), out, map[string]interface{}{}); err == nil ||
 		!strings.Contains(err.Error(), "missing signature data") {
 		t.Errorf("missing signatureData not rejected: %v", err)
 	}
-	if err := signPDF(filepath.Join(dir, "in.pdf"), out, map[string]interface{}{
+	if err := signPDF(t.Context(), filepath.Join(dir, "in.pdf"), out, map[string]interface{}{
 		"signatureData": "not-a-data-url",
 	}); err == nil || !strings.Contains(fmt.Sprint(err), "invalid image data format") {
 		t.Errorf("malformed data URL not rejected: %v", err)
@@ -136,7 +136,7 @@ func buildProtectInput(t *testing.T) string {
 	png := filepath.Join(dir, "p1.png")
 	writeTestPNG(t, png, 200, 260)
 	input := filepath.Join(dir, "input.pdf")
-	if err := api.ImportImagesFile([]string{png}, input, nil, nil); err != nil {
+	if err := api.ImportImagesFile(t.Context(), []string{png}, input, nil, nil); err != nil {
 		t.Fatalf("build input pdf: %v", err)
 	}
 	return input
@@ -154,12 +154,12 @@ func readEncrypted(t *testing.T, path, userPW, ownerPW string) (*model.Context, 
 	conf := model.NewDefaultConfiguration()
 	conf.UserPW = userPW
 	conf.OwnerPW = ownerPW
-	ctx, err := api.ReadContext(f, conf)
+	ctx, err := api.ReadContext(t.Context(), f, conf)
 	if err != nil {
 		return nil, err
 	}
 	// Validation populates PageCount (a bare read leaves it 0).
-	if err := api.ValidateContext(ctx); err != nil {
+	if err := api.ValidateContext(t.Context(), ctx); err != nil {
 		return nil, err
 	}
 	return ctx, nil
@@ -316,7 +316,7 @@ func TestEncryptPDFRoundTrip(t *testing.T) {
 			EncryptUsingAES:  true,
 			EncryptKeyLength: 256,
 		}
-		if err := encryptPDF(input, output, settings); err != nil {
+		if err := encryptPDF(t.Context(), input, output, settings); err != nil {
 			t.Fatalf("encrypt: %v", err)
 		}
 		ctx, err := readEncrypted(t, output, "open1234", "")
@@ -338,7 +338,7 @@ func TestEncryptPDFRoundTrip(t *testing.T) {
 		input := buildProtectInput(t)
 		output := filepath.Join(t.TempDir(), "out.pdf")
 		settings := protectSettings{UserPW: "open1234", OwnerPW: "admin1234", Permissions: model.PermissionsPrint, EncryptUsingAES: true, EncryptKeyLength: 256}
-		if err := encryptPDF(input, output, settings); err != nil {
+		if err := encryptPDF(t.Context(), input, output, settings); err != nil {
 			t.Fatalf("encrypt: %v", err)
 		}
 		if _, err := readEncrypted(t, output, "wrongpass", ""); err == nil {
@@ -350,7 +350,7 @@ func TestEncryptPDFRoundTrip(t *testing.T) {
 		input := buildProtectInput(t)
 		output := filepath.Join(t.TempDir(), "out.pdf")
 		settings := protectSettings{UserPW: "", OwnerPW: "admin1234", Permissions: model.PermissionsNone, EncryptUsingAES: true, EncryptKeyLength: 256}
-		if err := encryptPDF(input, output, settings); err != nil {
+		if err := encryptPDF(t.Context(), input, output, settings); err != nil {
 			t.Fatalf("encrypt: %v", err)
 		}
 		ctx, err := readEncrypted(t, output, "", "")
@@ -378,7 +378,7 @@ func TestEncryptPDFRoundTrip(t *testing.T) {
 			input := buildProtectInput(t)
 			output := filepath.Join(t.TempDir(), tc.name+".pdf")
 			settings := protectSettings{UserPW: "open1234", OwnerPW: "open1234", Permissions: model.PermissionsPrint, EncryptUsingAES: tc.aes, EncryptKeyLength: 128}
-			if err := encryptPDF(input, output, settings); err != nil {
+			if err := encryptPDF(t.Context(), input, output, settings); err != nil {
 				t.Fatalf("%s encrypt: %v", tc.name, err)
 			}
 			if _, err := readEncrypted(t, output, "open1234", ""); err != nil {
@@ -407,20 +407,20 @@ func TestDecryptPDFOwnerPassword(t *testing.T) {
 	dir := t.TempDir()
 	locked := filepath.Join(dir, "locked.pdf")
 	settings := protectSettings{UserPW: "open1234", OwnerPW: "admin1234", Permissions: model.PermissionsPrint, EncryptUsingAES: true, EncryptKeyLength: 256}
-	if err := encryptPDF(input, locked, settings); err != nil {
+	if err := encryptPDF(t.Context(), input, locked, settings); err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
 
-	if err := decryptPDF(locked, filepath.Join(dir, "by-owner.pdf"), "admin1234"); err != nil {
+	if err := decryptPDF(t.Context(), locked, filepath.Join(dir, "by-owner.pdf"), "admin1234"); err != nil {
 		t.Errorf("owner password should unlock: %v", err)
 	}
-	if err := decryptPDF(locked, filepath.Join(dir, "by-user.pdf"), "open1234"); err != nil {
+	if err := decryptPDF(t.Context(), locked, filepath.Join(dir, "by-user.pdf"), "open1234"); err != nil {
 		t.Errorf("user password should unlock: %v", err)
 	}
-	if err := decryptPDF(locked, filepath.Join(dir, "by-wrong.pdf"), "wrongpass"); err == nil {
+	if err := decryptPDF(t.Context(), locked, filepath.Join(dir, "by-wrong.pdf"), "wrongpass"); err == nil {
 		t.Error("wrong password must not unlock")
 	}
-	if ctx, err := api.ReadContextFile(filepath.Join(dir, "by-owner.pdf")); err != nil || ctx.PageCount != 1 {
+	if ctx, err := api.ReadContextFile(t.Context(), filepath.Join(dir, "by-owner.pdf")); err != nil || ctx.PageCount != 1 {
 		t.Errorf("decrypted output should open with no password: %v", err)
 	}
 }

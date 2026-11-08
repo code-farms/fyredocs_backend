@@ -1,10 +1,13 @@
 package processing
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
@@ -53,20 +56,65 @@ func parseMetadataOptions(options map[string]interface{}) (map[string]string, er
 	return props, nil
 }
 
-// setPDFMetadata writes the requested fields into the PDF Info dictionary via
-// pdfcpu's properties API. pdfcpu v0.9.1 has no dedicated SetInfo call, but
-// PropertiesAdd writes the given keys verbatim into the Info dict and the
-// writer only regenerates Producer/CreationDate/ModDate — so the standard
-// Title/Author/Subject/Keywords entries survive intact. AddKeywordsFile is
-// deliberately NOT used: it appends to existing keywords, which is the wrong
-// semantic for "set the metadata".
-func setPDFMetadata(inputPath, outputPath string, options map[string]interface{}) error {
+// setPDFMetadata sets the requested Info dictionary fields, replacing any
+// existing values, in one read and one write.
+//
+// pdfcpu v0.16 reserves "Keywords" in its properties API (validate.DocumentProperty)
+// and keeps keywords as a set that the writer rebuilds into the Info entry, so
+// writing Keywords as a property is rejected. Keywords therefore go through the
+// keywords API, but its Add call alone would merge with keywords already in the
+// file; removing them all first gives "set" semantics. The user's keywords string
+// is stored as one keyword so it lands in the Info entry verbatim, as before.
+// Title/Author/Subject still go through PropertiesAdd. The api.*File wrappers are
+// not used because each would read and rewrite the whole file again.
+func setPDFMetadata(ctx context.Context, inputPath, outputPath string, options map[string]interface{}) (err error) {
 	props, err := parseMetadataOptions(options)
 	if err != nil {
 		return err
 	}
-	if err := api.AddPropertiesFile(inputPath, outputPath, props, model.NewDefaultConfiguration()); err != nil {
-		return fmt.Errorf("set pdf metadata: %w", err)
+	keywords, setKeywords := props["Keywords"]
+	delete(props, "Keywords")
+
+	in, err := os.Open(inputPath)
+	if err != nil {
+		return fmt.Errorf("set pdf metadata: open input: %w", err)
+	}
+	defer in.Close()
+
+	conf := model.NewDefaultConfiguration()
+	conf.Cmd = model.ADDPROPERTIES
+	pdfCtx, err := api.ReadValidateAndOptimize(ctx, in, conf, nil)
+	if err != nil {
+		return fmt.Errorf("set pdf metadata: read: %w", err)
+	}
+	if len(props) > 0 {
+		if err := pdfcpu.PropertiesAdd(ctx, pdfCtx, props); err != nil {
+			return fmt.Errorf("set pdf metadata: properties: %w", err)
+		}
+	}
+	if setKeywords {
+		if _, err := pdfcpu.KeywordsRemove(ctx, pdfCtx, nil); err != nil {
+			return fmt.Errorf("set pdf metadata: clear keywords: %w", err)
+		}
+		if err := pdfcpu.KeywordsAdd(ctx, pdfCtx, []string{keywords}); err != nil {
+			return fmt.Errorf("set pdf metadata: keywords: %w", err)
+		}
+	}
+
+	out, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("set pdf metadata: create output: %w", err)
+	}
+	defer func() {
+		if cerr := out.Close(); err == nil && cerr != nil {
+			err = fmt.Errorf("set pdf metadata: close output: %w", cerr)
+		}
+		if err != nil {
+			_ = os.Remove(outputPath)
+		}
+	}()
+	if err := api.WriteContext(ctx, pdfCtx, out); err != nil {
+		return fmt.Errorf("set pdf metadata: write: %w", err)
 	}
 	return nil
 }

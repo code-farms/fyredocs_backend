@@ -1,6 +1,7 @@
 package processing
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -180,7 +181,7 @@ func parseProtectOptions(options map[string]interface{}) (protectSettings, error
 // explicitly so the result never depends on a host config.yml (see the
 // DisableConfigDir note in main.go). Passwords are user secrets and must
 // never be logged or echoed into an error message.
-func encryptPDF(inputPath string, outputPath string, s protectSettings) error {
+func encryptPDF(ctx context.Context, inputPath string, outputPath string, s protectSettings) error {
 	slog.Info("encrypting PDF", "input", inputPath, "aes", s.EncryptUsingAES, "keyLength", s.EncryptKeyLength)
 	conf := model.NewDefaultConfiguration()
 	conf.UserPW = s.UserPW
@@ -188,13 +189,13 @@ func encryptPDF(inputPath string, outputPath string, s protectSettings) error {
 	conf.Permissions = s.Permissions
 	conf.EncryptUsingAES = s.EncryptUsingAES
 	conf.EncryptKeyLength = s.EncryptKeyLength
-	return api.EncryptFile(inputPath, outputPath, conf)
+	return api.EncryptFile(ctx, inputPath, outputPath, conf)
 }
 
 // decryptPDF removes password protection, given the correct password. A wrong
 // password surfaces as a tool error; the message must not distinguish "wrong
 // password" from "not encrypted" in a way that helps guessing.
-func decryptPDF(inputPath string, outputPath string, password string) error {
+func decryptPDF(ctx context.Context, inputPath string, outputPath string, password string) error {
 	slog.Info("decrypting PDF", "input", inputPath)
 	conf := model.NewDefaultConfiguration()
 	// Both fields carry the one supplied secret: pdfcpu validates the owner
@@ -203,12 +204,12 @@ func decryptPDF(inputPath string, outputPath string, password string) error {
 	// unlocked BY its owner — the exact split protect-pdf now produces.
 	conf.UserPW = password
 	conf.OwnerPW = password
-	return api.DecryptFile(inputPath, outputPath, conf)
+	return api.DecryptFile(ctx, inputPath, outputPath, conf)
 }
 
 // watermarkPDF dispatches to the text or image watermark implementation based on
 // the supplied options.
-func watermarkPDF(inputPath string, outputPath string, options map[string]interface{}) error {
+func watermarkPDF(ctx context.Context, inputPath string, outputPath string, options map[string]interface{}) error {
 	slog.Info("adding watermark to PDF", "input", inputPath)
 
 	wmType, _ := optionString(options, "type")
@@ -244,15 +245,15 @@ func watermarkPDF(inputPath string, outputPath string, options map[string]interf
 	}
 
 	if wmType == "image" {
-		return watermarkPDFImage(inputPath, outputPath, options, position, opacity, rotation)
+		return watermarkPDFImage(ctx, inputPath, outputPath, options, position, opacity, rotation)
 	}
-	return watermarkPDFText(inputPath, outputPath, options, position, opacity, rotation)
+	return watermarkPDFText(ctx, inputPath, outputPath, options, position, opacity, rotation)
 }
 
 // watermarkPDFText stamps rendered text across pages. Option values reach a
 // pdfcpu description string, so they are constrained rather than interpolated
 // freely — see hexToRGBFloat for the colour case.
-func watermarkPDFText(inputPath, outputPath string, options map[string]interface{}, position string, opacity float64, rotation int) error {
+func watermarkPDFText(ctx context.Context, inputPath, outputPath string, options map[string]interface{}, position string, opacity float64, rotation int) error {
 	text, _ := optionString(options, "text")
 	if text == "" {
 		text = "CONFIDENTIAL"
@@ -276,12 +277,12 @@ func watermarkPDFText(inputPath, outputPath string, options map[string]interface
 	desc := fmt.Sprintf("font:Helvetica, points:%d, color:%s %s %s, opacity:%.2f, rotation:%d",
 		fontSize, r, g, b, opacity, rotation)
 
-	wm, err := pdfcpu.ParseTextWatermarkDetails(text, desc, false, types.POINTS)
+	wm, err := pdfcpu.ParseTextWatermarkDetails(ctx, text, desc, false, types.POINTS, nil)
 	if err != nil {
 		return fmt.Errorf("failed to parse text watermark: %w", err)
 	}
 
-	return api.AddWatermarksFile(inputPath, outputPath, nil, wm, nil)
+	return api.AddWatermarksFile(ctx, inputPath, outputPath, nil, wm, nil)
 }
 
 // watermarkPDFImage stamps a user-supplied image across pages. The image is
@@ -314,7 +315,7 @@ func decodeDataURLImage(dataURL, dir, baseName string, allowWebp bool) (string, 
 	return path, nil
 }
 
-func watermarkPDFImage(inputPath, outputPath string, options map[string]interface{}, position string, opacity float64, rotation int) error {
+func watermarkPDFImage(ctx context.Context, inputPath, outputPath string, options map[string]interface{}, position string, opacity float64, rotation int) error {
 	imageData, ok := optionString(options, "imageData")
 	if !ok || imageData == "" {
 		return fmt.Errorf("missing watermark image data")
@@ -345,12 +346,12 @@ func watermarkPDFImage(inputPath, outputPath string, options map[string]interfac
 
 	desc := fmt.Sprintf("scalefactor:%.2f, opacity:%.2f, rot:%d", scale, opacity, rotation)
 
-	wm, err := pdfcpu.ParseImageWatermarkDetails(imgPath, desc, false, types.POINTS)
+	wm, err := pdfcpu.ParseImageWatermarkDetails(ctx, imgPath, desc, false, types.POINTS, nil)
 	if err != nil {
 		return fmt.Errorf("failed to parse image watermark: %w", err)
 	}
 
-	return api.AddWatermarksFile(inputPath, outputPath, nil, wm, nil)
+	return api.AddWatermarksFile(ctx, inputPath, outputPath, nil, wm, nil)
 }
 
 // hexToRGBFloat converts a #RRGGBB colour to the 0..1 float triple pdfcpu
@@ -378,7 +379,7 @@ func hexToRGBFloat(hex string) (string, string, string) {
 
 // addPageNumbers stamps page numbers using the same description-string mechanism
 // as the watermark tools, with position and format taken from options.
-func addPageNumbers(inputPath string, outputPath string, options map[string]interface{}) error {
+func addPageNumbers(ctx context.Context, inputPath string, outputPath string, options map[string]interface{}) error {
 	slog.Info("adding page numbers to PDF", "input", inputPath)
 
 	position := "bc"
@@ -425,11 +426,11 @@ func addPageNumbers(inputPath string, outputPath string, options map[string]inte
 		pdfcpuPos = "bc"
 	}
 
-	ctx, err := api.ReadContextFile(inputPath)
+	pdfCtx, err := api.ReadContextFile(ctx, inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to read PDF: %w", err)
 	}
-	pageCount := ctx.PageCount
+	pageCount := pdfCtx.PageCount
 
 	if err := copyFile(inputPath, outputPath); err != nil {
 		return fmt.Errorf("failed to copy input file: %w", err)
@@ -445,13 +446,13 @@ func addPageNumbers(inputPath string, outputPath string, options map[string]inte
 
 		desc := fmt.Sprintf("font:Helvetica, points:%d, pos:%s, scale:1 abs, rot:0, color:0 0 0, opacity:1", fontSize, pdfcpuPos)
 
-		wm, err := pdfcpu.ParseTextWatermarkDetails(text, desc, true, types.POINTS)
+		wm, err := pdfcpu.ParseTextWatermarkDetails(ctx, text, desc, true, types.POINTS, nil)
 		if err != nil {
 			return fmt.Errorf("failed to parse page number stamp for page %d: %w", i, err)
 		}
 
 		pageSelection := []string{strconv.Itoa(i)}
-		if err := api.AddWatermarksFile(outputPath, "", pageSelection, wm, nil); err != nil {
+		if err := api.AddWatermarksFile(ctx, outputPath, "", pageSelection, wm, nil); err != nil {
 			return fmt.Errorf("failed to add page number to page %d: %w", i, err)
 		}
 	}
@@ -472,7 +473,7 @@ func signatureWatermarkDesc(pdfcpuPos string) string {
 // This is a visual signature only — it does not create a cryptographic PDF
 // signature, so it proves nothing about authenticity. The distinction matters if
 // anyone reads the tool name as offering more than it does.
-func signPDF(inputPath string, outputPath string, options map[string]interface{}) error {
+func signPDF(ctx context.Context, inputPath string, outputPath string, options map[string]interface{}) error {
 	slog.Info("signing PDF", "input", inputPath)
 
 	position := "br"
@@ -510,14 +511,14 @@ func signPDF(inputPath string, outputPath string, options map[string]interface{}
 		return fmt.Errorf("signature image: %w", err)
 	}
 
-	ctx, err := api.ReadContextFile(inputPath)
+	pdfCtx, err := api.ReadContextFile(ctx, inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to read PDF: %w", err)
 	}
 
 	targetPage := page
 	if targetPage <= 0 {
-		targetPage = ctx.PageCount
+		targetPage = pdfCtx.PageCount
 	}
 
 	posMap := map[string]string{
@@ -532,13 +533,13 @@ func signPDF(inputPath string, outputPath string, options map[string]interface{}
 
 	desc := signatureWatermarkDesc(pdfcpuPos)
 
-	wm, err := pdfcpu.ParseImageWatermarkDetails(sigPath, desc, true, types.POINTS)
+	wm, err := pdfcpu.ParseImageWatermarkDetails(ctx, sigPath, desc, true, types.POINTS, nil)
 	if err != nil {
 		return fmt.Errorf("failed to parse signature watermark: %w", err)
 	}
 
 	pageSelection := []string{strconv.Itoa(targetPage)}
-	if err := api.AddWatermarksFile(inputPath, outputPath, pageSelection, wm, nil); err != nil {
+	if err := api.AddWatermarksFile(ctx, inputPath, outputPath, pageSelection, wm, nil); err != nil {
 		return fmt.Errorf("failed to add signature: %w", err)
 	}
 
@@ -548,7 +549,7 @@ func signPDF(inputPath string, outputPath string, options map[string]interface{}
 
 // editPDF applies a combined edit description (annotations and stamps) in one
 // pass, so a multi-part edit produces a single output rather than chaining tools.
-func editPDF(inputPath string, outputPath string, options map[string]interface{}) error {
+func editPDF(ctx context.Context, inputPath string, outputPath string, options map[string]interface{}) error {
 	slog.Info("editing PDF with annotations", "input", inputPath)
 
 	annotationsRaw, ok := options["annotations"]
@@ -603,13 +604,13 @@ func editPDF(inputPath string, outputPath string, options map[string]interface{}
 
 		desc := fmt.Sprintf("font:Helvetica, points:%d, pos:%s, scale:1 abs, rot:0, color:0 0 0, opacity:1", fontSize, pdfcpuPos)
 
-		wm, err := pdfcpu.ParseTextWatermarkDetails(ann.Content, desc, true, types.POINTS)
+		wm, err := pdfcpu.ParseTextWatermarkDetails(ctx, ann.Content, desc, true, types.POINTS, nil)
 		if err != nil {
 			return fmt.Errorf("failed to parse annotation %d: %w", i, err)
 		}
 
 		pageSelection := []string{strconv.Itoa(ann.Page)}
-		if err := api.AddWatermarksFile(outputPath, "", pageSelection, wm, nil); err != nil {
+		if err := api.AddWatermarksFile(ctx, outputPath, "", pageSelection, wm, nil); err != nil {
 			return fmt.Errorf("failed to add annotation %d: %w", i, err)
 		}
 	}

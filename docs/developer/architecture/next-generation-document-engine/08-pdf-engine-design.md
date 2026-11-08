@@ -29,7 +29,7 @@ in all four workers, audit §go.mod).
 | OCR | `pdftoppm -png -r DPI` all pages up front (`:531`), tesseract per page in errgroup (`:579`), per-page failure → `api.ImportImagesFile` (`:588`), merge `api.MergeCreateFile` (`:609`) | same file |
 | Raster / text | `pdfinfo` (`:126`), `pdftoppm` (`:181`), `pdftohtml -s -noframes` (`:503`), `pdftotext -layout` (`:520`) | `convert-from-pdf/processing/processing_free.go` |
 | PDF/A | `gs -dPDFA=2 … -sPDFACompatibilityPolicy=1` with **no `PDFA_def.ps`, no ICC OutputIntent, no `-sColorConversionStrategy`, no `-dSAFER`**; `CombinedOutput` | `convert-from-pdf/processing/processing_free.go:212-221`; brief 01 finding 3 |
-| Context | 10-min job ctx passed to `exec.CommandContext`; pdfcpu API has no ctx parameter (every `pkg/api` signature takes `*model.Configuration`, none takes `context.Context`) | audit §Worker; `pdfcpu@v0.9.1/pkg/api/*.go` |
+| Context | **Since 2026-11-08 (pdfcpu v0.16.4) every `pkg/api` call takes the job ctx and pdfcpu checks it in its parse and page loops.** As audited: 10-min job ctx passed to `exec.CommandContext`; pdfcpu API has no ctx parameter (every `pkg/api` signature takes `*model.Configuration`, none takes `context.Context`) | audit §Worker; `pdfcpu@v0.9.1/pkg/api/*.go` |
 | Config dir | `api.DisableConfigDir()` only in `organize-pdf/main.go:57` | brief 01 finding 4 |
 | Process control | No Setpgid/Pdeathsig/WaitDelay/cmd.Cancel anywhere | audit §exec |
 | Image decode | Pure-Go `organize-pdf/internal/imaging` with `DecodeConfig` guard and 50 MP cap | `internal/imaging/decode.go:17,48-60` (audit) |

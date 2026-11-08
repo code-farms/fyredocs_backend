@@ -208,7 +208,7 @@ func officeToOffice(ctx context.Context, inputPath string, outputPath string, ou
 // imageToPDF wraps one or more images into a PDF, page per image. Does not go
 // through LibreOffice — the images are placed directly, which is both faster and
 // avoids LibreOffice's own rescaling.
-func imageToPDF(inputPaths []string, outputPath string) error {
+func imageToPDF(ctx context.Context, inputPaths []string, outputPath string) error {
 	slog.Info("converting images to PDF", "count", len(inputPaths))
-	return api.ImportImagesFile(inputPaths, outputPath, nil, nil)
+	return api.ImportImagesFile(ctx, inputPaths, outputPath, nil, nil)
 }

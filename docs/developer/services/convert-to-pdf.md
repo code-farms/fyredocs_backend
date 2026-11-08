@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Convert To PDF service converts Office (Word/Excel/PowerPoint), HTML, and image files into PDF. It runs as a NATS JetStream worker alongside a small HTTP server for health and metrics. Office and HTML conversions go through a persistent `unoserver` LibreOffice daemon (with a direct `libreoffice --headless` fallback). Image conversions use `pdfcpu`.
+The Convert To PDF service converts Office (Word/Excel/PowerPoint), HTML, and image files into PDF. It runs as a NATS JetStream worker alongside a small HTTP server for health and metrics. Office and HTML conversions go through a persistent `unoserver` LibreOffice daemon (with a direct `libreoffice --headless` fallback). Image conversions use `pdfcpu` (v0.16.4).
 
 **Port**: 8083 (internal — not exposed via the API gateway)
 **Type**: NATS Worker + HTTP health/metrics server
@@ -346,6 +346,13 @@ Example — logged (raw): `[TIMEOUT] context deadline exceeded`; shown to the us
 ### Retry / DLQ
 
 NATS handles retries via `MaxDeliver=4` (1 initial + 3 retries) with exponential backoff `10s / 30s / 2m`. Permanent failures (invalid input, unsupported tool, missing input file) are acked immediately to prevent infinite retry. Object-storage download/upload failures and scratch-dir creation failures are marked recoverable and NAKed for redelivery. When the delivery count hits 4, the failed payload is published to `jobs.dlq.convert-to-pdf` and the original message is acked.
+
+**Job timeout vs shutdown** (`processErrForRetry` in `internal/worker/worker.go`, same rule in all four
+PDF workers): every job runs under a 10-minute context that both `procexec` children and pdfcpu (v0.16+,
+which checks the context inside its parse and page loops) honour. If that deadline expires the job fails
+permanently with the timeout code. Retrying would hit the same limit, and `context.DeadlineExceeded`
+would otherwise look like a retryable network timeout. If instead the worker itself is shutting down and
+the drain timeout cancels the job, it is marked recoverable and redelivered to another replica.
 
 ## Deployment
 

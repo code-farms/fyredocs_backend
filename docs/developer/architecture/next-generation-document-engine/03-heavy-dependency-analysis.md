@@ -136,7 +136,7 @@ the daemon protocol — a Go UNO client is not on the roadmap, so Python remains
 | Attribute | Finding |
 |---|---|
 | Use | every organize-pdf tool, image-to-pdf, OCR merge/fallback, page counts in convert-from-pdf (`:173,291`) |
-| Versions | pinned v0.9.1 in all four `go.mod`; upstream v0.16.4 (2026-10-27), v0.16.3 (2026-10-19), v0.16.2 (2026-10-11, "requires Go 1.26 or later") ([releases](https://github.com/pdfcpu/pdfcpu/releases)) — seven minor versions behind; upgrade must be gated by the organize-pdf test suite and fuzz targets (`organize-pdf/processing/fuzz_test.go`) |
+| Versions | **upgraded to v0.16.4 in all four `go.mod` on 2026-11-08** (see `20-…` status). As audited: pinned v0.9.1 in all four `go.mod`; upstream v0.16.4 (2026-10-27), v0.16.3 (2026-10-19), v0.16.2 (2026-10-11, "requires Go 1.26 or later") ([releases](https://github.com/pdfcpu/pdfcpu/releases)) — seven minor versions behind; upgrade must be gated by the organize-pdf test suite and fuzz targets (`organize-pdf/processing/fuzz_test.go`) |
 | Licence | Apache-2.0 |
 | Memory | whole cross-reference table and touched objects in memory per `ReadContextFile`; per-page rewrites for stamps (`processing_edit.go:454,612`); no ctx awareness; to be measured on the 40 MB fixture (`go test -bench` in organize-pdf or step 6) |
 | Security | pure Go, memory-safe; config-dir side effect unless `DisableConfigDir()` (`organize-pdf/main.go:57` only); fuzzed in-repo |

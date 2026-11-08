@@ -2,6 +2,7 @@ package processing
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,25 +17,25 @@ import (
 
 // mergePDFs concatenates inputs in the order given. Input order is the user's
 // chosen order from the UI, so it must be preserved exactly rather than sorted.
-func mergePDFs(inputPaths []string, outputPath string) error {
+func mergePDFs(ctx context.Context, inputPaths []string, outputPath string) error {
 	if len(inputPaths) < 2 {
 		return fmt.Errorf("merge requires at least 2 PDF files")
 	}
 	slog.Info("merging PDFs", "count", len(inputPaths), "output", outputPath)
-	return api.MergeCreateFile(inputPaths, outputPath, false, nil)
+	return api.MergeCreateFile(ctx, inputPaths, outputPath, false, nil)
 }
 
 // splitPDF divides a PDF into multiple files and returns them as a single ZIP,
 // because the job model has exactly one output object per job.
-func splitPDF(inputPath string, outputPath string, mode string, rangeValue string) error {
+func splitPDF(ctx context.Context, inputPath string, outputPath string, mode string, rangeValue string) error {
 	slog.Info("splitting PDF", "input", inputPath, "mode", mode, "range", rangeValue)
 
-	ctx, err := api.ReadContextFile(inputPath)
+	pdfCtx, err := api.ReadContextFile(ctx, inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to read PDF: %w", err)
 	}
 
-	pageCount := ctx.PageCount
+	pageCount := pdfCtx.PageCount
 	slog.Info("PDF page count", "pages", pageCount)
 
 	tempDir, err := os.MkdirTemp("", "pdf-split-*")
@@ -56,7 +57,7 @@ func splitPDF(inputPath string, outputPath string, mode string, rangeValue strin
 			for j, p := range group {
 				pageStrings[j] = fmt.Sprintf("%d", p)
 			}
-			if err := api.CollectFile(inputPath, outFile, pageStrings, nil); err != nil {
+			if err := api.CollectFile(ctx, inputPath, outFile, pageStrings, nil); err != nil {
 				return fmt.Errorf("failed to collect pages %v: %w", group, err)
 			}
 		}
@@ -67,7 +68,7 @@ func splitPDF(inputPath string, outputPath string, mode string, rangeValue strin
 		if err != nil || span < 1 {
 			return fmt.Errorf("invalid span value: %s", rangeValue)
 		}
-		if err := api.SplitFile(inputPath, tempDir, span, nil); err != nil {
+		if err := api.SplitFile(ctx, inputPath, tempDir, span, nil); err != nil {
 			return fmt.Errorf("failed to split PDF by span %d: %w", span, err)
 		}
 
@@ -87,7 +88,7 @@ func splitPDF(inputPath string, outputPath string, mode string, rangeValue strin
 			for j, p := range group {
 				pageStrings[j] = fmt.Sprintf("%d", p)
 			}
-			if err := api.CollectFile(inputPath, outFile, pageStrings, nil); err != nil {
+			if err := api.CollectFile(ctx, inputPath, outFile, pageStrings, nil); err != nil {
 				return fmt.Errorf("failed to collect part %d: %w", i+1, err)
 			}
 		}
@@ -102,7 +103,7 @@ func splitPDF(inputPath string, outputPath string, mode string, rangeValue strin
 		for i, p := range pages {
 			pageStrings[i] = fmt.Sprintf("%d", p)
 		}
-		if err := api.ExtractPagesFile(inputPath, tempDir, pageStrings, nil); err != nil {
+		if err := api.ExtractPagesFile(ctx, inputPath, tempDir, pageStrings, nil); err != nil {
 			return fmt.Errorf("failed to extract pages: %w", err)
 		}
 	}
@@ -112,15 +113,15 @@ func splitPDF(inputPath string, outputPath string, mode string, rangeValue strin
 
 // removePages deletes the pages named by the caller's range expression. Page
 // numbers are 1-based throughout the PDF tools, matching what the user sees.
-func removePages(inputPath string, outputPath string, pages string) error {
+func removePages(ctx context.Context, inputPath string, outputPath string, pages string) error {
 	slog.Info("removing pages from PDF", "pages", pages, "input", inputPath)
 
-	ctx, err := api.ReadContextFile(inputPath)
+	pdfCtx, err := api.ReadContextFile(ctx, inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to read PDF: %w", err)
 	}
 
-	pageCount := ctx.PageCount
+	pageCount := pdfCtx.PageCount
 	pagesToRemove := parsePageRange(pages, pageCount)
 	if len(pagesToRemove) == 0 {
 		return fmt.Errorf("invalid pages specification: %s", pages)
@@ -131,20 +132,20 @@ func removePages(inputPath string, outputPath string, pages string) error {
 		pageStrings[i] = fmt.Sprintf("%d", p)
 	}
 
-	return api.RemovePagesFile(inputPath, outputPath, pageStrings, nil)
+	return api.RemovePagesFile(ctx, inputPath, outputPath, pageStrings, nil)
 }
 
 // extractPages keeps only the pages named by the range expression — the
 // complement of removePages.
-func extractPages(inputPath string, outputPath string, pages string) error {
+func extractPages(ctx context.Context, inputPath string, outputPath string, pages string) error {
 	slog.Info("extracting pages from PDF", "pages", pages, "input", inputPath)
 
-	ctx, err := api.ReadContextFile(inputPath)
+	pdfCtx, err := api.ReadContextFile(ctx, inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to read PDF: %w", err)
 	}
 
-	pageCount := ctx.PageCount
+	pageCount := pdfCtx.PageCount
 	pagesToExtract := parsePageRange(pages, pageCount)
 	if len(pagesToExtract) == 0 {
 		return fmt.Errorf("invalid pages specification: %s", pages)
@@ -155,21 +156,21 @@ func extractPages(inputPath string, outputPath string, pages string) error {
 		pageStrings[i] = fmt.Sprintf("%d", p)
 	}
 
-	return api.CollectFile(inputPath, outputPath, pageStrings, nil)
+	return api.CollectFile(ctx, inputPath, outputPath, pageStrings, nil)
 }
 
 // organizePDF reorders pages into an explicitly supplied sequence, which may
 // repeat or omit pages. This is the general case that rotate/remove/extract are
 // specializations of.
-func organizePDF(inputPath string, outputPath string, order string) error {
+func organizePDF(ctx context.Context, inputPath string, outputPath string, order string) error {
 	slog.Info("organizing PDF", "input", inputPath, "order", order)
 
-	ctx, err := api.ReadContextFile(inputPath)
+	pdfCtx, err := api.ReadContextFile(ctx, inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to read PDF: %w", err)
 	}
 
-	pageCount := ctx.PageCount
+	pageCount := pdfCtx.PageCount
 	pageOrder := parsePageOrder(order, pageCount)
 	if len(pageOrder) == 0 {
 		return fmt.Errorf("invalid page order: %s", order)
@@ -180,12 +181,12 @@ func organizePDF(inputPath string, outputPath string, order string) error {
 		pageStrings[i] = fmt.Sprintf("%d", p)
 	}
 
-	return api.CollectFile(inputPath, outputPath, pageStrings, nil)
+	return api.CollectFile(ctx, inputPath, outputPath, pageStrings, nil)
 }
 
 // rotatePDF rotates pages by a multiple of 90 degrees. Rotation is recorded as
 // page metadata rather than by re-rendering content, so it is lossless and fast.
-func rotatePDF(inputPath string, outputPath string, rotation int, applyTo string) error {
+func rotatePDF(ctx context.Context, inputPath string, outputPath string, rotation int, applyTo string) error {
 	slog.Info("rotating PDF", "input", inputPath, "rotation", rotation, "applyTo", applyTo)
 
 	var pageSelection []string
@@ -198,7 +199,7 @@ func rotatePDF(inputPath string, outputPath string, rotation int, applyTo string
 		pageSelection = nil
 	}
 
-	return api.RotateFile(inputPath, outputPath, rotation, pageSelection, nil)
+	return api.RotateFile(ctx, inputPath, outputPath, rotation, pageSelection, nil)
 }
 
 // parsePageRange expands a page expression like "1,3,5-8" into 1-based page

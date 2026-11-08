@@ -587,3 +587,40 @@ func TestBuildStatusEventCarriesOwner(t *testing.T) {
 		t.Errorf("unexpected guest event: %+v", guest)
 	}
 }
+
+// TestProcessErrForRetry pins how a processing error is classified by the
+// context it ran under (see processErrForRetry).
+func TestProcessErrForRetry(t *testing.T) {
+	procErr := fmt.Errorf("pdfcpu: %w", context.DeadlineExceeded)
+
+	t.Run("nil stays nil", func(t *testing.T) {
+		if got := processErrForRetry(context.Background(), context.Background(), nil); got != nil {
+			t.Errorf("got %v, want nil", got)
+		}
+	})
+	t.Run("job deadline is permanent and reported as a timeout", func(t *testing.T) {
+		jobCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		got := processErrForRetry(context.Background(), jobCtx, procErr)
+		if isRecoverable(got) {
+			t.Errorf("job deadline must not be retried: %v", got)
+		}
+		if code := classifyError(got); code != ErrCodeTimeout {
+			t.Errorf("classifyError = %q, want %q", code, ErrCodeTimeout)
+		}
+	})
+	t.Run("worker shutdown is retried", func(t *testing.T) {
+		workerCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		got := processErrForRetry(workerCtx, workerCtx, fmt.Errorf("pdfcpu: %w", context.Canceled))
+		if !isRecoverable(got) {
+			t.Errorf("a job cancelled by shutdown must be redelivered: %v", got)
+		}
+	})
+	t.Run("other errors unchanged", func(t *testing.T) {
+		plain := errors.New("malformed PDF")
+		if got := processErrForRetry(context.Background(), context.Background(), plain); got != plain {
+			t.Errorf("got %v, want the original error", got)
+		}
+	})
+}

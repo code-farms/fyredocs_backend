@@ -32,6 +32,16 @@
 > renderer stays poppler either way. pdfcpu would save milliseconds per job and could reject PDFs that
 > poppler opens, failing jobs that work today.
 >
+> **M1.3 pdfcpu part done 2026-11-08.** v0.9.1 → v0.16.4 in all four workers. Every pdfcpu call now gets
+> the job context, and pdfcpu checks it inside its parse and page loops, so a cancelled or timed-out job
+> stops inside pdfcpu. Each worker's `processErrForRetry` makes a 10-minute timeout permanent (it used to look
+> like a retryable network timeout) and a shutdown cancel recoverable, as the drain log already promised.
+> pdf-metadata was rewritten because v0.16 rejects `Keywords` as a property. A v0.9.1 vs v0.16.4 run of every
+> pdfcpu operation the workers use on the k6 fixtures gave identical page counts, sizes and validity
+> (47 of 53 outputs), except protect → unlock: v0.9.1 wrote a wrong stream length, so the decrypted page
+> content carried trailing file structure and failed validation; v0.16.4 returns the original bytes. Parse errors
+> were already permanent (unknown errors are never retried), so `isRecoverable` itself needed no change.
+>
 > **Q12 done 2026-11-08, scope changed by decision.** Instead of a 150 MB office-only cap, every job is
 > capped at what the PDF workers can hold: total input × 3 must fit the 900 MB tmpfs, so 300 MB per job.
 > Pro went from 500 to 300 MB per file. All plan limits now live in auth-service's `subscription_plans`

@@ -441,7 +441,7 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 
 	result, procErr := cfg.Process(jobCtx, jobID, payload.ToolType, localInputs, options, outDir)
 	if procErr != nil {
-		handleFailure(ctx, cfg, msg, payload, procErr, logger)
+		handleFailure(ctx, cfg, msg, payload, processErrForRetry(ctx, jobCtx, procErr), logger)
 		return
 	}
 
@@ -739,6 +739,37 @@ func isRecoverable(err error) bool {
 		return true
 	}
 	return false
+}
+
+// processErrForRetry classifies a processing error by the context it ran under,
+// before isRecoverable sees it. pdfcpu (v0.16+) and every procexec child honour
+// the job context, so a context error here says why processing stopped:
+//
+//   - The worker's own context was cancelled (shutdown drain timed out): the job
+//     did nothing wrong, so it is marked recoverable and redelivered, as
+//     drainInFlight promises. Without this a cancelled job was dead-lettered.
+//   - Only the 10-minute job deadline expired: the same input will time out
+//     again, so the error is made permanent. context.DeadlineExceeded implements
+//     Timeout() == true, which isRecoverable would otherwise retry three more
+//     times at 10 minutes each. The chain is broken with %v on purpose; the
+//     message keeps "deadline exceeded" so classifyError still reports a timeout.
+//
+// Any other error is returned unchanged. Storage calls are not routed through
+// here, so their network timeouts stay retryable.
+//
+// NOTE: duplicated by design in convert-from-pdf, convert-to-pdf, organize-pdf
+// and optimize-pdf (*/internal/worker/worker.go, CLAUDE.md §1); keep the four in step.
+func processErrForRetry(workerCtx, jobCtx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if workerCtx.Err() != nil {
+		return markRecoverable(fmt.Errorf("worker shutting down: %w", err))
+	}
+	if errors.Is(jobCtx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("job deadline exceeded: %v", err)
+	}
+	return err
 }
 
 // statusToEventType maps a DB status string to a NATS event type.

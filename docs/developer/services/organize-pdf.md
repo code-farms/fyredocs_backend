@@ -8,7 +8,7 @@ The Organize-PDF service provides comprehensive PDF manipulation capabilities us
 
 **Port:** 8084
 **Bus:** NATS JetStream — pulls from `jobs.dispatch.organize-pdf`, publishes events to `jobs.events.<jobId>.*`, DLQ on `jobs.dlq.organize-pdf`
-**Engine:** [pdfcpu](https://github.com/pdfcpu/pdfcpu) (pure Go, no LibreOffice in this container)
+**Engine:** [pdfcpu](https://github.com/pdfcpu/pdfcpu) v0.16.4 (pure Go, no LibreOffice in this container). Every pdfcpu call receives the job context, so a cancelled or timed-out job stops inside pdfcpu instead of running on.
 **OCR (optional):** Tesseract — used by `scan-to-pdf` when `options.ocr = true`; language packs `eng` and `hin` are installed in the runtime image
 **Internal HTTP API:** `POST /internal/v1/detect-edges` (document edge detection for the scanner UI, relayed by job-service)
 
@@ -285,7 +285,10 @@ Adds page-number stamps to every page.
 
 ### 14. Set PDF Metadata
 
-Sets document metadata (the PDF Info dictionary) via pdfcpu `AddPropertiesFile`.
+Sets document metadata (the PDF Info dictionary), replacing existing values, in one pdfcpu read and
+write: Title/Author/Subject through `pdfcpu.PropertiesAdd`, keywords through the keywords API. pdfcpu
+v0.16 reserves `Keywords` in its properties API, and its keyword add merges with existing keywords, so
+the worker removes all keywords first and then adds the user's string as one keyword (stored verbatim).
 
 **Tool:** `pdf-metadata`
 **Input:** Single PDF file
@@ -653,9 +656,16 @@ curl -O http://localhost/api/organize-pdf/merge-pdf/$JOB_ID/download \
 ## Error Handling
 
 ### Retry Logic
-- Failed jobs automatically retry up to MAX_RETRIES times
-- Recoverable errors (network issues, timeouts) trigger retries
+- Failed jobs retry up to 3 times (`MaxDeliver=4`) with backoff
+- Recoverable errors (object-storage network issues, a job cancelled by worker shutdown) trigger retries
 - Non-recoverable errors (invalid input) fail immediately
+
+**Job timeout vs shutdown** (`processErrForRetry` in `internal/worker/worker.go`, same rule in all four
+PDF workers): every job runs under a 10-minute context that both `procexec` children and pdfcpu (v0.16+,
+which checks the context inside its parse and page loops) honour. If that deadline expires the job fails
+permanently with the timeout code. Retrying would hit the same limit, and `context.DeadlineExceeded`
+would otherwise look like a retryable network timeout. If instead the worker itself is shutting down and
+the drain timeout cancels the job, it is marked recoverable and redelivered to another replica.
 
 ### Structured Error Codes
 
@@ -805,7 +815,7 @@ sequenceDiagram
     else add-page-numbers
         W->>PC: pdfcpu add page numbers (per template)
     else pdf-metadata
-        W->>PC: pdfcpu AddPropertiesFile (write Info dictionary)
+        W->>PC: pdfcpu read · PropertiesAdd · KeywordsRemove+KeywordsAdd · write (Info dictionary)
     end
 
     alt Processing succeeds

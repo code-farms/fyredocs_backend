@@ -335,7 +335,7 @@ The baseline that later stages are measured against must be produced, not estima
 | D8 | tmpfs budget checked after upload completed | `tmpfs.go:42-48`; `worker.go:516-519` | > ≈300 MiB inputs fail late with a confusing message |
 | D9 | OCR renders every page to PNG before any tesseract run | `optimize-pdf/processing/processing_free.go:531-551` | tmpfs peak ∝ pages × DPI²; 300-page scan at 300 DPI can exhaust the 1 GiB tmpfs |
 | D10 | scan-to-pdf OCR is sequential (no pool) | `organize-pdf/processing/processing_scan.go:515-538` | 4× slower than optimize-pdf's errgroup on multi-page scans |
-| D11 | pdfcpu ignores ctx; `add-page-numbers`/`edit-pdf` rewrite the file once per page/annotation | `processing_edit.go:454,612` | O(pages × file size) I/O; uncancellable |
+| D11 | **ctx part fixed 2026-11-08** (pdfcpu v0.16.4 takes and checks ctx; the per-page rewrite remains). pdfcpu ignores ctx; `add-page-numbers`/`edit-pdf` rewrite the file once per page/annotation | `processing_edit.go:454,612` | O(pages × file size) I/O; uncancellable |
 | D12 | Watermark/sign image is a base64 data-URL in job options with no size cap or sniff | `processing_edit.go:295-315` | options jsonb bloat; decoder bombs reach pdfcpu |
 | D13 | Core-Helvetica-only text stamps | `processing_edit.go:279,448,606` | Hindi/Unicode watermarks, page numbers and edits render as tofu or fail |
 | D14 | No Devanagari or Noto fonts in any image; no `fc-cache` | `deployment/base-alpine-libreoffice.Dockerfile:14-20`; `convert-from-pdf/Dockerfile:30-36` | Hindi DOCX→PDF substitutes glyphs silently |
@@ -343,7 +343,7 @@ The baseline that later stages are measured against must be produced, not estima
 | D16 | `hasRealProgress` in convert-to-pdf lists organize-pdf tools | `convert-to-pdf/internal/worker/worker.go:233-238` | dead branch; harmless but misleading |
 | D17 | image-to-pdf options (pageSize/margin/orientation/quality) sent by the app are ignored server-side | `fyredocs_app/src/config/tools.ts:383`; `convert-to-pdf/processing/processing.go:61-63`; `processing_free.go:112-115` | UI promises a layout it does not get |
 | D18 | Stale Dockerfile comment claims five OCR languages | `organize-pdf/Dockerfile:26-27` vs `processing_scan.go:225` | documentation drift |
-| D19 | unoserver installed unpinned; pdf2docx pinned 0.5.8 (latest 0.5.13), pdfcpu v0.9.1 (latest v0.16.4) | `base-alpine-libreoffice.Dockerfile:24`; `convert-from-pdf/Dockerfile:40`; `convert-from-pdf/go.mod` | non-reproducible base image; see `03-heavy-dependency-analysis.md` |
+| D19 | **unoserver pinned and pdfcpu at v0.16.4 as of 2026-11-08.** unoserver installed unpinned; pdf2docx pinned 0.5.8 (latest 0.5.13), pdfcpu v0.9.1 (latest v0.16.4) | `base-alpine-libreoffice.Dockerfile:24`; `convert-from-pdf/Dockerfile:40`; `convert-from-pdf/go.mod` | non-reproducible base image; see `03-heavy-dependency-analysis.md` |
 | D20 | `validateMIMEHead` fails open for uncategorised tools | `jobs.go:1358-1368` | a new slug without a `mimeCategory` case accepts any bytes |
 | D21 | No job cancellation; `DELETE` removes rows while the worker runs | `00001_baseline.sql:50`; `jobs.go:553-603` | wasted CPU; orphan outputs; user sees "deleted" while gs still runs |
 | D22 | `worker.go.orig` committed | `organize-pdf/internal/worker/worker.go.orig` | hygiene |

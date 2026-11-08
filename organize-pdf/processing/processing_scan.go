@@ -476,7 +476,7 @@ func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, opti
 			return nil, fmt.Errorf("page size config: %w", err)
 		}
 		conf := model.NewDefaultConfiguration()
-		return withWarnings(nil, warnings), api.ImportImagesFile(paths, outputPath, imp, conf)
+		return withWarnings(nil, warnings), api.ImportImagesFile(ctx, paths, outputPath, imp, conf)
 	}
 
 	if opts.OCR {
@@ -488,7 +488,7 @@ func scanToPDF(ctx context.Context, inputPaths []string, outputPath string, opti
 		return nil, fmt.Errorf("page size config: %w", err)
 	}
 	conf := model.NewDefaultConfiguration()
-	return nil, api.ImportImagesFile(paths, outputPath, imp, conf)
+	return nil, api.ImportImagesFile(ctx, paths, outputPath, imp, conf)
 }
 
 // scanToPDFWithOCR renders each image to a searchable PDF via tesseract and
@@ -528,7 +528,7 @@ func scanToPDFWithOCR(ctx context.Context, inputPaths []string, outputPath strin
 		if err := cmd.Run(); err != nil {
 			slog.Warn("OCR failed, falling back to non-OCR", "image", imgPath, "error", err)
 			pdfFile := outputBase + ".pdf"
-			if err := api.ImportImagesFile([]string{imgPath}, pdfFile, nil, nil); err != nil {
+			if err := api.ImportImagesFile(ctx, []string{imgPath}, pdfFile, nil, nil); err != nil {
 				return nil, fmt.Errorf("failed to process image %s: %w", imgPath, err)
 			}
 			pdfFiles[i] = pdfFile
@@ -549,7 +549,7 @@ func scanToPDFWithOCR(ctx context.Context, inputPaths []string, outputPath strin
 	if len(pdfFiles) == 1 {
 		return metadata, copyFile(pdfFiles[0], outputPath)
 	}
-	return metadata, api.MergeCreateFile(pdfFiles, outputPath, false, nil)
+	return metadata, api.MergeCreateFile(ctx, pdfFiles, outputPath, false, nil)
 }
 
 // ocrTextCapBytes bounds the extracted-text sidecar stored in job metadata.

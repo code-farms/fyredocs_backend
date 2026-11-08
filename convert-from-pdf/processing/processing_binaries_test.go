@@ -66,7 +66,7 @@ func buildImagePDF(t *testing.T, dir string, pages int) string {
 		imgs[i] = p
 	}
 	input := filepath.Join(dir, "input.pdf")
-	if err := api.ImportImagesFile(imgs, input, nil, nil); err != nil {
+	if err := api.ImportImagesFile(t.Context(), imgs, input, nil, nil); err != nil {
 		t.Fatalf("build input pdf: %v", err)
 	}
 	return input
@@ -293,11 +293,11 @@ func TestPdfToPdfaPassesVeraPDFBinaries(t *testing.T) {
 				t.Fatalf("output is not PDF/A-2b:\n%s\n%s", report, details)
 			}
 
-			inPages, err := api.PageCountFile(input)
+			inPages, err := api.PageCountFile(t.Context(), input)
 			if err != nil {
 				t.Fatal(err)
 			}
-			outPages, err := api.PageCountFile(output)
+			outPages, err := api.PageCountFile(t.Context(), output)
 			if err != nil {
 				t.Fatal(err)
 			}

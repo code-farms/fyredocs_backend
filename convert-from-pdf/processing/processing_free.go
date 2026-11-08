@@ -170,7 +170,7 @@ func pdfToImages(ctx context.Context, inputPath string, outputDir string, baseNa
 	}
 	defer os.RemoveAll(tempDir)
 
-	pdfCtx, err := api.ReadContextFile(inputPath)
+	pdfCtx, err := api.ReadContextFile(ctx, inputPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read PDF: %w", err)
 	}
@@ -258,7 +258,7 @@ func pdfToPptImages(ctx context.Context, inputPath string, outputPath string, on
 	}
 	defer os.RemoveAll(tempDir)
 
-	pdfCtx, err := api.ReadContextFile(inputPath)
+	pdfCtx, err := api.ReadContextFile(ctx, inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to read PDF: %w", err)
 	}

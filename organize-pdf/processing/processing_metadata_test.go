@@ -60,12 +60,12 @@ func TestSetPDFMetadata(t *testing.T) {
 	writeTestPNG(t, png, 200, 300)
 
 	input := filepath.Join(dir, "in.pdf")
-	if err := api.ImportImagesFile([]string{png}, input, nil, model.NewDefaultConfiguration()); err != nil {
+	if err := api.ImportImagesFile(t.Context(), []string{png}, input, nil, model.NewDefaultConfiguration()); err != nil {
 		t.Fatalf("build input pdf: %v", err)
 	}
 
 	output := filepath.Join(dir, "out.pdf")
-	err := setPDFMetadata(input, output, map[string]interface{}{
+	err := setPDFMetadata(t.Context(), input, output, map[string]interface{}{
 		"title":    "Scanned Contract",
 		"author":   "FyreDocs",
 		"keywords": "contract, signed",
@@ -81,7 +81,7 @@ func TestSetPDFMetadata(t *testing.T) {
 	defer f.Close()
 	// Standard Info keys parse into PDFInfo fields on read (NOT into the
 	// custom-properties map) — read back through the same path a viewer uses.
-	info, err := api.PDFInfo(f, output, nil, model.NewDefaultConfiguration())
+	info, err := api.PDFInfo(t.Context(), f, output, nil, false, model.NewDefaultConfiguration())
 	if err != nil {
 		t.Fatalf("read info: %v", err)
 	}
@@ -96,7 +96,41 @@ func TestSetPDFMetadata(t *testing.T) {
 // TestSetPDFMetadataEmptyOptions pins the failure mode: nothing to write is
 // an error, not a silent byte-for-byte copy that looks like success.
 func TestSetPDFMetadataEmptyOptions(t *testing.T) {
-	if err := setPDFMetadata("in.pdf", "out.pdf", map[string]interface{}{}); err == nil {
+	if err := setPDFMetadata(t.Context(), "in.pdf", "out.pdf", map[string]interface{}{}); err == nil {
 		t.Error("empty options must error before touching any file")
+	}
+}
+
+// TestSetPDFMetadataReplacesKeywords pins "set" semantics for keywords: a second
+// run replaces the first run's keywords instead of merging with them (pdfcpu's
+// keywords API adds to a set), and a keywords-only request is valid.
+func TestSetPDFMetadataReplacesKeywords(t *testing.T) {
+	dir := t.TempDir()
+	png := filepath.Join(dir, "page.png")
+	writeTestPNG(t, png, 200, 300)
+	input := filepath.Join(dir, "in.pdf")
+	if err := api.ImportImagesFile(t.Context(), []string{png}, input, nil, nil); err != nil {
+		t.Fatalf("build input pdf: %v", err)
+	}
+	first := filepath.Join(dir, "first.pdf")
+	if err := setPDFMetadata(t.Context(), input, first, map[string]interface{}{"keywords": "old, draft"}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	second := filepath.Join(dir, "second.pdf")
+	if err := setPDFMetadata(t.Context(), first, second, map[string]interface{}{"keywords": "final"}); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	f, err := os.Open(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	info, err := api.PDFInfo(t.Context(), f, second, nil, false, model.NewDefaultConfiguration())
+	if err != nil {
+		t.Fatalf("read info: %v", err)
+	}
+	got := strings.Join(info.Keywords, ",")
+	if !strings.Contains(got, "final") || strings.Contains(got, "old") {
+		t.Errorf("keywords = %q, want only the second run's", got)
 	}
 }

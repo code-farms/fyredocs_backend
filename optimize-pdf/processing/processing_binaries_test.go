@@ -82,7 +82,7 @@ func buildImagePDF(t *testing.T, dir string, pages ...string) string {
 		imgs[i] = p
 	}
 	input := filepath.Join(dir, "input.pdf")
-	if err := api.ImportImagesFile(imgs, input, nil, nil); err != nil {
+	if err := api.ImportImagesFile(t.Context(), imgs, input, nil, nil); err != nil {
 		t.Fatalf("build input pdf: %v", err)
 	}
 	return input
@@ -109,7 +109,7 @@ func assertValidPDF(t *testing.T, path string) {
 	if _, err := f.Read(head); err != nil || !bytes.HasPrefix(head, []byte("%PDF-")) {
 		t.Fatalf("output lacks %%PDF- header (got %q, err %v)", head, err)
 	}
-	if err := api.ValidateFile(path, nil); err != nil {
+	if err := api.ValidateFile(t.Context(), path, nil, nil); err != nil {
 		t.Fatalf("output does not validate: %v", err)
 	}
 }
@@ -128,7 +128,7 @@ func TestCompressPDFBinaries(t *testing.T) {
 	}
 	assertValidPDF(t, output)
 
-	if ctx, err := api.ReadContextFile(output); err != nil || ctx.PageCount != 3 {
+	if ctx, err := api.ReadContextFile(t.Context(), output); err != nil || ctx.PageCount != 3 {
 		t.Errorf("compressed page count: %v (err %v), want 3", ctx, err)
 	}
 	orig, ok := meta["originalSizeBytes"].(int64)
@@ -152,7 +152,7 @@ func TestRepairPDFBinaries(t *testing.T) {
 		t.Fatalf("repairPDF: %v", err)
 	}
 	assertValidPDF(t, output)
-	if ctx, err := api.ReadContextFile(output); err != nil || ctx.PageCount != 1 {
+	if ctx, err := api.ReadContextFile(t.Context(), output); err != nil || ctx.PageCount != 1 {
 		t.Errorf("repaired page count: %v (err %v), want 1", ctx, err)
 	}
 }
@@ -193,7 +193,7 @@ func TestOCRPDFBinaries(t *testing.T) {
 	}
 	assertValidPDF(t, output)
 
-	if ctx, err := api.ReadContextFile(output); err != nil || ctx.PageCount != 2 {
+	if ctx, err := api.ReadContextFile(t.Context(), output); err != nil || ctx.PageCount != 2 {
 		t.Errorf("OCR output page count: %v (err %v), want 2", ctx, err)
 	}
 	if got := meta["language"]; got != "eng" {
@@ -313,14 +313,14 @@ func TestOCRPDFBoundsPageImagesBinaries(t *testing.T) {
 		imgs[i] = png
 	}
 	input := filepath.Join(fixtures, "input.pdf")
-	if err := api.ImportImagesFile(imgs, input, nil, nil); err != nil {
+	if err := api.ImportImagesFile(t.Context(), imgs, input, nil, nil); err != nil {
 		t.Fatalf("build input pdf: %v", err)
 	}
 	// OCR_MEASURE_INPUT swaps in a real scan for measurement runs; the
 	// generated text pages compress far better than scanned paper does.
 	if v := os.Getenv("OCR_MEASURE_INPUT"); v != "" {
 		input = v
-		n, err := api.PageCountFile(input)
+		n, err := api.PageCountFile(t.Context(), input)
 		if err != nil {
 			t.Fatalf("OCR_MEASURE_INPUT: %v", err)
 		}
@@ -370,7 +370,7 @@ func TestOCRPDFBoundsPageImagesBinaries(t *testing.T) {
 	if got := meta["pagesOCRed"]; got != pages {
 		t.Errorf("pagesOCRed = %v, want %d", got, pages)
 	}
-	if n, err := api.PageCountFile(output); err != nil || n != pages {
+	if n, err := api.PageCountFile(t.Context(), output); err != nil || n != pages {
 		t.Errorf("output pages = %d (err %v), want %d", n, err, pages)
 	}
 }

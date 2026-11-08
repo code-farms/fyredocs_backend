@@ -617,7 +617,7 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 			if err := cmd.Run(); err != nil {
 				slog.Warn("OCR failed for page, falling back", "page", i+1, "error", err)
 				pdfFile := outputBase + ".pdf"
-				if err := api.ImportImagesFile([]string{imgPath}, pdfFile, nil, nil); err != nil {
+				if err := api.ImportImagesFile(ctx, []string{imgPath}, pdfFile, nil, nil); err != nil {
 					return fmt.Errorf("failed to process page %d: %w", i+1, err)
 				}
 				pdfFiles[i] = pdfFile
@@ -638,7 +638,7 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 			return nil, err
 		}
 	} else {
-		if err := api.MergeCreateFile(pdfFiles, outputPath, false, nil); err != nil {
+		if err := api.MergeCreateFile(ctx, pdfFiles, outputPath, false, nil); err != nil {
 			return nil, fmt.Errorf("failed to merge OCR pages: %w", err)
 		}
 	}

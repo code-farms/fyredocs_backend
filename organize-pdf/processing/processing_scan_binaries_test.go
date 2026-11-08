@@ -79,7 +79,7 @@ func assertValidScanPDF(t *testing.T, path string) {
 	if _, err := f.Read(head); err != nil || !bytes.HasPrefix(head, []byte("%PDF-")) {
 		t.Fatalf("output lacks %%PDF- header (got %q, err %v)", head, err)
 	}
-	if err := api.ValidateFile(path, nil); err != nil {
+	if err := api.ValidateFile(t.Context(), path, nil, nil); err != nil {
 		t.Fatalf("output does not validate: %v", err)
 	}
 }
@@ -110,7 +110,7 @@ func TestScanToPDFOCRBinaries(t *testing.T) {
 	}
 	assertValidScanPDF(t, output)
 
-	if ctx, err := api.ReadContextFile(output); err != nil || ctx.PageCount != 2 {
+	if ctx, err := api.ReadContextFile(t.Context(), output); err != nil || ctx.PageCount != 2 {
 		t.Errorf("OCR output page count: %v (err %v), want 2", ctx, err)
 	}
 	text, _ := meta["extractedText"].(string)

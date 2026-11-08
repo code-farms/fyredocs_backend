@@ -60,7 +60,7 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		err = officeToPDF(ctx, inputPaths[0], outputPath, "html")
 	case "image-to-pdf", "img-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = imageToPDF(inputPaths, outputPath)
+		err = imageToPDF(ctx, inputPaths, outputPath)
 	case "odt-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		err = officeToPDF(ctx, inputPaths[0], outputPath, "odt")

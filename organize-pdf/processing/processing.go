@@ -48,33 +48,33 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	switch toolType {
 	case "merge-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = mergePDFs(inputPaths, outputPath)
+		err = mergePDFs(ctx, inputPaths, outputPath)
 	case "split-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".zip")
 		mode, _ := optionString(options, "mode")
 		rangeValue, _ := optionString(options, "range")
-		err = splitPDF(inputPaths[0], outputPath, mode, rangeValue)
+		err = splitPDF(ctx, inputPaths[0], outputPath, mode, rangeValue)
 	case "remove-pages":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		pages, ok := optionString(options, "pages")
 		if !ok {
 			return Result{}, fmt.Errorf("missing pages option")
 		}
-		err = removePages(inputPaths[0], outputPath, pages)
+		err = removePages(ctx, inputPaths[0], outputPath, pages)
 	case "extract-pages":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		pages, ok := optionString(options, "pages")
 		if !ok {
 			return Result{}, fmt.Errorf("missing pages option")
 		}
-		err = extractPages(inputPaths[0], outputPath, pages)
+		err = extractPages(ctx, inputPaths[0], outputPath, pages)
 	case "organize-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		order, ok := optionString(options, "order")
 		if !ok {
 			return Result{}, fmt.Errorf("missing order option")
 		}
-		err = organizePDF(inputPaths[0], outputPath, order)
+		err = organizePDF(ctx, inputPaths[0], outputPath, order)
 	case "rotate-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		rotationStr, ok := optionString(options, "rotation")
@@ -86,39 +86,39 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 			return Result{}, fmt.Errorf("invalid rotation value: must be 90, 180, or 270")
 		}
 		applyTo, _ := optionString(options, "applyToPages")
-		err = rotatePDF(inputPaths[0], outputPath, rotation, applyTo)
+		err = rotatePDF(ctx, inputPaths[0], outputPath, rotation, applyTo)
 	case "scan-to-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		toolMeta, err = scanToPDF(ctx, inputPaths, outputPath, options)
 	case "watermark-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = watermarkPDF(inputPaths[0], outputPath, options)
+		err = watermarkPDF(ctx, inputPaths[0], outputPath, options)
 	case "protect-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		settings, perr := parseProtectOptions(options)
 		if perr != nil {
 			return Result{}, perr
 		}
-		err = encryptPDF(inputPaths[0], outputPath, settings)
+		err = encryptPDF(ctx, inputPaths[0], outputPath, settings)
 	case "unlock-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		password, ok := optionString(options, "password")
 		if !ok {
 			return Result{}, fmt.Errorf("missing password option for decryption")
 		}
-		err = decryptPDF(inputPaths[0], outputPath, password)
+		err = decryptPDF(ctx, inputPaths[0], outputPath, password)
 	case "sign-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = signPDF(inputPaths[0], outputPath, options)
+		err = signPDF(ctx, inputPaths[0], outputPath, options)
 	case "edit-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = editPDF(inputPaths[0], outputPath, options)
+		err = editPDF(ctx, inputPaths[0], outputPath, options)
 	case "add-page-numbers":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = addPageNumbers(inputPaths[0], outputPath, options)
+		err = addPageNumbers(ctx, inputPaths[0], outputPath, options)
 	case "pdf-metadata":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = setPDFMetadata(inputPaths[0], outputPath, options)
+		err = setPDFMetadata(ctx, inputPaths[0], outputPath, options)
 	default:
 		err = fmt.Errorf("unsupported tool type: %s", toolType)
 	}
