@@ -228,7 +228,7 @@ func TestSupervisorRealUnoserverBinaries(t *testing.T) {
 	t.Logf("warm conversion: %v", time.Since(start))
 
 	port := s.daemons[0].port
-	if !s.Recycle(port) {
+	if !s.Recycle(port, "test") {
 		t.Fatal("Recycle reported no running daemon")
 	}
 	if !s.WaitReady(context.Background(), 90*time.Second) {

@@ -59,19 +59,6 @@ func unoconvertTimeout(inputBytes int64) time.Duration {
 	return scaled
 }
 
-// recycleDaemon makes the daemon on port start fresh, abandoning whatever it is
-// converting, by asking the Supervisor that owns the daemon's process group.
-// Without a running supervisor (unoserver missing, e.g. a local `go run`) there
-// is no daemon to recycle and this only logs.
-func recycleDaemon(port string) {
-	s := activeSupervisor.Load()
-	if s == nil {
-		slog.Warn("cannot recycle unoserver daemon: no supervisor running", "port", port)
-		return
-	}
-	s.Recycle(port)
-}
-
 // tryUnoconvert attempts a conversion through a pooled unoserver daemon. It
 // blocks until a daemon port is free (bounding concurrency to the pool size),
 // runs unoconvert against it, then releases the port BEFORE returning so the
@@ -82,7 +69,14 @@ func tryUnoconvert(ctx context.Context, inputPath, outputPath, convertTo string)
 	if !ok {
 		return false
 	}
-	defer pool.release(port)
+	// The port goes back to the pool when this returns, unless a recycle takes
+	// it over: recycleThenRelease releases it once the fresh daemon answers.
+	releaseOnReturn := true
+	defer func() {
+		if releaseOnReturn {
+			pool.release(port)
+		}
+	}()
 
 	// Check the daemon is listening before handing the job to unoconvert. The
 	// unoconvert client does not fail fast on a dead port: it retries the
@@ -110,15 +104,20 @@ func tryUnoconvert(ctx context.Context, inputPath, outputPath, convertTo string)
 		inputPath, outputPath)
 	output, err := cmd.CombinedOutput()
 	if err == nil {
+		uses := pool.recordUse(port)
+		if cause := recycleCause(uses, maxConversions(), func() int64 { return daemonRSS(port) }, maxRSSMB()); cause != "" {
+			releaseOnReturn = false
+			go recycleThenRelease(port, cause)
+		}
 		return true
 	}
 	if unoCtx.Err() != nil {
 		// The client was killed, but the daemon is still converting the file
 		// and would make the next job on this port queue behind work nobody
-		// wants. Restart it (see recycleDaemon) before the deferred
-		// release hands the port out again; the pre-flight dial then routes jobs
-		// to the cold path until the fresh daemon is listening.
-		recycleDaemon(port)
+		// wants. Restart it and keep the port out of the pool until the fresh
+		// daemon answers (recycleThenRelease).
+		releaseOnReturn = false
+		go recycleThenRelease(port, "timeout")
 	}
 	if ctx.Err() != nil {
 		// The job itself was cancelled or ran out of time: there is nothing to
@@ -163,9 +162,15 @@ func officeToPDF(ctx context.Context, inputPath string, outputPath string, fileT
 		return nil
 	}
 
-	// Slow fallback: spawn a fresh LibreOffice process.
+	// Slow fallback: spawn a fresh LibreOffice process with its own hardened
+	// profile (see newFallbackProfile), next to the output in the job scratch dir.
 	outputDir := filepath.Dir(outputPath)
-	cmd := procexec.Command(ctx, "libreoffice", "--headless", "--convert-to", "pdf", "--outdir", outputDir, inputPath)
+	profileArg, cleanup, err := newFallbackProfile(filepath.Dir(outputDir))
+	if err != nil {
+		return fmt.Errorf("conversion failed: %w", err)
+	}
+	defer cleanup()
+	cmd := procexec.Command(ctx, "libreoffice", profileArg, "--headless", "--convert-to", "pdf", "--outdir", outputDir, inputPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		slog.ErrorContext(ctx, "libreoffice convert failed", "error", err, "op", "libreoffice.convert", "type", fileType, "output", string(output))
@@ -189,9 +194,15 @@ func officeToOffice(ctx context.Context, inputPath string, outputPath string, ou
 		return nil
 	}
 
-	// Slow fallback: spawn a fresh LibreOffice process.
+	// Slow fallback: spawn a fresh LibreOffice process with its own hardened
+	// profile (see newFallbackProfile).
 	outputDir := filepath.Dir(outputPath)
-	cmd := procexec.Command(ctx, "libreoffice", "--headless", "--convert-to", outputFormat, "--outdir", outputDir, inputPath)
+	profileArg, cleanup, err := newFallbackProfile(filepath.Dir(outputDir))
+	if err != nil {
+		return fmt.Errorf("conversion to %s failed: %w", outputFormat, err)
+	}
+	defer cleanup()
+	cmd := procexec.Command(ctx, "libreoffice", profileArg, "--headless", "--convert-to", outputFormat, "--outdir", outputDir, inputPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		slog.ErrorContext(ctx, "libreoffice convert failed", "error", err, "op", "libreoffice.convert", "format", outputFormat, "output", string(output))

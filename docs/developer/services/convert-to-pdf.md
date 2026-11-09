@@ -57,7 +57,9 @@ The pool is visible, not just best-effort:
 - **Readiness:** `/readyz` returns 503 when no pooled daemon port accepts a connection. A partial pool stays ready and reports `ok (n/m daemons up)`. The compose healthcheck uses `/healthz`, so a dead pool never triggers a restart; jobs keep completing on the cold path.
 - **Fast fallback:** before calling `unoconvert`, the worker dials the pooled daemon port (200 ms). If nothing listens it falls back at once with reason `no_daemon`. Without this check the `unoconvert` client retries the connection for about 40 s (5 tries, 10 s apart), so every job on a dead pool lost the full 30 s per-call deadline before the cold conversion even began.
 - **Size-scaled deadline:** each `unoconvert` call gets `max(30 s, 2 s + 1.5 s/MB)` (the documented LibreOffice cost model), still capped by the 10-minute job context. The old fixed 30 s failed every warm conversion above roughly 18 MB.
-- **No ghost work:** if a call hits its deadline or the job is cancelled mid-conversion, the worker kills that daemon's whole process group (`recycleDaemon`) before returning the port. Otherwise the daemon keeps converting the abandoned file and the next job on that port queues behind it. Cancellations are not counted as fallbacks.
+- **No ghost work:** if a call hits its deadline or the job is cancelled mid-conversion, the worker kills that daemon's whole process group. Otherwise the daemon keeps converting the abandoned file and the next job on that port queues behind it. Cancellations are not counted as fallbacks.
+- **Recycle by use:** after a successful conversion the daemon is recycled once it has served `UNOSERVER_MAX_CONVERSIONS` documents (default 200) or its process group's RSS passes `UNOSERVER_MAX_RSS_MB` (default 600, twice the ~300 MB per-daemon budget in `deploy.sh`). Both defaults are initial values and have not been measured yet; 0 disables either. RSS is read from `/proc` for every process in the daemon's group (`processing/rss_linux.go`).
+- **Port held until the fresh daemon answers:** every recycle (use limit, RSS limit or timeout) runs in the background (`recycleThenRelease`). The port stays out of the pool until a new process group on it accepts connections and answers `unoping`, bounded at 60 s, so jobs wait for another pooled daemon instead of falling back cold. The finished job does not wait. The log line `recycled unoserver daemon` carries `cause` (`timeout`, `max_conversions`, `max_rss`).
 - **Metric:** every cold fallback increments `convert_fallback_total{service="convert-to-pdf",reason}` with `reason` one of `no_daemon` (nothing listening on the pooled port), `timeout` (unoconvert deadline fired) or `daemon_error`. The `OfficeConversionsOnColdFallback` alert fires on a sustained rate.
 
 The supervisor starts one daemon per port from `UnoserverPorts()` — the same list the pool hands out, so the two can no longer disagree — with three load-bearing arguments:
@@ -67,6 +69,7 @@ The supervisor starts one daemon per port from `UnoserverPorts()` — the same l
 | `--user-installation` | `/tmp/uno-profile-<port>` (a **path**) | unoserver converts it to a URI itself; passing `file:///…` makes it exit at startup |
 | `--uno-port` | `<port> + UNOSERVER_UNO_PORT_OFFSET` | unoserver 3.x defaults it to 2002 and refuses to start when it equals `--port` |
 | one profile per daemon | — | a shared profile lock lets only the first daemon start |
+| hardened profile | written before **every** start | see "Profile hardening" below |
 
 Each daemon also gets `--conversion-timeout $UNOSERVER_CONVERSION_TIMEOUT` as a daemon-side backstop. Before taking jobs the worker waits up to 30 s for the first daemon to answer `unoping`; if it does not, the worker starts anyway on the cold path. unoserver is pinned (`unoserver==3.7` in `deployment/base-alpine-libreoffice.Dockerfile`) because the supervisor is written against that CLI.
 
@@ -84,6 +87,28 @@ Each daemon leads its own process group (`Setpgid`) holding unoserver, `oosplash
 Metrics: `engine_daemons_running{service}` (processes running; a process serves only once LibreOffice is up, so readiness still dials the ports) and `engine_daemon_restarts_total{service,reason}` with `reason` `crash` or `recycle`. The `EngineDaemonCrashLoop` alert fires on sustained crashes.
 
 Measured on the 2026-11-08 image (arm64 VM): ready in about 6 s; a recycled daemon serves again in 7–8 s, with no orphaned `soffice.bin`.
+
+**Profile hardening** (`processing/loprofile.go`). Untrusted documents go into LibreOffice, so every profile it
+uses (each daemon's, and each cold fallback's) gets a `user/registrymodifications.xcu` forcing:
+
+| Setting | Value | Default it replaces |
+|---|---|---|
+| `Common/Security/Scripting/DisableMacrosExecution` | `true` (no Basic, BeanShell, JavaScript or Python macros) | `false` |
+| `Common/Security/Scripting/MacroSecurityLevel` | `3` (highest) | `2` |
+| `Common/Security/Scripting/BlockUntrustedRefererLinks` | `true` | `false` |
+| `Writer/Content/Update/Link` | `2` (never) | `1` (on request) |
+| `Calc/Content/Update/Link` | `1` (never; Calc numbers its values differently) | `2` (on request) |
+| `Writer`, `Calc`, `Impress` `Filter/Import/VBA/*` (Load, Executable, Save, UseExport) | `false` | `true`, so ODF outputs could carry converted VBA |
+
+The file is rewritten before every daemon start, because LibreOffice rewrites it on exit. A failed write counts as a
+failed start: an unhardened daemon never serves. `DisableActiveContent` is deliberately not set, since it also stops
+OLE objects rendering. LibreOffice ignores unknown keys silently, so `TestHardenedProfileKeysExistInSchemaBinaries`
+checks every key against the schema installed in the image, and `TestMacroDoesNotRunWithHardenedProfileBinaries`
+converts a document whose open event runs a macro, on both paths, and asserts the macro did not run.
+
+**Cold fallback isolation.** Each fallback `libreoffice --headless` gets its own fresh hardened profile in the job
+scratch dir (`-env:UserInstallation=file://…/lo-profile-*`), removed afterwards. Before, every fallback shared
+`~/.config/libreoffice`, so two concurrent fallbacks contended on its lock and the second could hang or fail (D6).
 
 > **History:** until the fix for finding D23/D23b a shell entrypoint started the daemons and passed a `file://` profile and no `--uno-port`, so no daemon ever started, the `/dev/null` startup probe could not succeed, and every Office/HTML job ran cold while `/readyz` stayed green. See `docs/developer/architecture/next-generation-document-engine/01-existing-system-audit.md`.
 
@@ -172,6 +197,8 @@ This worker writes to `processing_jobs` and `file_metadata` (the same tables own
 | `WORKER_CONCURRENCY` | `2` | Max concurrent jobs processed in parallel |
 | `UNOSERVER_HOST` | `127.0.0.1` | unoserver daemon host |
 | `UNOSERVER_PORT` | `2002` | unoserver daemon port |
+| `UNOSERVER_MAX_CONVERSIONS` | `200` | Recycle a daemon after this many successful conversions; 0 disables. Initial value, not measured. |
+| `UNOSERVER_MAX_RSS_MB` | `600` | Recycle a daemon whose process-group RSS exceeds this; 0 disables. Initial value, not measured. |
 | `UNOSERVER_INSTANCES` | `WORKER_CONCURRENCY + 1` | Size of the unoserver daemon pool. When unset, auto-sizes to one warm daemon per concurrent job plus a spare so the cold-start fallback is unreachable. Set explicitly to pin (`deploy.sh` does, sized to the memory cap). |
 | `UNOSERVER_UNO_PORT_OFFSET` | `100` | Offset from each daemon's XML-RPC port to its LibreOffice UNO port (`--uno-port`). Must be ≥ `UNOSERVER_INSTANCES`. Read by the supervisor. |
 | `UNOSERVER_CONVERSION_TIMEOUT` | `600` | Seconds. Daemon-side backstop (`--conversion-timeout`): unoserver kills its LibreOffice and exits, and the supervisor restarts it. The worker's size-scaled deadline normally fires first. |
@@ -208,9 +235,9 @@ Fast path:
 unoconvert --host 127.0.0.1 --port 2002 --convert-to pdf input.docx output.pdf
 ```
 
-Fallback (when unoserver is unreachable):
+Fallback (when unoserver is unreachable), with a per-call hardened profile:
 ```bash
-libreoffice --headless --convert-to pdf --outdir /output /input/file.docx
+libreoffice -env:UserInstallation=file:///scratch/<job>/lo-profile-XXXX --headless --convert-to pdf --outdir /output /input/file.docx
 ```
 
 ### pdfcpu
@@ -264,7 +291,10 @@ sequenceDiagram
             alt office or html
                 W->>Tool: unoconvert (--host UNOSERVER_HOST --port UNOSERVER_PORT)
                 alt daemon unreachable
-                    W->>Tool: libreoffice --headless (fallback)
+                    W->>W: fresh hardened profile in scratch
+                    W->>Tool: libreoffice -env:UserInstallation=… --headless (fallback)
+                else served, and use or RSS limit reached
+                    W-)W: recycleThenRelease (port held until the new daemon answers unoping)
                 end
             else image-to-pdf / img-to-pdf
                 W->>Tool: pdfcpu Import (one image per page)

@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,11 @@ import (
 type unoserverPool struct {
 	host  string
 	ports chan string
+
+	mu sync.Mutex
+	// uses counts successful conversions per port since that port's daemon
+	// last recycled; it drives recycling by use (recycleCause).
+	uses map[string]int
 }
 
 // pool is the process-wide daemon port pool, built at init. Package-level because
@@ -36,7 +42,7 @@ func newUnoserverPool() *unoserverPool {
 	for _, p := range ports {
 		ch <- p
 	}
-	return &unoserverPool{host: host, ports: ch}
+	return &unoserverPool{host: host, ports: ch, uses: map[string]int{}}
 }
 
 // acquire blocks until a daemon port is free or ctx is cancelled.
@@ -52,6 +58,22 @@ func (p *unoserverPool) acquire(ctx context.Context) (string, bool) {
 // release returns a port to the pool for reuse.
 func (p *unoserverPool) release(port string) {
 	p.ports <- port
+}
+
+// recordUse counts one successful conversion on port and returns the count
+// since the port's daemon last recycled.
+func (p *unoserverPool) recordUse(port string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.uses[port]++
+	return p.uses[port]
+}
+
+// resetUses zeroes port's count; called when its daemon is recycled.
+func (p *unoserverPool) resetUses(port string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.uses, port)
 }
 
 // unoserverInstances reads UNOSERVER_INSTANCES. When set, it is honored

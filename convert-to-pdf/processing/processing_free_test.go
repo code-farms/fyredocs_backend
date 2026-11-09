@@ -92,10 +92,30 @@ func TestUnoconvertTimeout(t *testing.T) {
 	}
 }
 
-// TestRecycleDaemonWithoutSupervisor: with no supervisor running (unoserver
-// missing, e.g. a local `go run`) recycling is a logged no-op, never a panic.
-func TestRecycleDaemonWithoutSupervisor(t *testing.T) {
+// TestRecycleThenReleaseWithoutSupervisor: with no supervisor running
+// (unoserver missing, e.g. a local `go run`) recycling is a logged no-op that
+// still returns the port, never a lost pool slot or a panic.
+func TestRecycleThenReleaseWithoutSupervisor(t *testing.T) {
 	saved := activeSupervisor.Swap(nil)
 	t.Cleanup(func() { activeSupervisor.Store(saved) })
-	recycleDaemon("2002")
+	p := withTestPool(t, "2002")
+	port, _ := p.acquire(context.Background())
+	recycleThenRelease(port, "test")
+	if got := len(p.ports); got != 1 {
+		t.Fatalf("pool has %d free ports after recycleThenRelease, want 1", got)
+	}
+}
+
+// withTestPool swaps the package pool for one over ports for the test.
+func withTestPool(t *testing.T, ports ...string) *unoserverPool {
+	t.Helper()
+	ch := make(chan string, len(ports))
+	for _, p := range ports {
+		ch <- p
+	}
+	p := &unoserverPool{host: "127.0.0.1", ports: ch, uses: map[string]int{}}
+	saved := pool
+	pool = p
+	t.Cleanup(func() { pool = saved })
+	return p
 }

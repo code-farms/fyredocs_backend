@@ -210,8 +210,14 @@ func pdfToOffice(ctx context.Context, inputPath string, outputPath string, outpu
 	slog.Info("converting PDF to office format", "format", outputFormat, "input", inputPath)
 
 	outputDir := filepath.Dir(outputPath)
+	profileArg, cleanup, err := newFallbackProfile(filepath.Dir(outputDir))
+	if err != nil {
+		return fmt.Errorf("PDF to %s conversion failed: %w", outputFormat, err)
+	}
+	defer cleanup()
 
 	cmd := procexec.Command(ctx, "libreoffice",
+		profileArg,
 		"--headless",
 		"--infilter=writer_pdf_import",
 		"--convert-to", outputFormat,
@@ -370,7 +376,12 @@ func pdfToOdp(ctx context.Context, inputPath string, outputPath string, onProgre
 // conversions (e.g. xlsx→ods, pptx→odp), then renames to the requested output.
 func officeConvertTo(ctx context.Context, inputPath string, outputPath string, outputFormat string) error {
 	outputDir := filepath.Dir(outputPath)
-	cmd := procexec.Command(ctx, "libreoffice", "--headless",
+	profileArg, cleanup, err := newFallbackProfile(filepath.Dir(outputDir))
+	if err != nil {
+		return fmt.Errorf("conversion to %s failed: %w", outputFormat, err)
+	}
+	defer cleanup()
+	cmd := procexec.Command(ctx, "libreoffice", profileArg, "--headless",
 		"--convert-to", outputFormat, "--outdir", outputDir, inputPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		slog.ErrorContext(ctx, "libreoffice convert failed", "error", err, "op", "libreoffice.convert", "format", outputFormat, "output", string(output))

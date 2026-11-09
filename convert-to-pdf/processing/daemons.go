@@ -168,8 +168,15 @@ func (s *Supervisor) loop(ctx context.Context, d *daemon) {
 		slog.Info("starting unoserver daemon", "port", d.port, "unoPort", d.unoPort, "profile", d.profile)
 		started := time.Now()
 		var recycled bool
-		if err := cmd.Start(); err != nil {
-			slog.Error("unoserver daemon failed to start", "port", d.port, "error", err)
+		// The profile is hardened before EVERY start (LibreOffice rewrites it on
+		// exit). If that fails the daemon is not started this round: an
+		// unhardened daemon must never serve, and the crash backoff applies.
+		startErr := writeHardenedProfile(d.profile)
+		if startErr == nil {
+			startErr = cmd.Start()
+		}
+		if startErr != nil {
+			slog.Error("unoserver daemon failed to start", "port", d.port, "error", startErr)
 		} else {
 			d.mu.Lock()
 			d.pgid = cmd.Process.Pid
@@ -264,31 +271,89 @@ func (s *Supervisor) WaitReady(ctx context.Context, timeout time.Duration) bool 
 }
 
 // Recycle kills the daemon on port together with its LibreOffice so its loop
-// starts a fresh one immediately. It is how tryUnoconvert abandons a conversion
-// that overran or whose job was cancelled, without leaving the daemon busy with
-// it. Returns false if no daemon is running on port.
-func (s *Supervisor) Recycle(port string) bool {
-	for _, d := range s.daemons {
-		if d.port != port {
-			continue
-		}
-		d.mu.Lock()
-		pgid := d.pgid
-		if pgid != 0 {
-			d.recycled = true
-		}
-		d.mu.Unlock()
-		if pgid == 0 {
-			return false
-		}
-		if err := killGroup(pgid); err != nil {
-			slog.Warn("recycling unoserver daemon failed", "port", port, "pgid", pgid, "error", err)
-			return false
-		}
-		slog.Warn("recycled unoserver daemon after abandoned conversion", "port", port, "pgid", pgid)
-		return true
+// starts a fresh one immediately. cause ("timeout", "max_conversions",
+// "max_rss") is logged. It is how a conversion that overran is abandoned and how
+// a daemon is retired after heavy use. Returns false if no daemon is running on
+// port. Callers that hand the port out again should use RecycleAndWait.
+func (s *Supervisor) Recycle(port, cause string) bool {
+	d := s.daemonFor(port)
+	if d == nil {
+		return false
 	}
-	return false
+	d.mu.Lock()
+	pgid := d.pgid
+	if pgid != 0 {
+		d.recycled = true
+	}
+	d.mu.Unlock()
+	if pgid == 0 {
+		return false
+	}
+	if err := killGroup(pgid); err != nil {
+		slog.Warn("recycling unoserver daemon failed", "port", port, "pgid", pgid, "cause", cause, "error", err)
+		return false
+	}
+	slog.Warn("recycled unoserver daemon", "port", port, "pgid", pgid, "cause", cause)
+	return true
+}
+
+// RecycleAndWait recycles the daemon on port and blocks until a NEW daemon
+// (different process group) on that port accepts connections and passes the
+// probe, or timeout elapses. Waiting for a new group matters: right after the
+// kill the old daemon can still be listening, and a plain readiness check would
+// pass on the process being torn down. Returns false if nothing was running or
+// the replacement was not ready in time.
+func (s *Supervisor) RecycleAndWait(port, cause string, timeout time.Duration) bool {
+	d := s.daemonFor(port)
+	if d == nil {
+		return false
+	}
+	d.mu.Lock()
+	old := d.pgid
+	d.mu.Unlock()
+	if !s.Recycle(port, cause) {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		d.mu.Lock()
+		cur := d.pgid
+		d.mu.Unlock()
+		if cur != 0 && cur != old &&
+			DaemonsUp(s.host, []string{port}, daemonDialTimeout) == 1 && s.probe(ctx, port) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(readyPollInterval):
+		}
+	}
+}
+
+// DaemonRSS returns the resident memory in bytes of the daemon group on port
+// (unoserver, oosplash, soffice.bin), or 0 if it is not running or the platform
+// has no /proc.
+func (s *Supervisor) DaemonRSS(port string) int64 {
+	d := s.daemonFor(port)
+	if d == nil {
+		return 0
+	}
+	d.mu.Lock()
+	pgid := d.pgid
+	d.mu.Unlock()
+	return groupRSS(pgid)
+}
+
+// daemonFor returns the daemon serving port, or nil.
+func (s *Supervisor) daemonFor(port string) *daemon {
+	for _, d := range s.daemons {
+		if d.port == port {
+			return d
+		}
+	}
+	return nil
 }
 
 // Stop ends supervision: no more restarts, TERM to every daemon group, then KILL

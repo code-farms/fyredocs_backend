@@ -42,6 +42,14 @@
 > content carried trailing file structure and failed validation; v0.16.4 returns the original bytes. Parse errors
 > were already permanent (unknown errors are never retried), so `isRecoverable` itself needed no change.
 >
+> **M1.4 remainder coded 2026-11-09 (not yet verified on real binaries).** Every LibreOffice profile (each daemon's,
+> rewritten before every start, and a fresh one per cold fallback in both LibreOffice workers) forces macros off,
+> macro level 3, link updates never, VBA import off. Cold fallbacks no longer share `~/.config/libreoffice` (D6).
+> Daemons recycle after `UNOSERVER_MAX_CONVERSIONS` (200) or `UNOSERVER_MAX_RSS_MB` (600) — initial values pending
+> the soak — and a recycled port is held until the new daemon answers, so jobs no longer fall back cold during
+> restarts. Pending Docker: the schema check, the macro sentinel, the concurrent-fallback and recycle binaries tests,
+> and the soak. Q2 instance sizing remains open.
+>
 > **Q12 done 2026-11-08, scope changed by decision.** Instead of a 150 MB office-only cap, every job is
 > capped at what the PDF workers can hold: total input × 3 must fit the 900 MB tmpfs, so 300 MB per job.
 > Pro went from 500 to 300 MB per file. All plan limits now live in auth-service's `subscription_plans`

@@ -73,10 +73,10 @@ func TestNewSupervisorPortsAndOffset(t *testing.T) {
 func TestSupervisorRecycleAndStopWithoutStart(t *testing.T) {
 	t.Setenv("UNOSERVER_INSTANCES", "1")
 	s := NewSupervisor()
-	if s.Recycle("2002") {
+	if s.Recycle("2002", "test") {
 		t.Error("Recycle on a stopped supervisor reported success")
 	}
-	if s.Recycle("9999") {
+	if s.Recycle("9999", "test") {
 		t.Error("Recycle of an unknown port reported success")
 	}
 	s.Stop()

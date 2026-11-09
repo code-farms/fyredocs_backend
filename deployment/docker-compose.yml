@@ -895,6 +895,11 @@ services:
       # explicitly only to pin it. Each instance adds ~150-300 MB RAM; raise the
       # memory limit below before increasing concurrency.
       UNOSERVER_INSTANCES: "${UNOSERVER_INSTANCES:-}"
+      # Recycle a daemon after this many conversions, or when its process group
+      # RSS passes UNOSERVER_MAX_RSS_MB. 0 disables either. Initial values, not
+      # measured yet (docs/developer/services/convert-to-pdf.md).
+      UNOSERVER_MAX_CONVERSIONS: "${UNOSERVER_MAX_CONVERSIONS:-200}"
+      UNOSERVER_MAX_RSS_MB: "${UNOSERVER_MAX_RSS_MB:-600}"
       # Result cache (see convert-from-pdf). 0 disables.
       RESULT_CACHE_TTL_SECONDS: "${RESULT_CACHE_TTL_SECONDS:-3600}"
 

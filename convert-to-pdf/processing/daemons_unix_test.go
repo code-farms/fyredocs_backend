@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -78,7 +79,8 @@ func fakeSupervisor(t *testing.T, n int, extraEnv ...string) (*Supervisor, strin
 	dir := t.TempDir()
 	s := &Supervisor{host: "127.0.0.1"}
 	for i := 0; i < n; i++ {
-		s.daemons = append(s.daemons, &daemon{port: freePort(t)})
+		port := freePort(t)
+		s.daemons = append(s.daemons, &daemon{port: port, profile: filepath.Join(dir, "profile-"+port)})
 	}
 	s.newCmd = func(d *daemon) *exec.Cmd {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestHelperFakeUnoserver$")
@@ -197,7 +199,7 @@ func TestSupervisorRecycleRestartsAtOnce(t *testing.T) {
 // uses, proving the active-supervisor registration works.
 func recycleViaActiveSupervisor(port string) bool {
 	s := activeSupervisor.Load()
-	return s != nil && s.Recycle(port)
+	return s != nil && s.Recycle(port, "test")
 }
 
 // TestSupervisorStopKillsEverything: Stop leaves no daemon or grandchild alive
@@ -238,5 +240,102 @@ func TestSupervisorStopKillsEverything(t *testing.T) {
 	}
 	if activeSupervisor.Load() == s {
 		t.Error("Stop left the supervisor registered")
+	}
+}
+
+// TestSupervisorHardensProfileOnEveryStart: the profile is written before the
+// first start and rewritten before the restart after a recycle, so whatever
+// LibreOffice changed in between does not survive.
+func TestSupervisorHardensProfileOnEveryStart(t *testing.T) {
+	s, dir := fakeSupervisor(t, 1)
+	d := s.daemons[0]
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if !waitFor(10*time.Second, func() bool { return len(grandchildren(t, dir, d.port)) == 1 }) {
+		t.Fatal("daemon did not start")
+	}
+	reg := filepath.Join(d.profile, "user", "registrymodifications.xcu")
+	if _, err := os.Stat(reg); err != nil {
+		t.Fatalf("profile not hardened before start: %v", err)
+	}
+	if err := os.WriteFile(reg, []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Recycle(d.port, "test") {
+		t.Fatal("Recycle reported no running daemon")
+	}
+	if !waitFor(5*time.Second, func() bool { return len(grandchildren(t, dir, d.port)) == 2 }) {
+		t.Fatal("daemon did not restart")
+	}
+	if v := readRegistry(t, d.profile)["/org.openoffice.Office.Common/Security/Scripting|DisableMacrosExecution"]; v != "true" {
+		t.Errorf("profile not rewritten before restart: DisableMacrosExecution = %q", v)
+	}
+}
+
+// TestRecycleAndWaitWaitsForNewDaemon: it returns only once a different
+// process group serves the port and passes the probe.
+func TestRecycleAndWaitWaitsForNewDaemon(t *testing.T) {
+	s, dir := fakeSupervisor(t, 1)
+	d := s.daemons[0]
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if !s.WaitReady(context.Background(), 10*time.Second) {
+		t.Fatal("daemon not ready")
+	}
+	d.mu.Lock()
+	old := d.pgid
+	d.mu.Unlock()
+	if !s.RecycleAndWait(d.port, "test", 10*time.Second) {
+		t.Fatal("RecycleAndWait = false")
+	}
+	d.mu.Lock()
+	cur := d.pgid
+	d.mu.Unlock()
+	if cur == 0 || cur == old {
+		t.Errorf("returned with pgid %d (old %d), want a new running daemon", cur, old)
+	}
+	if n := len(grandchildren(t, dir, d.port)); n != 2 {
+		t.Errorf("%d daemon starts, want 2", n)
+	}
+}
+
+// TestRecycleThenReleaseHoldsPortUntilReady: the recycled port stays out of the
+// pool until the replacement passes the probe, so jobs wait for a pooled
+// daemon instead of hitting the cold fallback.
+func TestRecycleThenReleaseHoldsPortUntilReady(t *testing.T) {
+	s, _ := fakeSupervisor(t, 1)
+	d := s.daemons[0]
+	var ready atomic.Bool
+	s.probe = func(ctx context.Context, port string) bool { return ready.Load() }
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if !waitFor(10*time.Second, func() bool { return s.Running() == 1 }) {
+		t.Fatal("daemon did not start")
+	}
+	p := withTestPool(t, d.port)
+	port, _ := p.acquire(context.Background())
+	p.recordUse(port)
+
+	done := make(chan struct{})
+	go func() { recycleThenRelease(port, "test"); close(done) }()
+
+	time.Sleep(1500 * time.Millisecond)
+	if got := len(p.ports); got != 0 {
+		t.Fatalf("port released before the new daemon passed the probe (%d free)", got)
+	}
+	ready.Store(true)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("recycleThenRelease did not finish after the daemon became ready")
+	}
+	if got := len(p.ports); got != 1 {
+		t.Errorf("%d free ports after ready, want 1", got)
+	}
+	if got := p.recordUse(port); got != 1 {
+		t.Errorf("use count not reset by recycle: %d", got)
 	}
 }

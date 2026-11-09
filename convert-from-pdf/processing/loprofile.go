@@ -1,0 +1,143 @@
+package processing
+
+import (
+	"bytes"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+)
+
+// LibreOffice profile hardening. Every LibreOffice this worker runs gets its own
+// fresh profile (newFallbackProfile) whose
+// registrymodifications.xcu turns off what untrusted Office documents could use
+// against us. LibreOffice's defaults leave macros at security level 2, import VBA
+// into Office Basic (so an ODF output can carry the converted macro), and update
+// links "on request". Headless conversion is believed not to fire document
+// macros at level 2, but that rests on forum evidence; these settings make it a
+// configured property instead (docs/developer/architecture/
+// next-generation-document-engine/15-security-and-reliability.md §5.3, §8).
+//
+// LibreOffice silently ignores a key it does not know, so a typo here would
+// leave a setting at its default with no error.
+//
+// NOTE: duplicated by design from convert-to-pdf/processing/loprofile.go
+// (CLAUDE.md §1, no shared business logic); keep the two tables identical. The
+// schema check that guards the keys lives in convert-to-pdf's binaries tests.
+
+// profileSetting is one registry value: an item path, a prop name, its schema
+// type and the value to force.
+type profileSetting struct {
+	Path  string
+	Prop  string
+	Type  string
+	Value string
+}
+
+// hardenedSettings is the single source of the forced values. Paths and value
+// meanings are from LibreOffice's officecfg schemas (Common.xcs, Writer.xcs,
+// Calc.xcs, Impress.xcs). Link-update values differ by application: Writer
+// 2 = never, Calc 1 = never. DisableActiveContent is deliberately absent: it
+// also stops OLE objects rendering, which would change PDF output.
+var hardenedSettings = []profileSetting{
+	// Disables Basic, BeanShell, JavaScript and Python macros outright; the
+	// level below is a second line in case a future version changes that.
+	{"/org.openoffice.Office.Common/Security/Scripting", "DisableMacrosExecution", "xs:boolean", "true"},
+	{"/org.openoffice.Office.Common/Security/Scripting", "MacroSecurityLevel", "xs:int", "3"},
+	{"/org.openoffice.Office.Common/Security/Scripting", "BlockUntrustedRefererLinks", "xs:boolean", "true"},
+	{"/org.openoffice.Office.Writer/Content/Update", "Link", "xs:int", "2"},
+	{"/org.openoffice.Office.Calc/Content/Update", "Link", "xs:int", "1"},
+	{"/org.openoffice.Office.Writer/Filter/Import/VBA", "Load", "xs:boolean", "false"},
+	{"/org.openoffice.Office.Writer/Filter/Import/VBA", "Executable", "xs:boolean", "false"},
+	{"/org.openoffice.Office.Writer/Filter/Import/VBA", "Save", "xs:boolean", "false"},
+	{"/org.openoffice.Office.Calc/Filter/Import/VBA", "Load", "xs:boolean", "false"},
+	{"/org.openoffice.Office.Calc/Filter/Import/VBA", "Executable", "xs:boolean", "false"},
+	{"/org.openoffice.Office.Calc/Filter/Import/VBA", "Save", "xs:boolean", "false"},
+	{"/org.openoffice.Office.Calc/Filter/Import/VBA", "UseExport", "xs:boolean", "false"},
+	{"/org.openoffice.Office.Impress/Filter/Import/VBA", "Load", "xs:boolean", "false"},
+	{"/org.openoffice.Office.Impress/Filter/Import/VBA", "Save", "xs:boolean", "false"},
+}
+
+// hardenedRegistry renders hardenedSettings as a registrymodifications.xcu.
+// oor:op="fuse" is what LibreOffice itself writes for a changed value.
+func hardenedRegistry() []byte {
+	var b bytes.Buffer
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	b.WriteString(`<oor:items xmlns:oor="http://openoffice.org/2001/registry" ` +
+		`xmlns:xs="http://www.w3.org/2001/XMLSchema" ` +
+		`xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` + "\n")
+	for _, s := range hardenedSettings {
+		fmt.Fprintf(&b, `<item oor:path="%s"><prop oor:name="%s" oor:op="fuse" oor:type="%s"><value>%s</value></prop></item>`+"\n",
+			xmlEscape(s.Path), xmlEscape(s.Prop), xmlEscape(s.Type), xmlEscape(s.Value))
+	}
+	b.WriteString("</oor:items>\n")
+	return b.Bytes()
+}
+
+// xmlEscape escapes s for use in XML text or a double-quoted attribute.
+func xmlEscape(s string) string {
+	var b bytes.Buffer
+	_ = xml.EscapeText(&b, []byte(s))
+	return b.String()
+}
+
+// writeHardenedProfile writes the hardened registrymodifications.xcu into the
+// LibreOffice profile at dir (the directory passed as --user-installation or
+// -env:UserInstallation; LibreOffice keeps its settings in dir/user). It
+// replaces any existing file: LibreOffice rewrites that file on exit, so a
+// profile that ran before is never trusted to still hold these values. The write
+// goes to a temporary file and is renamed into place, so a crash cannot leave a
+// truncated registry. An empty dir is an error rather than a write into the
+// current directory.
+func writeHardenedProfile(dir string) error {
+	if dir == "" {
+		return errors.New("libreoffice profile: empty directory")
+	}
+	userDir := filepath.Join(dir, "user")
+	if err := os.MkdirAll(userDir, 0o700); err != nil {
+		return fmt.Errorf("libreoffice profile: %w", err)
+	}
+	tmp, err := os.CreateTemp(userDir, ".registrymodifications-*.xcu")
+	if err != nil {
+		return fmt.Errorf("libreoffice profile: %w", err)
+	}
+	_, werr := tmp.Write(hardenedRegistry())
+	cerr := tmp.Close()
+	if err := errors.Join(werr, cerr); err != nil {
+		_ = os.Remove(tmp.Name())
+		return fmt.Errorf("libreoffice profile: write: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), filepath.Join(userDir, "registrymodifications.xcu")); err != nil {
+		_ = os.Remove(tmp.Name())
+		return fmt.Errorf("libreoffice profile: %w", err)
+	}
+	return nil
+}
+
+// newFallbackProfile creates a fresh hardened LibreOffice profile under baseDir
+// for one LibreOffice conversion and returns the -env:UserInstallation
+// argument for it plus a cleanup func. Without its own profile every call
+// shares ~/.config/libreoffice, so two concurrent conversions contend on the
+// profile lock and the second can hang or fail (D6 in
+// docs/developer/architecture/next-generation-document-engine/
+// 01-existing-system-audit.md). baseDir should be the job's scratch directory so
+// the worker's scratch cleanup also removes the profile if cleanup is skipped.
+func newFallbackProfile(baseDir string) (arg string, cleanup func(), err error) {
+	dir, err := os.MkdirTemp(baseDir, "lo-profile-")
+	if err != nil {
+		return "", nil, fmt.Errorf("fallback profile: %w", err)
+	}
+	cleanup = func() { _ = os.RemoveAll(dir) }
+	if err := writeHardenedProfile(dir); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("fallback profile: %w", err)
+	}
+	return "-env:UserInstallation=" + (&url.URL{Scheme: "file", Path: abs}).String(), cleanup, nil
+}
