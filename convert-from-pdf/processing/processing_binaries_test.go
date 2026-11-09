@@ -22,7 +22,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 )
@@ -305,5 +307,41 @@ func TestPdfToPdfaPassesVeraPDFBinaries(t *testing.T) {
 				t.Errorf("pages: input %d, output %d — conversion dropped pages", inPages, outPages)
 			}
 		})
+	}
+}
+
+// TestPdfToOdtConcurrentBinaries runs the LibreOffice PDF→ODT path twice at the
+// same time, three rounds, through the hardened per-call profile
+// (newFallbackProfile). Before per-call profiles every call shared
+// ~/.config/libreoffice and the second could hang on its lock (D6).
+func TestPdfToOdtConcurrentBinaries(t *testing.T) {
+	src := buildTextPDF(t, t.TempDir(), "Fyredocs ODT conversion fixture")
+	for round := 0; round < 3; round++ {
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		outs := make([]string, 2)
+		for i := range errs {
+			outDir := filepath.Join(t.TempDir(), "out")
+			if err := os.MkdirAll(outDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			outs[i] = filepath.Join(outDir, "result.odt")
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+				defer cancel()
+				errs[i] = pdfToOffice(ctx, src, outs[i], "odt")
+			}(i)
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d, call %d: %v", round, i, err)
+			}
+			if info, err := os.Stat(outs[i]); err != nil || info.Size() == 0 {
+				t.Fatalf("round %d, call %d: no ODT output (%v)", round, i, err)
+			}
+		}
 	}
 }

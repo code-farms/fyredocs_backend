@@ -2,12 +2,19 @@ package processing
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
+
+	"fyredocs/shared/procexec"
 )
 
 // LibreOffice profile hardening. Every LibreOffice this worker runs (each pooled
@@ -131,6 +138,13 @@ func newFallbackProfile(baseDir string) (arg string, cleanup func(), err error) 
 		return "", nil, fmt.Errorf("fallback profile: %w", err)
 	}
 	cleanup = func() { _ = os.RemoveAll(dir) }
+	// Start from the initialised template when there is one, then force the
+	// hardened registry again: the copy is never trusted to still hold it.
+	if tmpl := fallbackTemplate(); tmpl != "" {
+		if err := copyTree(tmpl, dir); err != nil {
+			slog.Warn("libreoffice profile: copying the template failed; using a fresh profile", "error", err)
+		}
+	}
 	if err := writeHardenedProfile(dir); err != nil {
 		cleanup()
 		return "", nil, err
@@ -141,4 +155,81 @@ func newFallbackProfile(baseDir string) (arg string, cleanup func(), err error) 
 		return "", nil, fmt.Errorf("fallback profile: %w", err)
 	}
 	return "-env:UserInstallation=" + (&url.URL{Scheme: "file", Path: abs}).String(), cleanup, nil
+}
+
+// fallbackTemplateWait bounds the one-time LibreOffice start that initialises
+// the template profile.
+const fallbackTemplateWait = 2 * time.Minute
+
+var (
+	templateOnce sync.Once
+	// templateDir is the initialised hardened template profile, or "" if it
+	// could not be built (each fallback then starts from a fresh profile).
+	templateDir string
+)
+
+// fallbackTemplate returns a hardened LibreOffice profile that LibreOffice has
+// already initialised, built once per process on first use (concurrent first
+// callers wait for it). Starting LibreOffice concurrently on brand-new profiles
+// crashed one of the two processes in about 1 run in 10 ("terminate called
+// after throwing an instance of WrappedTargetRuntimeException"), while copies
+// of an initialised profile failed 0 times in 20 (measured 2026-11-09 in the
+// test-binaries image). It is built with `--terminate_after_init`, which runs
+// LibreOffice's first-start initialisation and exits without converting.
+// Returns "" when LibreOffice is missing or the start fails; the caller then
+// uses a fresh profile, which still works most of the time.
+func fallbackTemplate() string {
+	templateOnce.Do(func() {
+		dir := filepath.Join(os.TempDir(), "lo-profile-template")
+		_ = os.RemoveAll(dir)
+		if err := writeHardenedProfile(dir); err != nil {
+			slog.Warn("libreoffice template profile: write failed; fallbacks use fresh profiles", "error", err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), fallbackTemplateWait)
+		defer cancel()
+		u := url.URL{Scheme: "file", Path: dir}
+		out, err := procexec.Command(ctx, "libreoffice", "-env:UserInstallation="+u.String(),
+			"--headless", "--terminate_after_init").CombinedOutput()
+		if err != nil {
+			slog.Warn("libreoffice template profile: initialisation failed; fallbacks use fresh profiles",
+				"error", err, "output", string(out))
+			_ = os.RemoveAll(dir)
+			return
+		}
+		templateDir = dir
+	})
+	return templateDir
+}
+
+// copyTree copies the directory tree at src into dst (which must exist),
+// keeping file modes. Symlinks and other special files are skipped: a
+// LibreOffice profile holds only directories and regular files.
+func copyTree(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil || rel == "." {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		switch {
+		case d.IsDir():
+			return os.MkdirAll(target, info.Mode().Perm())
+		case info.Mode().IsRegular():
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(target, data, info.Mode().Perm())
+		default:
+			return nil
+		}
+	})
 }

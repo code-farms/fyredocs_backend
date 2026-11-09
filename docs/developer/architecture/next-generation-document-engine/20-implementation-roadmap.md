@@ -52,7 +52,9 @@
 > documented instead). The LibreOffice meta-package split was already shown not to help on Alpine 3.24
 > (`base-image-setup.md`).
 >
-> **M1.4 remainder coded 2026-11-09 (not yet verified on real binaries).** Every LibreOffice profile (each daemon's,
+> **M1.4 remainder verified 2026-11-09 on real binaries** (schema check, macro sentinel, concurrent fallbacks, recycle
+> after N). The run found that concurrent cold starts on fresh profiles crash about 1 in 10, so fallbacks now copy an
+> initialised hardened template (0 failures in 20). Originally coded 2026-11-09: Every LibreOffice profile (each daemon's,
 > rewritten before every start, and a fresh one per cold fallback in both LibreOffice workers) forces macros off,
 > macro level 3, link updates never, VBA import off. Cold fallbacks no longer share `~/.config/libreoffice` (D6).
 > Daemons recycle after `UNOSERVER_MAX_CONVERSIONS` (200) or `UNOSERVER_MAX_RSS_MB` (600) — initial values pending

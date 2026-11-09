@@ -155,3 +155,25 @@ func TestNewFallbackProfileIsPerCall(t *testing.T) {
 		t.Errorf("two calls returned the same profile %q", a)
 	}
 }
+
+func TestCopyTree(t *testing.T) {
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "user", "basic"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "user", "basic", "x.xml"), []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := copyTree(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "user", "basic", "x.xml"))
+	if err != nil || string(got) != "payload" {
+		t.Fatalf("copied file = %q, %v", got, err)
+	}
+	info, _ := os.Stat(filepath.Join(dst, "user", "basic", "x.xml"))
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
+	}
+}

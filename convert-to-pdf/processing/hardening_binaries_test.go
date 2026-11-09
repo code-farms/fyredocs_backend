@@ -6,9 +6,11 @@ import (
 	"archive/zip"
 	"context"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -42,10 +44,15 @@ func registryFiles(t *testing.T) []string {
 // Nesting is approximated by order, which is enough to catch a misspelled or
 // nonexistent key, the failure LibreOffice itself never reports.
 func schemaHas(xcd, component string, groups []string, prop, typ string) bool {
-	start := strings.Index(xcd, `<oor:component-schema oor:name="`+component+`" oor:package="org.openoffice.Office"`)
-	if start < 0 {
+	// Attribute order differs between .xcd files (main.xcd puts oor:package
+	// first), so match the tag, not a fixed attribute sequence.
+	loc := regexp.MustCompile(`<oor:component-schema[^>]*\boor:name="` + regexp.QuoteMeta(component) +
+		`"[^>]*\boor:package="org\.openoffice\.Office"|<oor:component-schema[^>]*\boor:package="org\.openoffice\.Office"[^>]*\boor:name="` +
+		regexp.QuoteMeta(component) + `"`).FindStringIndex(xcd)
+	if loc == nil {
 		return false
 	}
+	start := loc[0]
 	section := xcd[start:]
 	if end := strings.Index(section, "</oor:component-schema>"); end >= 0 {
 		section = section[:end]
@@ -101,16 +108,22 @@ func macroODT(t *testing.T, path, sentinel string) {
 		t.Fatal(err)
 	}
 	zw := zip.NewWriter(f)
-	// mimetype must be the first entry and stored uncompressed.
-	w, err := zw.CreateHeader(&zip.FileHeader{Name: "mimetype", Method: zip.Store})
+	// mimetype must be the first entry, stored uncompressed, with its CRC and
+	// sizes in the local header. zip.CreateHeader would stream it with a
+	// trailing data descriptor, and LibreOffice then refuses the package.
+	mt := []byte("application/vnd.oasis.opendocument.text")
+	w, err := zw.CreateRaw(&zip.FileHeader{
+		Name: "mimetype", Method: zip.Store, CRC32: crc32.ChecksumIEEE(mt),
+		CompressedSize64: uint64(len(mt)), UncompressedSize64: uint64(len(mt)),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = w.Write([]byte("application/vnd.oasis.opendocument.text"))
+	_, _ = w.Write(mt)
 	files := map[string]string{
 		"META-INF/manifest.xml": `<?xml version="1.0" encoding="UTF-8"?>
 <manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">
- <manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/>
+ <manifest:file-entry manifest:full-path="/" manifest:version="1.2" manifest:media-type="application/vnd.oasis.opendocument.text"/>
  <manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>
  <manifest:file-entry manifest:full-path="Basic/script-lc.xml" manifest:media-type="text/xml"/>
  <manifest:file-entry manifest:full-path="Basic/Standard/script-lb.xml" manifest:media-type="text/xml"/>
@@ -124,14 +137,17 @@ func macroODT(t *testing.T, path, sentinel string) {
  <office:body><office:text><text:p>Fyredocs macro sentinel fixture</text:p></office:text></office:body>
 </office:document-content>`,
 		"Basic/script-lc.xml": `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE library:libraries PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "libraries.dtd">
 <library:libraries xmlns:library="http://openoffice.org/2000/library" xmlns:xlink="http://www.w3.org/1999/xlink">
  <library:library library:name="Standard" library:link="false"/>
 </library:libraries>`,
 		"Basic/Standard/script-lb.xml": `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE library:library PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "library.dtd">
 <library:library xmlns:library="http://openoffice.org/2000/library" library:name="Standard" library:readonly="false" library:passwordprotected="false">
  <library:element library:name="Module1"/>
 </library:library>`,
 		"Basic/Standard/Module1.xml": fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">
 <script:module xmlns:script="http://openoffice.org/2000/script" script:name="Module1" script:language="StarBasic">Sub Main
   Dim n As Integer
   n = FreeFile
@@ -141,7 +157,12 @@ func macroODT(t *testing.T, path, sentinel string) {
 End Sub
 </script:module>`, sentinel),
 	}
-	for name, body := range files {
+	// Fixed order: LibreOffice refuses the package ("source file could not be
+	// loaded") when the manifest comes after the Basic files, which random map
+	// iteration produced (measured 2026-11-09).
+	for _, name := range []string{"META-INF/manifest.xml", "content.xml", "Basic/script-lc.xml",
+		"Basic/Standard/script-lb.xml", "Basic/Standard/Module1.xml"} {
+		body := files[name]
 		w, err := zw.Create(name)
 		if err != nil {
 			t.Fatal(err)
@@ -203,6 +224,9 @@ func TestMacroDoesNotRunWithHardenedProfileBinaries(t *testing.T) {
 	ctlOut := filepath.Join(dir, "control-out")
 	_ = os.MkdirAll(ctlOut, 0o755)
 	convertWithProfile(t, permissiveProfile(t, filepath.Join(dir, "permissive")), ctlSrc, ctlOut)
+	// The fixture must load, or every result below is vacuous (LibreOffice
+	// exits 0 even when it cannot load the source).
+	assertValidPDFOutput(t, filepath.Join(ctlOut, "control.pdf"))
 	_, ctlErr := os.Stat(ctlSentinel)
 	controlFired := ctlErr == nil
 	t.Logf("control (macros allowed): open-event macro ran during headless conversion = %v", controlFired)
@@ -251,35 +275,45 @@ func TestMacroDoesNotRunWithHardenedProfileBinaries(t *testing.T) {
 }
 
 // TestConcurrentColdFallbacksBinaries: two cold LibreOffice conversions at the
-// same time both succeed, because each has its own profile (D6).
+// same time both succeed, ten rounds in a row. Shared profiles contended on one
+// lock (D6); fresh per-call profiles crashed one process in about 1 round in 10
+// during LibreOffice's first-start initialisation, which the initialised
+// template (fallbackTemplate) removes. Ten rounds make that rate visible.
 func TestConcurrentColdFallbacksBinaries(t *testing.T) {
 	saved := activeSupervisor.Swap(nil)
 	t.Cleanup(func() { activeSupervisor.Store(saved) })
-	dir := t.TempDir()
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	for i := range errs {
-		src := filepath.Join(dir, fmt.Sprintf("doc%d.txt", i))
-		if err := os.WriteFile(src, []byte(fmt.Sprintf("concurrent fallback %d\n", i)), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		outDir := filepath.Join(dir, fmt.Sprintf("job%d", i), "out")
-		_ = os.MkdirAll(outDir, 0o755)
-		wg.Add(1)
-		go func(i int, src, out string) {
-			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-			defer cancel()
-			errs[i] = officeToPDF(ctx, src, out, "txt")
-		}(i, src, filepath.Join(outDir, "out.pdf"))
+	if fallbackTemplate() == "" {
+		t.Fatal("the initialised template profile could not be built")
 	}
-	wg.Wait()
-	for i, err := range errs {
-		if err != nil {
-			t.Errorf("fallback %d: %v", i, err)
-			continue
+	if v := readRegistry(t, fallbackTemplate())["/org.openoffice.Office.Common/Security/Scripting|DisableMacrosExecution"]; v != "true" {
+		t.Errorf("template lost the hardened settings after initialisation: DisableMacrosExecution = %q", v)
+	}
+	for round := 0; round < 10; round++ {
+		dir := t.TempDir()
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for i := range errs {
+			src := filepath.Join(dir, fmt.Sprintf("doc%d.txt", i))
+			if err := os.WriteFile(src, []byte(fmt.Sprintf("concurrent fallback %d\n", i)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			outDir := filepath.Join(dir, fmt.Sprintf("job%d", i), "out")
+			_ = os.MkdirAll(outDir, 0o755)
+			wg.Add(1)
+			go func(i int, src, out string) {
+				defer wg.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+				defer cancel()
+				errs[i] = officeToPDF(ctx, src, out, "txt")
+			}(i, src, filepath.Join(outDir, "out.pdf"))
 		}
-		assertValidPDFOutput(t, filepath.Join(dir, fmt.Sprintf("job%d", i), "out", "out.pdf"))
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d, fallback %d: %v", round, i, err)
+			}
+			assertValidPDFOutput(t, filepath.Join(dir, fmt.Sprintf("job%d", i), "out", "out.pdf"))
+		}
 	}
 }
 

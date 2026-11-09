@@ -111,9 +111,19 @@ OLE objects rendering. LibreOffice ignores unknown keys silently, so `TestHarden
 checks every key against the schema installed in the image, and `TestMacroDoesNotRunWithHardenedProfileBinaries`
 converts a document whose open event runs a macro, on both paths, and asserts the macro did not run.
 
-**Cold fallback isolation.** Each fallback `libreoffice --headless` gets its own fresh hardened profile in the job
-scratch dir (`-env:UserInstallation=file://…/lo-profile-*`), removed afterwards. Before, every fallback shared
+**Cold fallback isolation.** Each fallback `libreoffice --headless` gets its own hardened profile in the job scratch
+dir (`-env:UserInstallation=file://…/lo-profile-*`), removed afterwards. Before, every fallback shared
 `~/.config/libreoffice`, so two concurrent fallbacks contended on its lock and the second could hang or fail (D6).
+The per-call profile is a copy of a template that LibreOffice has already initialised (`fallbackTemplate`, built once
+per process with `--terminate_after_init` on first use), with the hardened registry written over it again.
+Starting two LibreOffice processes at once on brand-new profiles crashed one of them in about 1 run in 10
+(`WrappedTargetRuntimeException` during first-start initialisation); copies of an initialised profile failed 0
+times in 20 (measured 2026-11-09, test-binaries image). If the template cannot be built, calls use fresh profiles.
+
+**What the macro test showed** (2026-11-09, LibreOffice 25.8 in the test image): a document whose open event runs a
+Basic macro did not run it under headless `--convert-to` even with macros fully allowed (level 0, macros enabled),
+nor through a hardened daemon. So for this conversion path the hardened settings are a second safeguard, not the
+only one; they also cover the ODF outputs (no VBA carried over) and link updates.
 
 > **History:** until the fix for finding D23/D23b a shell entrypoint started the daemons and passed a `file://` profile and no `--uno-port`, so no daemon ever started, the `/dev/null` startup probe could not succeed, and every Office/HTML job ran cold while `/readyz` stayed green. See `docs/developer/architecture/next-generation-document-engine/01-existing-system-audit.md`.
 
