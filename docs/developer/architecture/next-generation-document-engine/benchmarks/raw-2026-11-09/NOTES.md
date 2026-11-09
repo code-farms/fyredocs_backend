@@ -66,3 +66,10 @@ All four Go binaries share the same HIGH findings: quic-go 0.54.0 (fixed 0.54.1)
 govulncheck (CI stage 8) reports the same modules plus otel. The Debian base of convert-from-pdf
 carries most of the remaining findings; moving it to Alpine (with the rest of the workers) or to a
 newer Debian is the larger fix.
+
+### After the dependency bump (same day)
+
+Go 1.26.10 (`toolchain` in go.work, pinned builder images), otel 1.47.0, grpc 1.85.0,
+golang.org/x/net 0.62.0, quic-go 0.65.0: govulncheck reports 0 reachable vulnerabilities in all
+13 modules; Trivy on the rebuilt organize-pdf image: 0 HIGH/CRITICAL (alpine 3.24.4 and the Go
+binary). The Debian findings in convert-from-pdf are unaffected by this change.

@@ -31,13 +31,18 @@ Local parity: `make lint` ≈ stages 1–2, `make test` = stage 3,
 `make fuzz-short` = 6, `make vuln` = 8, `make check-compose` = the compose half of 2.
 
 **Stage 8 and the Go toolchain.** govulncheck judges the standard library by the Go
-toolchain that runs it, not by the one the images were built with. The images build
-on `golang:1.26-alpine` (a floating tag, newest 1.26 patch at build time), so run
-stage 8 with that same patch release or its standard-library findings describe a
-toolchain nobody ships. First run (2026-11-09, local go1.26.0): every module
-affected, mostly standard-library issues fixed in 1.26.1–1.26.9, plus
-`go.opentelemetry.io/otel` (fixed in 1.45.0), `google.golang.org/grpc` (1.83.1) and
-`github.com/quic-go/quic-go` (0.59.1). Those dependency bumps are a separate change.
+toolchain that runs it. `go.work` sets `toolchain go1.26.10`, so the go command (and
+therefore govulncheck) switches to that release automatically, and the builder images
+are pinned to the same patch (`golang:1.26.10-alpine` in
+`deployment/base-go-builder.Dockerfile`, `golang:1.26.10-alpine3.24` in
+`deployment/test-binaries.Dockerfile`). Bump all three together.
+
+History: the first run (2026-11-09, go1.26.0) found every module affected by
+standard-library issues fixed in 1.26.1–1.26.9 plus outdated `go.opentelemetry.io/otel`,
+`google.golang.org/grpc`, `golang.org/x/net` and `github.com/quic-go/quic-go`. After moving
+to Go 1.26.10, otel 1.47.0, grpc 1.85.0, x/net 0.62.0 and quic-go 0.65.0, govulncheck
+reports 0 reachable vulnerabilities in all 13 modules, and Trivy finds no HIGH/CRITICAL
+in the organize-pdf image (Alpine packages or Go binary).
 
 ## Argo Workflows wiring
 

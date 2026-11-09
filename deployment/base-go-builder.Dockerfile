@@ -15,7 +15,8 @@
 # rebuilds when the repo no longer matches. Force one by hand — e.g. after a Go
 # toolchain bump, which the hash does NOT cover — with:
 #   ./deployment/build-base-image.sh
-FROM golang:1.26-alpine AS gobuilder
+# NOTE: Go patch release pinned to the `toolchain` line in go.work; bump both together.
+FROM golang:1.26.10-alpine AS gobuilder
 
 # Kept in sync with the service builds (deploy.sh passes --build-arg). Leave 2 of 8
 # cores for the daemon/OS during the warm compile.

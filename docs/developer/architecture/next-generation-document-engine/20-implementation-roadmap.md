@@ -42,6 +42,11 @@
 > content carried trailing file structure and failed validation; v0.16.4 returns the original bytes. Parse errors
 > were already permanent (unknown errors are never retried), so `isRecoverable` itself needed no change.
 >
+> **Vulnerability findings cleared 2026-11-09** (Go 1.26.10 toolchain pinned in go.work and the builder images;
+> otel 1.47.0, grpc 1.85.0, x/net 0.62.0, quic-go 0.65.0): govulncheck clean in all 13 modules, no Go-binary
+> HIGH/CRITICAL in the worker images. Open: convert-from-pdf's Debian 12 base (4 CRITICAL, ~100 HIGH, mostly
+> unfixed upstream).
+>
 > **M1.5 remainder done 2026-11-09 (compose and images; runtime check pending Docker).** Every Fyredocs service runs
 > `read_only`, `cap_drop: [ALL]`, `no-new-privileges`, uid 10001 (`x-hardened` in `deployment/docker-compose.yml`,
 > guarded by `scripts/ci/check-compose-hardening.sh`); workers write only to their `/tmp` tmpfs with `HOME=/tmp`.

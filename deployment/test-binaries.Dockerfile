@@ -19,7 +19,8 @@
 # own JRE on any architecture. Pinned: bump deliberately, it decides pass/fail.
 FROM --platform=linux/amd64 verapdf/cli:v1.30.3 AS verapdf
 
-FROM golang:1.26-alpine3.24
+# NOTE: Go patch release pinned to the `toolchain` line in go.work; bump both together.
+FROM golang:1.26.10-alpine3.24
 
 RUN apk add --no-cache \
     ca-certificates \
