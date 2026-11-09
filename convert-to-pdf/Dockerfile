@@ -30,13 +30,13 @@ RUN mkdir -p uploads outputs && \
     chown -R appuser:appuser /app
 
 COPY --from=builder /app/bin/convert-to-pdf .
+# Third-party licence notice for the programs this image runs (see the file).
+COPY convert-to-pdf/THIRD-PARTY-LICENCES.md /licences/THIRD-PARTY-LICENCES.md
 RUN chown appuser:appuser convert-to-pdf
 
 USER appuser
 
 EXPOSE 8083
-
-VOLUME /app/uploads /app/outputs
 
 # The worker starts and supervises its own unoserver (LibreOffice) daemons
 # (processing/daemons.go), so it runs directly — no shell entrypoint. Exec form

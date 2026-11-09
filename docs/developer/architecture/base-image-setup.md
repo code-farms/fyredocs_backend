@@ -18,6 +18,14 @@ The Go builder base is documented in its own section below ("Go Builder Base Ima
 
 Size: about 1.5 GB, up from about 1.07 GB on 3.19. In Alpine 3.24 `libreoffice-common` depends on Qt 6 and GTK, which pull mesa and LLVM (about 377 MB a headless server never loads); installing only the writer/calc/impress components does not avoid them. Resident memory went down (two daemons idle: 193 MiB on 3.19, 122 MiB on 3.24). Measurements: `next-generation-document-engine/benchmarks/raw-2026-11-08/NOTES.md`.
 
+**Licence notices.** Each worker image carries `/licences/THIRD-PARTY-LICENCES.md`, copied from
+`<worker>/THIRD-PARTY-LICENCES.md` next to its Dockerfile (`.dockerignore` excludes Markdown but makes an
+exception for these). Each lists only what that image ships: Ghostscript and PyMuPDF (AGPL-3.0), Poppler (GPL),
+LibreOffice (MPL-2.0), Tesseract (Apache-2.0) and the rest, and how each is used (executed unmodified as a
+separate process). Update the notice when a package is added to or removed from that image; the per-image SBOM
+from CI stage 8 (`scripts/ci/08-vuln.sh`) is the full list. A counsel review of the AGPL subprocess boundary is
+still open.
+
 Alpine version is kept in step across four files: `deployment/base-alpine-libreoffice.Dockerfile`, `organize-pdf/Dockerfile`, `optimize-pdf/Dockerfile` and `deployment/test-binaries.Dockerfile` (`golang:1.26-alpine3.24`). Track the newest Alpine branch: LibreOffice and Tesseract come from the community repository, which is supported only until the next stable release.
 
 ## Problem

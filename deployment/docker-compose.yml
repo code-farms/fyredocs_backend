@@ -1,5 +1,24 @@
 name: fyredocs
 
+# Container hardening shared by every Fyredocs service (not by the third-party
+# infra images below, which have their own write and capability needs).
+# Merged into each service with `<<: *hardened`; the per-service slices and the
+# multi-host app file use `extends`, so they inherit it.
+#   read_only     the image cannot be modified; writable paths are tmpfs mounts
+#                 declared per service (the PDF workers' /tmp, job-service's /tmp)
+#   cap_drop ALL  nothing here binds a port < 1024 or needs a capability
+#   no-new-privileges  setuid binaries cannot raise privileges
+#   user          pins uid 10001 so an image regression cannot run as root
+# There is deliberately no internal-only worker network: it would break the
+# multi-host layout (docker-compose.app.yml), where worker slices reach the data
+# host by IP. Restrict worker egress with the host firewall there instead
+# (docs/developer/architecture/compose-files.md "Container hardening").
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  user: "10001:10001"
+
 services:
   # ==================== INFRASTRUCTURE ====================
 
@@ -442,6 +461,7 @@ services:
   # the SPA or relays MinIO bytes — it only verifies auth, rate-limits, and
   # routes API traffic to services.
   api-gateway:
+    <<: *hardened
     build:
       context: ..
       dockerfile: api-gateway/Dockerfile
@@ -554,6 +574,7 @@ services:
 
   # ==================== AUTH SERVICE ====================
   auth-service:
+    <<: *hardened
     build:
       context: ..
       dockerfile: auth-service/Dockerfile
@@ -664,6 +685,11 @@ services:
 
   # ==================== JOB SERVICE (formerly upload-service) ====================
   job-service:
+    <<: *hardened
+    # Read-only rootfs: Gin spills multipart parts over 50 MiB to /tmp. The
+    # gateway caps bodies at 1 MiB, so this only backs direct calls.
+    tmpfs:
+      - /tmp:size=64m
     build:
       context: ..
       dockerfile: job-service/Dockerfile
@@ -782,6 +808,7 @@ services:
 
   # ==================== CONVERT FROM PDF (worker) ====================
   convert-from-pdf:
+    <<: *hardened
     build:
       context: ..
       dockerfile: convert-from-pdf/Dockerfile
@@ -793,6 +820,10 @@ services:
     # WORKER_DRAIN_TIMEOUT below, or Docker SIGKILLs the worker mid-drain.
     stop_grace_period: 3m
     environment:
+      # Read-only rootfs: LibreOffice, fontconfig and Python write caches under
+      # $HOME, so it points at the /tmp tmpfs (see x-hardened).
+      HOME: /tmp
+      PYTHONDONTWRITEBYTECODE: "1"
       PORT: "8082"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
@@ -858,6 +889,7 @@ services:
 
   # ==================== CONVERT TO PDF (worker) ====================
   convert-to-pdf:
+    <<: *hardened
     build:
       context: ..
       dockerfile: convert-to-pdf/Dockerfile
@@ -869,6 +901,9 @@ services:
     # WORKER_DRAIN_TIMEOUT below, or Docker SIGKILLs the worker mid-drain.
     stop_grace_period: 3m
     environment:
+      # Read-only rootfs: LibreOffice, fontconfig and Python write caches under
+      # $HOME, so it points at the /tmp tmpfs (see x-hardened).
+      HOME: /tmp
       PORT: "8083"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
@@ -944,6 +979,7 @@ services:
 
   # ==================== ORGANIZE PDF (worker) ====================
   organize-pdf:
+    <<: *hardened
     build:
       context: ..
       dockerfile: organize-pdf/Dockerfile
@@ -955,6 +991,9 @@ services:
     # WORKER_DRAIN_TIMEOUT below, or Docker SIGKILLs the worker mid-drain.
     stop_grace_period: 3m
     environment:
+      # Read-only rootfs: LibreOffice, fontconfig and Python write caches under
+      # $HOME, so it points at the /tmp tmpfs (see x-hardened).
+      HOME: /tmp
       PORT: "8084"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
@@ -1017,6 +1056,7 @@ services:
 
   # ==================== OPTIMIZE PDF (worker) ====================
   optimize-pdf:
+    <<: *hardened
     build:
       context: ..
       dockerfile: optimize-pdf/Dockerfile
@@ -1028,6 +1068,9 @@ services:
     # WORKER_DRAIN_TIMEOUT below, or Docker SIGKILLs the worker mid-drain.
     stop_grace_period: 3m
     environment:
+      # Read-only rootfs: LibreOffice, fontconfig and Python write caches under
+      # $HOME, so it points at the /tmp tmpfs (see x-hardened).
+      HOME: /tmp
       PORT: "8085"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deployment/.env}
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
@@ -1095,6 +1138,7 @@ services:
 
   # ==================== ANALYTICS SERVICE ====================
   analytics-service:
+    <<: *hardened
     build:
       context: ..
       dockerfile: analytics-service/Dockerfile
@@ -1181,6 +1225,7 @@ services:
 
   # ==================== DOCUMENT SERVICE ====================
   document-service:
+    <<: *hardened
     build:
       context: ..
       dockerfile: document-service/Dockerfile
@@ -1270,6 +1315,7 @@ services:
 
   # ==================== USER SERVICE ====================
   user-service:
+    <<: *hardened
     build:
       context: ..
       dockerfile: user-service/Dockerfile
@@ -1346,6 +1392,7 @@ services:
   #   docker compose -f deployment/docker-compose.yml --env-file .env --profile notifications up -d
   #   (or) ./deployment/deploy.sh notification-service
   notification-service:
+    <<: *hardened
     profiles: ["notifications"]
     build:
       context: ..
@@ -1425,6 +1472,7 @@ services:
   #   docker compose -f deployment/docker-compose.yml --env-file .env --profile ai up -d
   #   (or) ./deployment/deploy.sh ai-service
   ai-service:
+    <<: *hardened
     profiles: ["ai"]
     build:
       context: ..

@@ -44,12 +44,12 @@ RUN mkdir -p uploads outputs && \
 
 # 4. Copy the binary from builder
 COPY --from=builder /app/bin/optimize-pdf .
+# Third-party licence notice for the programs this image runs (see the file).
+COPY optimize-pdf/THIRD-PARTY-LICENCES.md /licences/THIRD-PARTY-LICENCES.md
 RUN chown appuser:appuser optimize-pdf
 
 USER appuser
 
 EXPOSE 8085
-
-VOLUME /app/uploads /app/outputs
 
 CMD ["./optimize-pdf"]

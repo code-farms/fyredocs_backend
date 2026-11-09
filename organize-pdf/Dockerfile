@@ -46,12 +46,12 @@ RUN mkdir -p uploads outputs && \
 
 # 3. Copy the binary from builder
 COPY --from=builder /app/bin/organize-pdf .
+# Third-party licence notice for the programs this image runs (see the file).
+COPY organize-pdf/THIRD-PARTY-LICENCES.md /licences/THIRD-PARTY-LICENCES.md
 RUN chown appuser:appuser organize-pdf
 
 USER appuser
 
 EXPOSE 8084
-
-VOLUME /app/uploads /app/outputs
 
 CMD ["./organize-pdf"]

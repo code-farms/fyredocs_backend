@@ -154,6 +154,46 @@ done
 fails the run instead of binding `0.0.0.0` and exposing an unauthenticated NATS),
 so validating it on a single-host box needs any placeholder IP.
 
+## Container hardening
+
+Every Fyredocs service (api-gateway, auth, job, analytics, document, user,
+notification, ai, and the four PDF workers) merges the `x-hardened` anchor at the
+top of `docker-compose.yml`:
+
+| Key | Value | Why |
+|---|---|---|
+| `read_only` | `true` | the image cannot be changed at runtime; a compromised parser cannot plant files outside tmpfs |
+| `cap_drop` | `[ALL]` | nothing binds a port below 1024 or needs a capability |
+| `security_opt` | `no-new-privileges:true` | a setuid binary cannot raise privileges |
+| `user` | `"10001:10001"` | the images already run as `appuser`; this keeps an image regression from running as root |
+
+The per-service slices and `docker-compose.app.yml` use `extends`, so they inherit
+it. `scripts/ci/check-compose-hardening.sh` (run by CI stage 2, or `make
+check-compose`) renders every variant and fails if any service lost a key.
+
+**Writable paths.** Only tmpfs mounts are writable:
+
+- PDF workers: `/tmp` (1 GiB), which holds job scratch dirs, the unoserver
+  profiles and each cold fallback's LibreOffice profile. `HOME=/tmp`, so
+  LibreOffice, fontconfig and Python write their caches there.
+  convert-from-pdf also sets `PYTHONDONTWRITEBYTECODE=1`.
+- job-service: `/tmp` (64 MiB) for Gin's multipart spill. The gateway caps bodies
+  at 1 MiB, so this only backs direct calls.
+- The other Go services write nothing to disk and get no tmpfs.
+
+**Not covered.** Third-party infra containers (Postgres, PgBouncer, Redis,
+NATS, MinIO, Caddy and the observability stack) keep their images' defaults:
+each has its own write and capability needs, and hardening them is a separate
+change. `pids_limit` and tmpfs `noexec` wait for measurements.
+
+**No internal-only worker network** (decided 2026-11-09). An `internal: true`
+network for the PDF workers would block the multi-host layout, where worker
+slices run on their own host and reach Postgres, NATS and MinIO on the data host
+by private IP (see "Multi-host"). job-service also calls organize-pdf for edge
+detection. On a dedicated worker host, restrict egress with the host firewall
+instead: allow only the data host's 5432/6432, 4222, 6379 and 9000 and the
+OTLP collector, and drop everything else.
+
 ## Port-exposure invariant
 
 **Only the Caddy edge publishes host ports (`80`/`443`). Every other service is

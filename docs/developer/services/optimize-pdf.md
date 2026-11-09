@@ -12,6 +12,11 @@ PDF optimization microservice providing compression, repair, OCR, and flattening
 | Engines | Ghostscript (`compress-pdf`, `repair-pdf`, `flatten-pdf`), Tesseract + Poppler `pdftoppm` (`ocr-pdf`) |
 | Allowed tools | `compress-pdf`, `repair-pdf`, `ocr-pdf`, `flatten-pdf` (4 — see `optimize-pdf/main.go:59`) |
 
+**Runs read-only.** The container has a read-only root filesystem, no capabilities, `no-new-privileges` and uid
+10001 (`x-hardened` in `deployment/docker-compose.yml`). Only the `/tmp` tmpfs is writable, and `HOME=/tmp` sends
+LibreOffice, fontconfig and Python caches there. The image carries its third-party licence notice at
+`/licences/THIRD-PARTY-LICENCES.md`. See `docs/developer/architecture/compose-files.md` "Container hardening".
+
 ## Supported Operations
 
 ### 1. Compress PDF (`compress-pdf`)

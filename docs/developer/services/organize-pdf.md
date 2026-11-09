@@ -12,6 +12,11 @@ The Organize-PDF service provides comprehensive PDF manipulation capabilities us
 **OCR (optional):** Tesseract — used by `scan-to-pdf` when `options.ocr = true`; language packs `eng` and `hin` are installed in the runtime image
 **Internal HTTP API:** `POST /internal/v1/detect-edges` (document edge detection for the scanner UI, relayed by job-service)
 
+**Runs read-only.** The container has a read-only root filesystem, no capabilities, `no-new-privileges` and uid
+10001 (`x-hardened` in `deployment/docker-compose.yml`). Only the `/tmp` tmpfs is writable, and `HOME=/tmp` sends
+LibreOffice, fontconfig and Python caches there. The image carries its third-party licence notice at
+`/licences/THIRD-PARTY-LICENCES.md`. See `docs/developer/architecture/compose-files.md` "Container hardening".
+
 ## Supported Operations
 
 ### 1. Merge PDF

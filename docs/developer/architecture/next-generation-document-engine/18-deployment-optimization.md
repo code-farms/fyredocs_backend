@@ -253,7 +253,7 @@ All per [Docker Compose service reference](https://docs.docker.com/reference/com
 | Hook | Status | Proposal |
 |---|---|---|
 | Non-root | exists (`USER appuser`, uid 10001, every Dockerfile) | also set `user: "10001:10001"` in compose so an image regression cannot silently run as root |
-| Read-only rootfs | absent | `read_only: true` for every service; workers already have `tmpfs /tmp:size=1g`; LibreOffice profiles live at `/tmp/uno-profile-<port>` (`entrypoint.sh:41`) so they stay writable; **pdfcpu writes `config.yml` under the user config dir and can `os.Exit(1)`** — Q4 (`DisableConfigDir` in the 3 remaining mains, doc 01 finding 4) is a prerequisite for read-only in those workers; set `HOME=/tmp` for LO/tesseract |
+| Read-only rootfs | **done 2026-11-09 for every Fyredocs service** (was absent) | `read_only: true` for every service; workers already have `tmpfs /tmp:size=1g`; LibreOffice profiles live at `/tmp/uno-profile-<port>` (`entrypoint.sh:41`) so they stay writable; **pdfcpu writes `config.yml` under the user config dir and can `os.Exit(1)`** — Q4 (`DisableConfigDir` in the 3 remaining mains, doc 01 finding 4) is a prerequisite for read-only in those workers; set `HOME=/tmp` for LO/tesseract |
 | no-new-privileges | absent | `security_opt: ["no-new-privileges:true"]` everywhere (note: snap-installed Docker rejects it — install from the official repo) |
 | Capabilities | absent | `cap_drop: [ALL]`; nothing in the stack binds a port < 1024 inside a container (Caddy publishes 80/443 but runs as root inside its own image; evaluate `cap_add: NET_BIND_SERVICE` for Caddy only) |
 | seccomp | Docker default profile applies | keep default; a custom profile only after `strace`-derived syscall lists per profile (Stage 6) |

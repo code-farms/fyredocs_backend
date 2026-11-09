@@ -9,6 +9,11 @@ The Convert From PDF service converts PDF files to other formats including image
 **Framework**: Gin (Go)
 **Processing**: pdf2docx (Python; for `pdf-to-word`/`pdf-to-docx`), pdfplumber + openpyxl (real table extraction for `pdf-to-excel`/`pdf-to-xlsx`, and the intermediate `.xlsx` for `pdf-to-ods`), LibreOffice (Writer for `pdf-to-odt` and the `pdf-to-word` fallback; Calc `xlsx→ods` for `pdf-to-ods`; Impress `pptx→odp` for `pdf-to-odp`), Ghostscript (`pdf-to-pdfa`), Poppler (`pdftotext`, `pdftohtml`, `pdftoppm` for image/text/html/ppt/odp conversions)
 
+**Runs read-only.** The container has a read-only root filesystem, no capabilities, `no-new-privileges` and uid
+10001 (`x-hardened` in `deployment/docker-compose.yml`). Only the `/tmp` tmpfs is writable, and `HOME=/tmp` sends
+LibreOffice, fontconfig and Python caches there. The image carries its third-party licence notice at
+`/licences/THIRD-PARTY-LICENCES.md`. See `docs/developer/architecture/compose-files.md` "Container hardening".
+
 ## Responsibilities
 
 1. **PDF to Image** - Convert PDF pages to PNG (default), JPEG, or TIFF images at a client-selectable DPI

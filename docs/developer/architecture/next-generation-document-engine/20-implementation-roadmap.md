@@ -42,6 +42,16 @@
 > content carried trailing file structure and failed validation; v0.16.4 returns the original bytes. Parse errors
 > were already permanent (unknown errors are never retried), so `isRecoverable` itself needed no change.
 >
+> **M1.5 remainder done 2026-11-09 (compose and images; runtime check pending Docker).** Every Fyredocs service runs
+> `read_only`, `cap_drop: [ALL]`, `no-new-privileges`, uid 10001 (`x-hardened` in `deployment/docker-compose.yml`,
+> guarded by `scripts/ci/check-compose-hardening.sh`); workers write only to their `/tmp` tmpfs with `HOME=/tmp`.
+> Licence notices ship in each worker image at `/licences/`. CI stage `scripts/ci/08-vuln.sh` runs govulncheck per
+> module plus syft/trivy on built images; its first run found reachable standard-library issues (fixed in Go
+> 1.26.1–1.26.9) and outdated otel, grpc and quic-go, to be bumped separately. The five stale `VOLUME` lines are
+> gone. Decided against: an internal-only worker network (breaks the multi-host layout; host-firewall egress rule
+> documented instead). The LibreOffice meta-package split was already shown not to help on Alpine 3.24
+> (`base-image-setup.md`).
+>
 > **M1.4 remainder coded 2026-11-09 (not yet verified on real binaries).** Every LibreOffice profile (each daemon's,
 > rewritten before every start, and a fresh one per cold fallback in both LibreOffice workers) forces macros off,
 > macro level 3, link updates never, VBA import off. Cold fallbacks no longer share `~/.config/libreoffice` (D6).

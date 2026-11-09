@@ -9,6 +9,11 @@ The Convert To PDF service converts Office (Word/Excel/PowerPoint), HTML, and im
 **Framework**: Gin (Go) for HTTP, custom NATS pull-consumer for jobs
 **Processing**: LibreOffice (via unoserver/unoconvert), pdfcpu
 
+**Runs read-only.** The container has a read-only root filesystem, no capabilities, `no-new-privileges` and uid
+10001 (`x-hardened` in `deployment/docker-compose.yml`). Only the `/tmp` tmpfs is writable, and `HOME=/tmp` sends
+LibreOffice, fontconfig and Python caches there. The image carries its third-party licence notice at
+`/licences/THIRD-PARTY-LICENCES.md`. See `docs/developer/architecture/compose-files.md` "Container hardening".
+
 ## Responsibilities
 
 1. **Office → PDF** — Convert Word/Excel/PowerPoint documents to PDF.

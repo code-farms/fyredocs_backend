@@ -34,7 +34,7 @@ ESSENTIALS_COMPOSE = docker compose -f deployment/docker-compose.essentials.yml 
 # (organize-pdf's pdfcpu suites) under -race overhead.
 TESTFLAGS = -race -count=1 -shuffle=on -timeout=10m
 
-.PHONY: up down logs ps check-ports test test-v test-integration test-infra-up test-infra-down test-binaries cover bench fuzz-short lint dev-up dev-down dev-logs dev-ps dev-nuke $(addprefix test-,$(SERVICES)) $(addprefix test-v-,$(SERVICES))
+.PHONY: up down logs ps check-ports vuln check-compose test test-v test-integration test-infra-up test-infra-down test-binaries cover bench fuzz-short lint dev-up dev-down dev-logs dev-ps dev-nuke $(addprefix test-,$(SERVICES)) $(addprefix test-v-,$(SERVICES))
 
 ## Start service(s) (SVC=…) or the whole stack; env comes from the root .env
 up:
@@ -157,6 +157,14 @@ bench:
 ## Run every fuzz target briefly (smoke fuzzing; long sessions are manual)
 fuzz-short:
 	@bash scripts/fuzz-short.sh
+
+## Vulnerability scan: govulncheck per module, plus SBOM + Trivy on built images when syft/trivy are installed
+vuln:
+	@bash scripts/ci/08-vuln.sh
+
+## Assert every service keeps read_only / cap_drop ALL / no-new-privileges / uid 10001 in every compose variant
+check-compose:
+	@bash scripts/ci/check-compose-hardening.sh
 
 ## Format check + vet across every module (golangci-lint added on top if installed)
 lint:

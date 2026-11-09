@@ -56,13 +56,13 @@ RUN mkdir -p uploads outputs && \
 
 # 4. Copy the binary + the PDF→XLSX helper script from builder context
 COPY --from=builder /app/bin/convert-from-pdf .
+# Third-party licence notice for the programs this image runs (see the file).
+COPY convert-from-pdf/THIRD-PARTY-LICENCES.md /licences/THIRD-PARTY-LICENCES.md
 COPY convert-from-pdf/scripts/ /app/scripts/
 RUN chown -R appuser:appuser convert-from-pdf /app/scripts
 
 USER appuser
 
 EXPOSE 8082
-
-VOLUME /app/uploads /app/outputs
 
 CMD ["./convert-from-pdf"]

@@ -12,12 +12,13 @@ never drift from what developers run locally.
 | # | Script | What it gates | Needs |
 |---|---|---|---|
 | 1 | `scripts/ci/01-format.sh` | `gofmt -l` clean | Go |
-| 2 | `scripts/ci/02-static.sh` | `go vet` per module; golangci-lint (`.golangci.yml`, correctness linters only) when installed — warns loudly when skipped | Go (+ golangci-lint, pinned in the CI image) |
+| 2 | `scripts/ci/02-static.sh` | `go vet` per module; `check-compose-hardening.sh` (every Fyredocs service keeps `read_only`, `cap_drop: [ALL]`, `no-new-privileges`, uid 10001 in every compose variant); golangci-lint (`.golangci.yml`, correctness linters only) when installed — warns loudly when a tool is missing | Go, docker CLI with compose (no daemon), python3 (+ golangci-lint, pinned in the CI image) |
 | 3 | `scripts/ci/03-unit.sh` | unit tests, `-race -count=1 -shuffle=on -timeout=10m`, fully offline | Go |
 | 4 | `scripts/ci/04-integration.sh` | `-tags=integration` suite against real Postgres/Redis/NATS/MinIO; sources `.env`, waits for Postgres, `-p 1` (shared test DB) | Go + the essentials infra (`make test-infra-up` locally; sidecar/services in CI) |
 | 5 | `scripts/ci/05-coverage.sh` | per-module coverprofiles merged to `coverage/merged.out` (artifact) | Go |
 | 6 | `scripts/ci/06-fuzz-short.sh` | every `Fuzz*` target for `FUZZTIME` (default 10s) each | Go |
 | 7 | `scripts/ci/07-build.sh` | every module compiles | Go |
+| 8 | `scripts/ci/08-vuln.sh` | `govulncheck` (pinned `GOVULNCHECK_VERSION`, default v1.9.0) per module, failing on reachable vulnerabilities; when the `fyredocs-*` images exist and `syft`/`trivy` are installed, an SPDX SBOM per image in `sbom/` and `trivy image --severity HIGH,CRITICAL --exit-code 1` — warns loudly when skipped | Go + network (vuln.go.dev); Docker + syft + trivy for the image half |
 
 Deliberately **excluded from the PR pipeline** (run on demand or on a
 schedule): `make bench` (benchmarks), long fuzz sessions
@@ -27,7 +28,16 @@ schedule): `make bench` (benchmarks), long fuzz sessions
 
 Local parity: `make lint` ≈ stages 1–2, `make test` = stage 3,
 `make test-infra-up && make test-integration` = stage 4, `make cover` = 5,
-`make fuzz-short` = 6.
+`make fuzz-short` = 6, `make vuln` = 8, `make check-compose` = the compose half of 2.
+
+**Stage 8 and the Go toolchain.** govulncheck judges the standard library by the Go
+toolchain that runs it, not by the one the images were built with. The images build
+on `golang:1.26-alpine` (a floating tag, newest 1.26 patch at build time), so run
+stage 8 with that same patch release or its standard-library findings describe a
+toolchain nobody ships. First run (2026-11-09, local go1.26.0): every module
+affected, mostly standard-library issues fixed in 1.26.1–1.26.9, plus
+`go.opentelemetry.io/otel` (fixed in 1.45.0), `google.golang.org/grpc` (1.83.1) and
+`github.com/quic-go/quic-go` (0.59.1). Those dependency bumps are a separate change.
 
 ## Argo Workflows wiring
 

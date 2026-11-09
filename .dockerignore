@@ -30,6 +30,9 @@ docs/
 postman/
 scripts/
 **/*.md
+# ...except the per-worker licence notices, which each worker Dockerfile COPYs
+# into /licences/ (a notice that ships nowhere protects nobody).
+!*/THIRD-PARTY-LICENCES.md
 
 # OS / editor cruft
 **/.DS_Store

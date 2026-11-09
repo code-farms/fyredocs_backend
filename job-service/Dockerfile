@@ -32,9 +32,6 @@ COPY --from=builder /etc/group /etc/group
 
 WORKDIR /app
 
-# 7. Create volumes (Note: Scratch doesn't have 'mkdir', but defining VOLUME works)
-VOLUME /app/uploads /app/outputs
-
 # 8. Copy the binary
 COPY --from=builder /app/bin/healthcheck .
 COPY --from=builder /app/bin/job-service .
