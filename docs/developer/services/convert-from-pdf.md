@@ -497,7 +497,7 @@ at boot, so pdfcpu never reads or writes a `config.yml` under the user config di
 
 Used for PDF to Office format conversions.
 
-**Installed packages** (Debian bookworm, `python:3.11-slim-bookworm`; not the full suite):
+**Installed packages** (Debian 13 trixie, `python:3.15-slim-trixie`, LibreOffice 25.2; not the full suite):
 - `libreoffice-core`, `libreoffice-writer`, `libreoffice-calc`, `libreoffice-impress`
 - `fonts-liberation` - Latin fonts, metric-compatible with Arial/Times/Courier
 - `fonts-noto-core` - Noto Sans/Serif, including Devanagari for Hindi

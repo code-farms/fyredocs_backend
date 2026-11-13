@@ -1,3 +1,4 @@
+# check=skip=FromPlatformFlagConstDisallowed
 # Test-runner image for the `binaries`-tagged suite: the Go toolchain plus
 # every external binary the four PDF workers shell out to, so
 # processing_free.go / processing_scan.go exec paths can run for real.
@@ -17,10 +18,12 @@
 # it never ships in a runtime image. The official image is amd64-only, but the
 # application is plain Java, so its files are copied out and run on this image's
 # own JRE on any architecture. Pinned: bump deliberately, it decides pass/fail.
-FROM --platform=linux/amd64 verapdf/cli:v1.30.3 AS verapdf
+# The constant --platform is deliberate ($BUILDPLATFORM would fail to pull on
+# arm64), hence the build-check skip on the first line of this file.
+FROM --platform=linux/amd64 verapdf/cli:v1.30.4 AS verapdf
 
 # NOTE: Go patch release pinned to the `toolchain` line in go.work; bump both together.
-FROM golang:1.26.10-alpine3.24
+FROM golang:1.27.3-alpine3.24
 
 RUN apk add --no-cache \
     ca-certificates \

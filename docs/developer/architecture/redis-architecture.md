@@ -1,5 +1,11 @@
 # Redis Architecture
 
+> **Server: Valkey** (since 2026-11-09). The `redis` service runs `valkey/valkey:9.0.7-alpine3.24`,
+> the BSD-licensed Linux Foundation fork of Redis 7.2, instead of `redis:7-alpine` (Redis 7.4+ is
+> RSALv2/SSPL; Redis 8 adds AGPLv3). The protocol is the same, so go-redis, every key pattern below
+> and every `REDIS_*` setting are unchanged; this document keeps saying "Redis" for the protocol.
+> See "Valkey" below for the one-time migration of existing data.
+
 ## Overview
 
 Redis serves as the backbone for asynchronous job processing, caching, and session management in the Fyredocs backend. It provides high-performance, in-memory data storage with persistence capabilities.
@@ -280,7 +286,7 @@ cleanup-worker:lock
 ```yaml
 # docker-compose.yml
 redis:
-  image: redis:7-alpine
+  image: valkey/valkey:9.0.7-alpine3.24
   volumes:
     - redis_data:/data  # Data persistence
 ```
@@ -501,8 +507,8 @@ published** (internal-only on `fyredocs_net`):
 
 ```yaml
 redis:
-  image: redis:7-alpine
-  command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory ${REDIS_MAXMEMORY:-400mb} --maxmemory-policy volatile-lru
+  image: valkey/valkey:9.0.7-alpine3.24
+  command: valkey-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory ${REDIS_MAXMEMORY:-400mb} --maxmemory-policy volatile-lru
   networks:
     - fyredocs_net   # internal only; no `ports:` mapping
 ```
@@ -752,3 +758,27 @@ exists to be evicted.
 ---
 
 **Built with Redis 7 for high-performance job queuing and caching** ⚡
+
+## Valkey
+
+**Why.** Redis 7.4 moved to RSALv2/SSPL and Redis 8 added AGPLv3 as a third option. Valkey 9 (BSD-3)
+continues the Redis 7.2 codebase under the Linux Foundation, speaks the same protocol and reads the same
+commands, so nothing in the services changes. The image also ships `redis-server`/`redis-cli` as aliases.
+
+**Switching a host that ran the old Redis.** Redis 7.4 writes its append-only file with an RDB preamble in
+format 12, and Valkey 9 refuses it (`Can't handle RDB format version 12`, measured 2026-11-09) and exits,
+so the `redis` container keeps restarting. A fresh install is unaffected. On a host with an old `redis_data`
+volume, remove it before starting Valkey:
+
+```bash
+docker compose -f deployment/docker-compose.yml --env-file .env stop redis
+docker volume rm fyredocs_redis_data
+docker compose -f deployment/docker-compose.yml --env-file .env up -d redis
+```
+
+That discards the data: users are logged out, the JWT denylist is lost (revoked tokens work again until they
+expire, at most the access-token TTL), and guest job lists and in-flight uploads are gone. If data ever has
+to be kept instead, have the old Redis rewrite its AOF as plain commands before switching
+(`CONFIG SET aof-use-rdb-preamble no`, then `BGREWRITEAOF` and wait for `aof_last_bgrewrite_status:ok`);
+Valkey replays that file. Tested 2026-11-09 with strings, hashes, sets, sorted sets and streams: every key
+and its TTL survived.

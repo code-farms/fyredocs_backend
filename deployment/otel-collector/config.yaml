@@ -32,7 +32,9 @@ processors:
 exporters:
   # Forward traces to Tempo over OTLP/gRPC. tls.insecure: internal network,
   # no TLS between collector and Tempo.
-  otlp/tempo:
+  # otlp_grpc: the plain "otlp" exporter name is deprecated since collector
+  # 0.165.0 (startup warning: "use otlp_grpc instead").
+  otlp_grpc/tempo:
     endpoint: tempo:4317
     tls:
       insecure: true
@@ -54,4 +56,4 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlp/tempo]
+      exporters: [otlp_grpc/tempo]

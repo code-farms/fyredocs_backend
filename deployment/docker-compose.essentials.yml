@@ -39,7 +39,7 @@ services:
       - fyredocs_net
 
   redis:
-    image: redis:7-alpine
+    image: valkey/valkey:9.0.7-alpine3.24  # see docker-compose.yml redis note
     restart: always
     ports:
       # Loopback-only (see db note above).

@@ -331,7 +331,7 @@ The site address is `{$PUBLIC_DOMAIN::80}`:
 
 ```yaml
 caddy:
-  image: caddy:2-alpine
+  image: caddy:2.11.9-alpine
   ports: ["80:80", "443:443"]        # the only published ports in the stack
   environment:
     PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-:80}

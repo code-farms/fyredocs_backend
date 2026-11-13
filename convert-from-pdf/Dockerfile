@@ -22,14 +22,17 @@ RUN cd convert-from-pdf && \
 # ---- Runtime Stage ----
 # Runtime uses Python (pdf2docx for pdf→word), LibreOffice (pdf→xlsx/odt/ods/odp +
 # pdf→word fallback), poppler (pdftoppm/pdftohtml/pdftotext), and Ghostscript
-# (pdf→pdfa). Base is python:3.11-slim-bookworm because pdf2docx's deps
+# (pdf→pdfa). Base is a Debian slim Python image because pdf2docx's deps
 # (PyMuPDF, opencv-python-headless) do not publish musllinux wheels for aarch64
 # and would otherwise have to compile MuPDF from source.
 # Fonts: fonts-liberation keeps Latin Office layouts; fonts-noto-core adds Noto
 # Sans/Serif Devanagari so Hindi survives LibreOffice's PDF import and the
-# Ghostscript PDF/A rewrite (which embeds fonts). Bookworm stays: it is still
-# security-supported, and LibreOffice/Python leave this image in Stage 3.
-FROM python:3.11-slim-bookworm
+# Ghostscript PDF/A rewrite (which embeds fonts).
+# Debian 13 (trixie) and Python 3.15: latest as of 2026-11-09. Bookworm's
+# packages carried 4 CRITICAL / ~100 HIGH findings with no bookworm fix
+# (docs/developer/architecture/next-generation-document-engine/benchmarks/
+# raw-2026-11-09/NOTES.md). LibreOffice/Python leave this image in Stage 3.
+FROM python:3.15-slim-trixie
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -44,7 +47,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 
 # pdf2docx: PDF→DOCX. pdfplumber+openpyxl: PDF→XLSX table extraction
 # (scripts/pdf_to_xlsx.py). All pure-Python (no Java/opencv beyond pdf2docx's).
-RUN pip3 install --no-cache-dir pdf2docx==0.5.8 pdfplumber==0.11.4 openpyxl==3.1.5
+# Pinned; TestPdfToWordBinaries and TestPdfToExcelBinaries guard upgrades.
+RUN pip3 install --no-cache-dir pdf2docx==0.5.13 pdfplumber==0.11.10 openpyxl==3.1.5
 
 RUN useradd -m -u 10001 appuser
 

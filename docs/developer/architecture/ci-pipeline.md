@@ -31,10 +31,10 @@ Local parity: `make lint` ≈ stages 1–2, `make test` = stage 3,
 `make fuzz-short` = 6, `make vuln` = 8, `make check-compose` = the compose half of 2.
 
 **Stage 8 and the Go toolchain.** govulncheck judges the standard library by the Go
-toolchain that runs it. `go.work` sets `toolchain go1.26.10`, so the go command (and
+toolchain that runs it. `go.work` sets `toolchain go1.27.3`, so the go command (and
 therefore govulncheck) switches to that release automatically, and the builder images
-are pinned to the same patch (`golang:1.26.10-alpine` in
-`deployment/base-go-builder.Dockerfile`, `golang:1.26.10-alpine3.24` in
+are pinned to the same patch (`golang:1.27.3-alpine` in
+`deployment/base-go-builder.Dockerfile`, `golang:1.27.3-alpine3.24` in
 `deployment/test-binaries.Dockerfile`). Bump all three together.
 
 History: the first run (2026-11-09, go1.26.0) found every module affected by
@@ -138,9 +138,9 @@ spec:
             - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: fyredocs-ci, key: pg-password}}}
             - {name: POSTGRES_DB, value: fyredocs}
         - name: redis
-          image: redis:7-alpine
+          image: valkey/valkey:9.0.7-alpine3.24
         - name: nats
-          image: nats:2.10-alpine
+          image: nats:2.15.2-alpine
           args: ["-js"]
         - name: minio
           image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z

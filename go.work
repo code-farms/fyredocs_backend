@@ -1,11 +1,12 @@
 go 1.26.0
 
 // Minimum toolchain for builds, tests and govulncheck (CI stage 8): the go
-// command switches to it automatically. 1.26.10 carries the standard-library
-// fixes govulncheck reported against 1.26.0 (2026-11-09). NOTE: keep in step
+// command switches to it automatically. Latest release as of 2026-11-09
+// (1.26.10 was the first pin, for the standard-library fixes govulncheck
+// reported against 1.26.0). NOTE: keep in step
 // with the pinned images deployment/base-go-builder.Dockerfile and
 // deployment/test-binaries.Dockerfile.
-toolchain go1.26.10
+toolchain go1.27.3
 
 use (
 	./ai-service

@@ -113,7 +113,7 @@ services:
   #    transaction pooling: migrations connect via DATABASE_URL_DIRECT, and so
   #    does db-backup's pg_dump.
   pgbouncer:
-    image: edoburu/pgbouncer:v1.25.2-p0
+    image: edoburu/pgbouncer:v1.26.1-p0
     restart: always
     environment:
       DB_HOST: db
@@ -172,17 +172,24 @@ services:
       - fyredocs_net
 
   redis:
-    image: redis:7-alpine
+    # Valkey, the BSD-licensed fork of Redis 7.2 (Linux Foundation), replaced
+    # redis:7-alpine on 2026-11-09: Redis 7.4+ is RSALv2/SSPL and Redis 8 adds
+    # AGPLv3. Same protocol, so every client and REDIS_* setting is unchanged.
+    # Valkey cannot read the RDB v12 that Redis 7.4 writes, and refuses to start
+    # on it: on a host that ran the old Redis, remove the redis_data volume
+    # before switching (docs/developer/architecture/redis-architecture.md
+    # "Valkey"). A fresh install needs nothing.
+    image: valkey/valkey:9.0.7-alpine3.24
     restart: always
     # maxmemory caps Redis well under the container limit so it never gets
     # OOM-killed; volatile-lru evicts only keys that carry a TTL. Every Fyredocs
     # Redis key has a TTL (plan cache 8h, JWT denylist 8h, upload sessions 30m,
     # rate-limit ZSETs 2x window), so nothing TTL-less is ever evicted.
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory ${REDIS_MAXMEMORY:-400mb} --maxmemory-policy volatile-lru
+    command: valkey-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory ${REDIS_MAXMEMORY:-400mb} --maxmemory-policy volatile-lru
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=$REDIS_PASSWORD redis-cli ping"]
+      test: ["CMD-SHELL", "VALKEYCLI_AUTH=$REDIS_PASSWORD valkey-cli ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -205,7 +212,7 @@ services:
       - fyredocs_net
 
   nats:
-    image: nats:2.10-alpine
+    image: nats:2.15.2-alpine
     restart: always
     command: ["--jetstream", "--store_dir=/data", "-m", "8222"]
     volumes:
@@ -380,7 +387,7 @@ services:
   # browser<->MinIO byte routing (presigned URLs), and API proxying to the
   # api-gateway. See deployment/caddy/Caddyfile.
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.11.9-alpine
     restart: always
     ports:
       - "80:80"
@@ -1643,7 +1650,7 @@ services:
   # OTLP ingestion point. Receives spans over HTTP on 4318 (matches every
   # service's OTEL_EXPORTER_OTLP_ENDPOINT) and forwards them to Tempo.
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.156.0
+    image: otel/opentelemetry-collector-contrib:0.165.0
     profiles: ["observability"]
     restart: always
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
@@ -1670,7 +1677,7 @@ services:
   # Trace storage/query backend. Ingests from the collector over OTLP/gRPC
   # (:4317); Grafana queries it over HTTP (:3200).
   tempo:
-    image: grafana/tempo:2.6.1
+    image: grafana/tempo:2.10.10
     profiles: ["observability"]
     restart: always
     command: ["-config.file=/etc/tempo.yaml"]
@@ -1696,7 +1703,7 @@ services:
   # queries it via the Loki datasource, with trace_id ↔ trace correlation. Free /
   # self-hosted, single-binary, filesystem storage. Console loopback-only.
   loki:
-    image: grafana/loki:3.3.2
+    image: grafana/loki:3.6.20
     profiles: ["observability"]
     restart: always
     command: ["-config.file=/etc/loki/loki-config.yaml"]
@@ -1724,7 +1731,7 @@ services:
   # tails their stdout, labels each stream by compose service + container name, and
   # pushes to Loki. Replaces per-container `docker logs` with central search.
   alloy:
-    image: grafana/alloy:v1.5.1
+    image: grafana/alloy:v1.21.3
     profiles: ["observability"]
     restart: always
     command:
@@ -1757,7 +1764,7 @@ services:
   # Scrapes the /metrics endpoint of every service (see prometheus/prometheus.yml).
   # Console loopback-only for operators — never public.
   prometheus:
-    image: prom/prometheus:v3.0.1
+    image: prom/prometheus:v3.16.0
     profiles: ["observability"]
     restart: always
     command:
@@ -1794,7 +1801,7 @@ services:
   # Served under /grafana via the Caddy edge and embedded in the admin SPA's
   # Observability tab. Loopback port kept for direct operator access.
   grafana:
-    image: grafana/grafana:11.4.0
+    image: grafana/grafana:13.3.0
     profiles: ["observability"]
     restart: always
     environment:

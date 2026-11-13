@@ -34,7 +34,7 @@ ESSENTIALS_COMPOSE = docker compose -f deployment/docker-compose.essentials.yml 
 # (organize-pdf's pdfcpu suites) under -race overhead.
 TESTFLAGS = -race -count=1 -shuffle=on -timeout=10m
 
-.PHONY: up down logs ps check-ports vuln check-compose test test-v test-integration test-infra-up test-infra-down test-binaries cover bench fuzz-short lint dev-up dev-down dev-logs dev-ps dev-nuke $(addprefix test-,$(SERVICES)) $(addprefix test-v-,$(SERVICES))
+.PHONY: up down logs ps check-ports vuln check-compose test-convert-from-pdf-image test test-v test-integration test-infra-up test-infra-down test-binaries cover bench fuzz-short lint dev-up dev-down dev-logs dev-ps dev-nuke $(addprefix test-,$(SERVICES)) $(addprefix test-v-,$(SERVICES))
 
 ## Start service(s) (SVC=…) or the whole stack; env comes from the root .env
 up:
@@ -140,6 +140,18 @@ test-binaries:
 			go test -tags="integration binaries" -count=1 -timeout=15m ./$$svc/... || fail=1; \
 		done; \
 		exit $$fail'
+
+## pdf2docx / pdfplumber tests inside the real convert-from-pdf image (build it first:
+## docker compose -f deployment/docker-compose.yml --env-file .env build convert-from-pdf).
+## The shared test image lacks that Debian/pip runtime, so the static test binary is
+## compiled there and run here.
+test-convert-from-pdf-image:
+	docker build -q -f deployment/test-binaries.Dockerfile -t fyredocs-test-binaries deployment >/dev/null
+	docker run --rm -v "$(CURDIR)":/src -v fyredocs-test-gomod:/go/pkg/mod \
+		-v fyredocs-test-gocache:/root/.cache/go-build -v fyredocs-test-out:/out \
+		fyredocs-test-binaries sh -c 'cd /src && CGO_ENABLED=0 go test -c -tags "integration binaries" -o /out/cfp-processing.test ./convert-from-pdf/processing && chmod 755 /out/cfp-processing.test'
+	docker run --rm -v fyredocs-test-out:/out:ro --entrypoint /out/cfp-processing.test \
+		fyredocs-convert-from-pdf -test.run 'PdfToWord|PdfToExcel' -test.v -test.count=1
 
 ## Per-module coverage profiles merged into coverage/merged.out + func summary
 cover:
