@@ -106,3 +106,18 @@ func TestInitDisabledWhenUnreachable(t *testing.T) {
 		t.Error("expected Tracer to be set even when collector is unreachable")
 	}
 }
+
+func TestTracesURL(t *testing.T) {
+	cases := map[string]string{
+		"http://otel-collector:4318":            "http://otel-collector:4318/v1/traces",
+		"http://otel-collector:4318/":           "http://otel-collector:4318/v1/traces",
+		"https://collector.example/custom/path": "https://collector.example/custom/path",
+		"http://localhost:4318/v1/traces":       "http://localhost:4318/v1/traces",
+		"not a url":                             "not a url",
+	}
+	for in, want := range cases {
+		if got := tracesURL(in); got != want {
+			t.Errorf("tracesURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

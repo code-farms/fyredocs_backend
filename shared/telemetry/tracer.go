@@ -67,7 +67,7 @@ func Init(serviceName string) func(context.Context) error {
 	ctx := context.Background()
 
 	exporter, err := otlptracehttp.New(ctx,
-		otlptracehttp.WithEndpointURL(endpoint),
+		otlptracehttp.WithEndpointURL(tracesURL(endpoint)),
 	)
 	if err != nil {
 		slog.Warn("failed to create OTLP exporter, tracing disabled", "error", err)
@@ -103,6 +103,25 @@ func Init(serviceName string) func(context.Context) error {
 	return func(ctx context.Context) error {
 		return tp.Shutdown(ctx)
 	}
+}
+
+// tracesURL turns OTEL_EXPORTER_OTLP_ENDPOINT, which the OTLP spec defines as a
+// BASE URL (e.g. http://otel-collector:4318), into the traces URL by appending
+// /v1/traces when the URL has no path. otlptracehttp.WithEndpointURL stopped
+// appending it itself (v1.47.0: "the path of the provided URL is used as-is"),
+// so after the 2026-11-09 dependency bump every service posted spans to "/" and
+// the collector answered 404 — tracing silently stopped. A URL that already
+// carries a path is passed through unchanged; an unparsable one is returned as
+// is and the exporter keeps its default.
+func tracesURL(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return endpoint
+	}
+	if u.Path == "" || u.Path == "/" {
+		u.Path = "/v1/traces"
+	}
+	return u.String()
 }
 
 // probeEndpoint performs a quick TCP dial to the collector host to check
