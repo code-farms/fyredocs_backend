@@ -9,9 +9,12 @@ import (
 	"strings"
 )
 
-// buildTextPDF writes a minimal, valid PDF: pages of Helvetica text, plus an
-// optional incompressible padding stream so size classes (small/medium/large)
-// can be hit without changing the page content. It is hand-assembled so the
+// buildTextPDF writes a minimal, valid PDF: pages of Helvetica text, plus,
+// for the size classes (small/medium/large), an uncompressed RGB gradient image
+// of about padBytes drawn on page 1. Until 2026-11-16 the size came from a
+// stream nothing referenced, which compress-pdf simply dropped (40 MB → 16 KB),
+// so the large class never made an engine work on large content. A gradient
+// (not noise) keeps the visual checks fair after lossy recompression. It is hand-assembled so the
 // harness needs no PDF writer dependency for its most common input; the result
 // is checked by pdfcpu in the unit tests.
 func buildTextPDF(r *rand.Rand, pages, linesPerPage, padBytes int) []byte {
@@ -30,9 +33,32 @@ func buildTextPDF(r *rand.Rand, pages, linesPerPage, padBytes int) []byte {
 	offsets = append(offsets, 0)
 	pagesObj := len(offsets) - 1
 	font := obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+	image := 0
+	if padBytes > 0 {
+		const w = 1000
+		h := max(1, padBytes/(w*3))
+		pix := make([]byte, w*h*3)
+		shift := byte(r.UintN(64))
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				i := (y*w + x) * 3
+				pix[i] = byte(x*255/w) + shift
+				pix[i+1] = byte(y * 255 / h)
+				pix[i+2] = 160
+			}
+		}
+		offsets = append(offsets, buf.Len())
+		image = len(offsets) - 1
+		fmt.Fprintf(&buf, "%d 0 obj\n<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length %d >>\nstream\n", image, w, h, len(pix))
+		buf.Write(pix)
+		buf.WriteString("\nendstream\nendobj\n")
+	}
 	var kids []string
 	for p := 0; p < pages; p++ {
 		var content strings.Builder
+		if image > 0 && p == 0 {
+			content.WriteString("q 500 0 0 300 56 40 cm /Im1 Do Q\n")
+		}
 		content.WriteString("BT /F1 11 Tf 56 760 Td 14 TL\n")
 		fmt.Fprintf(&content, "(Page %d) Tj T*\n", p+1)
 		for l := 0; l < linesPerPage; l++ {
@@ -41,19 +67,12 @@ func buildTextPDF(r *rand.Rand, pages, linesPerPage, padBytes int) []byte {
 		content.WriteString("ET")
 		cs := content.String()
 		stream := obj(fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(cs), cs))
-		page := obj(fmt.Sprintf("<< /Type /Page /Parent %d 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 %d 0 R >> >> /Contents %d 0 R >>", pagesObj, font, stream))
-		kids = append(kids, fmt.Sprintf("%d 0 R", page))
-	}
-	if padBytes > 0 {
-		pad := make([]byte, padBytes)
-		for i := range pad {
-			pad[i] = byte(r.UintN(256))
+		resources := fmt.Sprintf("/Font << /F1 %d 0 R >>", font)
+		if image > 0 {
+			resources += fmt.Sprintf(" /XObject << /Im1 %d 0 R >>", image)
 		}
-		offsets = append(offsets, buf.Len())
-		n := len(offsets) - 1
-		fmt.Fprintf(&buf, "%d 0 obj\n<< /Length %d >>\nstream\n", n, len(pad))
-		buf.Write(pad)
-		buf.WriteString("\nendstream\nendobj\n")
+		page := obj(fmt.Sprintf("<< /Type /Page /Parent %d 0 R /MediaBox [0 0 612 792] /Resources << %s >> /Contents %d 0 R >>", pagesObj, resources, stream))
+		kids = append(kids, fmt.Sprintf("%d 0 R", page))
 	}
 	offsets[pagesObj] = buf.Len()
 	fmt.Fprintf(&buf, "%d 0 obj\n<< /Type /Pages /Kids [%s] /Count %d >>\nendobj\n", pagesObj, strings.Join(kids, " "), pages)

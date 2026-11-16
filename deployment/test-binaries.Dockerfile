@@ -23,7 +23,7 @@
 FROM --platform=linux/amd64 verapdf/cli:v1.30.4 AS verapdf
 
 # NOTE: Go patch release pinned to the `toolchain` line in go.work; bump both together.
-FROM golang:1.27.3-alpine3.24
+FROM golang:1.27.4-alpine3.24
 
 RUN apk add --no-cache \
     ca-certificates \

@@ -38,13 +38,14 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	outputFileName := fmt.Sprintf("processed_%s_%d", jobID, time.Now().Unix())
 	var outputPath string
 	var err error
+	var toolMeta map[string]interface{}
 
 	switch toolType {
 	case "pdf-to-image", "pdf-to-img":
 		outputPath, err = pdfToImages(ctx, inputPaths[0], outputDir, outputFileName, options)
 	case "pdf-to-pdfa":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = pdfToPdfa(ctx, inputPaths[0], outputPath)
+		toolMeta, err = pdfToPdfa(ctx, inputPaths[0], outputPath)
 	case "pdf-to-word", "pdf-to-docx":
 		outputPath = filepath.Join(outputDir, outputFileName+".docx")
 		// Try pdf2docx first — it reconstructs real paragraphs/lists/tables.
@@ -93,6 +94,9 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 	}
 
 	meta := map[string]interface{}{}
+	for k, v := range toolMeta {
+		meta[k] = v
+	}
 	// Store the actual output extension so downstream services (job-service)
 	// can determine the correct Content-Type and download filename.
 	if ext := filepath.Ext(outputPath); ext != "" {

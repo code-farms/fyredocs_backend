@@ -148,7 +148,7 @@ func TestRepairPDFBinaries(t *testing.T) {
 	input := buildImagePDF(t, dir, "REPAIR ME")
 	output := filepath.Join(dir, "out.pdf")
 
-	if err := repairPDF(context.Background(), input, output); err != nil {
+	if _, err := repairPDF(context.Background(), input, output); err != nil {
 		t.Fatalf("repairPDF: %v", err)
 	}
 	assertValidPDF(t, output)
@@ -166,7 +166,7 @@ func TestFlattenPDFBinaries(t *testing.T) {
 	input := buildImagePDF(t, dir, "FLATTEN ME")
 	output := filepath.Join(dir, "out.pdf")
 
-	if err := flattenPDF(context.Background(), input, output); err != nil {
+	if _, err := flattenPDF(context.Background(), input, output); err != nil {
 		t.Fatalf("flattenPDF: %v", err)
 	}
 	assertValidPDF(t, output)

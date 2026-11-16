@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"optimize-pdf/processing"
 	"testing"
 	"time"
 
@@ -74,6 +75,7 @@ func TestFriendlyMessage(t *testing.T) {
 		ErrCodeTimeout:          "This file took too long to process. Please try again, or use a smaller file.",
 		ErrCodeUnsupportedTool:  "This operation isn't supported for this file.",
 		ErrCodeConversionFailed: "We couldn't process this file. It may be corrupted, password-protected, or in an unsupported format. Please try a different file.",
+		ErrCodePagesLost:        "This file is damaged in a way that would lose pages, so we stopped rather than return an incomplete document. Please try a different copy of the file.",
 	}
 	for code, want := range cases {
 		if got := friendlyMessage(code); got != want {
@@ -96,6 +98,7 @@ func TestClassifyError(t *testing.T) {
 		{"timeout error", errors.New("context deadline exceeded"), ErrCodeTimeout},
 		{"timeout keyword", errors.New("operation timeout"), ErrCodeTimeout},
 		{"generic error", errors.New("file not found"), ErrCodeConversionFailed},
+		{"pages lost (wrapped)", fmt.Errorf("repair-pdf: %w (input 2 pages, output 1)", processing.ErrPagesLost), ErrCodePagesLost},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

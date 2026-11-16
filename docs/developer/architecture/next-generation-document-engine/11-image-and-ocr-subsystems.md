@@ -191,6 +191,13 @@ flowchart LR
   `computeSafeDPI` cap stays). Pass `--dpi N` to tesseract explicitly so it never guesses from PNG metadata.
 - **`--oem 1`** with **tessdata_best `hin`** (11.3 MB) shipped in the image instead of the Alpine data package; `eng` may
   stay on the packaged data. Provenance of the Alpine `-data-hin` package must be confirmed before deciding (unverified).
+- **Implemented 2026-11-16 (pulled forward from Stage 2 after the first engine benchmark measured the
+  rebuild at SSIM 0.86 against the input):** `optimize-pdf/processing/ocr_overlay.go`. Tesseract gets
+  `--dpi <dpi> -c textonly_pdf=1`; pdfcpu stamps each text-only page with `AddWatermarksMapFile`
+  (`position:c, scalefactor:1 abs`); a page whose OCR fails keeps its original content; inputs pdfcpu
+  cannot read fall back to the rebuild (`metadata.ocrMode`). `--oem 1` was not adopted. Tested: pixels
+  unchanged and text-layer words on the visible text, including a `/Rotate 90` page. The pdf.js /
+  Acrobat selection check is still manual.
 - **Searchable PDF that preserves the original page (Stage 2)**: `-c textonly_pdf=1` produces a page with only the
   invisible GlyphLessFont text; stamp it over the original page with pdfcpu's PDF-mode watermark (the same E1 mechanism
   doc `14` uses for Typst stamps). Output quality then equals input quality and size grows by the text layer only. For

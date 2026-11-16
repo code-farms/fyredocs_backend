@@ -48,10 +48,10 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		metadata, err = compressPDF(ctx, inputPaths[0], outputPath, options)
 	case "repair-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = repairPDF(ctx, inputPaths[0], outputPath)
+		metadata, err = repairPDF(ctx, inputPaths[0], outputPath)
 	case "flatten-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
-		err = flattenPDF(ctx, inputPaths[0], outputPath)
+		metadata, err = flattenPDF(ctx, inputPaths[0], outputPath)
 	case "ocr-pdf":
 		outputPath = filepath.Join(outputDir, outputFileName+".pdf")
 		metadata, err = ocrPDF(ctx, inputPaths[0], outputPath, options)

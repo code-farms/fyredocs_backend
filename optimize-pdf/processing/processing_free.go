@@ -1,10 +1,8 @@
 package processing
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -62,21 +60,13 @@ func compressPDF(ctx context.Context, inputPath string, outputPath string, optio
 
 	quality, _ := optionString(options, "quality")
 
-	gsPath, err := findGhostscript()
+	guardMeta, err := runGuardedRewrite(ctx, rewrite{
+		tool:         "compress-pdf",
+		args:         func(in string) []string { return buildCompressArgs(quality, outputPath, in) },
+		textFallback: optimizeLossless,
+	}, inputPath, outputPath)
 	if err != nil {
 		return nil, err
-	}
-
-	args := buildCompressArgs(quality, outputPath, inputPath)
-
-	var stderr bytes.Buffer
-	cmd := procexec.Command(ctx, gsPath, args...)
-	cmd.Stderr = &stderr
-	cmd.Stdout = io.Discard
-
-	if err := cmd.Run(); err != nil {
-		slog.ErrorContext(ctx, "ghostscript compress failed", "error", err, "op", "ghostscript.compress", "stderr", stderr.String())
-		return nil, fmt.Errorf("ghostscript compression failed: %w", err)
 	}
 
 	outputInfo, err := os.Stat(outputPath)
@@ -95,6 +85,9 @@ func compressPDF(ctx context.Context, inputPath string, outputPath string, optio
 		"compressedSizeBytes": compressedSize,
 		"compressionRatio":    fmt.Sprintf("%.2f%%", compressionRatio),
 		"quality":             quality,
+	}
+	for k, v := range guardMeta {
+		metadata[k] = v
 	}
 
 	slog.Info("compression complete", "originalBytes", originalSize, "compressedBytes", compressedSize, "reduction", fmt.Sprintf("%.2f%%", compressionRatio))
@@ -171,15 +164,29 @@ func buildCompressArgs(quality, outputPath, inputPath string) []string {
 // broken cross-reference table or truncated trailer is rebuilt. It is not
 // lossless: content Ghostscript cannot interpret is dropped, which is the
 // intended trade for a file that opens at all.
-func repairPDF(ctx context.Context, inputPath string, outputPath string) error {
+func repairPDF(ctx context.Context, inputPath string, outputPath string) (map[string]interface{}, error) {
 	slog.Info("repairing PDF using Ghostscript", "input", inputPath)
 
-	gsPath, err := findGhostscript()
+	meta, err := runGuardedRewrite(ctx, rewrite{
+		tool:         "repair-pdf",
+		args:         func(in string) []string { return buildRepairArgs(outputPath, in) },
+		textFallback: optimizeLossless,
+	}, inputPath, outputPath)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("repair failed: output file not created")
 	}
 
-	args := []string{
+	slog.Info("PDF repair complete", "output", outputPath)
+	return meta, nil
+}
+
+// buildRepairArgs returns the Ghostscript arguments for repair: a lenient
+// re-parse written out as a clean /prepress PDF.
+func buildRepairArgs(outputPath, inputPath string) []string {
+	return []string{
 		"-dNOPAUSE",
 		"-dBATCH",
 		"-dSAFER",
@@ -191,23 +198,6 @@ func repairPDF(ctx context.Context, inputPath string, outputPath string) error {
 		fmt.Sprintf("-sOutputFile=%s", outputPath),
 		inputPath,
 	}
-
-	var stderr bytes.Buffer
-	cmd := procexec.Command(ctx, gsPath, args...)
-	cmd.Stderr = &stderr
-	cmd.Stdout = io.Discard
-
-	if err := cmd.Run(); err != nil {
-		slog.ErrorContext(ctx, "ghostscript repair failed", "error", err, "op", "ghostscript.repair", "stderr", stderr.String())
-		return fmt.Errorf("ghostscript repair failed: %w", err)
-	}
-
-	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-		return fmt.Errorf("repair failed: output file not created")
-	}
-
-	slog.Info("PDF repair complete", "output", outputPath)
-	return nil
 }
 
 // buildFlattenArgs returns the Ghostscript arguments that bake annotation and
@@ -237,32 +227,24 @@ func buildFlattenArgs(outputPath, inputPath string) []string {
 // rendering pages to images would destroy selection and balloon file size.
 // Known limit: a form field with no appearance stream (rare NeedAppearances
 // documents) renders nothing rather than its value.
-func flattenPDF(ctx context.Context, inputPath string, outputPath string) error {
+func flattenPDF(ctx context.Context, inputPath string, outputPath string) (map[string]interface{}, error) {
 	slog.Info("flattening PDF using Ghostscript", "input", inputPath)
 
-	gsPath, err := findGhostscript()
+	// No text fallback: a lossless rewrite would not flatten anything, so the
+	// flattened output is kept and the job carries a warning instead.
+	meta, err := runGuardedRewrite(ctx, rewrite{
+		tool: "flatten-pdf",
+		args: func(in string) []string { return buildFlattenArgs(outputPath, in) },
+	}, inputPath, outputPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	args := buildFlattenArgs(outputPath, inputPath)
-
-	var stderr bytes.Buffer
-	cmd := procexec.Command(ctx, gsPath, args...)
-	cmd.Stderr = &stderr
-	cmd.Stdout = io.Discard
-
-	if err := cmd.Run(); err != nil {
-		slog.ErrorContext(ctx, "ghostscript flatten failed", "error", err, "op", "ghostscript.flatten", "stderr", stderr.String())
-		return fmt.Errorf("ghostscript flatten failed: %w", err)
-	}
-
 	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-		return fmt.Errorf("flatten failed: output file not created")
+		return nil, fmt.Errorf("flatten failed: output file not created")
 	}
 
 	slog.Info("PDF flatten complete", "output", outputPath)
-	return nil
+	return meta, nil
 }
 
 // findGhostscript locates the Ghostscript binary, trying the Linux names first
@@ -572,6 +554,14 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 	}
 	slog.Info("OCR rendering page by page", "dpi", dpi, "pages", pageCount, "input", inputPath)
 
+	// Overlay mode (doc 11 §5.2): tesseract writes a text-only PDF per page and
+	// the invisible text is stamped onto the ORIGINAL page, so the scan keeps
+	// its quality. The old pipeline rebuilt every page from the PNG it OCRed,
+	// which the first engine benchmark measured as SSIM 0.86 against the input
+	// (2026-11-16). Overlay needs pdfcpu to read the input; damaged files that
+	// only Poppler accepts keep the rebuild path.
+	overlay := ocrOverlayPossible(ctx, inputPath, pageCount)
+
 	// Render, OCR and delete one page at a time inside the worker pool. The
 	// previous pipeline rendered every page up front, so the job's tmpfs held
 	// all page images before recognition began and long scans exhausted it
@@ -581,6 +571,9 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 	// raises (or lowers) that cap on larger boxes.
 	workers := ocrMaxWorkers()
 
+	// Per page: the PDF tesseract produced (text-only in overlay mode, image +
+	// text otherwise). In overlay mode a page whose OCR failed has "" and keeps
+	// its original content without a text layer.
 	pdfFiles := make([]string, pageCount)
 	// Per-page plain-text sidecars (tesseract's `txt` output config). Indexed
 	// by page so the concatenated text follows merged-PDF page order, not
@@ -608,14 +601,12 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 			}
 
 			outputBase := filepath.Join(tempDir, fmt.Sprintf("ocr_%05d", i+1))
-			cmd := procexec.Command(gctx, "tesseract",
-				imgPath,
-				outputBase,
-				"-l", language,
-				"pdf", "txt",
-			)
+			cmd := procexec.Command(gctx, "tesseract", ocrTesseractArgs(imgPath, outputBase, language, dpi, overlay)...)
 			if err := cmd.Run(); err != nil {
 				slog.Warn("OCR failed for page, falling back", "page", i+1, "error", err)
+				if overlay {
+					return nil // original page kept, no text layer
+				}
 				pdfFile := outputBase + ".pdf"
 				if err := api.ImportImagesFile(ctx, []string{imgPath}, pdfFile, nil, nil); err != nil {
 					return fmt.Errorf("failed to process page %d: %w", i+1, err)
@@ -633,7 +624,11 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 		return nil, err
 	}
 
-	if len(pdfFiles) == 1 {
+	if overlay {
+		if err := stampTextLayers(ctx, inputPath, outputPath, pdfFiles); err != nil {
+			return nil, err
+		}
+	} else if len(pdfFiles) == 1 {
 		if err := copyFile(pdfFiles[0], outputPath); err != nil {
 			return nil, err
 		}
@@ -647,6 +642,7 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 		"language":   language,
 		"dpi":        dpi,
 		"pagesOCRed": pageCount,
+		"ocrMode":    map[bool]string{true: "overlay", false: "rebuild"}[overlay],
 	}
 	// The extracted text rides back on the job's metadata jsonb — a job has
 	// exactly one output file, and the searchable PDF claims it. The cap keeps

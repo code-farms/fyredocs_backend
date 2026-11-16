@@ -19,6 +19,26 @@ LibreOffice, fontconfig and Python caches there. The image carries its third-par
 
 ## Supported Operations
 
+**Output guards (compress, repair, flatten; since 2026-11-16).** Each Ghostscript rewrite is
+checked against its input with Poppler (`processing/pdfguard.go`), because the first engine benchmark
+found two silent failures:
+
+- **Pages:** if the output has fewer pages than `pdfinfo` counts in the input, the input's page
+  tree is rebuilt (`pdfseparate` + `pdfunite`) and the rewrite runs again. If pages are still
+  missing, the job fails with `PAGES_LOST` ("This file is damaged in a way that would lose pages…")
+  and is not retried. Seen on a deeply nested catalog and on a page tree that lists itself as a
+  kid, where Ghostscript alone kept 1 of 2 pages.
+- **Text:** the first 3 pages' text (`pdftotext`) must match the input within a 5 % character
+  error rate; inputs with under 20 characters of text (scans) are skipped. Ghostscript breaks
+  Devanagari extraction (every word came out as "फा"), and no pdfwrite option avoids it. On a
+  mismatch, compress and repair return pdfcpu's lossless optimisation of the input instead
+  (`metadata.fallback = "text-preserving"`, warning `text-kept-light-compression`); flatten keeps
+  its output and adds warning `text-not-searchable` with `textExtractable: false`.
+
+Warnings are `metadata.warnings: [{code}]` (the `{page, code}` shape scan-to-pdf uses, page omitted);
+the web app shows one sentence per known code. Every check is counted in
+`pdf_output_guard_total{service,tool,guard,outcome}`.
+
 ### 1. Compress PDF (`compress-pdf`)
 Reduces PDF file size using Ghostscript optimization.
 
@@ -37,7 +57,7 @@ curl -X POST http://localhost/api/optimize-pdf/compress-pdf \
 ```
 
 ### 2. Repair PDF (`repair-pdf`)
-Fixes corrupted or damaged PDFs using Ghostscript to rebuild the PDF structure.
+Fixes corrupted or damaged PDFs using Ghostscript to rebuild the PDF structure. Never returns fewer pages than Poppler can recover (see Output guards).
 
 **Example:**
 ```bash
@@ -53,10 +73,12 @@ Adds a searchable text layer to scanned PDFs using Tesseract OCR.
 - `dpi`: Resolution for conversion (default: `150`, from `OCR_DEFAULT_DPI`). job-service accepts 72–600 at job creation. The effective DPI is additionally capped so the longest edge of a rendered page stays within `OCR_MAX_IMAGE_DIM` pixels (default `10000`) — this prevents oversized rasters (e.g. large banner PDFs) from making Tesseract/pdfcpu fail. The size bound wins over resolution, so very large pages may render below the requested DPI.
   Hindi uses the same 150 DPI default. Measured 2026-11-08 on rendered Hindi text: 0.00% character error at 150 and 300 DPI for 8–12 pt, and 1.86% → 0.31% only at 6 pt, while 300 DPI costs about twice the time per page. Users who need it can request 300 DPI. Real noisy scans may differ; that is the Stage 6 OCR comparison.
 
-**How pages are processed:** the worker counts pages with `pdfinfo`, then each pool worker renders one page (`pdftoppm -png -r <dpi> -f N -l N -singlefile`), OCRs it, and deletes the page image at once. At most `OCR_MAX_WORKERS` page images exist at a time. Before 2026-11-08 every page was rendered up front; a 60-page scan then peaked at 1.66 GB of temp files, above the worker's 1 GB tmpfs. Per-page searchable PDFs still accumulate until the merge.
+**How pages are processed:** the worker counts pages with `pdfinfo`, then each pool worker renders one page (`pdftoppm -png -r <dpi> -f N -l N -singlefile`), OCRs it, and deletes the page image at once. At most `OCR_MAX_WORKERS` page images exist at a time. Before 2026-11-08 every page was rendered up front; a 60-page scan then peaked at 1.66 GB of temp files, above the worker's 1 GB tmpfs.
+
+**Text layer over the original page (since 2026-11-16, doc 11 §5.2).** Tesseract writes a text-only PDF per page (`--dpi <dpi> -c textonly_pdf=1 … pdf txt`: invisible text, no image) and pdfcpu stamps it onto the **input's** page (`processing/ocr_overlay.go`, `AddWatermarksMapFile`, `position:c, scalefactor:1 abs`). The scan is no longer replaced by the re-rendered PNG, so it keeps its resolution and compression; the first engine benchmark measured the old rebuild at SSIM 0.86 against the input. A page whose OCR fails keeps its original content without text. Per-page PDFs are now a few KB, so temp space holds little more than the page images (24 pages, 2 workers: about 100 KB peak). If pdfcpu cannot read the input or counts different pages from Poppler (some damaged files), the worker falls back to the old rebuild from images. `metadata.ocrMode` says which ran: `overlay` or `rebuild`. Tested in `ocr_overlay_binaries_test.go`: unchanged pixels and text-layer words on the visible text, also on a `/Rotate 90` page.
 
 **Job metadata:** on success the worker returns metadata that job-service stores on the job row (`metadata` jsonb):
-- `language` (string), `dpi` (number), `pagesOCRed` (number) — as before.
+- `language` (string), `dpi` (number), `pagesOCRed` (number) — as before; `ocrMode` (`overlay` | `rebuild`).
 - `extractedText` (string, optional): the plain text tesseract recognized, produced as a per-page `.txt` sidecar (`tesseract ... pdf txt`) alongside each searchable page. Pages are concatenated in merged-PDF page order, separated by form-feed (`\f`); a fallback page (tesseract failed, raw image embedded) contributes an empty slot so page-break positions stay aligned with the output PDF. Omitted entirely when no page produced any text.
 - `textTruncated` (boolean, optional): present (`true`) only when `extractedText` hit the 512 KB cap (`ocrTextCapBytes`, rune-safe truncation — never splits a UTF-8 sequence).
 

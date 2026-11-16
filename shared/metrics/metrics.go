@@ -68,6 +68,20 @@ var (
 		Help: "Conversions that fell back from a warm engine to a cold one.",
 	}, []string{"service", "reason"})
 
+	// OutputGuard counts the post-conversion checks that compare a PDF rewrite
+	// with its input (optimize-pdf compress/repair/flatten, convert-from-pdf
+	// pdf-to-pdfa). guard is "text" (extracted text still matches) or "pages"
+	// (no page lost); outcome is "ok", "fallback" (a safe alternative output was
+	// returned), "warned" (output kept, job metadata carries a warning),
+	// "retried" (succeeded after rebuilding the page tree), "failed" or
+	// "skipped" (nothing to compare, e.g. a scan without text). Added after the
+	// first engine benchmark found Ghostscript breaking Devanagari text and
+	// dropping pages (2026-11-16).
+	OutputGuard = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "pdf_output_guard_total",
+		Help: "Post-conversion output checks against the input, by tool, guard and outcome.",
+	}, []string{"service", "tool", "guard", "outcome"})
+
 	// EngineDaemonRestarts counts restarts of supervised engine daemons (today:
 	// unoserver in convert-to-pdf). reason is "recycle" when the worker killed the
 	// daemon on purpose (a conversion overran or was cancelled) and "crash" for

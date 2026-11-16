@@ -355,6 +355,15 @@ Profile discovery, first match wins: `PDFA_ICC_PROFILE` (env override; must exis
 
 Ghostscript produces level **b** only (visual preservation); levels a and u need document tagging it cannot generate. Features PDF/A forbids (transparency, non-embedded fonts) are flattened or substituted with a warning.
 
+**Text check (since 2026-11-16).** After the conversion the worker compares the first 3 pages' text
+(`pdftotext`) with the input's (`processing/textguard.go`; skipped under 20 characters, e.g. scans).
+Ghostscript breaks Devanagari (Hindi) extraction: the PDF/A file renders correctly and passes veraPDF
+2b, but its text extracts as "फा" repeated, and no pdfwrite option avoids it (spike 2026-11-16).
+PDF/A has no lossless alternative, so the file is still returned, with `metadata.textExtractable:
+false` and `metadata.warnings: [{"code": "text-not-searchable"}]`, which the web app shows as a
+sentence. Counted in `pdf_output_guard_total{service="convert-from-pdf",tool="pdf-to-pdfa",guard="text"}`.
+The thresholds are shared with optimize-pdf's guard (`optimize-pdf/processing/pdfguard.go`).
+
 > **History:** before 2026-11-08 the invocation had no profile or definition file and used the string form `-sPDFACompatibilityPolicy`. This image's Ghostscript 10.00 then wrote files that fail PDF/A-2b (veraPDF clause 6.2.4.3), and Ghostscript 10.08 aborted with a one-page stub.
 
 | Variable | Default | Description |

@@ -18,7 +18,7 @@ never drift from what developers run locally.
 | 5 | `scripts/ci/05-coverage.sh` | per-module coverprofiles merged to `coverage/merged.out` (artifact) | Go |
 | 6 | `scripts/ci/06-fuzz-short.sh` | every `Fuzz*` target for `FUZZTIME` (default 10s) each | Go |
 | 7 | `scripts/ci/07-build.sh` | every module compiles | Go |
-| 8 | `scripts/ci/08-vuln.sh` | `govulncheck` (pinned `GOVULNCHECK_VERSION`, default v1.9.0) per module, failing on reachable vulnerabilities; when the `fyredocs-*` images exist and `syft`/`trivy` are installed, an SPDX SBOM per image in `sbom/` and `trivy image --severity HIGH,CRITICAL --exit-code 1` — warns loudly when skipped | Go + network (vuln.go.dev); Docker + syft + trivy for the image half |
+| 8 | `scripts/ci/08-vuln.sh` | `govulncheck` (pinned `GOVULNCHECK_VERSION`, default v1.9.0) per module, failing on reachable vulnerabilities; when the `fyredocs-*` images exist and `syft`/`trivy` are installed, an SPDX SBOM per image in `sbom/` and `trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1` (only findings with a fixed version gate; decided 2026-11-16) — warns loudly when skipped | Go + network (vuln.go.dev); Docker + syft + trivy for the image half |
 | 9 | `scripts/ci/09-engine-gate.sh` | **nightly / release tags only, not PRs.** Engine benchmark gate (roadmap Q13): generates the corpus if there is no `corpus.lock`, verifies it, runs a slice (`BENCH_ARGS`, default `-limit 2`) through the live stack and compares the report with the newest committed `benchmarks/results/baseline-*.json`, failing on a regression (wall p50 > +10 %, a differential check that now fails, SSIM drop > 0.02, a job that now fails). Warns and passes when no baseline is committed | Docker; the stack up with `scripts/bench-engine/compose.bench.yml`; the `fyredocs-test-binaries` image (built by `run.sh`) |
 
 Deliberately **excluded from the PR pipeline** (run on demand or on a
@@ -34,11 +34,12 @@ Local parity: `make lint` ≈ stages 1–2, `make test` = stage 3,
 `make fuzz-short` = 6, `make vuln` = 8, `make bench-engine` / `make bench-compare` ≈ 9, `make check-compose` = the compose half of 2.
 
 **Stage 8 and the Go toolchain.** govulncheck judges the standard library by the Go
-toolchain that runs it. `go.work` sets `toolchain go1.27.3`, so the go command (and
+toolchain that runs it. `go.work` sets `toolchain go1.27.4`, so the go command (and
 therefore govulncheck) switches to that release automatically, and the builder images
-are pinned to the same patch (`golang:1.27.3-alpine` in
-`deployment/base-go-builder.Dockerfile`, `golang:1.27.3-alpine3.24` in
-`deployment/test-binaries.Dockerfile`). Bump all three together.
+are pinned to the same patch (`golang:1.27.4-alpine` in
+`deployment/base-go-builder.Dockerfile`, `golang:1.27.4-alpine3.24` in
+`deployment/test-binaries.Dockerfile`). Bump all three together. (1.27.3 → 1.27.4 on 2026-11-16:
+GO-2026-6859 in `net/http`, reachable from every service.)
 
 History: the first run (2026-11-09, go1.26.0) found every module affected by
 standard-library issues fixed in 1.26.1–1.26.9 plus outdated `go.opentelemetry.io/otel`,

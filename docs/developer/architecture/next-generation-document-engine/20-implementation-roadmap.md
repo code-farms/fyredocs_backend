@@ -76,6 +76,20 @@
 > the same selections before uploading. `MAX_UPLOAD_MB` (default 300) is the worker-capacity ceiling.
 > The 10-minute job context for office files near 300 MB is still unmeasured; the size-scaled timeout
 > (Q1) covers the conversion itself.
+>
+> **M1.7 (Q13) first slice done 2026-11-16.** `make bench-engine` runs 226 generated corpus files
+> (446 jobs) through the live stack with differential checks against Poppler, LibreOffice and
+> veraPDF; `make bench-compare` and CI stage 09 (`scripts/ci/09-engine-gate.sh`, nightly/release,
+> not 08) gate regressions. The development baseline is `benchmarks/results/baseline-2026-11-16-dev`
+> (Apple M1, 8 GB). It is not the `engine-baseline-<date>` tag: that waits for the production-class
+> host. The run found three real defects for later stages: Ghostscript rewrites break Devanagari text
+> extraction (compress, PDF/A); OCR replaces the scan with a re-render; pdfcpu repair/compress drop a
+> page on two corrupt-input classes. **All three were fixed the same day** (re-run
+> `baseline-2026-11-16b-dev`): output guards in optimize-pdf and convert-from-pdf (text: lossless
+> fallback or a warning; pages: page-tree rebuild or `PAGES_LOST`) and the OCR text-layer overlay
+> from doc 11 §5.2, pulled forward from Stage 2. The dev host's noise floor is 57 % (LibreOffice
+> tools), so its timings cannot gate; quality checks do. Still open from M1.7: real-world corpus files, k6 throughput rows,
+> per-engine golden bands, class semaphores and `GOMEMLIMIT` values. Details: `16-…` status note.
 
 Siblings this roadmap sequences: `01-existing-system-audit.md` (defects D1–D23), `02-document-capability-matrix.md`
 (per-row gates), `03-heavy-dependency-analysis.md` (removal order), `04-libreoffice-replacement-strategy.md` (gates
@@ -240,7 +254,7 @@ pdfcpu, leave EOL base images, add licence notices and the compose hardening tha
 | M1.4 | **Q1** size-scaled unoconvert timeout `max(30 s, 2 s + 1.5 s/MB)` capped by `jobCtx`, kill + respawn the daemon on timeout **before** releasing the port, `--conversion-timeout` and `--stop-after N` on the daemons, `unoping` probe per port, metric `convert_fallback_total{reason}`; **Q2** single source of truth for `UNOSERVER_INSTANCES` (Go spawns/supervises — done 2026-11-08; the planned `OFFICE_POOL_SUPERVISOR` rollback flag was dropped because nothing had shipped, and `entrypoint.sh` was deleted), dead ports dropped, RSS/N-conversion recycling; per-job `-env:UserInstallation` on the cold fallback; `DisableMacrosExecution=true` in each daemon profile (`15-…` §5.3); **Q12** office inputs capped (≈150 MB) until size-scaled contexts (`14-…` §5.5) | convert-to-pdf (`processing/unopool.go`, new `internal/officepool/`) | `services/convert-to-pdf.md` + sequence diagram (daemon lifecycle); unit tests for the timeout curve, supervisor state machine, port drop; job-service 413 `FILE_TOO_LARGE_FOR_TOOL` → swagger + Postman |
 | M1.5 | Alpine 3.19 → 3.22 for organize-pdf, optimize-pdf, `fyredocs-base` (`18-…` §4 C); LO meta → writer/calc/impress (E, measured); **Q6** `font-noto`, `font-noto-devanagari`, `fontconfig` + `fc-cache -f` in `base-alpine-libreoffice.Dockerfile`, `fonts-noto-core` in `convert-from-pdf/Dockerfile`; `THIRD-PARTY-LICENCES.md` per worker image (Ghostscript AGPL, PyMuPDF AGPL via pdf2docx, Poppler GPL, LO MPL-2.0 — `03-…` §5.1); compose `read_only`/`cap_drop: [ALL]`/`no-new-privileges` on HTTP services and the `internal: true` worker network; CI `scripts/ci/08-vuln.sh` (govulncheck, syft, trivy); drop unused `VOLUME` lines | deployment/, each worker Dockerfile, scripts/ci | `base-image-setup.md`, `compose-files.md`, `ci-pipeline.md`; `tool-versions.txt` regenerated; office slice re-baselined after the LO version change (`18-…` §8) |
 | M1.6 | **Q5** PDF/A invocation per `08-…` §5.8 (`PDFA_def.ps` + sRGB ICC, `-sColorConversionStrategy=RGB`, `-dEmbedAllFonts`, `-dSAFER`), veraPDF added to `deployment/test-binaries.Dockerfile`; **Q7** OCR: render page N inside the errgroup (`pdftoppm -f N -l N -gray -r DPI`), delete PNG after tesseract, 300 DPI default for `hin`, `--oem 1`, tessdata_best `hin`, same errgroup pool in `organize-pdf/processing/processing_scan.go:515-538`; **Q8** `pdfinfo` → `api.PageDimsFile` at `optimize-pdf/processing/processing_free.go:331` and `convert-from-pdf/processing/processing_free.go:126` | convert-from-pdf (`internal/pdfa`), optimize-pdf (`internal/ocr`, `internal/pdfio`), organize-pdf | veraPDF CI job; OCR tmpfs test; page-size equality test vs `pdfinfo` on the corpus; `services/optimize-pdf.md`, `convert-from-pdf.md`, `organize-pdf.md` |
-| M1.7 | **Q13** `make bench-engine`: Go harness module under `scripts/bench-engine/` (go.work change), corpus manifest ≥ 200 files per `16-…` §5.2, differential checks §5.6, `compare.sh`, release stage `scripts/ci/08-engine-gate.sh` (nightly/tag only); first full run tagged `engine-baseline-<date>`; class semaphores + `GOMEMLIMIT` initial values (`12-…` §5.1, §5.6) | scripts/bench-engine (infra), each worker env | `testing-strategy.md`, `ci-pipeline.md`; harness unit tests (SSIM 1.0 on identical rasters, IoU < 1 on shifted word) |
+| M1.7 | **Q13** `make bench-engine`: Go harness module under `scripts/bench-engine/` (go.work change), corpus manifest ≥ 200 files per `16-…` §5.2, differential checks §5.6, `compare.sh`, release stage `scripts/ci/09-engine-gate.sh` (nightly/tag only; 08 became `08-vuln.sh`); first full run tagged `engine-baseline-<date>`; class semaphores + `GOMEMLIMIT` initial values (`12-…` §5.1, §5.6) | scripts/bench-engine (infra), each worker env | `testing-strategy.md`, `ci-pipeline.md`; harness unit tests (SSIM 1.0 on identical rasters, IoU < 1 on shifted word) |
 
 **Dependencies.** M1.1 has none and goes first. M1.4 depends on M1.3 (procexec kills `soffice.bin`) and on the M1.2
 "before" numbers. M1.7 depends on M1.5 (fonts for the Hindi slice; new LO version) and on the k6 fixtures

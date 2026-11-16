@@ -1,0 +1,1853 @@
+{
+  "host": "dev MacBook Air",
+  "date": "2026-11-16T16:26:48Z",
+  "git_sha": "1105c6d-dirty",
+  "image_digests": {
+    "convert-from-pdf": "sha256:fafa34d022997a2539a5c97c8500811abd2f1baca8195de930d2a07e37d464ea",
+    "convert-to-pdf": "sha256:4da36e861df4ef9fb38a7287406cc9eddcb08533871a6947a9a66fc99aaa13d3",
+    "optimize-pdf": "sha256:6fdeb2fe98b93005d48b03eb6410f2ca2189b502a5bdb4b7855370228ccf7466",
+    "organize-pdf": "sha256:8d29402b8d588df4f83393f7af384b83f07713afa610d3b564220719697ece76"
+  },
+  "corpus_lock_sha": "395100d36f888a3e662828af64a14d6de45a960827e78b4d264300b02532fe24",
+  "runs": 1,
+  "note": "Development numbers unless the host is the production-class one (doc 16 §5.3).",
+  "pending_series": [
+    "real-complex-layout",
+    "real-forms",
+    "real-labelled-tables",
+    "real-presentations",
+    "real-scans"
+  ],
+  "rows": [
+    {
+      "item": "pdf-small-001",
+      "category": "pdf",
+      "tool": "compress-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797922,
+      "output_bytes": 16092,
+      "wall_ms": 981,
+      "server_ms": 555,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 83.90234375,
+        "avg_mib": 83.90234375,
+        "cpu_avg_pct": 24.103308616453997,
+        "cpu_max_pct": 24.103308616453997
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-001",
+      "category": "pdf",
+      "tool": "pdf-to-text",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797922,
+      "output_bytes": 14307,
+      "wall_ms": 345,
+      "server_ms": 222,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 34.6171875,
+        "avg_mib": 34.6171875,
+        "cpu_avg_pct": 10.947825388582674,
+        "cpu_max_pct": 10.947825388582674
+      },
+      "checks": [
+        {
+          "name": "word_recall",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-001",
+      "category": "pdf",
+      "tool": "pdf-to-image",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797922,
+      "output_bytes": 1895862,
+      "wall_ms": 3156,
+      "server_ms": 3069,
+      "resources": {
+        "frames": 3,
+        "peak_mib": 83.53125,
+        "avg_mib": 82.9375,
+        "cpu_avg_pct": 69.90142978984862,
+        "cpu_max_pct": 99.63778761061947
+      },
+      "checks": [
+        {
+          "name": "images_equal_pages",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-001",
+      "category": "pdf",
+      "tool": "pdf-to-pdfa",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797922,
+      "output_bytes": 20628,
+      "wall_ms": 839,
+      "server_ms": 528,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 98.0703125,
+        "avg_mib": 98.0703125,
+        "cpu_avg_pct": 11.01955804309477,
+        "cpu_max_pct": 11.01955804309477
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 0.9867335992099125,
+          "pass": true
+        },
+        {
+          "name": "verapdf_2b",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-001",
+      "category": "pdf",
+      "tool": "rotate-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797922,
+      "output_bytes": 797385,
+      "wall_ms": 369,
+      "server_ms": 140,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 24.0546875,
+        "avg_mib": 24.0546875,
+        "cpu_avg_pct": 0.6488150316399237,
+        "cpu_max_pct": 0.6488150316399237
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-001",
+      "category": "pdf",
+      "tool": "merge-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797922,
+      "output_bytes": 814413,
+      "wall_ms": 379,
+      "server_ms": 61,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-001",
+      "category": "pdf",
+      "tool": "split-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797922,
+      "output_bytes": 104908,
+      "wall_ms": 335,
+      "server_ms": 35,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "split_parts",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-001",
+      "category": "pdf",
+      "tool": "protect-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797922,
+      "output_bytes": 798797,
+      "wall_ms": 314,
+      "server_ms": 38,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 28.171875,
+        "avg_mib": 28.171875,
+        "cpu_avg_pct": 0.6503956087955709,
+        "cpu_max_pct": 0.6503956087955709
+      },
+      "checks": [
+        {
+          "name": "password_required",
+          "value": 1,
+          "pass": true,
+          "detail": "opens only with the password"
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-001",
+      "category": "pdf",
+      "tool": "pdf-metadata",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797922,
+      "output_bytes": 797454,
+      "wall_ms": 306,
+      "server_ms": 37,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-001",
+      "category": "pdf",
+      "tool": "pdf-to-word",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797922,
+      "output_bytes": 59664,
+      "wall_ms": 2793,
+      "server_ms": 2551,
+      "resources": {
+        "frames": 3,
+        "peak_mib": 331.8203125,
+        "avg_mib": 242.16015625,
+        "cpu_avg_pct": 61.537743161261325,
+        "cpu_max_pct": 88.06632696390658
+      },
+      "checks": [
+        {
+          "name": "round_trip_recall",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-002",
+      "category": "pdf",
+      "tool": "compress-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 798002,
+      "output_bytes": 16064,
+      "wall_ms": 609,
+      "server_ms": 320,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 19.2109375,
+        "avg_mib": 19.2109375,
+        "cpu_avg_pct": 23.984235437075586,
+        "cpu_max_pct": 23.984235437075586
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-002",
+      "category": "pdf",
+      "tool": "pdf-to-text",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 798002,
+      "output_bytes": 14387,
+      "wall_ms": 337,
+      "server_ms": 124,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "word_recall",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-002",
+      "category": "pdf",
+      "tool": "pdf-to-image",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 798002,
+      "output_bytes": 1905609,
+      "wall_ms": 3131,
+      "server_ms": 2886,
+      "resources": {
+        "frames": 3,
+        "peak_mib": 65.0390625,
+        "avg_mib": 61.19921875,
+        "cpu_avg_pct": 69.07324602383868,
+        "cpu_max_pct": 98.34571098265896
+      },
+      "checks": [
+        {
+          "name": "images_equal_pages",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-002",
+      "category": "pdf",
+      "tool": "pdf-to-pdfa",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 798002,
+      "output_bytes": 20600,
+      "wall_ms": 571,
+      "server_ms": 468,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 51.671875,
+        "avg_mib": 51.671875,
+        "cpu_avg_pct": 11.0942976813084,
+        "cpu_max_pct": 11.0942976813084
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 0.986628528286961,
+          "pass": true
+        },
+        {
+          "name": "verapdf_2b",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-002",
+      "category": "pdf",
+      "tool": "rotate-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 798002,
+      "output_bytes": 797465,
+      "wall_ms": 357,
+      "server_ms": 84,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 29.09375,
+        "avg_mib": 29.09375,
+        "cpu_avg_pct": 0.6515948557482653,
+        "cpu_max_pct": 0.6515948557482653
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-002",
+      "category": "pdf",
+      "tool": "merge-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 798002,
+      "output_bytes": 814575,
+      "wall_ms": 344,
+      "server_ms": 49,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-002",
+      "category": "pdf",
+      "tool": "split-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 798002,
+      "output_bytes": 104813,
+      "wall_ms": 306,
+      "server_ms": 28,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 40.32421875,
+        "avg_mib": 40.32421875,
+        "cpu_avg_pct": 0.653955280229779,
+        "cpu_max_pct": 0.653955280229779
+      },
+      "checks": [
+        {
+          "name": "split_parts",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-002",
+      "category": "pdf",
+      "tool": "protect-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 798002,
+      "output_bytes": 798863,
+      "wall_ms": 327,
+      "server_ms": 34,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "password_required",
+          "value": 1,
+          "pass": true,
+          "detail": "opens only with the password"
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-002",
+      "category": "pdf",
+      "tool": "pdf-metadata",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 798002,
+      "output_bytes": 797534,
+      "wall_ms": 303,
+      "server_ms": 25,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-002",
+      "category": "pdf",
+      "tool": "pdf-to-word",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 798002,
+      "output_bytes": 59657,
+      "wall_ms": 1869,
+      "server_ms": 1603,
+      "resources": {
+        "frames": 2,
+        "peak_mib": 103.3984375,
+        "avg_mib": 89.017578125,
+        "cpu_avg_pct": 58.532347683203014,
+        "cpu_max_pct": 105.96796498905907
+      },
+      "checks": [
+        {
+          "name": "round_trip_recall",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-003",
+      "category": "pdf",
+      "tool": "compress-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797926,
+      "output_bytes": 16056,
+      "wall_ms": 595,
+      "server_ms": 300,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-003",
+      "category": "pdf",
+      "tool": "pdf-to-text",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797926,
+      "output_bytes": 14311,
+      "wall_ms": 322,
+      "server_ms": 71,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 33.3828125,
+        "avg_mib": 33.3828125,
+        "cpu_avg_pct": 11.110032892477886,
+        "cpu_max_pct": 11.110032892477886
+      },
+      "checks": [
+        {
+          "name": "word_recall",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-003",
+      "category": "pdf",
+      "tool": "pdf-to-image",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797926,
+      "output_bytes": 1887874,
+      "wall_ms": 2873,
+      "server_ms": 2615,
+      "resources": {
+        "frames": 3,
+        "peak_mib": 46.55859375,
+        "avg_mib": 42.196614583333336,
+        "cpu_avg_pct": 65.48027221974908,
+        "cpu_max_pct": 100.14014742014743
+      },
+      "checks": [
+        {
+          "name": "images_equal_pages",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-003",
+      "category": "pdf",
+      "tool": "pdf-to-pdfa",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797926,
+      "output_bytes": 20590,
+      "wall_ms": 667,
+      "server_ms": 311,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 0.986564053141992,
+          "pass": true
+        },
+        {
+          "name": "verapdf_2b",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-003",
+      "category": "pdf",
+      "tool": "rotate-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797926,
+      "output_bytes": 797389,
+      "wall_ms": 383,
+      "server_ms": 175,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 42.41796875,
+        "avg_mib": 42.41796875,
+        "cpu_avg_pct": 0.6566160877235211,
+        "cpu_max_pct": 0.6566160877235211
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-003",
+      "category": "pdf",
+      "tool": "merge-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797926,
+      "output_bytes": 814421,
+      "wall_ms": 361,
+      "server_ms": 44,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-003",
+      "category": "pdf",
+      "tool": "split-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797926,
+      "output_bytes": 104843,
+      "wall_ms": 298,
+      "server_ms": 53,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "split_parts",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-003",
+      "category": "pdf",
+      "tool": "protect-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797926,
+      "output_bytes": 798796,
+      "wall_ms": 313,
+      "server_ms": 33,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 38.85546875,
+        "avg_mib": 38.85546875,
+        "cpu_avg_pct": 0.6582681632142083,
+        "cpu_max_pct": 0.6582681632142083
+      },
+      "checks": [
+        {
+          "name": "password_required",
+          "value": 1,
+          "pass": true,
+          "detail": "opens only with the password"
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-003",
+      "category": "pdf",
+      "tool": "pdf-metadata",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797926,
+      "output_bytes": 797458,
+      "wall_ms": 324,
+      "server_ms": 27,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-003",
+      "category": "pdf",
+      "tool": "pdf-to-word",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797926,
+      "output_bytes": 59647,
+      "wall_ms": 1618,
+      "server_ms": 1348,
+      "resources": {
+        "frames": 2,
+        "peak_mib": 100.24609375,
+        "avg_mib": 69.001953125,
+        "cpu_avg_pct": 77.13565949064738,
+        "cpu_max_pct": 143.11573200992555
+      },
+      "checks": [
+        {
+          "name": "round_trip_recall",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "img-photo-001",
+      "category": "image-heavy",
+      "tool": "compress-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 2147504,
+      "output_bytes": 2150195,
+      "wall_ms": 368,
+      "server_ms": 225,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "img-photo-001",
+      "category": "image-heavy",
+      "tool": "pdf-to-image",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 2147504,
+      "output_bytes": 8121718,
+      "wall_ms": 1914,
+      "server_ms": 1553,
+      "resources": {
+        "frames": 2,
+        "peak_mib": 56.83984375,
+        "avg_mib": 47.248046875,
+        "cpu_avg_pct": 55.4025069786534,
+        "cpu_max_pct": 99.62643649815043
+      },
+      "checks": [
+        {
+          "name": "images_equal_pages",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "img-photo-002",
+      "category": "image-heavy",
+      "tool": "compress-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 2138233,
+      "output_bytes": 2140921,
+      "wall_ms": 405,
+      "server_ms": 208,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 23.140625,
+        "avg_mib": 23.140625,
+        "cpu_avg_pct": 23.776792490251232,
+        "cpu_max_pct": 23.776792490251232
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "img-photo-002",
+      "category": "image-heavy",
+      "tool": "pdf-to-image",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 2138233,
+      "output_bytes": 8110690,
+      "wall_ms": 1938,
+      "server_ms": 1771,
+      "resources": {
+        "frames": 2,
+        "peak_mib": 59.6796875,
+        "avg_mib": 55.5703125,
+        "cpu_avg_pct": 50.862672615966794,
+        "cpu_max_pct": 90.50829810901001
+      },
+      "checks": [
+        {
+          "name": "images_equal_pages",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "img-photo-003",
+      "category": "image-heavy",
+      "tool": "compress-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 2141686,
+      "output_bytes": 2144373,
+      "wall_ms": 619,
+      "server_ms": 272,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "img-photo-003",
+      "category": "image-heavy",
+      "tool": "pdf-to-image",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 2141686,
+      "output_bytes": 8112246,
+      "wall_ms": 1902,
+      "server_ms": 1776,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 62.53125,
+        "avg_mib": 62.53125,
+        "cpu_avg_pct": 11.253507089519204,
+        "cpu_max_pct": 11.253507089519204
+      },
+      "checks": [
+        {
+          "name": "images_equal_pages",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "scan-300dpi-001",
+      "category": "scans",
+      "tool": "ocr-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 2035250,
+      "output_bytes": 2046148,
+      "wall_ms": 12668,
+      "server_ms": 12487,
+      "resources": {
+        "frames": 12,
+        "peak_mib": 174.94921875,
+        "avg_mib": 152.46484375,
+        "cpu_avg_pct": 183.95211226917115,
+        "cpu_max_pct": 203.96511627906975
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ocr_word_recall",
+          "value": 0.994475138121547,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "scan-300dpi-001",
+      "category": "scans",
+      "tool": "compress-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 2035250,
+      "output_bytes": 526697,
+      "wall_ms": 577,
+      "server_ms": 346,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 55.87890625,
+        "avg_mib": 55.87890625,
+        "cpu_avg_pct": 24.245679745826184,
+        "cpu_max_pct": 24.245679745826184
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 0.9724965047168124,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "scan-300dpi-002",
+      "category": "scans",
+      "tool": "ocr-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 2006227,
+      "output_bytes": 2017079,
+      "wall_ms": 10851,
+      "server_ms": 10708,
+      "resources": {
+        "frames": 11,
+        "peak_mib": 200.44140625,
+        "avg_mib": 171.94779829545453,
+        "cpu_avg_pct": 181.43289060839334,
+        "cpu_max_pct": 206.5815238095238
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ocr_word_recall",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "scan-300dpi-002",
+      "category": "scans",
+      "tool": "compress-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 2006227,
+      "output_bytes": 520282,
+      "wall_ms": 584,
+      "server_ms": 316,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 67.921875,
+        "avg_mib": 67.921875,
+        "cpu_avg_pct": 24.670746430873315,
+        "cpu_max_pct": 24.670746430873315
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 0.9728425617039012,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "scan-300dpi-003",
+      "category": "scans",
+      "tool": "ocr-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 2035398,
+      "output_bytes": 2046424,
+      "wall_ms": 11126,
+      "server_ms": 11014,
+      "resources": {
+        "frames": 11,
+        "peak_mib": 206.8359375,
+        "avg_mib": 173.07883522727272,
+        "cpu_avg_pct": 181.5798935582037,
+        "cpu_max_pct": 207.96598802395206
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ocr_word_recall",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "scan-300dpi-003",
+      "category": "scans",
+      "tool": "compress-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 2035398,
+      "output_bytes": 527858,
+      "wall_ms": 605,
+      "server_ms": 355,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 80.9609375,
+        "avg_mib": 80.9609375,
+        "cpu_avg_pct": 25.10509267667902,
+        "cpu_max_pct": 25.10509267667902
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "text_cer",
+          "value": 0,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 0.9724136859616129,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "table-docx-001",
+      "category": "tables",
+      "tool": "word-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 6643,
+      "output_bytes": 75038,
+      "wall_ms": 2905,
+      "server_ms": 2720,
+      "resources": {
+        "frames": 2,
+        "peak_mib": 184.640625,
+        "avg_mib": 143.70703125,
+        "cpu_avg_pct": 14.950527936245496,
+        "cpu_max_pct": 23.71279661016949
+      },
+      "checks": [
+        {
+          "name": "pages_vs_reference",
+          "value": 1,
+          "pass": true,
+          "detail": "reference 1"
+        },
+        {
+          "name": "word_recall_vs_libreoffice",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "table-docx-002",
+      "category": "tables",
+      "tool": "word-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 6610,
+      "output_bytes": 74960,
+      "wall_ms": 1884,
+      "server_ms": 1716,
+      "resources": {
+        "frames": 2,
+        "peak_mib": 219.62890625,
+        "avg_mib": 187.267578125,
+        "cpu_avg_pct": 20.812068279363142,
+        "cpu_max_pct": 35.42925659472422
+      },
+      "checks": [
+        {
+          "name": "pages_vs_reference",
+          "value": 1,
+          "pass": true,
+          "detail": "reference 1"
+        },
+        {
+          "name": "word_recall_vs_libreoffice",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "table-docx-003",
+      "category": "tables",
+      "tool": "word-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 6621,
+      "output_bytes": 74860,
+      "wall_ms": 1625,
+      "server_ms": 1513,
+      "resources": {
+        "frames": 2,
+        "peak_mib": 232.5703125,
+        "avg_mib": 206.263671875,
+        "cpu_avg_pct": 17.946717776998316,
+        "cpu_max_pct": 29.68610250297974
+      },
+      "checks": [
+        {
+          "name": "pages_vs_reference",
+          "value": 1,
+          "pass": true,
+          "detail": "reference 1"
+        },
+        {
+          "name": "word_recall_vs_libreoffice",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "sheet-50k-xlsx-001",
+      "category": "spreadsheets",
+      "tool": "excel-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 1506332,
+      "output_bytes": 68763865,
+      "wall_ms": 11303,
+      "server_ms": 11091,
+      "resources": {
+        "frames": 11,
+        "peak_mib": 569.03125,
+        "avg_mib": 408.32492897727275,
+        "cpu_avg_pct": 85.61378982727669,
+        "cpu_max_pct": 105.53203452527744
+      },
+      "checks": [
+        {
+          "name": "pages_vs_reference",
+          "value": 1021,
+          "pass": true,
+          "detail": "reference 1021"
+        },
+        {
+          "name": "word_recall_vs_libreoffice",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "sheet-50k-xlsx-002",
+      "category": "spreadsheets",
+      "tool": "excel-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 1505780,
+      "output_bytes": 68763630,
+      "wall_ms": 8888,
+      "server_ms": 8676,
+      "resources": {
+        "frames": 9,
+        "peak_mib": 680.71875,
+        "avg_mib": 543.9110243055555,
+        "cpu_avg_pct": 83.05880594296232,
+        "cpu_max_pct": 101.63339285714285
+      },
+      "checks": [
+        {
+          "name": "pages_vs_reference",
+          "value": 1021,
+          "pass": true,
+          "detail": "reference 1021"
+        },
+        {
+          "name": "word_recall_vs_libreoffice",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "sheet-50k-xlsx-003",
+      "category": "spreadsheets",
+      "tool": "excel-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 1505116,
+      "output_bytes": 68758561,
+      "wall_ms": 9564,
+      "server_ms": 8963,
+      "resources": {
+        "frames": 10,
+        "peak_mib": 613.45703125,
+        "avg_mib": 455.430859375,
+        "cpu_avg_pct": 78.39105423949016,
+        "cpu_max_pct": 100.79731343283582
+      },
+      "checks": [
+        {
+          "name": "pages_vs_reference",
+          "value": 1021,
+          "pass": true,
+          "detail": "reference 1021"
+        },
+        {
+          "name": "word_recall_vs_libreoffice",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "office-text-docx-001",
+      "category": "office",
+      "tool": "word-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 7914,
+      "output_bytes": 29351,
+      "wall_ms": 1391,
+      "server_ms": 1142,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 293.8125,
+        "avg_mib": 293.8125,
+        "cpu_avg_pct": 6.722097821752262,
+        "cpu_max_pct": 6.722097821752262
+      },
+      "checks": [
+        {
+          "name": "pages_vs_reference",
+          "value": 4,
+          "pass": true,
+          "detail": "reference 4"
+        },
+        {
+          "name": "word_recall_vs_libreoffice",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "office-text-docx-001",
+      "category": "office",
+      "tool": "word-to-odt",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 7914,
+      "output_bytes": 56168,
+      "wall_ms": 1389,
+      "server_ms": 1084,
+      "resources": {
+        "frames": 2,
+        "peak_mib": 336.73828125,
+        "avg_mib": 317.5859375,
+        "cpu_avg_pct": 32.13082937931027,
+        "cpu_max_pct": 57.53334878331402
+      },
+      "checks": [
+        {
+          "name": "round_trip_recall",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "office-text-docx-002",
+      "category": "office",
+      "tool": "word-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 7935,
+      "output_bytes": 29625,
+      "wall_ms": 577,
+      "server_ms": 454,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_vs_reference",
+          "value": 4,
+          "pass": true,
+          "detail": "reference 4"
+        },
+        {
+          "name": "word_recall_vs_libreoffice",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "office-text-docx-002",
+      "category": "office",
+      "tool": "word-to-odt",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 7935,
+      "output_bytes": 55477,
+      "wall_ms": 867,
+      "server_ms": 640,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 335.17578125,
+        "avg_mib": 335.17578125,
+        "cpu_avg_pct": 6.74307537848103,
+        "cpu_max_pct": 6.74307537848103
+      },
+      "checks": [
+        {
+          "name": "round_trip_recall",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "office-text-docx-003",
+      "category": "office",
+      "tool": "word-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 7941,
+      "output_bytes": 29501,
+      "wall_ms": 605,
+      "server_ms": 422,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 347.47265625,
+        "avg_mib": 347.47265625,
+        "cpu_avg_pct": 6.7561347175531195,
+        "cpu_max_pct": 6.7561347175531195
+      },
+      "checks": [
+        {
+          "name": "pages_vs_reference",
+          "value": 4,
+          "pass": true,
+          "detail": "reference 4"
+        },
+        {
+          "name": "word_recall_vs_libreoffice",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "office-text-docx-003",
+      "category": "office",
+      "tool": "word-to-odt",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 7941,
+      "output_bytes": 54635,
+      "wall_ms": 849,
+      "server_ms": 690,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 340.78125,
+        "avg_mib": 340.78125,
+        "cpu_avg_pct": 6.764837031692937,
+        "cpu_max_pct": 6.764837031692937
+      },
+      "checks": [
+        {
+          "name": "round_trip_recall",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "html-001",
+      "category": "html",
+      "tool": "html-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 1401,
+      "output_bytes": 25966,
+      "wall_ms": 606,
+      "server_ms": 343,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_vs_reference",
+          "value": 1,
+          "pass": true,
+          "detail": "reference 1"
+        },
+        {
+          "name": "word_recall_vs_libreoffice",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "html-002",
+      "category": "html",
+      "tool": "html-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 1463,
+      "output_bytes": 17692,
+      "wall_ms": 586,
+      "server_ms": 294,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 308.23046875,
+        "avg_mib": 308.23046875,
+        "cpu_avg_pct": 6.774539451779864,
+        "cpu_max_pct": 6.774539451779864
+      },
+      "checks": [
+        {
+          "name": "pages_vs_reference",
+          "value": 1,
+          "pass": true,
+          "detail": "reference 1"
+        },
+        {
+          "name": "word_recall_vs_libreoffice",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "html-003",
+      "category": "html",
+      "tool": "html-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 3127,
+      "output_bytes": 18155,
+      "wall_ms": 565,
+      "server_ms": 353,
+      "resources": {
+        "frames": 1,
+        "peak_mib": 295.2578125,
+        "avg_mib": 295.2578125,
+        "cpu_avg_pct": 6.771870229473974,
+        "cpu_max_pct": 6.771870229473974
+      },
+      "checks": [
+        {
+          "name": "pages_vs_reference",
+          "value": 1,
+          "pass": true,
+          "detail": "reference 1"
+        },
+        {
+          "name": "word_recall_vs_libreoffice",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "ssim",
+          "value": 1,
+          "pass": true
+        },
+        {
+          "name": "fonts_embedded",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    }
+  ]
+}

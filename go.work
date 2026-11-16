@@ -6,7 +6,7 @@ go 1.26.0
 // reported against 1.26.0). NOTE: keep in step
 // with the pinned images deployment/base-go-builder.Dockerfile and
 // deployment/test-binaries.Dockerfile.
-toolchain go1.27.3
+toolchain go1.27.4
 
 use (
 	./ai-service

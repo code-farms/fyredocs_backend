@@ -21,6 +21,8 @@ make bench-engine-gen                         # generate out/ and the lock (resu
 make bench-engine BENCH_ARGS="-runs 3"        # verify, then run everything; writes a report
 make bench-engine BENCH_ARGS="-series pdf-small,html -limit 2"   # a quick slice
 make bench-compare A=base.json B=candidate.json                  # regressions vs a baseline
+scripts/bench-engine/run.sh run -series scan-300dpi -limit 1 -keep scripts/bench-engine/corpus/out/inspect
+                                                                  # keep outputs to inspect a finding
 scripts/bench-engine/run.sh compare -noise a.json b.json          # noise floor of two same-code runs
 ```
 
@@ -53,6 +55,17 @@ Reports go to `docs/developer/architecture/next-generation-document-engine/bench
 
 **Pending** (listed in the manifest with `"status": "pending"`, no files yet):
 real-world complex layouts, labelled tables, forms, presentations and scans.
+
+## Known limitations
+
+- The pdf-medium and pdf-large size classes get their size from padding no object references.
+  compress-pdf drops it (40 MB → 16 KB), so they test transfer and parsing size, not engine
+  work on large content. The image-heavy and scan series are the heavy-content cases.
+- Peak RAM comes from Docker's stats stream (about one frame per second): a lower bound, and
+  "n/a" for jobs that finish before the first frame.
+- Benchmark runs need the workers' result cache off (`compose.bench.yml` sets
+  `RESULT_CACHE_TTL_SECONDS=0`). Otherwise a file already seen comes back from Redis without
+  running the engine. `run` refuses a cached worker unless given `-allow-cache`.
 
 ## Adding real-world files later
 

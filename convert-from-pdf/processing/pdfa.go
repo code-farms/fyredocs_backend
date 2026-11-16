@@ -118,31 +118,33 @@ func pdfaArgs(defPath, iccPath, inputPath, outputPath string) []string {
 // Conversion can be lossy where the source uses features PDF/A forbids — notably
 // transparency and non-embedded fonts, which get flattened or substituted. That is
 // inherent to the format, not a defect here.
-func pdfToPdfa(ctx context.Context, inputPath string, outputPath string) error {
+func pdfToPdfa(ctx context.Context, inputPath string, outputPath string) (map[string]interface{}, error) {
 	slog.Info("converting PDF to PDF/A", "input", inputPath)
 
 	iccPath, err := srgbProfilePath()
 	if err != nil {
 		slog.ErrorContext(ctx, "PDF/A conversion unavailable", "error", err, "op", "ghostscript.pdfa")
-		return err
+		return nil, err
 	}
 	defDir, err := os.MkdirTemp(filepath.Dir(outputPath), "pdfa-def-*")
 	if err != nil {
-		return fmt.Errorf("create PDF/A definition dir: %w", err)
+		return nil, fmt.Errorf("create PDF/A definition dir: %w", err)
 	}
 	defer os.RemoveAll(defDir)
 	defPath := filepath.Join(defDir, "PDFA_def.ps")
 	if err := os.WriteFile(defPath, []byte(pdfaDefinition(iccPath)), 0o600); err != nil {
-		return fmt.Errorf("write PDF/A definition: %w", err)
+		return nil, fmt.Errorf("write PDF/A definition: %w", err)
 	}
 
 	cmd := procexec.Command(ctx, "gs", pdfaArgs(defPath, iccPath, inputPath, outputPath)...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		slog.ErrorContext(ctx, "ghostscript PDF/A conversion failed", "error", err, "op", "ghostscript.pdfa", "output", string(output))
-		return fmt.Errorf("Ghostscript not available or conversion failed: %w", err)
+		return nil, fmt.Errorf("Ghostscript not available or conversion failed: %w", err)
 	}
 
+	meta := map[string]interface{}{}
+	checkTextKept(ctx, "pdf-to-pdfa", inputPath, outputPath, meta)
 	slog.Info("PDF/A conversion completed", "output", outputPath, "iccProfile", iccPath)
-	return nil
+	return meta, nil
 }

@@ -5,7 +5,10 @@
 #      vulnerable code is reachable from our call graph, so a finding here is
 #      actionable, and it fails the stage.
 #   2. When syft/trivy are installed and the images exist locally: an SBOM per
-#      image (written to $SBOM_DIR) and a Trivy scan failing on HIGH/CRITICAL.
+#      image (written to $SBOM_DIR) and a Trivy scan failing on HIGH/CRITICAL
+#      that have a fixed version (--ignore-unfixed): only findings we can act on
+#      gate; unfixed ones (e.g. Debian packages in convert-from-pdf awaiting a
+#      fix) stay visible in the SBOM and a full scan. Decided 2026-11-16.
 #      Runners without them get a loud WARNING instead of a false green, the
 #      same posture as golangci-lint in 02-static.sh.
 #
@@ -54,7 +57,7 @@ else
   if command -v trivy >/dev/null 2>&1; then
     for img in "${images[@]}"; do
       echo "--- trivy $img ---"
-      trivy image --quiet --severity HIGH,CRITICAL --exit-code 1 "$img" || fail=1
+      trivy image --quiet --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$img" || fail=1
     done
   else
     echo "WARNING: trivy not installed — images were NOT scanned. Install: https://github.com/aquasecurity/trivy (pin the version in the CI image)."

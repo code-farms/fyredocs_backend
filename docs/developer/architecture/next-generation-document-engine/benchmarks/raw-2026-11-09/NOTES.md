@@ -73,3 +73,18 @@ Go 1.26.10 (`toolchain` in go.work, pinned builder images), otel 1.47.0, grpc 1.
 golang.org/x/net 0.62.0, quic-go 0.65.0: govulncheck reports 0 reachable vulnerabilities in all
 13 modules; Trivy on the rebuilt organize-pdf image: 0 HIGH/CRITICAL (alpine 3.24.4 and the Go
 binary). The Debian findings in convert-from-pdf are unaffected by this change.
+
+### After the image upgrade and the base-image fix (2026-11-13 → 2026-11-16)
+
+Trivy 0.76.2, HIGH/CRITICAL, images rebuilt from the latest bases (`--pull`, base without cache):
+
+| Image | 2026-11-13 (latest bases) | 2026-11-16 | What changed |
+|---|---|---|---|
+| organize-pdf | 0 | 0 | — |
+| optimize-pdf | 0 | 0 | — |
+| convert-to-pdf | 41 HIGH, all fixable (libpq 18.6 ×38, libxslt r3 ×3) | **0** | `fyredocs-base` installs LibreOffice components one by one, without `libreoffice-connector-postgres`, so libpq is gone; `apk upgrade` + a no-cache rebuild brought libxslt 1.1.43-r4 |
+| convert-from-pdf | 144 HIGH + 1 CRITICAL (7 fixable, incl. pip's vendored msgpack/urllib3, zlib1g) | **137 HIGH + 1 CRITICAL, 0 fixable** | `apt-get upgrade` (zlib1g), pip uninstalled after install (commit 1105c6d); the rest are Debian 13 packages with no fix yet (CRITICAL: libxml2) |
+
+CI stage 8 now runs Trivy with `--ignore-unfixed` (decided 2026-11-16): it fails on findings that
+have a fixed version, so all four images pass; the unfixed Debian findings stay in the SBOM and in
+a full scan. convert-from-pdf leaves Debian with LibreOffice/Python in Stage 3.

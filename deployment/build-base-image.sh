@@ -36,9 +36,13 @@ GOMOD_HASH="$(gomod_fingerprint)"
 
 echo "Building fyredocs-base image with LibreOffice..."
 echo ""
-docker build \
+# --pull: always start from the newest alpine:3.24 (security fixes). For a
+# security refresh also pass --no-cache, or the cached `apk add` layer keeps the
+# old packages (base-image-setup.md, "Security refresh").
+docker build --pull \
     -f deployment/base-alpine-libreoffice.Dockerfile \
     -t fyredocs-base:latest \
+    ${BASE_BUILD_ARGS:-} \
     .
 
 echo ""

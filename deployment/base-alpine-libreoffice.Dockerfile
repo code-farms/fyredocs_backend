@@ -21,10 +21,24 @@ LABEL version="3.24"
 # Office documents keep their layout; font-noto-devanagari covers Hindi, which
 # otherwise renders as missing-glyph boxes (finding in docs/developer/
 # architecture/next-generation-document-engine/07-layout-and-rendering-engine.md).
-RUN apk add --no-cache \
+# LibreOffice is installed component by component, not via the `libreoffice`
+# meta-package: that one also pulls libreoffice-connector-postgres, whose only
+# purpose is LibreOffice Base talking to PostgreSQL, and with it libpq, which
+# carried 38 of the image's 41 HIGH findings (Trivy 2026-11-13). The list is the
+# meta-package's dependencies minus the connector.
+# apk upgrade: packages already in the alpine image get their security fixes
+# too; rebuild with `--pull --no-cache` to pick up new ones
+# (docs/developer/architecture/base-image-setup.md).
+RUN apk upgrade --no-cache && apk add --no-cache \
     ca-certificates \
     poppler-utils \
-    libreoffice \
+    libreoffice-common \
+    libreoffice-base \
+    libreoffice-writer \
+    libreoffice-calc \
+    libreoffice-impress \
+    libreoffice-draw \
+    libreoffice-math \
     ttf-liberation \
     font-noto-devanagari \
     fontconfig \

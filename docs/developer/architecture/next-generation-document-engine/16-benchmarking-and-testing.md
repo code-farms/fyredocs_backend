@@ -1,6 +1,52 @@
 # 16 — Benchmarking and Testing
 > Part of the Next-Generation Document Engine analysis (2026-11). Status: ANALYSIS — no code changed.
 
+> **Status update (2026-11-16): M1.7 first slice implemented** (`scripts/bench-engine/`). What runs:
+> `gen`/`verify` over 226 generated files (§5.2 categories; real-world series listed as `pending`),
+> `run` through the live stack (upload → job → download via Caddy) with per-job wall/server time,
+> worker-container RAM/CPU from the Docker API, and the §5.6 checks (pdfinfo pages/sizes, pdftotext
+> CER and word recall, SSIM on 72 dpi greyscale renders, pdffonts embedding, veraPDF 2b, LibreOffice
+> reference for office/HTML → PDF, OCR recall against the generator's source text); `compare`
+> (and `-noise`) with the §5.5 thresholds; CI stage 09 (`scripts/ci/09-engine-gate.sh`, nightly/release).
+> First development baseline: `benchmarks/results/baseline-2026-11-16-dev.{json,md}` (446 jobs,
+> 29 min, Apple M1 / 8 GB; development numbers). **Noise floor on this host: 57 % wall p50**
+> (two same-code runs, `benchmarks/results/noise-2026-11-16-r*.json`): LibreOffice tools 24–57 %
+> (warm vs cold unoserver daemons), the rest under 10 %, pure pdfcpu tools under 4 %. Far above the
+> ±5 % target, so on this Mac a single run cannot gate timing (the +10 % rule): use `-runs 3` medians
+> and, for quotable numbers, the production-class host. Quality checks are deterministic and do gate.
+>
+> **Deviations from §5:** stats come from Docker's stats stream (about 1 per second, not 250 ms or
+> cgroup `memory.peak`), so peak RAM is a lower bound and jobs under about 1 s show "n/a"; the tofu
+> check is a Devanagari text/font proxy, not a pHash match against a `.notdef` glyph; the gate is
+> stage 09 (stage 08 became `08-vuln.sh`); the manifest is JSON recipes plus a local `corpus.lock`
+> (generated files are not byte-stable), not committed checksums; k6 throughput, cold startup on the
+> production-class host, build/binary/image sizes and per-engine golden bands are still open.
+> Benchmark runs need `scripts/bench-engine/compose.bench.yml`, which raises rate limits and turns
+> the workers' result cache off (`RESULT_CACHE_TTL_SECONDS=0`); the harness refuses a cached worker.
+>
+> **Findings from the first full run** (real; thresholds not tuned to hide them). **Status after the
+> fixes (re-run 2026-11-16, `baseline-2026-11-16b-dev`):** 1 fixed for compress/repair (output guard
+> falls back to a lossless pdfcpu optimisation; text kept on all 10 Hindi PDFs) and flagged for
+> PDF/A and flatten (`textExtractable=false` + warning; no Ghostscript option fixes it); 2 fixed
+> (text layer stamped onto the original page: SSIM passes on all 20 scans, output 3.5 → 1.65 MB, peak
+> RAM 317 → 233 MiB at 200 dpi, time unchanged); 3 fixed (page guard rebuilds the page tree with
+> Poppler; 2 of 2 pages on all 8 jobs; otherwise `PAGES_LOST`); 4 still open. The original list:
+> 1. compress-pdf and pdf-to-pdfa (Ghostscript 10.08) break Devanagari text extraction: every word
+>    extracts as "फा" (CER 0.86 on all 10 Hindi PDFs); rendering is unchanged, so search and
+>    copy/paste break silently.
+> 2. ocr-pdf replaces the scan with a re-render: SSIM 0.86 against the input on every scan (text
+>    recall ≥ 0.90 on all). The page is rendered to PNG and rebuilt from Tesseract's output instead
+>    of adding a text layer over the original image.
+> 3. repair-pdf and compress-pdf (pdfcpu) keep 1 of 2 pages on the deep-nesting and cyclic-pages
+>    corrupt inputs, where Poppler recovers both.
+> 4. Minor: two two-column DOCX → PDF outputs at SSIM 0.945/0.949 against the harness's cold
+>    LibreOffice 25.8.7.3 (same version as the worker); stream-length-long repairs at CER 0.045.
+>
+> Harness lessons, kept as regression tests: generated image pages must be Letter, not the image's
+> pixel size in points (posters made pdf-to-image look 15× slower); pdfcpu `ImportImagesFile`
+> appends to an existing file; pdfinfo reports `/Rotate` separately from the MediaBox; encrypted
+> references need `-upw`; OCR text is read in raw order.
+
 Siblings: `12-*` (engine integration decisions; every gate here is the proof a doc-12 decision asks
 for, and doc 12 cites this harness), `14-api-and-distributed-architecture.md` (sync budgets, per-profile
 throughput targets), `15-*` (metrics the harness reuses), `18-deployment-optimization.md` (image-size

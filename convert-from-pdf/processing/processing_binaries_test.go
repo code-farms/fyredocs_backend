@@ -273,17 +273,33 @@ func TestPdfToPdfaPassesVeraPDFBinaries(t *testing.T) {
 	if _, err := exec.LookPath("verapdf"); err != nil {
 		t.Skip("verapdf not installed (see deployment/test-binaries.Dockerfile)")
 	}
-	cases := map[string]func(dir string) string{
-		"image pdf": func(dir string) string { return buildImagePDF(t, dir, 3) },
-		"text pdf":  func(dir string) string { return buildTextPDF(t, dir, "Fyredocs PDF/A acceptance text") },
+	// warn: whether the text guard must flag the output. Ghostscript breaks
+	// Devanagari extraction (benchmark 2026-11-16) and no option avoids it, so
+	// the Hindi case passes veraPDF but must carry textExtractable=false. If a
+	// future Ghostscript fixes it, this case fails: drop the warning then.
+	cases := map[string]struct {
+		build func(dir string) string
+		warn  bool
+	}{
+		"image pdf": {func(dir string) string { return buildImagePDF(t, dir, 3) }, false},
+		"text pdf": {func(dir string) string {
+			return buildTextPDF(t, dir, "Fyredocs PDF/A acceptance text, long enough to be checked")
+		}, false},
+		"hindi pdf": {func(dir string) string {
+			return buildTextPDF(t, dir, "यह फायरडॉक्स का हिंदी परीक्षण दस्तावेज़ है। भुगतान की स्थिति, वितरण की तारीख और कुल राशि नीचे दी गई है।")
+		}, true},
 	}
-	for name, build := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			input := build(dir)
+			input := tc.build(dir)
 			output := filepath.Join(t.TempDir(), "out.pdf")
-			if err := pdfToPdfa(context.Background(), input, output); err != nil {
+			meta, err := pdfToPdfa(context.Background(), input, output)
+			if err != nil {
 				t.Fatalf("pdfToPdfa: %v", err)
+			}
+			if warned := meta["textExtractable"] == false; warned != tc.warn {
+				t.Errorf("text guard warned=%v, want %v (metadata %v)", warned, tc.warn, meta)
 			}
 
 			report, err := exec.Command("verapdf", "--flavour", "2b", "--format", "text", output).CombinedOutput()

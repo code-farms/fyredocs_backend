@@ -327,5 +327,11 @@ func gitSHA(repo string) string {
 	if err != nil {
 		return "unknown"
 	}
-	return strings.TrimSpace(string(out))
+	sha := strings.TrimSpace(string(out))
+	// Uncommitted changes (corpus/out is gitignored) mean the numbers are not
+	// reproducible from the SHA alone.
+	if st, err := exec.Command("git", "-C", repo, "status", "--porcelain", "--untracked-files=no").Output(); err == nil && len(strings.TrimSpace(string(st))) > 0 {
+		sha += "-dirty"
+	}
+	return sha
 }

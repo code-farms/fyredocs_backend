@@ -25,6 +25,7 @@ import (
 	"gorm.io/gorm"
 
 	"optimize-pdf/internal/models"
+	"optimize-pdf/processing"
 
 	"fyredocs/shared/queue"
 	"fyredocs/shared/storage"
@@ -78,12 +79,19 @@ const (
 	ErrCodeInvalidPayload   = "INVALID_PAYLOAD"
 	ErrCodeOutputFailed     = "OUTPUT_FAILED"
 	ErrCodeTimeout          = "TIMEOUT"
+	// ErrCodePagesLost: the rewrite kept fewer pages than the input has, even
+	// after rebuilding the page tree (processing.ErrPagesLost). Deterministic,
+	// so not retried.
+	ErrCodePagesLost = "PAGES_LOST"
 )
 
 // classifyError returns a structured error code for a processing failure.
 func classifyError(err error) string {
 	if err == nil {
 		return ""
+	}
+	if errors.Is(err, processing.ErrPagesLost) {
+		return ErrCodePagesLost
 	}
 	msg := err.Error()
 	if strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded") {
@@ -101,6 +109,8 @@ func friendlyMessage(code string) string {
 		return "This file took too long to process. Please try again, or use a smaller file."
 	case ErrCodeUnsupportedTool:
 		return "This operation isn't supported for this file."
+	case ErrCodePagesLost:
+		return "This file is damaged in a way that would lose pages, so we stopped rather than return an incomplete document. Please try a different copy of the file."
 	case ErrCodeConversionFailed:
 		return "We couldn't process this file. It may be corrupted, password-protected, or in an unsupported format. Please try a different file."
 	default:

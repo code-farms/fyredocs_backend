@@ -7,7 +7,7 @@ modules have drifted from the copy baked into it:
 
 | Image | Purpose | Rebuild when |
 |-------|---------|--------------|
-| `fyredocs-base:latest` | **Runtime** base for `convert-to-pdf` — Alpine + LibreOffice/poppler/unoserver | Alpine/LibreOffice/unoserver version changes — **manual** |
+| `fyredocs-base:latest` | **Runtime** base for `convert-to-pdf` — Alpine + LibreOffice/poppler/unoserver | Alpine/LibreOffice/unoserver version changes, or a fixable Trivy finding in a base package (see [Security refresh](#security-refresh)) — **manual** |
 | `fyredocs-go-builder:latest` | **Build** base for **every** service — Go toolchain + all module deps + a warm `go-build` cache | `go.work`/any `go.mod`/`go.sum` changes — **automatic** (see [Staleness detection](#staleness-detection)); Go toolchain bump — **manual** |
 
 The Go builder base is documented in its own section below ("Go Builder Base Image").
@@ -16,7 +16,7 @@ The Go builder base is documented in its own section below ("Go Builder Base Ima
 
 `fyredocs-base` is built from `alpine:3.24` (3.19 reached end-of-life on 2025-11-01). It carries LibreOffice 25.8, Poppler 25.12, Python 3.14 with `unoserver==3.7`, and the fonts `ttf-liberation` (Latin, metric-compatible with Arial/Times) and `font-noto-devanagari` (Hindi) registered with `fc-cache`. The build fails if fontconfig cannot see Noto Sans Devanagari.
 
-Size: about 1.5 GB, up from about 1.07 GB on 3.19. In Alpine 3.24 `libreoffice-common` depends on Qt 6 and GTK, which pull mesa and LLVM (about 377 MB a headless server never loads); installing only the writer/calc/impress components does not avoid them. Resident memory went down (two daemons idle: 193 MiB on 3.19, 122 MiB on 3.24). Measurements: `next-generation-document-engine/benchmarks/raw-2026-11-08/NOTES.md`.
+Size: about 1.5 GB, up from about 1.07 GB on 3.19. In Alpine 3.24 `libreoffice-common` depends on Qt 6 and GTK, which pull mesa and LLVM (about 377 MB a headless server never loads); installing only the writer/calc/impress components does not avoid them. The components are listed one by one anyway (2026-11-16), to leave out `libreoffice-connector-postgres` and its libpq. Resident memory went down (two daemons idle: 193 MiB on 3.19, 122 MiB on 3.24). Measurements: `next-generation-document-engine/benchmarks/raw-2026-11-08/NOTES.md`.
 
 **Licence notices.** Each worker image carries `/licences/THIRD-PARTY-LICENCES.md`, copied from
 `<worker>/THIRD-PARTY-LICENCES.md` next to its Dockerfile (`.dockerignore` excludes Markdown but makes an
@@ -115,6 +115,22 @@ docker build \
 - **Faster local builds**: Reuse pre-built layer with LibreOffice
 - **Reduced bandwidth**: LibreOffice packages downloaded once, not on every build
 - **Consistent environments**: All services use identical LibreOffice version
+
+## Security refresh
+
+Trivy (CI stage 8) gates on HIGH/CRITICAL findings that have a fixed version. When one is in
+a base package (an Alpine package in `fyredocs-base`), rebuild without the layer cache so
+`apk upgrade` and `apk add` fetch the fixed versions, then rebuild convert-to-pdf on top:
+
+```bash
+BASE_BUILD_ARGS=--no-cache ./deployment/build-base-image.sh   # always --pull
+docker compose -f deployment/docker-compose.yml build convert-to-pdf
+```
+
+A plain rebuild is not enough: Docker reuses the cached `apk add` layer and the old package
+versions stay (2026-11-13: libpq 18.6 and libxslt r3 stayed after a rebuild, though 18.7 and
+r4 were published). LibreOffice is installed component by component without
+`libreoffice-connector-postgres`, so libpq is no longer in the image at all.
 
 ## Updating the Base Image
 
