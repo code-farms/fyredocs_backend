@@ -46,6 +46,10 @@ COPY document-service/go.mod* ./document-service/
 COPY user-service/go.mod* ./user-service/
 COPY notification-service/go.mod* ./notification-service/
 COPY ai-service/go.mod* ./ai-service/
+# The engine benchmark harness is a workspace module too (go.work lists it), so
+# every build must see its go.mod or `go build` fails to load the workspace.
+# NOTE: .dockerignore excludes scripts/ except these two files.
+COPY scripts/bench-engine/go.mod scripts/bench-engine/go.sum* ./scripts/bench-engine/
 
 # 2. Download every module's deps into /go/pkg/mod (baked into the image).
 RUN go mod download

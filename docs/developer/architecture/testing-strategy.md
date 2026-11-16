@@ -24,6 +24,28 @@ There is no `e2e` tier: API tests run real gin routers in-process under the
 `integration` tag, and full-stack load/E2E traffic is owned by the existing
 k6 suite (`scripts/k6/`, see `load-testing.md`).
 
+### Engine benchmark harness (`scripts/bench-engine`)
+
+Outside the three tiers, because it drives the **running stack** the way a
+browser does: it uploads each corpus file through Caddy, runs every tool the
+manifest lists for it, and judges the output against oracle tools (Poppler,
+LibreOffice, veraPDF). It runs inside `fyredocs-test-binaries` via
+`scripts/bench-engine/run.sh`. Its own code is an ordinary workspace module, so
+its unit tests (SSIM, pHash, CER, manifest/lock, report comparison) run in
+`make test` like any other.
+
+```
+make bench-engine-gen                   # build corpus/out/ (226 generated files) + corpus.lock
+make bench-engine BENCH_ARGS="-runs 3"  # verify the corpus, run, write a report
+make bench-compare A=base.json B=new.json
+```
+
+The stack must be up with `scripts/bench-engine/compose.bench.yml` (raised
+rate limits). Reports go to
+`next-generation-document-engine/benchmarks/results/`. A nightly/release gate
+wraps it: CI stage 9 (`ci-pipeline.md`). Corpus and metrics:
+`scripts/bench-engine/corpus/README.md` and doc 16 §5.
+
 ## Runners
 
 All runners loop per module — root-relative `./...` does not work in this

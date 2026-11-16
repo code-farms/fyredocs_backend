@@ -352,7 +352,8 @@ When applying any code change, Claude MUST follow this workflow in order:
 - If no tests exist for the changed code, create them
 - Verify compilation and run tests **per module**, then check formatting
 
-This repository is a Go workspace (`go.work`) of 12 sibling modules.
+This repository is a Go workspace (`go.work`) of 12 sibling service/shared
+modules plus the engine benchmark harness (`scripts/bench-engine`).
 Root-relative `./...` patterns **do not work** — `go build ./...` fails with
 `directory prefix . does not contain modules listed in go.work`. Always scope
 to a module, or use `make test` which loops over all of them:
@@ -364,7 +365,7 @@ go build ./job-service/... && go vet ./job-service/... && go test ./job-service/
 # All modules
 SVCS=(ai-service analytics-service api-gateway auth-service convert-from-pdf convert-to-pdf \
       document-service job-service notification-service optimize-pdf \
-      organize-pdf shared user-service)
+      organize-pdf shared user-service scripts/bench-engine)
 for s in $SVCS; do go build ./$s/... && go vet ./$s/...; done
 make test
 

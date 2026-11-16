@@ -29,6 +29,10 @@ files/
 docs/
 postman/
 scripts/
+# ...except the benchmark harness's module files: go.work lists the module, and
+# deployment/base-go-builder.Dockerfile copies them so the workspace loads.
+!scripts/bench-engine/go.mod
+!scripts/bench-engine/go.sum
 **/*.md
 # ...except the per-worker licence notices, which each worker Dockerfile COPYs
 # into /licences/ (a notice that ships nowhere protects nobody).

@@ -1,0 +1,41 @@
+# Benchmark-only override: lifts the per-IP and per-plan rate limits so a corpus
+# run (hundreds of uploads and jobs from one client) measures the engines, not
+# the limiter. A guest run hit 429 within ~15 jobs (2026-11-09). NEVER use this
+# file for a deployment: the limits are a production safety control.
+#
+# It also turns the workers' result cache off (RESULT_CACHE_TTL_SECONDS=0):
+# identical input+tool+options would otherwise be served from Redis without
+# running the engine, so every repeat run (-runs 3) and any file seen before
+# measured the cache, not the engine (found 2026-11-13: pdf-to-image 65 ms from
+# cache vs 2.3 s converted).
+#
+#   docker compose -f deployment/docker-compose.yml \
+#                  -f scripts/bench-engine/compose.bench.yml --env-file .env up -d
+services:
+  api-gateway:
+    environment:
+      RATE_LIMIT_API_GUEST: "100000"
+      RATE_LIMIT_API_FREE: "100000"
+      RATE_LIMIT_API_PRO: "100000"
+  auth-service:
+    environment:
+      RATE_LIMIT_LOGIN: "1000"
+      RATE_LIMIT_SIGNUP: "1000"
+      RATE_LIMIT_REFRESH: "1000"
+  job-service:
+    environment:
+      RATE_LIMIT_UPLOAD: "100000"
+      RATE_LIMIT_JOB_CREATE: "100000"
+      RATE_LIMIT_DETECT: "100000"
+  convert-to-pdf:
+    environment:
+      RESULT_CACHE_TTL_SECONDS: "0"
+  convert-from-pdf:
+    environment:
+      RESULT_CACHE_TTL_SECONDS: "0"
+  organize-pdf:
+    environment:
+      RESULT_CACHE_TTL_SECONDS: "0"
+  optimize-pdf:
+    environment:
+      RESULT_CACHE_TTL_SECONDS: "0"

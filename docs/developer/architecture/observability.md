@@ -176,12 +176,21 @@ docker compose -f deployment/docker-compose.yml --env-file .env --profile observ
 
 ## Graceful degradation
 
-When the collector is not running (the default), each service's endpoint probe
-(`shared/telemetry` `probeEndpoint`, a 2s TCP dial) fails, logs
-`"OTLP collector unreachable, tracing disabled"`, and installs a no-op tracer.
-The service runs normally — no export timeouts, no errors. Start the profile and
-restart (or redeploy) the services and they log
-`"OpenTelemetry tracing initialized"` instead.
+When the collector is not reachable at startup, each service's endpoint probe
+(`shared/telemetry` `probeEndpoint`, a 2s TCP dial) fails and it logs
+`"OTLP collector unreachable, will retry"`. It keeps a no-op tracer and re-probes
+every 15 s for `OTEL_COLLECTOR_WAIT` (default `10m`); when the collector answers it
+switches tracing on by itself and logs `"OpenTelemetry tracing initialized"`.
+Spans from before that are dropped. After the wait it gives up with
+`"OTLP collector still unreachable, tracing disabled"` and runs on without tracing,
+so a stack without the observability profile still has no export timeouts or
+errors; start the profile later and restart the services to get traces.
+
+The retry exists because compose starts the services and the observability
+profile together and the collector is routinely a few seconds late: with the old
+one-shot probe, every service that started first ran without tracing until it
+was restarted (measured 2026-11-13: services up at 15:14:50, collector at
+15:15:13, zero traces in Tempo).
 
 ## In-app embedding (admin Observability tab)
 
@@ -341,4 +350,4 @@ All optional; defaults shown.
 | `OTEL_COLLECTOR_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `256M` / `0.5` / `64M` | collector resources |
 | `TEMPO_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `512M` / `0.5` / `128M` | Tempo resources |
 | `PROMETHEUS_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `512M` / `0.5` / `128M` | Prometheus resources |
-| `GRAFANA_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `256M` / `0.5` / `64M` | Grafana resources |
+| `GRAFANA_MEM_LIMIT` / `_CPU_LIMIT` / `_MEM_RESERVATION` | `512M` / `0.5` / `64M` | Grafana resources. 512M since Grafana 13, which reached the old 256 MiB cap under dashboard load (2026-11-13) |

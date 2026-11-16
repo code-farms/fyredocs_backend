@@ -1,5 +1,11 @@
 # Fidelity and performance corpus
 
+> **Implemented 2026-11-13 (M1.7, first slice).** The harness and the corpus recipes now live
+> in `scripts/bench-engine/` and are described in `scripts/bench-engine/corpus/README.md`. The design
+> below differs in two ways. The manifest is `manifest.json` recipes, not `manifest.tsv` checksums,
+> because generated PDFs are not byte-stable, so a local `corpus.lock` pins checksums per generation.
+> And the corpus is generated only for now: the real-world series are listed as `pending`.
+
 This folder documents the corpus the engine harness (`make bench-engine`, designed in
 `../../16-benchmarking-and-testing.md`) and the baseline script (`../measure-images.sh`) run against.
 Per CLAUDE.md §2 the harness code and the corpus **manifest** live under `scripts/bench-engine/`

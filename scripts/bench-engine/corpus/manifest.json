@@ -1,0 +1,639 @@
+{
+  "version": 1,
+  "series": [
+    {
+      "id": "pdf-small",
+      "category": "pdf",
+      "generator": "textpdf",
+      "count": 5,
+      "tools": [
+        "compress-pdf",
+        "pdf-to-text",
+        "pdf-to-image",
+        "pdf-to-pdfa",
+        "rotate-pdf",
+        "merge-pdf",
+        "split-pdf",
+        "protect-pdf",
+        "pdf-metadata",
+        "pdf-to-word"
+      ],
+      "params": {
+        "pages": "5",
+        "size": "small"
+      }
+    },
+    {
+      "id": "pdf-medium",
+      "category": "pdf",
+      "generator": "textpdf",
+      "count": 5,
+      "tools": [
+        "compress-pdf",
+        "pdf-to-text",
+        "pdf-to-pdfa"
+      ],
+      "params": {
+        "pages": "8",
+        "size": "medium"
+      }
+    },
+    {
+      "id": "pdf-large",
+      "category": "pdf",
+      "generator": "textpdf",
+      "count": 5,
+      "tools": [
+        "compress-pdf",
+        "pdf-to-text"
+      ],
+      "params": {
+        "pages": "12",
+        "size": "large"
+      }
+    },
+    {
+      "id": "pdf-100pages",
+      "category": "multipage",
+      "generator": "textpdf",
+      "count": 3,
+      "tools": [
+        "compress-pdf",
+        "pdf-to-image",
+        "split-pdf"
+      ],
+      "params": {
+        "pages": "100",
+        "lines": "45"
+      }
+    },
+    {
+      "id": "pdf-300pages",
+      "category": "multipage",
+      "generator": "textpdf",
+      "count": 2,
+      "tools": [
+        "compress-pdf",
+        "pdf-to-text"
+      ],
+      "params": {
+        "pages": "300",
+        "lines": "45"
+      }
+    },
+    {
+      "id": "img-photo",
+      "category": "image-heavy",
+      "generator": "imagepdf",
+      "count": 8,
+      "tools": [
+        "compress-pdf",
+        "pdf-to-image"
+      ],
+      "params": {
+        "pattern": "photo",
+        "images": "4"
+      }
+    },
+    {
+      "id": "img-noise",
+      "category": "image-heavy",
+      "generator": "imagepdf",
+      "count": 6,
+      "tools": [
+        "compress-pdf"
+      ],
+      "params": {
+        "pattern": "noise",
+        "images": "3",
+        "w": "1200",
+        "h": "900"
+      }
+    },
+    {
+      "id": "img-shapes",
+      "category": "image-heavy",
+      "generator": "imagepdf",
+      "count": 6,
+      "tools": [
+        "compress-pdf",
+        "pdf-to-image"
+      ],
+      "params": {
+        "pattern": "shapes",
+        "images": "4",
+        "format": "png"
+      }
+    },
+    {
+      "id": "scan-300dpi",
+      "category": "scans",
+      "generator": "scan",
+      "count": 12,
+      "tools": [
+        "ocr-pdf",
+        "compress-pdf"
+      ],
+      "params": {
+        "dpi": "300",
+        "pages": "2"
+      }
+    },
+    {
+      "id": "scan-200dpi",
+      "category": "scans",
+      "generator": "scan",
+      "count": 8,
+      "tools": [
+        "ocr-pdf"
+      ],
+      "params": {
+        "dpi": "200",
+        "pages": "3"
+      }
+    },
+    {
+      "id": "hindi-pdf",
+      "category": "hindi",
+      "generator": "lo",
+      "count": 10,
+      "tools": [
+        "compress-pdf",
+        "pdf-to-text",
+        "pdf-to-pdfa",
+        "pdf-to-image"
+      ],
+      "params": {
+        "source": "hindi",
+        "to": "pdf",
+        "paragraphs": "20"
+      }
+    },
+    {
+      "id": "hindi-docx",
+      "category": "hindi",
+      "generator": "lo",
+      "count": 10,
+      "tools": [
+        "word-to-pdf"
+      ],
+      "params": {
+        "source": "hindi",
+        "to": "docx",
+        "paragraphs": "20"
+      }
+    },
+    {
+      "id": "table-pdf",
+      "category": "tables",
+      "generator": "lo",
+      "count": 8,
+      "tools": [
+        "pdf-to-excel",
+        "pdf-to-word",
+        "pdf-to-text"
+      ],
+      "params": {
+        "source": "table",
+        "to": "pdf",
+        "rows": "40"
+      }
+    },
+    {
+      "id": "table-docx",
+      "category": "tables",
+      "generator": "lo",
+      "count": 6,
+      "tools": [
+        "word-to-pdf"
+      ],
+      "params": {
+        "source": "table",
+        "to": "docx",
+        "rows": "40"
+      }
+    },
+    {
+      "id": "table-odt",
+      "category": "tables",
+      "generator": "lo",
+      "count": 6,
+      "tools": [
+        "odt-to-pdf"
+      ],
+      "params": {
+        "source": "table",
+        "to": "odt",
+        "rows": "40"
+      }
+    },
+    {
+      "id": "columns-pdf",
+      "category": "layout",
+      "generator": "lo",
+      "count": 10,
+      "tools": [
+        "pdf-to-word",
+        "pdf-to-odt",
+        "pdf-to-text"
+      ],
+      "params": {
+        "source": "columns",
+        "to": "pdf"
+      }
+    },
+    {
+      "id": "columns-docx",
+      "category": "layout",
+      "generator": "lo",
+      "count": 10,
+      "tools": [
+        "word-to-pdf"
+      ],
+      "params": {
+        "source": "columns",
+        "to": "docx"
+      }
+    },
+    {
+      "id": "sheet-50k-xlsx",
+      "category": "spreadsheets",
+      "generator": "lo",
+      "count": 3,
+      "tools": [
+        "excel-to-pdf"
+      ],
+      "params": {
+        "source": "sheet",
+        "to": "xlsx",
+        "rows": "50000"
+      }
+    },
+    {
+      "id": "sheet-50k-ods",
+      "category": "spreadsheets",
+      "generator": "lo",
+      "count": 2,
+      "tools": [
+        "ods-to-pdf"
+      ],
+      "params": {
+        "source": "sheet",
+        "to": "ods",
+        "rows": "50000"
+      }
+    },
+    {
+      "id": "k6-docx-small",
+      "category": "office",
+      "generator": "k6fixture",
+      "count": 1,
+      "tools": [
+        "word-to-pdf"
+      ],
+      "params": {
+        "kind": "docx",
+        "size": "small"
+      }
+    },
+    {
+      "id": "k6-docx-medium",
+      "category": "office",
+      "generator": "k6fixture",
+      "count": 1,
+      "tools": [
+        "word-to-pdf"
+      ],
+      "params": {
+        "kind": "docx",
+        "size": "medium"
+      }
+    },
+    {
+      "id": "k6-xlsx-small",
+      "category": "office",
+      "generator": "k6fixture",
+      "count": 1,
+      "tools": [
+        "excel-to-pdf"
+      ],
+      "params": {
+        "kind": "xlsx",
+        "size": "small"
+      }
+    },
+    {
+      "id": "k6-xlsx-medium",
+      "category": "office",
+      "generator": "k6fixture",
+      "count": 1,
+      "tools": [
+        "excel-to-pdf"
+      ],
+      "params": {
+        "kind": "xlsx",
+        "size": "medium"
+      }
+    },
+    {
+      "id": "k6-pptx-small",
+      "category": "office",
+      "generator": "k6fixture",
+      "count": 1,
+      "tools": [
+        "powerpoint-to-pdf"
+      ],
+      "params": {
+        "kind": "pptx",
+        "size": "small"
+      }
+    },
+    {
+      "id": "k6-pptx-medium",
+      "category": "office",
+      "generator": "k6fixture",
+      "count": 1,
+      "tools": [
+        "powerpoint-to-pdf"
+      ],
+      "params": {
+        "kind": "pptx",
+        "size": "medium"
+      }
+    },
+    {
+      "id": "k6-odt-small",
+      "category": "office",
+      "generator": "k6fixture",
+      "count": 1,
+      "tools": [
+        "odt-to-pdf"
+      ],
+      "params": {
+        "kind": "odt",
+        "size": "small"
+      }
+    },
+    {
+      "id": "k6-odt-medium",
+      "category": "office",
+      "generator": "lo",
+      "count": 1,
+      "tools": [
+        "odt-to-pdf"
+      ],
+      "params": {
+        "source": "repo",
+        "path": "scripts/k6/fixtures/out/docx/medium.docx",
+        "to": "odt"
+      },
+      "note": "gen.py makes only a small odt; the medium one is LibreOffice's conversion of the medium docx fixture"
+    },
+    {
+      "id": "k6-ods-small",
+      "category": "office",
+      "generator": "k6fixture",
+      "count": 1,
+      "tools": [
+        "ods-to-pdf"
+      ],
+      "params": {
+        "kind": "ods",
+        "size": "small"
+      }
+    },
+    {
+      "id": "k6-ods-medium",
+      "category": "office",
+      "generator": "lo",
+      "count": 1,
+      "tools": [
+        "ods-to-pdf"
+      ],
+      "params": {
+        "source": "repo",
+        "path": "scripts/k6/fixtures/out/xlsx/medium.xlsx",
+        "to": "ods"
+      },
+      "note": "gen.py makes only a small ods; the medium one is LibreOffice's conversion of the medium xlsx fixture"
+    },
+    {
+      "id": "k6-odp-small",
+      "category": "office",
+      "generator": "k6fixture",
+      "count": 1,
+      "tools": [
+        "odp-to-pdf"
+      ],
+      "params": {
+        "kind": "odp",
+        "size": "small"
+      }
+    },
+    {
+      "id": "k6-odp-medium",
+      "category": "office",
+      "generator": "lo",
+      "count": 1,
+      "tools": [
+        "odp-to-pdf"
+      ],
+      "params": {
+        "source": "repo",
+        "path": "scripts/k6/fixtures/out/pptx/medium.pptx",
+        "to": "odp"
+      },
+      "note": "gen.py makes only a small odp; the medium one is LibreOffice's conversion of the medium pptx fixture"
+    },
+    {
+      "id": "office-text-docx",
+      "category": "office",
+      "generator": "lo",
+      "count": 6,
+      "tools": [
+        "word-to-pdf",
+        "word-to-odt"
+      ],
+      "params": {
+        "source": "text",
+        "to": "docx"
+      }
+    },
+    {
+      "id": "office-text-odt",
+      "category": "office",
+      "generator": "lo",
+      "count": 6,
+      "tools": [
+        "odt-to-pdf"
+      ],
+      "params": {
+        "source": "text",
+        "to": "odt"
+      }
+    },
+    {
+      "id": "office-sheet-xlsx",
+      "category": "office",
+      "generator": "lo",
+      "count": 6,
+      "tools": [
+        "excel-to-pdf",
+        "excel-to-ods"
+      ],
+      "params": {
+        "source": "sheet",
+        "to": "xlsx",
+        "rows": "2000"
+      }
+    },
+    {
+      "id": "html",
+      "category": "html",
+      "generator": "html",
+      "count": 30,
+      "tools": [
+        "html-to-pdf"
+      ]
+    },
+    {
+      "id": "enc-rc4-128",
+      "category": "encrypted",
+      "generator": "encrypted",
+      "count": 1,
+      "tools": [
+        "unlock-pdf"
+      ],
+      "params": {
+        "mode": "rc4-128",
+        "password": "bench-user"
+      }
+    },
+    {
+      "id": "enc-aes-128",
+      "category": "encrypted",
+      "generator": "encrypted",
+      "count": 1,
+      "tools": [
+        "unlock-pdf"
+      ],
+      "params": {
+        "mode": "aes-128",
+        "password": "bench-user"
+      }
+    },
+    {
+      "id": "enc-aes-256",
+      "category": "encrypted",
+      "generator": "encrypted",
+      "count": 2,
+      "tools": [
+        "unlock-pdf"
+      ],
+      "params": {
+        "mode": "aes-256",
+        "password": "bench-user"
+      }
+    },
+    {
+      "id": "enc-owner-only",
+      "category": "encrypted",
+      "generator": "encrypted",
+      "count": 2,
+      "tools": [
+        "unlock-pdf"
+      ],
+      "params": {
+        "mode": "owner-only",
+        "password": "bench-owner"
+      }
+    },
+    {
+      "id": "malformed",
+      "category": "malformed",
+      "generator": "malformed",
+      "count": 20,
+      "tools": [
+        "repair-pdf",
+        "compress-pdf",
+        "pdf-to-image"
+      ],
+      "expect": "fail-or-ok",
+      "note": "Each must either repair/convert or fail cleanly with an error code; a timeout or crash is a finding."
+    },
+    {
+      "id": "photo-jpeg",
+      "category": "images",
+      "generator": "image",
+      "count": 8,
+      "tools": [
+        "image-to-pdf",
+        "scan-to-pdf"
+      ],
+      "params": {
+        "format": "jpeg",
+        "pattern": "photo"
+      }
+    },
+    {
+      "id": "shapes-png",
+      "category": "images",
+      "generator": "image",
+      "count": 7,
+      "tools": [
+        "image-to-pdf"
+      ],
+      "params": {
+        "format": "png",
+        "pattern": "shapes",
+        "w": "1400",
+        "h": "1000"
+      }
+    },
+    {
+      "id": "real-complex-layout",
+      "category": "layout",
+      "generator": "",
+      "count": 0,
+      "tools": [],
+      "status": "pending",
+      "note": "Real-world documents to be added later (doc 16 §5.2 donated categories); listed so the gap stays visible."
+    },
+    {
+      "id": "real-labelled-tables",
+      "category": "tables",
+      "generator": "",
+      "count": 0,
+      "tools": [],
+      "status": "pending",
+      "note": "Real-world documents to be added later (doc 16 §5.2 donated categories); listed so the gap stays visible."
+    },
+    {
+      "id": "real-forms",
+      "category": "forms",
+      "generator": "",
+      "count": 0,
+      "tools": [],
+      "status": "pending",
+      "note": "Real-world documents to be added later (doc 16 §5.2 donated categories); listed so the gap stays visible."
+    },
+    {
+      "id": "real-presentations",
+      "category": "presentations",
+      "generator": "",
+      "count": 0,
+      "tools": [],
+      "status": "pending",
+      "note": "Real-world documents to be added later (doc 16 §5.2 donated categories); listed so the gap stays visible."
+    },
+    {
+      "id": "real-scans",
+      "category": "scans",
+      "generator": "",
+      "count": 0,
+      "tools": [],
+      "status": "pending",
+      "note": "Real-world documents to be added later (doc 16 §5.2 donated categories); listed so the gap stays visible."
+    }
+  ]
+}

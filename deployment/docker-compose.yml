@@ -1831,7 +1831,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${GRAFANA_MEM_LIMIT:-256M}
+          # 512M since Grafana 13: under dashboard and query load it reached
+          # 255.8 of the old 256 MiB (measured 2026-11-13), one heavy query away
+          # from an OOM kill. Idle it sits near 200 MiB.
+          memory: ${GRAFANA_MEM_LIMIT:-512M}
           cpus: "${GRAFANA_CPU_LIMIT:-0.5}"
         reservations:
           memory: ${GRAFANA_MEM_RESERVATION:-64M}

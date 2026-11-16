@@ -20,6 +20,7 @@ use (
 	./notification-service
 	./optimize-pdf
 	./organize-pdf
+	./scripts/bench-engine
 	./shared
 	./user-service
 )

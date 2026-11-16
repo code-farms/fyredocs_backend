@@ -1,7 +1,7 @@
 SERVICES = shared api-gateway auth-service job-service \
            convert-to-pdf convert-from-pdf organize-pdf optimize-pdf \
            analytics-service document-service user-service notification-service \
-           ai-service
+           ai-service scripts/bench-engine
 
 # Compose always uses the deployment compose file + the single root .env (same
 # env file deploy.sh loads). Run one (or more) services without a long command:
@@ -34,7 +34,7 @@ ESSENTIALS_COMPOSE = docker compose -f deployment/docker-compose.essentials.yml 
 # (organize-pdf's pdfcpu suites) under -race overhead.
 TESTFLAGS = -race -count=1 -shuffle=on -timeout=10m
 
-.PHONY: up down logs ps check-ports vuln check-compose test-convert-from-pdf-image test test-v test-integration test-infra-up test-infra-down test-binaries cover bench fuzz-short lint dev-up dev-down dev-logs dev-ps dev-nuke $(addprefix test-,$(SERVICES)) $(addprefix test-v-,$(SERVICES))
+.PHONY: up down logs ps check-ports vuln check-compose test-convert-from-pdf-image bench-engine-gen bench-engine bench-compare test test-v test-integration test-infra-up test-infra-down test-binaries cover bench fuzz-short lint dev-up dev-down dev-logs dev-ps dev-nuke $(addprefix test-,$(SERVICES)) $(addprefix test-v-,$(SERVICES))
 
 ## Start service(s) (SVC=…) or the whole stack; env comes from the root .env
 up:
@@ -152,6 +152,19 @@ test-convert-from-pdf-image:
 		fyredocs-test-binaries sh -c 'cd /src && CGO_ENABLED=0 go test -c -tags "integration binaries" -o /out/cfp-processing.test ./convert-from-pdf/processing && chmod 755 /out/cfp-processing.test'
 	docker run --rm -v fyredocs-test-out:/out:ro --entrypoint /out/cfp-processing.test \
 		fyredocs-convert-from-pdf -test.run 'PdfToWord|PdfToExcel' -test.v -test.count=1
+
+## Engine benchmark harness (Q13). The stack must be up with
+## scripts/bench-engine/compose.bench.yml; see scripts/bench-engine/corpus/README.md.
+bench-engine-gen:
+	@bash scripts/bench-engine/run.sh gen
+
+bench-engine:
+	@bash scripts/bench-engine/run.sh verify
+	@bash scripts/bench-engine/run.sh run $(BENCH_ARGS)
+
+## Compare two reports: make bench-compare A=base.json B=candidate.json
+bench-compare:
+	@bash scripts/bench-engine/run.sh compare $(A) $(B)
 
 ## Per-module coverage profiles merged into coverage/merged.out + func summary
 cover:

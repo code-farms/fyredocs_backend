@@ -47,7 +47,9 @@ gomod_fingerprint() {
     (
         LC_ALL=C
         {
-            for f in go.work go.work.sum; do
+            # scripts/bench-engine is the one workspace module below depth 2;
+            # listed by name so the find below can stay one level deep.
+            for f in go.work go.work.sum scripts/bench-engine/go.mod scripts/bench-engine/go.sum; do
                 [ -f "$f" ] || continue
                 printf '### %s\n' "$f"
                 cat "$f"

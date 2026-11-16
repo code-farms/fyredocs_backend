@@ -34,7 +34,10 @@ RUN cd convert-from-pdf && \
 # raw-2026-11-09/NOTES.md). LibreOffice/Python leave this image in Stage 3.
 FROM python:3.15-slim-trixie
 
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+# apt-get upgrade: the python image lags Debian security updates (Trivy
+# 2026-11-13: zlib1g fixed in deb13u1, image shipped +b1).
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress \
     poppler-utils \
@@ -48,7 +51,10 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 # pdf2docx: PDF→DOCX. pdfplumber+openpyxl: PDF→XLSX table extraction
 # (scripts/pdf_to_xlsx.py). All pure-Python (no Java/opencv beyond pdf2docx's).
 # Pinned; TestPdfToWordBinaries and TestPdfToExcelBinaries guard upgrades.
-RUN pip3 install --no-cache-dir pdf2docx==0.5.13 pdfplumber==0.11.10 openpyxl==3.1.5
+# pip is then removed: nothing installs at runtime, and its vendored msgpack and
+# urllib3 carried the image's only Python HIGH findings (Trivy 2026-11-13).
+RUN pip3 install --no-cache-dir pdf2docx==0.5.13 pdfplumber==0.11.10 openpyxl==3.1.5 \
+    && pip3 uninstall -y pip
 
 RUN useradd -m -u 10001 appuser
 

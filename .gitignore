@@ -29,3 +29,7 @@ scripts/k6/results/*
 
 # macOS Finder metadata, created in every browsed directory
 **/.DS_Store
+
+# Generated benchmark corpus and its lock (scripts/bench-engine gen): regenerated,
+# never committed (doc 16 §5.2). The manifest of recipes IS committed.
+scripts/bench-engine/corpus/out/
