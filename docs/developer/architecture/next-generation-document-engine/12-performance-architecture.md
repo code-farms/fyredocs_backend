@@ -134,6 +134,17 @@ Stage 1 (no routing change): a per-class weighted semaphore inside each worker's
 (`OCR_MAX_WORKERS × WORKER_CONCURRENCY` today). The NATS consumer still fetches `WORKER_CONCURRENCY` messages; the class
 semaphore only orders execution. `largeJobSem` becomes the `cpu` class's size-1 "large" sub-slot.
 
+**Stage 1 implemented 2026-11-16** (`shared/jobslots`, each worker's `internal/worker/class.go`):
+`CPU_JOB_SLOTS` (default `GOMAXPROCS`, which follows the cgroup CPU limit) and `IO_JOB_SLOTS` (default 2×
+cpu) are weighted semaphores taken after the result-cache lookup and before the input download.
+Classes: organize-pdf `scan-to-pdf` cpu, its 13 pdfcpu tools io; convert-to-pdf `image-to-pdf` io, LO tools
+cpu; convert-from-pdf and optimize-pdf all cpu. OCR differs from the table above: an OCR job takes no job
+slot and each page takes one cpu token, because a job token plus page tokens deadlocks once OCR jobs hold
+every token; all OCR jobs together now run ≤ `CPU_JOB_SLOTS` tesseracts. `WORKER_CONCURRENCY` became the
+in-flight bound (default cpu + io); `UNOSERVER_INSTANCES` defaults to cpu + 1. Remaining Stage 1 limit: a
+cpu job waiting for its slot holds an in-flight slot, so io work stalls only when more than `IO_JOB_SLOTS`
+cpu jobs are queued at once; `job_slot_wait_seconds{class}` shows it.
+
 Stage 2 (routing change, touches `job-service/internal/routing/routing.go`): publish `jobs.dispatch.<svc>.<class>` and
 give each worker two durable consumers with `FilterSubject`, each with its own `MaxAckPending`, so a wedged `cpu` class
 no longer holds `io` messages unacked. This is the point at which a dedicated `office-render` pool (§5.3) can be a

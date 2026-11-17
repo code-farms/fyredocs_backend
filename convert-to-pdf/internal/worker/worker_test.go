@@ -285,7 +285,7 @@ func TestProgressReporterStopsCleanly(t *testing.T) {
 func TestConcurrencyFromEnv(t *testing.T) {
 	t.Run("default is 2", func(t *testing.T) {
 		t.Setenv("WORKER_CONCURRENCY", "")
-		got := concurrencyFromEnv()
+		got := concurrencyFromEnv(2)
 		if got != 2 {
 			t.Errorf("expected 2, got %d", got)
 		}
@@ -293,7 +293,7 @@ func TestConcurrencyFromEnv(t *testing.T) {
 
 	t.Run("custom value", func(t *testing.T) {
 		t.Setenv("WORKER_CONCURRENCY", "4")
-		got := concurrencyFromEnv()
+		got := concurrencyFromEnv(2)
 		if got != 4 {
 			t.Errorf("expected 4, got %d", got)
 		}
@@ -301,7 +301,7 @@ func TestConcurrencyFromEnv(t *testing.T) {
 
 	t.Run("invalid uses default", func(t *testing.T) {
 		t.Setenv("WORKER_CONCURRENCY", "abc")
-		got := concurrencyFromEnv()
+		got := concurrencyFromEnv(2)
 		if got != 2 {
 			t.Errorf("expected 2, got %d", got)
 		}
@@ -309,7 +309,7 @@ func TestConcurrencyFromEnv(t *testing.T) {
 
 	t.Run("zero uses default", func(t *testing.T) {
 		t.Setenv("WORKER_CONCURRENCY", "0")
-		got := concurrencyFromEnv()
+		got := concurrencyFromEnv(2)
 		if got != 2 {
 			t.Errorf("expected 2, got %d", got)
 		}
@@ -317,7 +317,7 @@ func TestConcurrencyFromEnv(t *testing.T) {
 
 	t.Run("negative uses default", func(t *testing.T) {
 		t.Setenv("WORKER_CONCURRENCY", "-1")
-		got := concurrencyFromEnv()
+		got := concurrencyFromEnv(2)
 		if got != 2 {
 			t.Errorf("expected 2, got %d", got)
 		}

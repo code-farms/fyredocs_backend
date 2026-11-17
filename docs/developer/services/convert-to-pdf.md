@@ -165,9 +165,9 @@ See [jobs-api.md](../api/jobs-api.md) for full request/response shapes.
 
 ## Concurrency
 
-- `WORKER_CONCURRENCY` (default 2) controls how many in-flight conversions run in parallel.
-- Implementation: a Go semaphore (`chan struct{}`) sized at `WORKER_CONCURRENCY`. Each fetched message takes a slot before launching a goroutine; the slot is released on completion.
-- Fetch batch size matches `WORKER_CONCURRENCY` so the consumer doesn't pull more than it can run.
+- **Workload-class slots (since 2026-11-16)** (shared `jobslots`, see `next-generation-document-engine/12-performance-architecture.md` §5.1): `CPU_JOB_SLOTS` LibreOffice conversions (default: the CPU limit, compose 2) and `IO_JOB_SLOTS` `image-to-pdf` jobs (pdfcpu, default 2× cpu) run at once, each class from its own weighted semaphore taken after the cache lookup and before the input download. An image conversion no longer waits behind office documents (`internal/worker/slots_test.go`). Waits are in `job_slot_wait_seconds{class}`, held tokens in `job_slots_in_use{class}`.
+- `WORKER_CONCURRENCY` is now the number of jobs **in flight** (fetched, not yet acked). Unset (compose default) it is cpu + io slots. Each fetched message takes an in-flight slot before launching a goroutine.
+- Fetch batch size matches the in-flight bound so the consumer doesn't pull more than it can hold.
 
 ## Progress Reporting
 
@@ -209,12 +209,14 @@ This worker writes to `processing_jobs` and `file_metadata` (the same tables own
 | `S3_BUCKET_UPLOADS` | `uploads` | Bucket holding job input objects |
 | `S3_BUCKET_OUTPUTS` | `outputs` | Bucket receiving job outputs (`jobs/{jobID}/...`) |
 | `S3_REGION` | `us-east-1` | Signing region (MinIO ignores it; AWS must match) |
-| `WORKER_CONCURRENCY` | `2` | Max concurrent jobs processed in parallel |
+| `CPU_JOB_SLOTS` | CPU limit (compose `2`) | LibreOffice conversions that run at once (one warm daemon each) |
+| `IO_JOB_SLOTS` | 2 × `CPU_JOB_SLOTS` (compose `2`) | `image-to-pdf` jobs that run at once |
+| `WORKER_CONCURRENCY` | `CPU_JOB_SLOTS + IO_JOB_SLOTS` | Jobs in flight (fetched, not yet acked) |
 | `UNOSERVER_HOST` | `127.0.0.1` | unoserver daemon host |
 | `UNOSERVER_PORT` | `2002` | unoserver daemon port |
 | `UNOSERVER_MAX_CONVERSIONS` | `200` | Recycle a daemon after this many successful conversions; 0 disables. Initial value, not measured. |
 | `UNOSERVER_MAX_RSS_MB` | `600` | Recycle a daemon whose process-group RSS exceeds this; 0 disables. Initial value, not measured. |
-| `UNOSERVER_INSTANCES` | `WORKER_CONCURRENCY + 1` | Size of the unoserver daemon pool. When unset, auto-sizes to one warm daemon per concurrent job plus a spare so the cold-start fallback is unreachable. Set explicitly to pin (`deploy.sh` does, sized to the memory cap). |
+| `UNOSERVER_INSTANCES` | `CPU_JOB_SLOTS + 1` | Size of the unoserver daemon pool. When unset, auto-sizes to one warm daemon per concurrent LibreOffice job plus a spare so the cold-start fallback is unreachable. Set explicitly to pin (`deploy.sh` does, sized to the memory cap). |
 | `UNOSERVER_UNO_PORT_OFFSET` | `100` | Offset from each daemon's XML-RPC port to its LibreOffice UNO port (`--uno-port`). Must be ≥ `UNOSERVER_INSTANCES`. Read by the supervisor. |
 | `UNOSERVER_CONVERSION_TIMEOUT` | `600` | Seconds. Daemon-side backstop (`--conversion-timeout`): unoserver kills its LibreOffice and exits, and the supervisor restarts it. The worker's size-scaled deadline normally fires first. |
 | `RESULT_CACHE_TTL_SECONDS` | `3600` | Lifetime of result-cache entries. Keep ≤ outputs bucket TTL. `0` disables caching. |
@@ -471,9 +473,9 @@ instead of serializing on one port.
 - **Sizing**: handled automatically by `deploy.sh`'s 70% resource budget — it
   derives `UNOSERVER_INSTANCES` from this container's *scaled* memory cap
   (~300 MB per daemon + ~200 MB Go overhead), bounded by its CPU allowance and
-  6, then sets `WORKER_CONCURRENCY = instances − 1`. Because the pool is sized
+  6, then sets `CONVERT_TO_PDF_CPU_JOB_SLOTS = instances − 1`. Because the pool is sized
   to fit the cap, the container cannot OOM-kill itself regardless of host size.
-  To pin manually, set `UNOSERVER_INSTANCES`/`CONVERT_TO_PDF_CONCURRENCY` in
+  To pin manually, set `UNOSERVER_INSTANCES`/`CONVERT_TO_PDF_CPU_JOB_SLOTS` in
   `.env` (deploy.sh honors a pre-set value) — but a pin larger than the auto
   size can exceed the memory cap and risk an OOM-kill.
 

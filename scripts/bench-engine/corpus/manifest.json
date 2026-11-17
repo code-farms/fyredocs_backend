@@ -576,6 +576,23 @@
       }
     },
     {
+      "id": "scan-photo-bw",
+      "category": "images",
+      "generator": "image",
+      "count": 6,
+      "tools": [
+        "scan-to-pdf"
+      ],
+      "params": {
+        "format": "jpeg",
+        "pattern": "photo",
+        "w": "3000",
+        "h": "4000",
+        "enhance": "bw"
+      },
+      "note": "12 MP phone-sized photos through scan-to-pdf with enhance=bw (Go image clean-up): the cpu class in organize-pdf, for -concurrency contention runs against merge-pdf (doc 12 §5.1)"
+    },
+    {
       "id": "shapes-png",
       "category": "images",
       "generator": "image",

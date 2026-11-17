@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"bench-engine/internal/check"
@@ -24,13 +25,26 @@ type Options struct {
 	JobTimeout    time.Duration // per job, upload to download
 	ContainerName func(group string) string
 	Filter        func(it corpus.Item, tool string) bool
+	// Concurrency is the number of jobs in flight (default 1). Above 1 the run
+	// measures contention (e.g. whether merges wait behind scans) and the
+	// per-job container samples are skipped: the container is shared, so they
+	// would not belong to one job.
+	Concurrency int
 }
 
-// Run executes every item × tool × run against the stack and returns the rows.
-// One job is in flight at a time, so the worker's sampled resources belong to
-// that job (doc 16 §5.3 measures a job, not a load test; k6 covers load).
+// Run executes every item × tool × run against the stack and returns the rows,
+// in corpus order. With Concurrency 1 (the default) one job is in flight at a
+// time, so the worker's sampled resources belong to that job (doc 16 §5.3
+// measures a job, not a load test; k6 covers load).
 func Run(ctx context.Context, c *Client, d *metrics.Docker, lock corpus.Lock, items []corpus.Item, o Options) []report.Row {
-	var rows []report.Row
+	type task struct {
+		it        corpus.Item
+		tool      string
+		file      string
+		bytes     int64
+		run, slot int
+	}
+	var tasks []task
 	for _, it := range items {
 		e, ok := lock[it.ID]
 		if !ok {
@@ -42,16 +56,39 @@ func Run(ctx context.Context, c *Client, d *metrics.Docker, lock corpus.Lock, it
 				continue
 			}
 			for run := 1; run <= o.Runs; run++ {
-				row := runOne(ctx, c, d, it, tool, file, e.Bytes, run, o)
+				tasks = append(tasks, task{it: it, tool: tool, file: file, bytes: e.Bytes, run: run, slot: len(tasks)})
+			}
+		}
+	}
+
+	n := max(1, o.Concurrency)
+	sampler := d
+	if n > 1 {
+		sampler = nil
+	}
+	rows := make([]report.Row, len(tasks))
+	next := make(chan task)
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range next {
+				row := runOne(ctx, c, sampler, t.it, t.tool, t.file, t.bytes, t.run, o)
 				peak := "n/a"
 				if row.Resources.Frames > 0 {
 					peak = fmt.Sprintf("%.0fMiB", row.Resources.PeakMiB)
 				}
-				log.Printf("%-28s %-18s run %d: %s wall=%dms server=%dms peak=%s", it.ID, tool, run, row.Status, row.WallMs, row.ServerMs, peak)
-				rows = append(rows, row)
+				log.Printf("%-28s %-18s run %d: %s wall=%dms server=%dms peak=%s", t.it.ID, t.tool, t.run, row.Status, row.WallMs, row.ServerMs, peak)
+				rows[t.slot] = row
 			}
-		}
+		}()
 	}
+	for _, t := range tasks {
+		next <- t
+	}
+	close(next)
+	wg.Wait()
 	return rows
 }
 
@@ -83,7 +120,7 @@ func runOne(ctx context.Context, c *Client, d *metrics.Docker, it corpus.Item, t
 		}
 		ids = append(ids, id)
 	}
-	job, err := c.CreateJob(ctx, tool, ids, DefaultOptions(tool, it.Series.Params["password"]))
+	job, err := c.CreateJob(ctx, tool, ids, DefaultOptions(tool, it.Series.Params))
 	if err != nil {
 		// A 4xx at job creation is the service refusing the input (e.g. a file
 		// with no %PDF header sniffed as application/octet-stream): a clean,

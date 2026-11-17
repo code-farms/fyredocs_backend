@@ -13,6 +13,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"fyredocs/shared/jobslots"
 	"fyredocs/shared/procexec"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"golang.org/x/sync/errgroup"
@@ -586,6 +587,18 @@ func ocrPDF(ctx context.Context, inputPath string, outputPath string, options ma
 	for i := 0; i < pageCount; i++ {
 		i := i
 		g.Go(func() error {
+			// One cpu token per page while pdftoppm+tesseract run: across all
+			// OCR jobs in this worker, at most CPU_JOB_SLOTS pages are recognised
+			// at once (two jobs × OCR_MAX_WORKERS used to start up to eight
+			// tesseracts on two CPUs). No slots in ctx (tests, local runs): the
+			// per-job pool alone bounds it, as before.
+			if slots := jobslots.FromContext(gctx); slots != nil {
+				release, err := slots.Acquire(gctx, jobslots.CPU, 1)
+				if err != nil {
+					return err
+				}
+				defer release()
+			}
 			mu.Lock()
 			slog.Info("processing OCR page", "page", i+1, "total", pageCount)
 			mu.Unlock()

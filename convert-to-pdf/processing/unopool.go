@@ -2,6 +2,7 @@ package processing
 
 import (
 	"context"
+	"fyredocs/shared/jobslots"
 	"net"
 	"os"
 	"strconv"
@@ -77,11 +78,13 @@ func (p *unoserverPool) resetUses(port string) {
 }
 
 // unoserverInstances reads UNOSERVER_INSTANCES. When set, it is honored
-// (values < 1 clamp to 1). When unset, it defaults to WORKER_CONCURRENCY + 1 so
-// there is one warm daemon per concurrent job plus a spare — keeping the slow
-// cold-start LibreOffice fallback effectively unreachable even as concurrency
-// is raised on larger hosts. Each daemon costs memory (deploy.sh budgets
-// ~300 MB), so deploy.sh pins UNOSERVER_INSTANCES to fit the container's cap.
+// (values < 1 clamp to 1). When unset, it defaults to the cpu job slots + 1
+// (CPU_JOB_SLOTS, shared/jobslots): one warm daemon per LibreOffice job that can
+// run at once plus a spare, which keeps the slow cold-start fallback effectively
+// unreachable. It followed WORKER_CONCURRENCY until 2026-11-16; that now counts
+// jobs in flight across both classes, including image-to-pdf (io), which needs
+// no daemon. Each daemon costs memory (deploy.sh budgets ~300 MB), so deploy.sh
+// sizes CPU_JOB_SLOTS to fit the container's cap.
 func unoserverInstances() int {
 	if v := os.Getenv("UNOSERVER_INSTANCES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -91,20 +94,7 @@ func unoserverInstances() int {
 			return n
 		}
 	}
-	return workerConcurrency() + 1
-}
-
-// workerConcurrency mirrors the worker package's WORKER_CONCURRENCY default (2)
-// without importing it, so the daemon pool can size itself to the job
-// concurrency. Read here rather than imported to keep the processing package
-// independent of the worker package.
-func workerConcurrency() int {
-	if v := os.Getenv("WORKER_CONCURRENCY"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 2
+	return jobslots.CPUFromEnv() + 1
 }
 
 // UnoserverPorts returns the consecutive ports the unoserver daemons listen on

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"fyredocs/shared/storage"
@@ -15,9 +16,10 @@ import (
 // fakeStorage implements the Storage interface for tests. It records
 // download/upload calls and supports error injection.
 type fakeStorage struct {
-	downloads     []string // "bucket/key"
-	uploads       []string // "bucket/key"
-	copies        []string // "srcBucket/srcKey->dstBucket/dstKey"
+	mu            sync.Mutex // guards the recorded slices/maps: concurrent-job tests share one fake
+	downloads     []string   // "bucket/key"
+	uploads       []string   // "bucket/key"
+	copies        []string   // "srcBucket/srcKey->dstBucket/dstKey"
 	contentType   map[string]string
 	etagByKey     map[string]string // "bucket/key" -> ETag
 	defaultETag   string
@@ -59,6 +61,8 @@ func (f *fakeStorage) CopyObject(ctx context.Context, srcBucket, srcKey, dstBuck
 	if f.copyErr != nil {
 		return f.copyErr
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.copies = append(f.copies, srcBucket+"/"+srcKey+"->"+dstBucket+"/"+dstKey)
 	return nil
 }
@@ -67,7 +71,9 @@ func (f *fakeStorage) DownloadToFile(ctx context.Context, bucket, key, localPath
 	if f.downloadErr != nil {
 		return f.downloadErr
 	}
+	f.mu.Lock()
 	f.downloads = append(f.downloads, bucket+"/"+key)
+	f.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return err
 	}
@@ -81,6 +87,8 @@ func (f *fakeStorage) UploadFromFile(ctx context.Context, bucket, key, localPath
 	if _, err := os.Stat(localPath); err != nil {
 		return 0, fmt.Errorf("local file missing: %w", err)
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.uploads = append(f.uploads, bucket+"/"+key)
 	f.contentType[key] = contentType
 	return f.uploadSize, nil

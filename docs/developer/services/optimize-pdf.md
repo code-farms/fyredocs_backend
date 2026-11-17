@@ -137,7 +137,9 @@ REDIS_DB="0"
 NATS_URL="nats://nats:4222"
 PROCESSING_TIMEOUT="30m"   # honoured via NATS AckWait
 PORT="8085"
-WORKER_CONCURRENCY="2"     # parallel jobs per container (semaphore-bounded goroutines; OCR also parallelizes pages internally)
+CPU_JOB_SLOTS="2"          # Ghostscript jobs + OCR pages running at once, across all jobs (default: CPU limit)
+IO_JOB_SLOTS="1"           # no io-class tools here
+WORKER_CONCURRENCY=""      # jobs in flight; unset = cpu + io slots
 RESULT_CACHE_TTL_SECONDS="3600"  # result-cache entry TTL (keep <= outputs bucket TTL); 0 disables
 
 # Object storage (S3 / MinIO) — OUTPUT_DIR has been removed; inputs are
@@ -171,7 +173,7 @@ OCR_MAX_IMAGE_DIM="10000"  # max px for the longest edge of a rasterized OCR pag
 
 ### Scaling / memory bounding
 
-Peak tesseract memory ≈ `WORKER_CONCURRENCY × OCR_MAX_WORKERS` processes, each
+**Since 2026-11-16** (shared `jobslots`, see `next-generation-document-engine/12-performance-architecture.md` §5.1) every OCR page takes one cpu token while pdftoppm + tesseract run, and an OCR job holds no job slot itself (a job token plus page tokens would deadlock once OCR jobs held every token). So all OCR jobs together run at most `CPU_JOB_SLOTS` tesseracts; `OCR_MAX_WORKERS` is only the per-job cap. Tested in `ocr_overlay_binaries_test.go` (`TestOCRPagesDrawCPUTokensBinaries`). Before, peak tesseract memory ≈ `WORKER_CONCURRENCY × OCR_MAX_WORKERS` processes, each
 ~250 MB. `deploy.sh`'s 70% resource budget sizes **both** knobs from a single
 slot budget derived from this container's scaled memory cap, so their product
 fits the cap and the container cannot OOM-kill itself on any host (a tiny laptop

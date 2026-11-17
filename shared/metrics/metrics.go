@@ -68,6 +68,22 @@ var (
 		Help: "Conversions that fell back from a warm engine to a cold one.",
 	}, []string{"service", "reason"})
 
+	// JobSlotWait is how long a job waited for a slot of its workload class
+	// (shared/jobslots: "cpu" engines vs "io" pdfcpu work). A rising io wait
+	// means cheap jobs are queueing; a rising cpu wait means the CPU limit is the
+	// bottleneck. optimize-pdf's OCR pages also wait on the cpu pool.
+	JobSlotWait = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "job_slot_wait_seconds",
+		Help:    "Time a job (or an OCR page) waited for a slot of its workload class.",
+		Buckets: []float64{0.001, 0.01, 0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 300},
+	}, []string{"service", "class"})
+
+	// JobSlotsInUse is the number of class tokens currently held.
+	JobSlotsInUse = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "job_slots_in_use",
+		Help: "Workload-class slot tokens currently held, by class.",
+	}, []string{"service", "class"})
+
 	// OutputGuard counts the post-conversion checks that compare a PDF rewrite
 	// with its input (optimize-pdf compress/repair/flatten, convert-from-pdf
 	// pdf-to-pdfa). guard is "text" (extracted text still matches) or "pages"

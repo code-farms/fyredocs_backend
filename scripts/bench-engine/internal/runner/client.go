@@ -276,10 +276,17 @@ func (c *Client) Download(ctx context.Context, tool, id, dst string) error {
 }
 
 // DefaultOptions are the tool options a benchmark job sends: fixed, valid
-// values so every run of a tool does the same work. password is the corpus
-// item's password param (unlock-pdf).
-func DefaultOptions(tool, password string) map[string]any {
+// values so every run of a tool does the same work. params are the corpus
+// series params: password (unlock-pdf), enhance (scan-to-pdf).
+func DefaultOptions(tool string, params map[string]string) map[string]any {
 	switch tool {
+	case "scan-to-pdf":
+		// A series can ask for the Go clean-up (enhance), which makes the scan a
+		// cpu-class job; without it the tool is a plain image import.
+		if e := params["enhance"]; e != "" {
+			return map[string]any{"enhance": e}
+		}
+		return map[string]any{}
 	case "rotate-pdf":
 		return map[string]any{"rotation": "90"}
 	case "split-pdf":
@@ -287,7 +294,7 @@ func DefaultOptions(tool, password string) map[string]any {
 	case "protect-pdf":
 		return map[string]any{"password": "bench-protect-1"}
 	case "unlock-pdf":
-		return map[string]any{"password": password}
+		return map[string]any{"password": params["password"]}
 	case "pdf-metadata":
 		return map[string]any{"title": "Bench Engine", "keywords": "bench, fixture"}
 	case "pdf-to-image":

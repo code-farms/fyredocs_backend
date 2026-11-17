@@ -438,7 +438,9 @@ REDIS_DB="0"
 PORT="8084"
 NATS_URL="nats://nats:4222"
 PROCESSING_TIMEOUT="30m"   # honoured via NATS AckWait; must exceed the 10m per-job timeout or a running job is redelivered and double-processed
-WORKER_CONCURRENCY="4"     # parallel jobs per container (semaphore-bounded goroutines)
+CPU_JOB_SLOTS="2"          # scan-to-pdf jobs running at once (photo decode, Go clean-up, tesseract); default: CPU limit
+IO_JOB_SLOTS="4"           # pdfcpu jobs (the other 13 tools) running at once; they never wait behind scans
+WORKER_CONCURRENCY=""      # jobs in flight; unset = cpu + io slots ((shared `jobslots`, see `next-generation-document-engine/12-performance-architecture.md` §5.1))
 RESULT_CACHE_TTL_SECONDS="3600"  # result-cache entry TTL (keep <= outputs bucket TTL); 0 disables
 INTERNAL_API_TOKEN=""      # REQUIRED shared secret for /internal/v1/* — X-Internal-Token is always verified; unset fails closed with 503 (job-service sends the same value)
 ```

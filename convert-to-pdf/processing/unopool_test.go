@@ -10,20 +10,21 @@ import (
 func TestUnoserverPortsDefault(t *testing.T) {
 	t.Setenv("UNOSERVER_PORT", "2002")
 	t.Setenv("UNOSERVER_INSTANCES", "")
-	t.Setenv("WORKER_CONCURRENCY", "")
-	// Unset instances default to WORKER_CONCURRENCY (2) + 1 = 3 daemons, so the
-	// pool always has a warm spare beyond the concurrent job count.
+	t.Setenv("CPU_JOB_SLOTS", "2") // the default follows GOMAXPROCS; pin it
+	// Unset instances default to CPU_JOB_SLOTS (2) + 1 = 3 daemons, so the
+	// pool always has a warm spare beyond the LibreOffice jobs that can run.
 	ports := UnoserverPorts()
 	if len(ports) != 3 || ports[0] != "2002" || ports[1] != "2003" || ports[2] != "2004" {
 		t.Fatalf("default ports = %v, want [2002 2003 2004]", ports)
 	}
 }
 
-func TestUnoserverInstancesTracksConcurrency(t *testing.T) {
+func TestUnoserverInstancesTracksCPUSlots(t *testing.T) {
 	t.Setenv("UNOSERVER_INSTANCES", "")
-	t.Setenv("WORKER_CONCURRENCY", "4")
+	t.Setenv("CPU_JOB_SLOTS", "4")
+	t.Setenv("WORKER_CONCURRENCY", "12") // in-flight jobs, incl. io: must not size the pool
 	if got := unoserverInstances(); got != 5 {
-		t.Errorf("instances with concurrency=4 = %d, want 5 (concurrency+1)", got)
+		t.Errorf("instances with CPU_JOB_SLOTS=4 = %d, want 5 (cpu slots+1)", got)
 	}
 }
 
@@ -51,11 +52,11 @@ func TestUnoserverInstancesFloors(t *testing.T) {
 	if got := unoserverInstances(); got != 1 {
 		t.Errorf("instances(-5) = %d, want 1", got)
 	}
-	// A non-numeric value is treated as unset → WORKER_CONCURRENCY(2)+1 = 3.
+	// A non-numeric value is treated as unset → CPU_JOB_SLOTS(2)+1 = 3.
 	t.Setenv("UNOSERVER_INSTANCES", "garbage")
-	t.Setenv("WORKER_CONCURRENCY", "")
+	t.Setenv("CPU_JOB_SLOTS", "2")
 	if got := unoserverInstances(); got != 3 {
-		t.Errorf("instances(garbage) = %d, want 3 (default concurrency+1)", got)
+		t.Errorf("instances(garbage) = %d, want 3 (cpu slots+1)", got)
 	}
 }
 

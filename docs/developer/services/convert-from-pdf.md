@@ -473,7 +473,9 @@ curl -X POST http://localhost/api/convert-from-pdf/pdf-to-odp \
 | `QUEUE_PREFIX` | `queue` | Redis queue key prefix |
 | `MAX_RETRIES` | `3` | Max retry attempts for failed jobs |
 | `PROCESSING_TIMEOUT` | `30m` | Maximum time for job processing (currently honoured via NATS `AckWait` rather than a context deadline in code) |
-| `WORKER_CONCURRENCY` | `2` | Max concurrent jobs processed in parallel (semaphore-bounded goroutines; one slow conversion no longer blocks the rest) |
+| `CPU_JOB_SLOTS` | CPU limit (compose `2`) | Conversions that run at once; every tool here is an engine (cpu) job (shared `jobslots`, doc 12 §5.1, since 2026-11-16) |
+| `IO_JOB_SLOTS` | compose `1` | Unused here (no io-class tools) |
+| `WORKER_CONCURRENCY` | `CPU_JOB_SLOTS + IO_JOB_SLOTS` | Jobs in flight (fetched, not yet acked): with the compose values, the running jobs plus one queued so a freed slot is filled at once |
 | `IMAGE_MAX_IMAGE_DIM` | `10000` | pdf-to-image: longest allowed edge (pixels) of a rendered page. The effective render DPI is capped against the page's media-box size (`computeSafeDPI`) so oversized renders cannot exhaust memory |
 | `RESULT_CACHE_TTL_SECONDS` | `3600` | Lifetime of result-cache entries. Keep ≤ outputs bucket TTL. `0` disables caching. |
 | `PROGRESS_DB_MIN_DELTA` | `10` | Min percent jump before a progress update is persisted to the DB (throttles writes; `internal/worker/progress.go`) |

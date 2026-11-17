@@ -18,6 +18,9 @@ import (
 	"regexp"
 	"strconv"
 	"testing"
+	"time"
+
+	"fyredocs/shared/jobslots"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 )
@@ -175,5 +178,30 @@ func TestOCROverlayKeepsOriginalPageBinaries(t *testing.T) {
 				t.Errorf("text layer word at %v, visible text at %v: layer misplaced", centre, ink)
 			}
 		})
+	}
+}
+
+// OCR pages draw cpu tokens from the worker's class slots (shared/jobslots),
+// so all OCR jobs together run at most CPU_JOB_SLOTS tesseracts. With the only
+// token held elsewhere the job must wait, and finish once it is released.
+func TestOCRPagesDrawCPUTokensBinaries(t *testing.T) {
+	dir := t.TempDir()
+	input := buildImagePDF(t, dir, "TOKEN PAGE ONE", "TOKEN PAGE TWO")
+	slots := jobslots.New("optimize-pdf", 1, 1)
+	hold, err := slots.Acquire(context.Background(), jobslots.CPU, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(jobslots.WithSlots(context.Background(), slots), 2*time.Second)
+	defer cancel()
+	if _, err := ocrPDF(ctx, input, filepath.Join(dir, "blocked.pdf"), map[string]interface{}{"language": "en"}); err == nil {
+		t.Fatal("OCR ran although the only cpu token was held: pages do not draw tokens")
+	}
+
+	hold()
+	ctx2 := jobslots.WithSlots(context.Background(), slots)
+	if _, err := ocrPDF(ctx2, input, filepath.Join(dir, "ok.pdf"), map[string]interface{}{"language": "en"}); err != nil {
+		t.Fatalf("OCR with a free token: %v", err)
 	}
 }

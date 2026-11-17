@@ -27,6 +27,7 @@ import (
 
 	"convert-to-pdf/internal/models"
 
+	"fyredocs/shared/jobslots"
 	"fyredocs/shared/queue"
 	"fyredocs/shared/storage"
 	"fyredocs/shared/telemetry"
@@ -54,8 +55,12 @@ type WorkerConfig struct {
 	Process      ProcessFunc
 	JS           jetstream.JetStream
 	DB           *gorm.DB
-	Storage      Storage       // object storage for job inputs/outputs
-	RedisClient  *redis.Client // optional – only used for processing markers; may be nil
+	Storage      Storage // object storage for job inputs/outputs
+	// Slots bounds concurrent jobs per workload class (cpu engines vs io
+	// pdfcpu work, see class.go). Nil: Run builds it from CPU_JOB_SLOTS and
+	// IO_JOB_SLOTS.
+	Slots       *jobslots.Slots
+	RedisClient *redis.Client // optional – only used for processing markers; may be nil
 }
 
 // JobPayload is the dispatch message consumed from the JOBS_DISPATCH stream.
@@ -282,13 +287,16 @@ func drainTimeout() time.Duration {
 
 // concurrencyFromEnv reads the WORKER_CONCURRENCY environment variable.
 // Falls back to 2 if unset or invalid.
-func concurrencyFromEnv() int {
+// concurrencyFromEnv returns the number of jobs kept in flight: an explicit
+// WORKER_CONCURRENCY, otherwise fallback (the class slots' total, so each class
+// can fill its own pool).
+func concurrencyFromEnv(fallback int) int {
 	if v := os.Getenv("WORKER_CONCURRENCY"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
 	}
-	return 2
+	return fallback
 }
 
 // Run starts the worker loop and blocks until ctx is cancelled. It maintains a
@@ -297,7 +305,10 @@ func concurrencyFromEnv() int {
 func Run(ctx context.Context, cfg WorkerConfig) {
 	logger := slog.Default().With("service", cfg.ServiceName)
 
-	maxConcurrency := concurrencyFromEnv()
+	if cfg.Slots == nil {
+		cfg.Slots = jobslots.FromEnv(cfg.ServiceName)
+	}
+	maxConcurrency := concurrencyFromEnv(cfg.Slots.Total())
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
 
@@ -309,7 +320,8 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 	procCtx, procCancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer procCancel()
 
-	logger.Info("worker starting", "concurrency", maxConcurrency)
+	logger.Info("worker starting", "concurrency", maxConcurrency,
+		"cpuSlots", cfg.Slots.Capacity(jobslots.CPU), "ioSlots", cfg.Slots.Capacity(jobslots.IO))
 
 	// ── Create / get durable pull consumer on JOBS_DISPATCH stream ──
 	// NOTE: The BackOff slice below must stay equal to the package-level
@@ -517,6 +529,16 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 		handleFailure(ctx, cfg, msg, payload, fmt.Errorf("job too large for worker scratch space: projected %d MiB exceeds budget %d MiB (increase TMPFS_BUDGET_MB and the tmpfs mount, or route to a larger worker)", projected/bytesPerMiB, tmpfsBudgetBytes()/bytesPerMiB), logger)
 		return
 	}
+	// Workload-class slot: cheap io jobs never wait behind cpu engines
+	// (class.go). Taken after the cache lookup, which needs no engine.
+	if cfg.Slots != nil {
+		release, err := cfg.Slots.Acquire(ctx, classFor(payload.ToolType), 1)
+		if err != nil {
+			handleFailure(ctx, cfg, msg, payload, markRecoverable(err), logger)
+			return
+		}
+		defer release()
+	}
 	if totalInput > largeJobThresholdBytes() {
 		select {
 		case largeJobSem <- struct{}{}:
@@ -544,6 +566,9 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 	// frees the worker slot instead of holding it until AckWait — mirrors the
 	// 10-minute job context the other workers already use.
 	jobCtx, cancelJob := context.WithTimeout(ctx, 10*time.Minute)
+	// Processing code that draws tokens per unit of work (OCR pages) finds
+	// the pools here.
+	jobCtx = jobslots.WithSlots(jobCtx, cfg.Slots)
 	defer cancelJob()
 
 	var result *ProcessResult

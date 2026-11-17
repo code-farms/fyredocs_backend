@@ -162,6 +162,7 @@ func cmdRun(args []string) error {
 	email := fs.String("email", "bench-engine@example.com", "bench account (signed up if missing)")
 	password := fs.String("password", "Bench-engine-pass-1", "bench account password")
 	runs := fs.Int("runs", 1, "passes per job (3 for a baseline)")
+	concurrency := fs.Int("concurrency", 1, "jobs in flight; above 1 measures contention and skips per-job container samples")
 	tools := fs.String("tools", "", "comma-separated tools to run; default all")
 	series := fs.String("series", "", "comma-separated series IDs; default all")
 	limit := fs.Int("limit", 0, "max items per series (0 = all)")
@@ -231,6 +232,7 @@ func cmdRun(args []string) error {
 		GitSHA:        gitSHA(c.repo),
 		ImageDigests:  map[string]string{},
 		Runs:          *runs,
+		Concurrency:   *concurrency,
 		Pending:       m.Pending(),
 		Note:          "Development numbers unless the host is the production-class one (doc 16 §5.3).",
 		CorpusLockSHA: func() string { s, _ := corpus.LockSHA(out); return s }(),
@@ -257,7 +259,7 @@ func cmdRun(args []string) error {
 		}
 	}
 	rep.Rows = runner.Run(ctx, cl, d, lock, items, runner.Options{
-		CorpusDir: out, Scratch: scratch, Runs: *runs, JobTimeout: *timeout, ContainerName: name,
+		CorpusDir: out, Scratch: scratch, Runs: *runs, JobTimeout: *timeout, ContainerName: name, Concurrency: *concurrency,
 		Filter: func(_ corpus.Item, tool string) bool { return len(toolSet) == 0 || toolSet[tool] },
 	})
 	base := filepath.Join(c.repo, *results, "bench-engine-"+time.Now().UTC().Format("20060102-150405"))

@@ -849,9 +849,15 @@ services:
 
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
 
-      # Parallel jobs per container (pdf2docx/LibreOffice are CPU-heavy).
-      # Overridable per host: on a VS-32-class box (16 cores) try 3-4.
-      WORKER_CONCURRENCY: "${CONVERT_FROM_PDF_CONCURRENCY:-2}"
+      # Workload-class slots (shared/jobslots, doc 12 §5.1): CPU_JOB_SLOTS
+      # engine jobs (default: the CPU limit) and IO_JOB_SLOTS pdfcpu jobs
+      # (default 2× cpu) run at once. WORKER_CONCURRENCY is the number of jobs
+      # in flight; leave it unset to follow cpu + io.
+      # Every tool here is an engine job (pdf2docx/LibreOffice/gs/poppler), so
+      # in flight = cpu slots + 1 queued.
+      CPU_JOB_SLOTS: "${CONVERT_FROM_PDF_CPU_JOB_SLOTS:-2}"
+      IO_JOB_SLOTS: "1"
+      WORKER_CONCURRENCY: "${CONVERT_FROM_PDF_CONCURRENCY:-}"
       # Bounded drain on shutdown; must stay under stop_grace_period.
       WORKER_DRAIN_TIMEOUT: ${WORKER_DRAIN_TIMEOUT:-120s}
       # Result cache: identical input+tool+options reuse a prior output. Keep at
@@ -927,12 +933,18 @@ services:
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
 
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.18.0.0/16,127.0.0.1,::1}
-      # Overridable per host: on a VS-32-class box (16 cores) try 3-4.
-      WORKER_CONCURRENCY: "${CONVERT_TO_PDF_CONCURRENCY:-2}"
+      # Workload-class slots (shared/jobslots, doc 12 §5.1): CPU_JOB_SLOTS
+      # engine jobs (default: the CPU limit) and IO_JOB_SLOTS pdfcpu jobs
+      # (default 2× cpu) run at once. WORKER_CONCURRENCY is the number of jobs
+      # in flight; leave it unset to follow cpu + io.
+      # cpu = LibreOffice conversions (one warm daemon each), io = image-to-pdf.
+      CPU_JOB_SLOTS: "${CONVERT_TO_PDF_CPU_JOB_SLOTS:-2}"
+      IO_JOB_SLOTS: "${CONVERT_TO_PDF_IO_JOB_SLOTS:-2}"
+      WORKER_CONCURRENCY: "${CONVERT_TO_PDF_CONCURRENCY:-}"
       # Bounded drain on shutdown; must stay under stop_grace_period.
       WORKER_DRAIN_TIMEOUT: ${WORKER_DRAIN_TIMEOUT:-120s}
       # unoserver (LibreOffice) daemon pool. Leave UNSET to auto-size to
-      # WORKER_CONCURRENCY + 1 (one warm daemon per concurrent job plus a spare),
+      # CPU_JOB_SLOTS + 1 (one warm daemon per concurrent job plus a spare),
       # which keeps the slow cold-start LibreOffice fallback unreachable. Set
       # explicitly only to pin it. Each instance adds ~150-300 MB RAM; raise the
       # memory limit below before increasing concurrency.
@@ -958,7 +970,7 @@ services:
       # migrations, LibreOffice warm-up) must not flag the container unhealthy.
       start_period: 60s
     deploy:
-      # On a single box, prefer raising WORKER_CONCURRENCY + UNOSERVER_INSTANCES
+      # On a single box, prefer raising CPU_JOB_SLOTS (+ UNOSERVER_INSTANCES)
       # within one replica over running multiple replicas (avoids duplicate
       # LibreOffice daemon pools competing for the same cores). Scale out by
       # replicas only when adding a second host. NOTE limits are PER REPLICA.
@@ -1020,8 +1032,15 @@ services:
       # Shared secret guarding mesh-only /internal routes (fails closed when
       # unset). Must be identical across all services. See .env.example.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
-      # pdfcpu ops are pure-Go and cheap, so concurrency can run higher.
-      WORKER_CONCURRENCY: "${ORGANIZE_PDF_CONCURRENCY:-4}"
+      # Workload-class slots (shared/jobslots, doc 12 §5.1): CPU_JOB_SLOTS
+      # engine jobs (default: the CPU limit) and IO_JOB_SLOTS pdfcpu jobs
+      # (default 2× cpu) run at once. WORKER_CONCURRENCY is the number of jobs
+      # in flight; leave it unset to follow cpu + io.
+      # cpu = scan-to-pdf (photo decode, Go clean-up, tesseract); io = the 13
+      # pdfcpu tools, which no longer wait behind scans.
+      CPU_JOB_SLOTS: "${ORGANIZE_PDF_CPU_JOB_SLOTS:-2}"
+      IO_JOB_SLOTS: "${ORGANIZE_PDF_IO_JOB_SLOTS:-4}"
+      WORKER_CONCURRENCY: "${ORGANIZE_PDF_CONCURRENCY:-}"
       # Bounded drain on shutdown; must stay under stop_grace_period.
       WORKER_DRAIN_TIMEOUT: ${WORKER_DRAIN_TIMEOUT:-120s}
       # Result cache (see convert-from-pdf). 0 disables.
@@ -1102,8 +1121,16 @@ services:
       # On a VS-32-class box (32 GB) raise to ~6 to speed up multi-page scans.
       OCR_MAX_WORKERS: "${OCR_MAX_WORKERS:-}"
 
-      # Parallel jobs per container (kept low — OCR parallelizes pages internally)
-      WORKER_CONCURRENCY: "${OPTIMIZE_PDF_CONCURRENCY:-2}"
+      # Workload-class slots (shared/jobslots, doc 12 §5.1): CPU_JOB_SLOTS
+      # engine jobs (default: the CPU limit) and IO_JOB_SLOTS pdfcpu jobs
+      # (default 2× cpu) run at once. WORKER_CONCURRENCY is the number of jobs
+      # in flight; leave it unset to follow cpu + io.
+      # cpu = Ghostscript jobs AND OCR pages: an OCR job takes no job slot but
+      # one cpu token per page, so all OCR jobs together run at most
+      # CPU_JOB_SLOTS tesseracts (OCR_MAX_WORKERS stays the per-job cap).
+      CPU_JOB_SLOTS: "${OPTIMIZE_PDF_CPU_JOB_SLOTS:-2}"
+      IO_JOB_SLOTS: "1"
+      WORKER_CONCURRENCY: "${OPTIMIZE_PDF_CONCURRENCY:-}"
       # Bounded drain on shutdown; must stay under stop_grace_period.
       WORKER_DRAIN_TIMEOUT: ${WORKER_DRAIN_TIMEOUT:-120s}
       # Result cache (see convert-from-pdf). 0 disables.

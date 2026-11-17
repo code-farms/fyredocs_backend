@@ -40,6 +40,7 @@ type Report struct {
 	ImageDigests  map[string]string  `json:"image_digests"`
 	CorpusLockSHA string             `json:"corpus_lock_sha"`
 	Runs          int                `json:"runs"`
+	Concurrency   int                `json:"concurrency,omitempty"` // jobs in flight; >1 = contention run`
 	Note          string             `json:"note"`
 	StartupMs     map[string]float64 `json:"startup_ms,omitempty"`
 	Pending       []string           `json:"pending_series,omitempty"`
@@ -152,7 +153,11 @@ func Percentile(v []float64, p float64) float64 {
 func Markdown(r *Report) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Engine benchmark %s\n\n", r.Date)
-	fmt.Fprintf(&b, "- Host: %s\n- Git: `%s`\n- Corpus lock: `%s`\n- Runs per job: %d\n- %s\n\n", r.Host, r.GitSHA, short(r.CorpusLockSHA), r.Runs, r.Note)
+	fmt.Fprintf(&b, "- Host: %s\n- Git: `%s`\n- Corpus lock: `%s`\n- Runs per job: %d\n", r.Host, r.GitSHA, short(r.CorpusLockSHA), r.Runs)
+	if r.Concurrency > 1 {
+		fmt.Fprintf(&b, "- Jobs in flight: %d (contention run: wall time includes queueing; no per-job container samples)\n", r.Concurrency)
+	}
+	fmt.Fprintf(&b, "- %s\n\n", r.Note)
 	if len(r.Pending) > 0 {
 		fmt.Fprintf(&b, "Pending corpus series (no files yet): %s\n\n", strings.Join(r.Pending, ", "))
 	}

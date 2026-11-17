@@ -539,42 +539,47 @@ compute_resource_budget() {
     # Each pool: auto-size from the scaled caps, but honor a value the operator
     # pinned in .env (explicit opt-out wins). The mem/cpu LIMITS above stay
     # always-auto so the 70% cap can never be accidentally removed.
+    # Workload-class slots (shared/jobslots): <SVC>_CPU_JOB_SLOTS bounds the
+    # memory-heavy engine jobs; <SVC>_CONCURRENCY (jobs in flight) is left to
+    # the worker, which uses cpu + io slots when it is unset.
     # convert-to-pdf: ~300 MB per unoserver daemon, ~200 MB Go/buffer overhead.
-    local insts=$(( (MEM_TO - 200) / 300 )); [ "$insts" -lt 1 ] && insts=1
-    [ "$insts" -gt "$U_TO" ] && insts=$U_TO
+    # One daemon per cpu slot plus a spare.
+    local insts=$(( (MEM_TO - 200) / 300 )); [ "$insts" -lt 2 ] && insts=2
+    [ "$insts" -gt $(( U_TO + 1 )) ] && insts=$(( U_TO + 1 ))
     [ "$insts" -gt 6 ] && insts=6
     [ -n "${UNOSERVER_INSTANCES:-}" ] && insts="$UNOSERVER_INSTANCES"
     export UNOSERVER_INSTANCES="$insts"
     local cto=$(( insts - 1 )); [ "$cto" -lt 1 ] && cto=1
-    [ -n "${CONVERT_TO_PDF_CONCURRENCY:-}" ] && cto="$CONVERT_TO_PDF_CONCURRENCY"
-    export CONVERT_TO_PDF_CONCURRENCY="$cto"
+    [ -n "${CONVERT_TO_PDF_CPU_JOB_SLOTS:-}" ] && cto="$CONVERT_TO_PDF_CPU_JOB_SLOTS"
+    export CONVERT_TO_PDF_CPU_JOB_SLOTS="$cto"
 
-    # optimize-pdf: peak tesseract processes ≈ concurrency × ocr_workers, each
-    # ~250 MB. Size both from one slot budget (~100 MB Go overhead) so the
-    # product fits the container cap. OCR page-pool capped at U_OPT and 6.
-    local opt_slots=$(( (MEM_OPT - 100) / 250 )); [ "$opt_slots" -lt 1 ] && opt_slots=1
-    local ocr=$opt_slots
-    [ "$ocr" -gt "$U_OPT" ] && ocr=$U_OPT
-    [ "$ocr" -gt 6 ] && ocr=6
+    # optimize-pdf: every tesseract (OCR page) and gs job takes one cpu slot,
+    # ~250 MB each, ~100 MB Go overhead; capped by the CPU limit. OCR_MAX_WORKERS
+    # is only the per-job page cap now.
+    local opt=$(( (MEM_OPT - 100) / 250 )); [ "$opt" -lt 1 ] && opt=1
+    [ "$opt" -gt "$U_OPT" ] && opt=$U_OPT
+    [ "$opt" -gt 6 ] && opt=6
+    [ -n "${OPTIMIZE_PDF_CPU_JOB_SLOTS:-}" ] && opt="$OPTIMIZE_PDF_CPU_JOB_SLOTS"
+    export OPTIMIZE_PDF_CPU_JOB_SLOTS="$opt"
+    local ocr=$opt
     [ -n "${OCR_MAX_WORKERS:-}" ] && ocr="$OCR_MAX_WORKERS"
     export OCR_MAX_WORKERS="$ocr"
-    local opt_conc=$(( opt_slots / ocr )); [ "$opt_conc" -lt 1 ] && opt_conc=1
-    [ "$opt_conc" -gt "$U_OPT" ] && opt_conc=$U_OPT
-    [ -n "${OPTIMIZE_PDF_CONCURRENCY:-}" ] && opt_conc="$OPTIMIZE_PDF_CONCURRENCY"
-    export OPTIMIZE_PDF_CONCURRENCY="$opt_conc"
 
     # convert-from-pdf: ~300 MB per job (pdf2docx/LibreOffice).
     local cf=$(( (MEM_CF - 150) / 300 )); [ "$cf" -lt 1 ] && cf=1
     [ "$cf" -gt "$U_CF" ] && cf=$U_CF
-    [ -n "${CONVERT_FROM_PDF_CONCURRENCY:-}" ] && cf="$CONVERT_FROM_PDF_CONCURRENCY"
-    export CONVERT_FROM_PDF_CONCURRENCY="$cf"
+    [ -n "${CONVERT_FROM_PDF_CPU_JOB_SLOTS:-}" ] && cf="$CONVERT_FROM_PDF_CPU_JOB_SLOTS"
+    export CONVERT_FROM_PDF_CPU_JOB_SLOTS="$cf"
 
-    # organize-pdf: pdfcpu is pure-Go and cheap, ~96 MB per job; cap 8.
+    # organize-pdf: scan-to-pdf (cpu) is bounded by the CPU limit; the pdfcpu
+    # tools (io) by memory, ~96 MB per job, cap 8.
+    local org_cpu=$U_ORG
+    [ -n "${ORGANIZE_PDF_CPU_JOB_SLOTS:-}" ] && org_cpu="$ORGANIZE_PDF_CPU_JOB_SLOTS"
+    export ORGANIZE_PDF_CPU_JOB_SLOTS="$org_cpu"
     local org=$(( (MEM_ORG - 64) / 96 )); [ "$org" -lt 1 ] && org=1
-    [ "$org" -gt "$U_ORG" ] && org=$U_ORG
     [ "$org" -gt 8 ] && org=8
-    [ -n "${ORGANIZE_PDF_CONCURRENCY:-}" ] && org="$ORGANIZE_PDF_CONCURRENCY"
-    export ORGANIZE_PDF_CONCURRENCY="$org"
+    [ -n "${ORGANIZE_PDF_IO_JOB_SLOTS:-}" ] && org="$ORGANIZE_PDF_IO_JOB_SLOTS"
+    export ORGANIZE_PDF_IO_JOB_SLOTS="$org"
 
     # redis maxmemory kept under the redis container cap (existing pattern).
     export REDIS_MAXMEMORY="$(( MEM_REDIS * 75 / 100 ))mb"
