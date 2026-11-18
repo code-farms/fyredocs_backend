@@ -585,8 +585,8 @@ compute_resource_budget() {
     export REDIS_MAXMEMORY="$(( MEM_REDIS * 75 / 100 ))mb"
 
     echo ""
-    printf "  Derived pools: convert-to=%s (unoserver %s)  convert-from=%s  organize=%s  optimize=%s (ocr-workers=%s)\n" \
-        "$cto" "$insts" "$cf" "$org" "$opt_conc" "$ocr"
+    printf "  Derived cpu slots: convert-to=%s (unoserver %s)  convert-from=%s  organize=%s (io %s)  optimize=%s (ocr pages/job %s)\n" \
+        "$cto" "$insts" "$cf" "$org_cpu" "$org" "$opt" "$ocr"
     printf "  redis maxmemory: %s\n" "$REDIS_MAXMEMORY"
 }
 
