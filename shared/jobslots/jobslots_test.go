@@ -131,14 +131,14 @@ func TestConcurrencyNeverExceedsCapacity(t *testing.T) {
 	}
 }
 
-func TestPerUnitTakesNothingAndContextCarriesSlots(t *testing.T) {
+func TestPerUnitTakesNoCPUTokenAndContextCarriesSlots(t *testing.T) {
 	s := New("test", 1, 1)
 	release, err := s.Acquire(context.Background(), PerUnit, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer release()
-	// The cpu pool must still be free: a PerUnit job holds no token.
+	// The cpu pool must still be free: a PerUnit job holds no cpu token.
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	r, err := s.Acquire(ctx, CPU, 1)
@@ -156,4 +156,39 @@ func TestPerUnitTakesNothingAndContextCarriesSlots(t *testing.T) {
 	if WithSlots(context.Background(), nil) == nil {
 		t.Fatal("WithSlots(nil) must return the context unchanged")
 	}
+}
+
+// PerUnit jobs have their own job pool as large as the cpu pool, so OCR jobs
+// can never take every in-flight spot of a worker: on a 1-cpu worker the second
+// OCR job waits while a cpu job still runs (VPS capacity run, 2026-11-19).
+func TestPerUnitJobPoolIsBoundedByCPUCapacity(t *testing.T) {
+	s := New("test", 1, 1)
+	if got := s.Capacity(PerUnit); got != 1 {
+		t.Fatalf("Capacity(PerUnit) = %d, want 1 (the cpu capacity)", got)
+	}
+	if got := s.TotalWithPerUnit(); got != 3 {
+		t.Fatalf("TotalWithPerUnit = %d, want cpu+io+cpu = 3", got)
+	}
+
+	first, err := s.Acquire(context.Background(), PerUnit, 5) // weight is ignored
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := s.Acquire(ctx, PerUnit, 1); err == nil {
+		t.Fatal("second PerUnit job got a token although the pool holds 1")
+	}
+	cpu, err := s.Acquire(context.Background(), CPU, 1)
+	if err != nil {
+		t.Fatalf("cpu job blocked by a PerUnit job: %v", err)
+	}
+	cpu()
+
+	first()
+	again, err := s.Acquire(context.Background(), PerUnit, 1)
+	if err != nil {
+		t.Fatalf("PerUnit token not given back: %v", err)
+	}
+	again()
 }

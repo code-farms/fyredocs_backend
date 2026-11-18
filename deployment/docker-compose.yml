@@ -1125,9 +1125,11 @@ services:
       # engine jobs (default: the CPU limit) and IO_JOB_SLOTS pdfcpu jobs
       # (default 2× cpu) run at once. WORKER_CONCURRENCY is the number of jobs
       # in flight; leave it unset to follow cpu + io.
-      # cpu = Ghostscript jobs AND OCR pages: an OCR job takes no job slot but
-      # one cpu token per page, so all OCR jobs together run at most
-      # CPU_JOB_SLOTS tesseracts (OCR_MAX_WORKERS stays the per-job cap).
+      # cpu = Ghostscript jobs AND OCR pages: an OCR job takes no cpu token but
+      # one per page, so all OCR jobs together run at most CPU_JOB_SLOTS
+      # tesseracts (OCR_MAX_WORKERS stays the per-job cap). OCR jobs have their
+      # own job pool (CPU_JOB_SLOTS large) and in-flight default is cpu + io +
+      # that pool, so OCR can't keep compress jobs from being fetched.
       CPU_JOB_SLOTS: "${OPTIMIZE_PDF_CPU_JOB_SLOTS:-2}"
       IO_JOB_SLOTS: "1"
       WORKER_CONCURRENCY: "${OPTIMIZE_PDF_CONCURRENCY:-}"

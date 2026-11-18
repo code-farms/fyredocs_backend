@@ -159,7 +159,9 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 	if cfg.Slots == nil {
 		cfg.Slots = jobslots.FromEnv(cfg.ServiceName)
 	}
-	maxConcurrency := concurrencyFromEnv(cfg.Slots.Total())
+	// OCR jobs (PerUnit) get their own in-flight spots so they can never crowd
+	// Ghostscript jobs out of the fetch.
+	maxConcurrency := concurrencyFromEnv(cfg.Slots.TotalWithPerUnit())
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
 
@@ -296,8 +298,6 @@ func drainTimeout() time.Duration {
 	return 120 * time.Second
 }
 
-// concurrencyFromEnv reads the WORKER_CONCURRENCY environment variable.
-// Falls back to 2 if unset or invalid.
 // concurrencyFromEnv returns the number of jobs kept in flight: an explicit
 // WORKER_CONCURRENCY, otherwise fallback (the class slots' total, so each class
 // can fill its own pool).

@@ -17,7 +17,9 @@
 //
 // The cpu pool is weighted so a job's inner parallelism can draw from it too:
 // optimize-pdf's OCR takes one cpu token per page it is recognising, so two OCR
-// jobs can no longer start eight tesseracts on two CPUs.
+// jobs can no longer start eight tesseracts on two CPUs. Such "per-unit" jobs
+// have their own job pool, as large as the cpu pool, so they can never fill
+// every in-flight spot and keep cpu jobs from being fetched.
 package jobslots
 
 import (
@@ -38,10 +40,13 @@ const (
 	CPU Class = "cpu"
 	// IO is cheap pdfcpu work whose time is mostly transfers.
 	IO Class = "io"
-	// PerUnit marks a job that takes no slot itself because it draws cpu tokens
-	// for each unit of inner work (optimize-pdf OCR: one per page, through
-	// FromContext). Holding a job token while the pages wait for more would
-	// deadlock once every token is held by such jobs.
+	// PerUnit marks a job that draws cpu tokens for each unit of inner work
+	// (optimize-pdf OCR: one per page, through FromContext). It takes no cpu
+	// token itself: holding one while its pages wait for more would deadlock
+	// once every token is held by such jobs. It takes a token from its own job
+	// pool instead (capacity = the cpu capacity). Without that bound, two OCR
+	// jobs on a 1-cpu worker held both in-flight spots for minutes and compress
+	// jobs stayed queued (VPS capacity run, 2026-11-19).
 	PerUnit Class = "per-unit"
 )
 
@@ -50,6 +55,7 @@ type Slots struct {
 	service string
 	cpu     *semaphore.Weighted
 	io      *semaphore.Weighted
+	unit    *semaphore.Weighted
 	cpuCap  int64
 	ioCap   int64
 }
@@ -87,12 +93,14 @@ func New(service string, cpu, io int) *Slots {
 		service: service,
 		cpu:     semaphore.NewWeighted(int64(cpu)),
 		io:      semaphore.NewWeighted(int64(io)),
+		unit:    semaphore.NewWeighted(int64(cpu)),
 		cpuCap:  int64(cpu),
 		ioCap:   int64(io),
 	}
 }
 
-// Capacity reports the size of a class's pool.
+// Capacity reports the size of a class's pool. PerUnit's job pool is as large
+// as the cpu pool.
 func (s *Slots) Capacity(c Class) int {
 	if c == IO {
 		return int(s.ioCap)
@@ -100,9 +108,15 @@ func (s *Slots) Capacity(c Class) int {
 	return int(s.cpuCap)
 }
 
-// Total is the sum of both capacities: the default number of jobs a worker
-// keeps in flight, so each class can fill its own pool.
+// Total is the sum of the cpu and io capacities: the default number of jobs a
+// worker keeps in flight, so each class can fill its own pool. A worker that
+// also runs PerUnit jobs adds Capacity(PerUnit), so those jobs have their own
+// spots (see TotalWithPerUnit).
 func (s *Slots) Total() int { return int(s.cpuCap + s.ioCap) }
+
+// TotalWithPerUnit is Total plus the PerUnit job pool: the in-flight default for
+// a worker that runs PerUnit jobs (optimize-pdf).
+func (s *Slots) TotalWithPerUnit() int { return s.Total() + int(s.cpuCap) }
 
 type ctxKey struct{}
 
@@ -125,14 +139,15 @@ func FromContext(ctx context.Context) *Slots {
 // Acquire waits for weight tokens of class c (clamped to 1..capacity) and
 // returns the function that gives them back. It returns ctx's error if ctx ends
 // first; nothing is held then. The wait is recorded in job_slot_wait_seconds.
+// A PerUnit job takes one token of its own job pool, never a cpu token.
 func (s *Slots) Acquire(ctx context.Context, c Class, weight int) (func(), error) {
-	if c == PerUnit {
-		return func() {}, nil
-	}
 	sem, capacity := s.cpu, s.cpuCap
-	if c == IO {
+	switch c {
+	case IO:
 		sem, capacity = s.io, s.ioCap
-	} else {
+	case PerUnit:
+		sem, capacity, weight = s.unit, s.cpuCap, 1
+	default:
 		c = CPU
 	}
 	w := min(max(int64(weight), 1), capacity)
