@@ -105,7 +105,9 @@ export const TOOL_MATRIX = [
   { tool: 'word-to-pdf',  group: 'convert-to-pdf', fixture: 'docx', options: {}, weight: 15 },
   { tool: 'excel-to-pdf', group: 'convert-to-pdf', fixture: 'xlsx', options: {}, weight: 4 },
   { tool: 'ppt-to-pdf',   group: 'convert-to-pdf', fixture: 'pptx', options: {}, weight: 3 },
-  { tool: 'image-to-pdf', group: 'convert-to-pdf', fixture: 'image', options: {}, multi: 2, weight: 6 },
+  // maxFileMB mirrors job-service toolMaxFileMB (handlers/jobs.go): image tools
+  // take at most 20 MB per file, so the 36 MB large.png would get a 413.
+  { tool: 'image-to-pdf', group: 'convert-to-pdf', fixture: 'image', options: {}, multi: 2, weight: 6, maxFileMB: 20 },
   { tool: 'html-to-pdf',  group: 'convert-to-pdf', fixture: 'html', options: {}, weight: 4 },
   { tool: 'odt-to-pdf',   group: 'convert-to-pdf', fixture: 'odt', options: {}, weight: 2 },
   { tool: 'ods-to-pdf',   group: 'convert-to-pdf', fixture: 'ods', options: {}, weight: 2 },

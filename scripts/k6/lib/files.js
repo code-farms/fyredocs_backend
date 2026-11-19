@@ -47,13 +47,20 @@ export function hasFixture(category) {
 }
 
 // Pick a file for a category. If sizeName omitted, weighted-pick a size class
-// (falling back to any available size for that category).
-export function pickFile(category, sizeName) {
+// (falling back to any available size for that category). maxFileMB, when set,
+// is the tool's per-file cap: a pick above it is replaced by the largest size
+// that fits, so the run measures jobs, not expected 413s.
+export function pickFile(category, sizeName, maxFileMB) {
   const cat = registry[category];
   if (!cat) throw new Error(`fixture category '${category}' unknown`);
   let size = sizeName;
   if (!size) size = weightedPick(SIZE_CLASSES).name;
   let f = cat[size];
+  if (f && maxFileMB && f.data.byteLength > maxFileMB * 1024 * 1024) {
+    const fits = SIZES.map((s) => cat[s])
+      .filter((x) => x && x.data.byteLength <= maxFileMB * 1024 * 1024);
+    f = fits.length ? fits[fits.length - 1] : f;
+  }
   if (!f) {
     // requested size not generated — use whatever exists for this category
     const avail = SIZES.map((s) => cat[s]).filter(Boolean);

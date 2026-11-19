@@ -22,7 +22,7 @@ export function createJob(toolDef, token, mode, sizeName) {
   const m = mode || UPLOAD_MODE;
   const nFiles = toolDef.multi || 1;
   const files = [];
-  for (let i = 0; i < nFiles; i++) files.push(pickFile(toolDef.fixture, sizeName));
+  for (let i = 0; i < nFiles; i++) files.push(pickFile(toolDef.fixture, sizeName, toolDef.maxFileMB));
   const path = `/api/${toolDef.group}/${toolDef.tool}`;
   const t0 = Date.now();
 
