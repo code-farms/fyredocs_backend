@@ -158,7 +158,10 @@
 		# build's chunk names after a deploy. no-cache still allows a 304.
 		handle {
 			header Cache-Control "no-cache"
-			try_files {path} /index.html
+			# {path}.html: prerendered public pages (dist/pdf-to-word.html, …)
+			# written by the seo plugin in vite.config.ts, so crawlers get each
+			# tool's own title, meta, JSON-LD and FAQ without running JS.
+			try_files {path} {path}.html /index.html
 			file_server
 		}
 	}
