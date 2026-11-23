@@ -398,6 +398,9 @@ services:
       # HERE: compose always defines the variable in the container, and
       # Caddy's {$VAR:default} fallback ignores defined-but-empty values.
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-:80}
+      # Optional www host (e.g. www.fyredocs.com) that 301s to PUBLIC_DOMAIN.
+      # Needs its own DNS record; leave empty when there is none.
+      PUBLIC_WWW_DOMAIN: ${PUBLIC_WWW_DOMAIN:-}
       S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS:-uploads}
       S3_BUCKET_OUTPUTS: ${S3_BUCKET_OUTPUTS:-outputs}
       # Ad-network hosts appended to the CSP script/img/connect/frame-src (empty =
