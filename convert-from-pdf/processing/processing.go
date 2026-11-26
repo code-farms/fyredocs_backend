@@ -65,7 +65,9 @@ func ProcessFile(ctx context.Context, jobID uuid.UUID, toolType string, inputPat
 		err = pdfToXlsxTicking(ctx, inputPaths[0], outputPath, onProgress)
 	case "pdf-to-ppt", "pdf-to-powerpoint", "pdf-to-pptx":
 		outputPath = filepath.Join(outputDir, outputFileName+".pptx")
-		err = pdfToPptImages(ctx, inputPaths[0], outputPath, onProgress)
+		// Editable text boxes by default, image slides on request or as the
+		// fallback (see pdf_to_ppt.go).
+		err = pdfToPpt(ctx, inputPaths[0], outputPath, options, onProgress)
 	case "pdf-to-html":
 		outputPath = filepath.Join(outputDir, outputFileName+".zip")
 		err = pdfToHTML(ctx, inputPaths[0], outputPath)

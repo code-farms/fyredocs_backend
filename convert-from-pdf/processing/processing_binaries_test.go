@@ -361,3 +361,49 @@ func TestPdfToOdtConcurrentBinaries(t *testing.T) {
 		}
 	}
 }
+
+// firstSlideXML returns ppt/slides/slide1.xml from a .pptx.
+func firstSlideXML(t *testing.T, pptx string) string {
+	t.Helper()
+	zr, err := zip.OpenReader(pptx)
+	if err != nil {
+		t.Fatalf("open pptx: %v", err)
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		if f.Name == "ppt/slides/slide1.xml" {
+			rc, err := f.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rc.Close()
+			b, _ := io.ReadAll(rc)
+			return string(b)
+		}
+	}
+	t.Fatalf("pptx has no slide1.xml")
+	return ""
+}
+
+// TestPdfToPptModesBinaries checks both PDF→PPTX modes on a text-layer PDF:
+// the default editable mode must put the source words into slide text runs
+// (impress_pdf_import), and image mode must produce a picture slide instead.
+func TestPdfToPptModesBinaries(t *testing.T) {
+	input := buildTextPDF(t, t.TempDir(), "Fyredocs editable slide text")
+
+	editable := filepath.Join(t.TempDir(), "editable.pptx")
+	if err := pdfToPpt(context.Background(), input, editable, nil, nil); err != nil {
+		t.Fatalf("editable pdfToPpt: %v", err)
+	}
+	if xml := firstSlideXML(t, editable); !strings.Contains(xml, "<a:t>") || !strings.Contains(xml, "Fyredocs") {
+		t.Errorf("editable slide has no source text runs: %.300s", xml)
+	}
+
+	image := filepath.Join(t.TempDir(), "image.pptx")
+	if err := pdfToPpt(context.Background(), input, image, map[string]interface{}{"mode": "image"}, nil); err != nil {
+		t.Fatalf("image pdfToPpt: %v", err)
+	}
+	if xml := firstSlideXML(t, image); !strings.Contains(xml, "<p:pic>") {
+		t.Errorf("image-mode slide has no picture: %.300s", xml)
+	}
+}

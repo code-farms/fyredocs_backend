@@ -159,9 +159,36 @@ func validateToolOptions(toolType string, raw string) error {
 		return validateProtectOptions(raw)
 	case "unlock-pdf":
 		return validateUnlockOptions(raw)
+	case "pdf-to-powerpoint", "pdf-to-ppt", "pdf-to-pptx":
+		// normalizeToolType folds pdf-to-ppt to pdf-to-powerpoint; the aliases
+		// are listed so the check cannot be bypassed if that ever changes.
+		return validatePdfToPptOptions(raw)
 	default:
 		return nil
 	}
+}
+
+// pdfToPptModes is the pdf-to-powerpoint mode allowlist. "" and "editable" mean
+// editable text boxes (LibreOffice impress_pdf_import, with an automatic
+// image-slide fallback); "image" means one full-page image per slide. The worker
+// keeps its own copy (convert-from-pdf/processing/pdf_to_ppt.go) — duplicated
+// by design, keep in sync.
+var pdfToPptModes = map[string]bool{"": true, "editable": true, "image": true}
+
+type pdfToPptOptionsPayload struct {
+	Mode string `json:"mode"`
+}
+
+// validatePdfToPptOptions rejects unknown modes at the public boundary.
+func validatePdfToPptOptions(raw string) error {
+	var opts pdfToPptOptionsPayload
+	if err := json.Unmarshal([]byte(raw), &opts); err != nil {
+		return fmt.Errorf("options must be a valid JSON object")
+	}
+	if !pdfToPptModes[strings.ToLower(strings.TrimSpace(opts.Mode))] {
+		return fmt.Errorf("unsupported mode %q — supported: editable, image", opts.Mode)
+	}
+	return nil
 }
 
 var (

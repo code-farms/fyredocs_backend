@@ -207,7 +207,14 @@ func pdfToImages(ctx context.Context, inputPath string, outputDir string, baseNa
 // paragraphs or cells, so the structure LibreOffice reports is inferred. Expect
 // layout fidelity rather than semantic fidelity.
 func pdfToOffice(ctx context.Context, inputPath string, outputPath string, outputFormat string) error {
-	slog.Info("converting PDF to office format", "format", outputFormat, "input", inputPath)
+	return pdfToOfficeWithFilter(ctx, inputPath, outputPath, outputFormat, "writer_pdf_import")
+}
+
+// pdfToOfficeWithFilter is pdfToOffice with an explicit LibreOffice import
+// filter: writer_pdf_import (text documents) or impress_pdf_import (one slide
+// per page with editable text boxes, used for editable PDF → PPTX).
+func pdfToOfficeWithFilter(ctx context.Context, inputPath string, outputPath string, outputFormat string, infilter string) error {
+	slog.Info("converting PDF to office format", "format", outputFormat, "filter", infilter, "input", inputPath)
 
 	outputDir := filepath.Dir(outputPath)
 	profileArg, cleanup, err := newFallbackProfile(filepath.Dir(outputDir))
@@ -219,7 +226,7 @@ func pdfToOffice(ctx context.Context, inputPath string, outputPath string, outpu
 	cmd := procexec.Command(ctx, "libreoffice",
 		profileArg,
 		"--headless",
-		"--infilter=writer_pdf_import",
+		"--infilter="+infilter,
 		"--convert-to", outputFormat,
 		"--outdir", outputDir,
 		inputPath,

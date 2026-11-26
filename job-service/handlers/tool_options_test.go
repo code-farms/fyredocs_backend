@@ -447,3 +447,22 @@ func TestOCRLanguagesMatchInstalledPacks(t *testing.T) {
 	equalCodes(t, "ocrLanguages", ocrLanguages, []string{"", "en"}, installedPacks(t, "../../optimize-pdf/Dockerfile"))
 	equalCodes(t, "scanLanguages", scanLanguages, nil, installedPacks(t, "../../organize-pdf/Dockerfile"))
 }
+
+func TestValidatePdfToPptOptions(t *testing.T) {
+	ok := []string{`{}`, `{"mode":""}`, `{"mode":"editable"}`, `{"mode":"image"}`, `{"mode":" Image "}`}
+	for _, raw := range ok {
+		if err := validateToolOptions("pdf-to-powerpoint", raw); err != nil {
+			t.Errorf("%s should pass: %v", raw, err)
+		}
+	}
+	bad := []string{`{"mode":"svg"}`, `{"mode":"--infilter=x"}`, `not json`}
+	for _, raw := range bad {
+		if err := validateToolOptions("pdf-to-powerpoint", raw); err == nil {
+			t.Errorf("%s should be rejected", raw)
+		}
+	}
+	// Empty options mean the default (editable).
+	if err := validateToolOptions("pdf-to-powerpoint", ""); err != nil {
+		t.Errorf("empty options: %v", err)
+	}
+}
