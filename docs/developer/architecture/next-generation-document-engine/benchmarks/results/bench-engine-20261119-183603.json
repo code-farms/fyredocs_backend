@@ -1,0 +1,299 @@
+{
+  "host": "vps6-12g",
+  "date": "2026-11-19T18:35:27Z",
+  "git_sha": "unknown",
+  "image_digests": {
+    "convert-from-pdf": "sha256:03998e9cc02a064ee0c2c4016616bc021a3ee8482ca9538f26a7b0dcebea4a40",
+    "convert-to-pdf": "sha256:2cadc49997bd63f3800c5ce78b5b68cb5f201e4c56ead58da58041ec6d6f6392",
+    "optimize-pdf": "sha256:aae5321f682f241cc28583e83d43f85de5d655bb372391ab67668123e151b4ad",
+    "organize-pdf": "sha256:1669d790cf4597e0937b51db7c34682b1dc2526d9ca8abd81723e2ff195a6cb5"
+  },
+  "corpus_lock_sha": "4ec317f61545b8d74c555fd8739ae3dd32b18b0148ac4778c2696ee6acc97189",
+  "runs": 1,
+  "concurrency": 6,
+  "note": "Development numbers unless the host is the production-class one (doc 16 §5.3).",
+  "pending_series": [
+    "real-complex-layout",
+    "real-forms",
+    "real-labelled-tables",
+    "real-presentations",
+    "real-scans"
+  ],
+  "rows": [
+    {
+      "item": "pdf-small-001",
+      "category": "pdf",
+      "tool": "merge-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797922,
+      "output_bytes": 814415,
+      "wall_ms": 3488,
+      "server_ms": 1121,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-002",
+      "category": "pdf",
+      "tool": "merge-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 798002,
+      "output_bytes": 814572,
+      "wall_ms": 3690,
+      "server_ms": 1232,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-003",
+      "category": "pdf",
+      "tool": "merge-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797926,
+      "output_bytes": 814421,
+      "wall_ms": 3799,
+      "server_ms": 1115,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-004",
+      "category": "pdf",
+      "tool": "merge-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797949,
+      "output_bytes": 814473,
+      "wall_ms": 3239,
+      "server_ms": 1003,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "pdf-small-005",
+      "category": "pdf",
+      "tool": "merge-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 797889,
+      "output_bytes": 814352,
+      "wall_ms": 3689,
+      "server_ms": 1199,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_and_sizes",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "scan-photo-bw-001",
+      "category": "images",
+      "tool": "scan-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 3314844,
+      "output_bytes": 1268093,
+      "wall_ms": 8726,
+      "server_ms": 7396,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_equal",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "scan-photo-bw-002",
+      "category": "images",
+      "tool": "scan-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 3341461,
+      "output_bytes": 918711,
+      "wall_ms": 10835,
+      "server_ms": 10258,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_equal",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "scan-photo-bw-003",
+      "category": "images",
+      "tool": "scan-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 3313038,
+      "output_bytes": 803290,
+      "wall_ms": 15807,
+      "server_ms": 15050,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_equal",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "scan-photo-bw-004",
+      "category": "images",
+      "tool": "scan-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 3320069,
+      "output_bytes": 1197263,
+      "wall_ms": 26853,
+      "server_ms": 25937,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_equal",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "scan-photo-bw-005",
+      "category": "images",
+      "tool": "scan-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 3311834,
+      "output_bytes": 943550,
+      "wall_ms": 21124,
+      "server_ms": 20425,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_equal",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    },
+    {
+      "item": "scan-photo-bw-006",
+      "category": "images",
+      "tool": "scan-to-pdf",
+      "run": 1,
+      "status": "completed",
+      "input_bytes": 3287249,
+      "output_bytes": 947169,
+      "wall_ms": 32093,
+      "server_ms": 31489,
+      "resources": {
+        "frames": 0,
+        "peak_mib": 0,
+        "avg_mib": 0,
+        "cpu_avg_pct": 0,
+        "cpu_max_pct": 0
+      },
+      "checks": [
+        {
+          "name": "pages_equal",
+          "value": 1,
+          "pass": true
+        }
+      ]
+    }
+  ]
+}

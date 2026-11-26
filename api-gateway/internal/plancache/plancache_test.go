@@ -40,8 +40,8 @@ func newRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 // produces (pinned in auth-service/handlers/plan_limits_test.go).
 func TestGetPlanInfoReadsUserEntry(t *testing.T) {
 	mr, rdb := newRedis(t)
-	_ = mr.Set(keyPrefix+"u1", `{"plan":"pro","max_file_mb":300,"max_files":50,"max_job_mb":300}`)
-	want := PlanInfo{Plan: "pro", MaxFileMB: 300, MaxFiles: 50, MaxJobMB: 300}
+	_ = mr.Set(keyPrefix+"u1", `{"plan":"pro","max_file_mb":300,"max_files":50,"max_job_mb":300,"max_ocr_pages":200}`)
+	want := PlanInfo{Plan: "pro", MaxFileMB: 300, MaxFiles: 50, MaxJobMB: 300, MaxOCRPages: 200}
 	if got := GetPlanInfo(context.Background(), rdb, "u1"); got != want {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
@@ -57,6 +57,16 @@ func TestGetPlanInfoFillsMissingJobField(t *testing.T) {
 	}
 }
 
+func TestGetPlanInfoFillsMissingOCRPages(t *testing.T) {
+	// An entry written before max_ocr_pages existed (live until its TTL expires
+	// after a deploy) gets the free default, never 0 = unlimited.
+	mr, rdb := newRedis(t)
+	_ = mr.Set(keyPrefix+"u1", `{"plan":"pro","max_file_mb":300,"max_files":50,"max_job_mb":300}`)
+	if got := GetPlanInfo(context.Background(), rdb, "u1"); got.MaxOCRPages != DefaultPlan.MaxOCRPages {
+		t.Errorf("MaxOCRPages = %d, want default %d", got.MaxOCRPages, DefaultPlan.MaxOCRPages)
+	}
+}
+
 func TestGetPlanInfoMalformedFallsBack(t *testing.T) {
 	mr, rdb := newRedis(t)
 	_ = mr.Set(keyPrefix+"u1", `not json`)
@@ -68,8 +78,8 @@ func TestGetPlanInfoMalformedFallsBack(t *testing.T) {
 func TestGetGuestPlanInfo(t *testing.T) {
 	t.Run("published row wins", func(t *testing.T) {
 		mr, rdb := newRedis(t)
-		_ = mr.Set(guestKey, `{"plan":"guest","max_file_mb":15,"max_files":3,"max_job_mb":45}`)
-		want := PlanInfo{Plan: "guest", MaxFileMB: 15, MaxFiles: 3, MaxJobMB: 45}
+		_ = mr.Set(guestKey, `{"plan":"guest","max_file_mb":15,"max_files":3,"max_job_mb":45,"max_ocr_pages":7}`)
+		want := PlanInfo{Plan: "guest", MaxFileMB: 15, MaxFiles: 3, MaxJobMB: 45, MaxOCRPages: 7}
 		if got := GetGuestPlanInfo(context.Background(), rdb); got != want {
 			t.Errorf("got %+v, want %+v", got, want)
 		}

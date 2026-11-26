@@ -75,6 +75,9 @@ type JobPayload struct {
 	// QueuedAt is stamped by job-service at dispatch and echoed on every
 	// status event so end-to-end job latency is observable (job_duration_seconds).
 	QueuedAt time.Time `json:"queuedAt,omitempty"`
+	// MaxOCRPages is the caller's plan limit on the pages of one OCR job, set
+	// by job-service on ocr-pdf dispatches (0 = not set; see ocr_limits.go).
+	MaxOCRPages int `json:"maxOcrPages,omitempty"`
 }
 
 // Structured error codes for worker failures.
@@ -88,6 +91,10 @@ const (
 	// after rebuilding the page tree (processing.ErrPagesLost). Deterministic,
 	// so not retried.
 	ErrCodePagesLost = "PAGES_LOST"
+	// ErrCodeTooManyPages: an OCR job over the plan's page limit or over what
+	// one job can finish before its deadline (ocr_limits.go). Not retried; the
+	// failure reason names the numbers.
+	ErrCodeTooManyPages = "TOO_MANY_PAGES"
 )
 
 // classifyError returns a structured error code for a processing failure.
@@ -97,6 +104,10 @@ func classifyError(err error) string {
 	}
 	if errors.Is(err, processing.ErrPagesLost) {
 		return ErrCodePagesLost
+	}
+	var tooMany *pageLimitError
+	if errors.As(err, &tooMany) {
+		return ErrCodeTooManyPages
 	}
 	msg := err.Error()
 	if strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded") {
@@ -186,7 +197,7 @@ func Run(ctx context.Context, cfg WorkerConfig) {
 		FilterSubject: "jobs.dispatch." + cfg.ServiceName,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		MaxDeliver:    4, // 1 initial + 3 retries
-		AckWait:       30 * time.Minute,
+		AckWait:       ConsumerAckWait,
 		MaxAckPending: 2 * maxConcurrency, // bound unacked messages on a wedged container
 		BackOff:       []time.Duration{10 * time.Second, 30 * time.Second, 2 * time.Minute},
 	})
@@ -468,7 +479,25 @@ func processMessage(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, lo
 	}
 
 	// Per-job timeout prevents hung subprocesses from causing AckWait redelivery.
-	jobCtx, jobCancel := context.WithTimeout(ctx, 10*time.Minute)
+	// OCR scales it with the page count and first rejects a scan over the
+	// plan's page limit or over what one job can finish (ocr_limits.go), so a
+	// long scan fails in a second with the numbers, not after 10 minutes.
+	deadline := DefaultJobDeadline
+	if payload.ToolType == "ocr-pdf" && len(localInputs) > 0 {
+		pages, err := processing.PDFPageCount(ctx, localInputs[0])
+		if err == nil {
+			d, limitErr := planOCRJob(pages, payload.MaxOCRPages, ocrParallelism(cfg.Slots))
+			if limitErr != nil {
+				handleFailure(ctx, cfg, msg, payload, limitErr, logger)
+				return
+			}
+			deadline = d
+			logger.Info("ocr job sized", "jobId", payload.JobID, "pages", pages,
+				"planLimit", payload.MaxOCRPages, "deadline", deadline)
+		}
+		// A count failure is left to ocrPDF, which reports the damaged file.
+	}
+	jobCtx, jobCancel := context.WithTimeout(ctx, deadline)
 	// Processing code that draws tokens per unit of work (OCR pages) finds
 	// the pools here.
 	jobCtx = jobslots.WithSlots(jobCtx, cfg.Slots)
@@ -617,6 +646,12 @@ func handleFailure(ctx context.Context, cfg WorkerConfig, msg jetstream.Msg, pay
 	)
 	errCode := classifyError(err)
 	failMsg := friendlyMessage(errCode)
+	var tooMany *pageLimitError
+	if errors.As(err, &tooMany) {
+		// The only failure whose message carries numbers: the user needs the
+		// page count and the limit to act on it.
+		failMsg = tooMany.userMessage
+	}
 	updateJobStatusString(cfg.DB, payload.JobID, "failed", 0, failMsg)
 	if parsed, parseErr := uuid.Parse(payload.JobID); parseErr == nil {
 		publishStatusEvent(ctx, cfg.JS, parsed, payload.UserID, payload.ToolType, "failed", 0, failMsg, payload.QueuedAt)

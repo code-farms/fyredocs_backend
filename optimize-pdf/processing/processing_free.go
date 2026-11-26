@@ -346,6 +346,16 @@ func pdfPageCount(ctx context.Context, inputPath string) (int, error) {
 	return parsePdfinfoPages(string(out))
 }
 
+// PDFPageCount is pdfPageCount for the worker, which checks an OCR job's page
+// count against the plan limit and sizes its deadline before any work starts.
+func PDFPageCount(ctx context.Context, inputPath string) (int, error) {
+	return pdfPageCount(ctx, inputPath)
+}
+
+// OCRWorkers is the per-job OCR page pool size (ocrMaxWorkers), exported for
+// the worker's deadline estimate.
+func OCRWorkers() int { return ocrMaxWorkers() }
+
 // parsePdfinfoPages extracts the "Pages:" value from pdfinfo output. Zero pages
 // is an error: there would be nothing to OCR.
 func parsePdfinfoPages(out string) (int, error) {

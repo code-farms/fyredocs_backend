@@ -28,6 +28,11 @@ const (
 	// CodeJobTooLarge: every file fits the per-file limit but together they
 	// exceed the plan's per-job total (413).
 	CodeJobTooLarge = "JOB_TOO_LARGE"
+	// CodeTooManyPages: the document has more pages than the plan allows for
+	// the tool (OCR: subscription_plans.max_ocr_pages), or more than one job can
+	// finish within the worker's deadline. Carried as the "[TOO_MANY_PAGES]"
+	// prefix of a worker failure reason.
+	CodeTooManyPages = "TOO_MANY_PAGES"
 
 	// Server / dependency (5xx).
 	CodeServerError         = "SERVER_ERROR"         // unexpected internal failure (incl. recovered panics)

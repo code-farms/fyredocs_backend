@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"log/slog"
 
+	"fyredocs/shared/config"
+
 	"github.com/redis/go-redis/v9"
 )
 
@@ -31,27 +33,31 @@ type PlanInfo struct {
 	MaxFiles  int    `json:"max_files"`
 	// MaxJobMB is the total size of all files allowed in one job.
 	MaxJobMB int `json:"max_job_mb"`
+	// MaxOCRPages is the most pages one OCR job may have.
+	MaxOCRPages int `json:"max_ocr_pages"`
 }
 
 // DefaultPlan is the last resort when no cached plan is found for an
 // authenticated user. The real limits live in auth-service's
-// subscription_plans table; this mirrors the seeded free row so a cache miss
-// never grants more than free. NOTE: keep in sync with seedPlans in
-// auth-service/internal/models/database.go.
+// subscription_plans table; this uses the free plan fallbacks the seed also
+// uses (shared/config/plan_limits.go), so a cache miss never grants more than free.
 var DefaultPlan = PlanInfo{
-	Plan:      "free",
-	MaxFileMB: 50,
-	MaxFiles:  10,
-	MaxJobMB:  300,
+	Plan:        "free",
+	MaxFileMB:   config.PlanFreeMaxFileMB,
+	MaxFiles:    config.PlanFreeMaxFiles,
+	MaxJobMB:    config.PlanFreeMaxJobMB,
+	MaxOCRPages: config.PlanFreeMaxOCRPages,
 }
 
 // DefaultGuestPlan is the last resort for anonymous requests when auth-service
-// has not published the guest row. Mirrors the seeded guest row (same NOTE).
+// has not published the guest row. Uses the guest fallbacks from
+// shared/config/plan_limits.go.
 var DefaultGuestPlan = PlanInfo{
-	Plan:      "guest",
-	MaxFileMB: 20,
-	MaxFiles:  5,
-	MaxJobMB:  100,
+	Plan:        "guest",
+	MaxFileMB:   config.PlanGuestMaxFileMB,
+	MaxFiles:    config.PlanGuestMaxFiles,
+	MaxJobMB:    config.PlanGuestMaxJobMB,
+	MaxOCRPages: config.PlanGuestMaxOCRPages,
 }
 
 // GetPlanInfo reads the user's plan info from Redis.
@@ -103,6 +109,9 @@ func readPlan(ctx context.Context, rdb *redis.Client, key string, fallback PlanI
 	}
 	if info.MaxJobMB <= 0 {
 		info.MaxJobMB = fallback.MaxJobMB
+	}
+	if info.MaxOCRPages <= 0 {
+		info.MaxOCRPages = fallback.MaxOCRPages
 	}
 	return info
 }

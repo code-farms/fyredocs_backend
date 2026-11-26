@@ -52,6 +52,7 @@ func TestAuthContextFromGatewayHeaders(t *testing.T) {
 	header.Set("X-User-Plan", "pro")
 	header.Set("X-User-Plan-Max-File-MB", "500")
 	header.Set("X-User-Plan-Max-Files", "50")
+	header.Set("X-User-Plan-Max-Ocr-Pages", "30")
 
 	ctx, ok := authContextFromGatewayHeaders(header)
 	if !ok {
@@ -68,6 +69,9 @@ func TestAuthContextFromGatewayHeaders(t *testing.T) {
 	}
 	if ctx.Plan != "pro" {
 		t.Errorf("expected Plan 'pro', got %q", ctx.Plan)
+	}
+	if ctx.PlanMaxOCRPages != 30 {
+		t.Errorf("expected PlanMaxOCRPages 30, got %d", ctx.PlanMaxOCRPages)
 	}
 	if ctx.PlanMaxFileSizeMB != 500 {
 		t.Errorf("expected PlanMaxFileSizeMB 500, got %d", ctx.PlanMaxFileSizeMB)
@@ -104,6 +108,9 @@ func TestHTTPAuthMiddlewareAnonymousPlanDefaults(t *testing.T) {
 	}
 	if gotCtx.PlanMaxFilesPerJob != config.GuestMaxFilesPerJob() {
 		t.Errorf("expected PlanMaxFilesPerJob %d for guest, got %d", config.GuestMaxFilesPerJob(), gotCtx.PlanMaxFilesPerJob)
+	}
+	if gotCtx.PlanMaxOCRPages != config.GuestMaxOCRPages() {
+		t.Errorf("expected PlanMaxOCRPages %d for guest, got %d", config.GuestMaxOCRPages(), gotCtx.PlanMaxOCRPages)
 	}
 	if gotCtx.PlanMaxJobInputMB != config.GuestMaxJobInputMB() {
 		t.Errorf("expected PlanMaxJobInputMB %d for guest, got %d", config.GuestMaxJobInputMB(), gotCtx.PlanMaxJobInputMB)

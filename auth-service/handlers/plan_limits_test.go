@@ -40,9 +40,9 @@ func newMiniRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 }
 
 var (
-	testGuestPlan = models.SubscriptionPlan{Name: "guest", MaxFileSizeMB: 20, MaxFilesPerJob: 5, MaxJobInputMB: 100}
-	testFreePlan  = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 50, MaxFilesPerJob: 10, MaxJobInputMB: 300, RetentionDays: 7}
-	testProPlan   = models.SubscriptionPlan{Name: "pro", MaxFileSizeMB: 300, MaxFilesPerJob: 50, MaxJobInputMB: 300, RetentionDays: 30}
+	testGuestPlan = models.SubscriptionPlan{Name: "guest", MaxFileSizeMB: 20, MaxFilesPerJob: 5, MaxJobInputMB: 100, MaxOCRPages: 10}
+	testFreePlan  = models.SubscriptionPlan{Name: "free", MaxFileSizeMB: 50, MaxFilesPerJob: 10, MaxJobInputMB: 300, MaxOCRPages: 30, RetentionDays: 7}
+	testProPlan   = models.SubscriptionPlan{Name: "pro", MaxFileSizeMB: 300, MaxFilesPerJob: 50, MaxJobInputMB: 300, MaxOCRPages: 200, RetentionDays: 30}
 )
 
 func TestBuildUserResponseCarriesPlanLimits(t *testing.T) {
@@ -60,7 +60,7 @@ func TestBuildUserResponseCarriesPlanLimits(t *testing.T) {
 	}
 	want := map[string]any{
 		"name": "pro", "maxFileSizeMb": float64(300), "maxFilesPerJob": float64(50),
-		"maxJobInputMb": float64(300), "retentionDays": float64(30),
+		"maxJobInputMb": float64(300), "maxOcrPages": float64(200), "retentionDays": float64(30),
 	}
 	if got.PlanName != "pro" {
 		t.Errorf("planName = %q, want pro", got.PlanName)
@@ -81,7 +81,7 @@ func TestLimitsFromPlanEmptyIsNil(t *testing.T) {
 func TestPlanCacheEntryForWireFormat(t *testing.T) {
 	raw, _ := json.Marshal(planCacheEntryFor(testProPlan))
 	// NOTE: these keys are read by api-gateway/internal/plancache/plancache.go.
-	const want = `{"plan":"pro","max_file_mb":300,"max_files":50,"max_job_mb":300}`
+	const want = `{"plan":"pro","max_file_mb":300,"max_files":50,"max_job_mb":300,"max_ocr_pages":200}`
 	if string(raw) != want {
 		t.Errorf("entry = %s, want %s", raw, want)
 	}
@@ -126,7 +126,7 @@ func TestPublishGuestPlan(t *testing.T) {
 		if err != nil {
 			t.Fatalf("plan:guest not written: %v", err)
 		}
-		const want = `{"plan":"guest","max_file_mb":20,"max_files":5,"max_job_mb":100}`
+		const want = `{"plan":"guest","max_file_mb":20,"max_files":5,"max_job_mb":100,"max_ocr_pages":10}`
 		if got != want {
 			t.Errorf("plan:guest = %s, want %s", got, want)
 		}

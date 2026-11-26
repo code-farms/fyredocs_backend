@@ -170,6 +170,7 @@ CREATE TABLE subscription_plans (
     max_file_size_mb  INT NOT NULL,
     max_files_per_job INT NOT NULL,
     max_job_input_mb  BIGINT NOT NULL DEFAULT 300,  -- total MB of all files in one job (migration 00002)
+    max_ocr_pages     BIGINT NOT NULL DEFAULT 30,   -- pages of one OCR job (migration 00003)
     retention_days    INT NOT NULL,
     created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -180,16 +181,31 @@ CREATE TABLE subscription_plans (
 These rows are the **single source of every plan limit**: the web app, the mobile app, the
 gateway and job-service all enforce the numbers in this table, and nothing else defines them.
 
-| name | max_file_size_mb | max_files_per_job | max_job_input_mb | retention_days |
-|------|------------------|-------------------|------------------|----------------|
-| `guest` | 20 | 5 | 100 | 0 |
-| `free` | 50 | 10 | 300 | 7 |
-| `pro` | 300 | 50 | 300 | 30 |
+| name | max_file_size_mb | max_files_per_job | max_job_input_mb | max_ocr_pages | retention_days |
+|------|------------------|-------------------|------------------|---------------|----------------|
+| `guest` | 20 | 5 | 100 | 10 | 0 |
+| `free` | 50 | 10 | 300 | 30 | 7 |
+| `pro` | 300 | 50 | 300 | 200 | 30 |
 
+- **How to change a limit.** On a running system, update the row; no deploy is needed:
+  `UPDATE subscription_plans SET max_ocr_pages = 50 WHERE name = 'free';`. The gateway sees it
+  within `PLAN_CACHE_TTL` (5 min) and each user at their next login or refresh. For a value
+  every environment should get, add a migration and change the matching constant in
+  `shared/config/plan_limits.go`, the only place in code that holds plan numbers: the seed and
+  every fallback (auth `lastResortPlan`, gateway `DefaultPlan`/`DefaultGuestPlan`, the
+  `GUEST_MAX_*` env defaults) read it. The web and mobile apps keep their fallback copy in
+  `src/config/planLimits.ts`.
 - **Seeding is insert-only.** `seedPlans` (`internal/models/database.go`) inserts these rows
   when they are missing and never touches existing rows, so an edit made in the table survives
   restarts. Changing the values for existing databases is done with a migration
-  (`00002_plan_job_input_limit.sql` set pro to 300 MB and added `max_job_input_mb`).
+  (`00002_plan_job_input_limit.sql` set pro to 300 MB and added `max_job_input_mb`;
+  `00003_plan_ocr_pages.sql` added `max_ocr_pages`).
+- **OCR pages are checked by the worker.** job-service cannot count pages (inputs stay in
+  object storage), so it forwards `max_ocr_pages` (gateway header `X-User-Plan-Max-Ocr-Pages`)
+  on the ocr-pdf dispatch, and optimize-pdf rejects a scan above it before OCR starts
+  (`optimize-pdf/internal/worker/ocr_limits.go`). The worker also rejects a scan one job
+  cannot finish within `OCR_MAX_JOB_MINUTES`, so on a small host the effective limit can be
+  lower than this column.
 - **Worker capacity bounds the table.** Every PDF worker rejects a job whose total input × 3
   exceeds its 900 MB tmpfs budget, so no row should allow more than 300 MB per file or per job.
   job-service also caps every limit at `MAX_UPLOAD_MB` (default 300), so a row set too high
@@ -821,6 +837,7 @@ Set-Cookie: refresh_token=eyJhbGc...; HttpOnly; Secure; SameSite=Lax; Max-Age=60
         "maxFileSizeMb": 50,
         "maxFilesPerJob": 10,
         "maxJobInputMb": 300,
+        "maxOcrPages": 30,
         "retentionDays": 7
       }
     },
@@ -857,7 +874,7 @@ Returns 204. Side effects: deletes the matching `user_sessions` row, denies the 
 
 ### GET /auth/plans
 
-Returns all plans (`guest`, `free`, `pro`), each with `maxFileSizeMb`, `maxFilesPerJob`, `maxJobInputMb` and `retentionDays`. Guest clients read their limits from the `guest` row.
+Returns all plans (`guest`, `free`, `pro`), each with `maxFileSizeMb`, `maxFilesPerJob`, `maxJobInputMb`, `maxOcrPages` and `retentionDays`. Guest clients read their limits from the `guest` row.
 
 ### POST /auth/forgot-password
 
@@ -926,7 +943,7 @@ Side effects on success:
 
 ### Internal — GET /internal/users/:id/plan
 
-Returns `{userId, plan: {name, maxFileSizeMb, maxFilesPerJob, maxJobInputMb, retentionDays}}`. Used by other services that need plan info without going through the gateway / Redis cache.
+Returns `{userId, plan: {name, maxFileSizeMb, maxFilesPerJob, maxJobInputMb, maxOcrPages, retentionDays}}`. Used by other services that need plan info without going through the gateway / Redis cache.
 
 ### Internal — POST /internal/users/:id/revoke-sessions
 

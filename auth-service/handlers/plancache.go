@@ -105,19 +105,21 @@ func resolvePlan(ctx context.Context, name string) models.SubscriptionPlan {
 }
 
 // lastResortPlan is used only when not even the "free" row can be read (database
-// down). It mirrors the seeded free row (internal/models/database.go seedPlans)
-// so an outage never grants more than free. NOTE: keep in sync with the seed.
+// down). It uses the free plan fallbacks the seed also uses
+// (shared/config/plan_limits.go), so an outage never grants more than free.
 var lastResortPlan = models.SubscriptionPlan{
-	Name: "free", MaxFileSizeMB: 50, MaxFilesPerJob: 10, MaxJobInputMB: 300, RetentionDays: 7,
+	Name: "free", MaxFileSizeMB: config.PlanFreeMaxFileMB, MaxFilesPerJob: config.PlanFreeMaxFiles,
+	MaxJobInputMB: config.PlanFreeMaxJobMB, MaxOCRPages: config.PlanFreeMaxOCRPages, RetentionDays: config.PlanFreeRetentionDays,
 }
 
 // planCacheEntryFor builds the gateway's view of a plan row.
 func planCacheEntryFor(plan models.SubscriptionPlan) planCacheEntry {
 	return planCacheEntry{
-		Plan:      plan.Name,
-		MaxFileMB: plan.MaxFileSizeMB,
-		MaxFiles:  plan.MaxFilesPerJob,
-		MaxJobMB:  plan.MaxJobInputMB,
+		Plan:        plan.Name,
+		MaxFileMB:   plan.MaxFileSizeMB,
+		MaxFiles:    plan.MaxFilesPerJob,
+		MaxJobMB:    plan.MaxJobInputMB,
+		MaxOCRPages: plan.MaxOCRPages,
 	}
 }
 

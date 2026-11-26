@@ -21,6 +21,7 @@ func guestPlanContext() AuthContext {
 		PlanMaxFileSizeMB:  config.GuestMaxFileSizeMB(),
 		PlanMaxFilesPerJob: config.GuestMaxFilesPerJob(),
 		PlanMaxJobInputMB:  config.GuestMaxJobInputMB(),
+		PlanMaxOCRPages:    config.GuestMaxOCRPages(),
 	}
 }
 
@@ -166,6 +167,7 @@ func resolveGuestPlan(r *http.Request, authCtx *AuthContext, resolve PlanResolve
 	authCtx.PlanMaxFileSizeMB = fallback.PlanMaxFileSizeMB
 	authCtx.PlanMaxFilesPerJob = fallback.PlanMaxFilesPerJob
 	authCtx.PlanMaxJobInputMB = fallback.PlanMaxJobInputMB
+	authCtx.PlanMaxOCRPages = fallback.PlanMaxOCRPages
 	if resolve == nil {
 		return
 	}
@@ -226,6 +228,7 @@ func authContextFromGatewayHeaders(header http.Header) (AuthContext, bool) {
 	maxFileMB, _ := strconv.Atoi(header.Get("X-User-Plan-Max-File-MB"))
 	maxFiles, _ := strconv.Atoi(header.Get("X-User-Plan-Max-Files"))
 	maxJobMB, _ := strconv.Atoi(header.Get("X-User-Plan-Max-Job-MB"))
+	maxOCRPages, _ := strconv.Atoi(header.Get("X-User-Plan-Max-Ocr-Pages"))
 	return AuthContext{
 		UserID:             userID,
 		Role:               role,
@@ -234,6 +237,7 @@ func authContextFromGatewayHeaders(header http.Header) (AuthContext, bool) {
 		PlanMaxFileSizeMB:  maxFileMB,
 		PlanMaxFilesPerJob: maxFiles,
 		PlanMaxJobInputMB:  maxJobMB,
+		PlanMaxOCRPages:    maxOCRPages,
 	}, true
 }
 

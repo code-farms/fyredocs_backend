@@ -48,6 +48,28 @@ func TestPlanMaxJobInputMB(t *testing.T) {
 	}
 }
 
+func TestPlanMaxOCRPages(t *testing.T) {
+	t.Setenv("GUEST_MAX_OCR_PAGES", "")
+	cases := []struct {
+		header string
+		want   int
+	}{
+		{"200", 200},
+		{"", 10},    // missing → guest fallback
+		{"abc", 10}, // invalid → guest fallback
+		{"0", 10},   // non-positive → guest fallback, never unlimited
+	}
+	for _, tc := range cases {
+		c := planCtx("", "", "")
+		if tc.header != "" {
+			c.Request.Header.Set("X-User-Plan-Max-Ocr-Pages", tc.header)
+		}
+		if got := planMaxOCRPages(c); got != tc.want {
+			t.Errorf("header %q: got %d, want %d", tc.header, got, tc.want)
+		}
+	}
+}
+
 func TestEffectiveMaxFileMB(t *testing.T) {
 	t.Setenv("MAX_UPLOAD_MB", "")
 	cases := []struct {

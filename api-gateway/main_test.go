@@ -336,10 +336,10 @@ func TestRegisterServiceRoutesAppliesBodyLimitToUploadRoute(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/upload/init", bytes.NewReader(make([]byte, 2<<20)))
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
-		// MaxBytesReader aborts the proxied request mid-body; depending on
-		// where the read fails the proxy surfaces 413 or 502 — never 2xx.
-		if rec.Code < 400 {
-			t.Errorf("expected error status for oversized body on /api/upload, got %d", rec.Code)
+		// The client's oversized body is a 413, never a 502 that would count
+		// against the upstream's circuit breaker.
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("expected 413 for oversized body on /api/upload, got %d", rec.Code)
 		}
 	})
 
@@ -359,8 +359,23 @@ func TestRegisterServiceRoutesAppliesBodyLimitToUploadRoute(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/upload/init", bytes.NewReader(make([]byte, 1<<20+1)))
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
-		if rec.Code < 400 {
-			t.Errorf("expected error status for 1 MiB + 1 byte body, got %d", rec.Code)
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("expected 413 for 1 MiB + 1 byte body, got %d", rec.Code)
+		}
+	})
+
+	// Oversized bodies are client errors: however many arrive, the upstream's
+	// breaker must stay closed and a normal request must still pass.
+	t.Run("oversized bodies do not open the circuit breaker", func(t *testing.T) {
+		for i := 0; i < 20; i++ {
+			req := httptest.NewRequest(http.MethodPost, "/api/upload/init", bytes.NewReader(make([]byte, 2<<20)))
+			mux.ServeHTTP(httptest.NewRecorder(), req)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/upload/init", bytes.NewReader(make([]byte, 512)))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("small request after oversized ones got %d, want 200 (breaker opened?)", rec.Code)
 		}
 	})
 }

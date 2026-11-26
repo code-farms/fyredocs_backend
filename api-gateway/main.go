@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -418,6 +419,7 @@ func main() {
 			authCtx.PlanMaxFileSizeMB = info.MaxFileMB
 			authCtx.PlanMaxFilesPerJob = info.MaxFiles
 			authCtx.PlanMaxJobInputMB = info.MaxJobMB
+			authCtx.PlanMaxOCRPages = info.MaxOCRPages
 		},
 	})
 
@@ -663,6 +665,21 @@ func newProxy(cfg routeConfig, breaker *circuitbreaker.TwoStep) http.Handler {
 	// is logged by httputil's default handler via stdlib log to stderr — no slog,
 	// no request_id/trace_id. Log it ourselves at the request ctx, then 502.
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		// A body over the route's limit (withMaxBodySize) is the client's
+		// fault: answer 413, not 502. A 5xx here would also count as an
+		// upstream failure in the circuit breaker below, so a client sending
+		// oversized requests could open the breaker for everyone (found on the
+		// VPS run, 2026-11-26: a 41 MB multipart create returned 502
+		// UPSTREAM_UNAVAILABLE).
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			slog.WarnContext(r.Context(), "request body over gateway limit",
+				"op", "gateway.body_limit", "limit", tooLarge.Limit,
+				"prefix", cfg.prefix, "path", r.URL.Path)
+			response.WriteErr(w, http.StatusRequestEntityTooLarge, response.CodeFileTooLarge,
+				"This request is too large. Upload files with the upload API and send their upload IDs.")
+			return
+		}
 		slog.ErrorContext(r.Context(), "upstream proxy error",
 			"error", err, "op", "gateway.proxy",
 			"prefix", cfg.prefix, "target", cfg.targetURL, "path", r.URL.Path)

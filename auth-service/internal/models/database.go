@@ -120,9 +120,14 @@ func seedPlans() {
 	}
 
 	plans := []SubscriptionPlan{
-		{ID: uuid.New(), Name: "guest", MaxFileSizeMB: 20, MaxFilesPerJob: 5, MaxJobInputMB: 100, RetentionDays: 0},
-		{ID: uuid.New(), Name: "free", MaxFileSizeMB: 50, MaxFilesPerJob: 10, MaxJobInputMB: 300, RetentionDays: 7},
-		{ID: uuid.New(), Name: "pro", MaxFileSizeMB: 300, MaxFilesPerJob: 50, MaxJobInputMB: 300, RetentionDays: 30},
+		// Values: shared/config/plan_limits.go (seed and fallbacks only; the
+		// rows are the live limits).
+		{ID: uuid.New(), Name: "guest", MaxFileSizeMB: config.PlanGuestMaxFileMB, MaxFilesPerJob: config.PlanGuestMaxFiles,
+			MaxJobInputMB: config.PlanGuestMaxJobMB, MaxOCRPages: config.PlanGuestMaxOCRPages, RetentionDays: config.PlanGuestRetentionDays},
+		{ID: uuid.New(), Name: "free", MaxFileSizeMB: config.PlanFreeMaxFileMB, MaxFilesPerJob: config.PlanFreeMaxFiles,
+			MaxJobInputMB: config.PlanFreeMaxJobMB, MaxOCRPages: config.PlanFreeMaxOCRPages, RetentionDays: config.PlanFreeRetentionDays},
+		{ID: uuid.New(), Name: "pro", MaxFileSizeMB: config.PlanProMaxFileMB, MaxFilesPerJob: config.PlanProMaxFiles,
+			MaxJobInputMB: config.PlanProMaxJobMB, MaxOCRPages: config.PlanProMaxOCRPages, RetentionDays: config.PlanProRetentionDays},
 	}
 	// Insert-only on the unique plan name: existing rows (and any edits made to
 	// them) are left alone.

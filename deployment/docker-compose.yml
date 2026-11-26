@@ -1138,6 +1138,14 @@ services:
       # OCR page-worker pool. Unset → min(NumCPU, 4) to bound tesseract memory.
       # On a VS-32-class box (32 GB) raise to ~6 to speed up multi-page scans.
       OCR_MAX_WORKERS: "${OCR_MAX_WORKERS:-}"
+      # OCR job sizing (internal/worker/ocr_limits.go): a scan over the plan's
+      # page limit (subscription_plans.max_ocr_pages) or over what one job can
+      # finish in OCR_MAX_JOB_MINUTES is rejected before OCR starts, with the
+      # numbers in the message; otherwise the deadline grows with the pages.
+      # 40 s/page is per tesseract slot, measured ~35 s at 0.6 CPU (2026-11-26).
+      OCR_SECONDS_PER_PAGE: "${OCR_SECONDS_PER_PAGE:-40}"
+      OCR_JOB_BASE_SECONDS: "${OCR_JOB_BASE_SECONDS:-60}"
+      OCR_MAX_JOB_MINUTES: "${OCR_MAX_JOB_MINUTES:-25}"
 
       # Workload-class slots (shared/jobslots, doc 12 §5.1): CPU_JOB_SLOTS
       # engine jobs (default: the CPU limit) and IO_JOB_SLOTS pdfcpu jobs

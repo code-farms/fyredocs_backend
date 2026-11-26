@@ -19,7 +19,9 @@ type AuthContext struct {
 	PlanMaxFilesPerJob int
 	// PlanMaxJobInputMB is the plan's total size limit for all files in one job.
 	PlanMaxJobInputMB int
-	IsGuest           bool
+	// PlanMaxOCRPages is the plan's limit on the pages of one OCR job.
+	PlanMaxOCRPages int
+	IsGuest         bool
 	// ImpersonatedBy is the admin user ID when this request is an impersonation
 	// (proxy login) session; empty otherwise.
 	ImpersonatedBy string
@@ -84,6 +86,9 @@ func ApplyUserHeaders(header http.Header, authCtx AuthContext) {
 	if authCtx.PlanMaxFilesPerJob > 0 {
 		header.Set("X-User-Plan-Max-Files", strconv.Itoa(authCtx.PlanMaxFilesPerJob))
 	}
+	if authCtx.PlanMaxOCRPages > 0 {
+		header.Set("X-User-Plan-Max-Ocr-Pages", strconv.Itoa(authCtx.PlanMaxOCRPages))
+	}
 	if strings.TrimSpace(authCtx.ImpersonatedBy) != "" {
 		header.Set("X-Impersonated-By", authCtx.ImpersonatedBy)
 	}
@@ -103,5 +108,6 @@ func ClearUserHeaders(header http.Header) {
 	header.Del("X-User-Plan-Max-File-MB")
 	header.Del("X-User-Plan-Max-Files")
 	header.Del("X-User-Plan-Max-Job-MB")
+	header.Del("X-User-Plan-Max-Ocr-Pages")
 	header.Del("X-Impersonated-By")
 }

@@ -40,6 +40,7 @@ func GetUserPlan(c *gin.Context) {
 			"maxFileSizeMb":  plan.MaxFileSizeMB,
 			"maxJobInputMb":  plan.MaxJobInputMB,
 			"maxFilesPerJob": plan.MaxFilesPerJob,
+			"maxOcrPages":    plan.MaxOCRPages,
 			"retentionDays":  plan.RetentionDays,
 		},
 	})

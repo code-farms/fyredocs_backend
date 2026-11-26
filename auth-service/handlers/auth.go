@@ -83,6 +83,7 @@ type planLimits struct {
 	MaxFileSizeMB  int    `json:"maxFileSizeMb"`
 	MaxFilesPerJob int    `json:"maxFilesPerJob"`
 	MaxJobInputMB  int    `json:"maxJobInputMb"`
+	MaxOCRPages    int    `json:"maxOcrPages"`
 	RetentionDays  int    `json:"retentionDays"`
 }
 
@@ -589,6 +590,7 @@ func limitsFromPlan(plan models.SubscriptionPlan) *planLimits {
 		MaxFileSizeMB:  plan.MaxFileSizeMB,
 		MaxFilesPerJob: plan.MaxFilesPerJob,
 		MaxJobInputMB:  plan.MaxJobInputMB,
+		MaxOCRPages:    plan.MaxOCRPages,
 		RetentionDays:  plan.RetentionDays,
 	}
 }
@@ -923,6 +925,9 @@ type planCacheEntry struct {
 	// MaxJobMB is the plan's total-per-job limit (subscription_plans.max_job_input_mb).
 	// NOTE: same field name in api-gateway/internal/plancache/plancache.go.
 	MaxJobMB int `json:"max_job_mb"`
+	// MaxOCRPages is subscription_plans.max_ocr_pages. NOTE: same field name in
+	// api-gateway/internal/plancache/plancache.go.
+	MaxOCRPages int `json:"max_ocr_pages"`
 }
 
 // cachePlanInfo publishes a user's plan limits to Redis for the gateway to read,

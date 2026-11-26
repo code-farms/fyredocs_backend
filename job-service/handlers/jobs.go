@@ -438,6 +438,10 @@ func CreateJobFromTool(c *gin.Context) {
 		return
 	}
 	event := newDispatchEvent(job.ID.String(), toolType, userID, inputPaths, optionsPayload(optionsRaw), correlationID, time.Now().UTC())
+	if toolType == "ocr-pdf" {
+		// Pages can only be counted once the worker has the file; it enforces this.
+		event.MaxOCRPages = planMaxOCRPages(c)
+	}
 	subject := queue.SubjectForDispatch(serviceName)
 	if err := queue.PublishJobEvent(c.Request.Context(), natsconn.JS, subject, event); err != nil {
 		response.InternalErrorf(c, response.CodeServerError, "Our servers are busy. Please try again in a moment.", err,
@@ -1262,6 +1266,23 @@ func planMaxJobInputMB(c *gin.Context) int {
 		return config.GuestMaxJobInputMB()
 	}
 	return mb
+}
+
+// planMaxOCRPages reads the plan's limit on the pages of one OCR job from
+// X-User-Plan-Max-Ocr-Pages (subscription_plans.max_ocr_pages, forwarded by the
+// gateway). Missing or invalid falls back to the guest value and is logged, the
+// same "too strict, never unlimited" rule as planMaxJobInputMB. job-service
+// cannot count pages (inputs stay in object storage), so the value travels on
+// the dispatch event and the optimize-pdf worker enforces it.
+func planMaxOCRPages(c *gin.Context) int {
+	val := c.GetHeader("X-User-Plan-Max-Ocr-Pages")
+	n, err := strconv.Atoi(val)
+	if val == "" || err != nil || n <= 0 {
+		logger.LogWarn(c.Request.Context(), "plan_limits.ocr_pages_header_missing",
+			fmt.Errorf("X-User-Plan-Max-Ocr-Pages missing or invalid: %q", val))
+		return config.GuestMaxOCRPages()
+	}
+	return n
 }
 
 // bytesPerMB converts plan limits (whole MB) to bytes. MB means MiB here and in

@@ -74,7 +74,10 @@ type SubscriptionPlan struct {
 	// MaxJobInputMB caps the total size of all files in one job. Must stay at or
 	// below what the PDF workers can hold (300 MB: total input × 3 within their
 	// 900 MB tmpfs budget), or jobs pass upload checks and fail in the worker.
-	MaxJobInputMB int       `gorm:"not null;default:300" json:"maxJobInputMb"`
+	MaxJobInputMB int `gorm:"not null;default:300" json:"maxJobInputMb"`
+	// MaxOCRPages caps the pages of one OCR job (ocr-pdf). The optimize-pdf
+	// worker enforces it after counting pages, before any OCR work starts.
+	MaxOCRPages   int       `gorm:"column:max_ocr_pages;not null;default:30" json:"maxOcrPages"`
 	RetentionDays int       `gorm:"not null" json:"retentionDays"`
 	CreatedAt     time.Time `gorm:"default:CURRENT_TIMESTAMP" json:"createdAt"`
 }

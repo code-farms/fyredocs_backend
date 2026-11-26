@@ -32,6 +32,10 @@ type JobEvent struct {
 	// terminal events so end-to-end job latency (queued → terminal, including
 	// retries and DLQ dwell) can be observed as job_duration_seconds.
 	QueuedAt time.Time `json:"queuedAt,omitempty"`
+	// MaxOCRPages is the caller's plan limit on the pages of one OCR job, set by
+	// job-service on ocr-pdf dispatches (subscription_plans.max_ocr_pages). The
+	// optimize-pdf worker counts pages and rejects the job above it. 0 = not set.
+	MaxOCRPages int `json:"maxOcrPages,omitempty"`
 }
 
 // PublishJobEvent marshals and publishes a JobEvent to the given NATS

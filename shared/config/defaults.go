@@ -70,34 +70,45 @@ func MaxUploadBytes() int64 {
 // is the source of guest limits: auth-service publishes it to Redis (plan:guest)
 // and the gateway forwards it as X-User-Plan-* headers. These helpers are used
 // only when that header is missing (Redis down, gateway bypassed), so a request
-// is never left without a limit. Their defaults match the seeded guest row.
+// is never left without a limit. Their defaults are the guest constants in
+// plan_limits.go, which also seed the guest row.
 
 // GuestMaxFileSizeMB is the guest plan's per-file upload limit in MB
-// (GUEST_MAX_FILE_MB, default 20).
+// (GUEST_MAX_FILE_MB, default PlanGuestMaxFileMB in plan_limits.go).
 func GuestMaxFileSizeMB() int {
-	mb := GetEnvInt("GUEST_MAX_FILE_MB", 20)
+	mb := GetEnvInt("GUEST_MAX_FILE_MB", PlanGuestMaxFileMB)
 	if mb <= 0 {
-		mb = 20
+		mb = PlanGuestMaxFileMB
 	}
 	return mb
 }
 
 // GuestMaxFilesPerJob is the guest plan's per-job file count limit
-// (GUEST_MAX_FILES, default 5).
+// (GUEST_MAX_FILES, default PlanGuestMaxFiles).
 func GuestMaxFilesPerJob() int {
-	n := GetEnvInt("GUEST_MAX_FILES", 5)
+	n := GetEnvInt("GUEST_MAX_FILES", PlanGuestMaxFiles)
 	if n <= 0 {
-		n = 5
+		n = PlanGuestMaxFiles
 	}
 	return n
 }
 
 // GuestMaxJobInputMB is the fallback cap on the total size of all files in one
-// guest job, in MB (GUEST_MAX_JOB_MB, default 100 = 20 MB × 5 files).
+// guest job, in MB (GUEST_MAX_JOB_MB, default PlanGuestMaxJobMB).
 func GuestMaxJobInputMB() int {
-	mb := GetEnvInt("GUEST_MAX_JOB_MB", 100)
+	mb := GetEnvInt("GUEST_MAX_JOB_MB", PlanGuestMaxJobMB)
 	if mb <= 0 {
-		mb = 100
+		mb = PlanGuestMaxJobMB
 	}
 	return mb
+}
+
+// GuestMaxOCRPages is the fallback cap on the pages of one guest OCR job
+// (GUEST_MAX_OCR_PAGES, default PlanGuestMaxOCRPages).
+func GuestMaxOCRPages() int {
+	n := GetEnvInt("GUEST_MAX_OCR_PAGES", PlanGuestMaxOCRPages)
+	if n <= 0 {
+		n = PlanGuestMaxOCRPages
+	}
+	return n
 }
