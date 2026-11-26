@@ -314,6 +314,34 @@ then falls outside the default `172.18.0.0/16`, Gin stops trusting
 collapsing all rate-limit and guest buckets into a single shared key. Add the edge
 host's private address.
 
+## Compression and HTTP/3
+
+All response compression happens at this edge; Go services and the gateway never compress.
+
+| Traffic | How | Encodings |
+|---|---|---|
+| SPA files (`dist/**/*.js/css/html/svg/json/xml/txt`, ≥1 KB) | Pre-compressed at `npm run build` by `precompressPlugin` in `fyredocs_frontend/vite.config.ts`; served by `file_server { precompressed br gzip }` | br (quality 11), gzip (level 9). No zstd: br is smaller here and every zstd browser also accepts br |
+| Dynamic responses (API JSON, CSV export, Grafana) | `encode zstd gzip` with an explicit `Content-Type` list and `minimum_length 1024` | zstd, gzip |
+| SSE (`text/event-stream`) | Not compressed: left out of the type list so events flush immediately | none |
+| Object bytes (`/uploads/*`, `/outputs/*`: PDF, images, zip) | Not compressed: already compressed formats | none |
+
+**How the encoding is picked.** Every browser and mobile HTTP stack sends `Accept-Encoding` with the encodings it can decode (e.g. Chrome `gzip, deflate, br, zstd`, Safari `gzip, deflate, br`, Android OkHttp `gzip`). Caddy picks the best one from that list and sets `Content-Encoding` and `Vary: Accept-Encoding`. A client that lists none gets the raw bytes. We deliberately do not pick by User-Agent, because UA does not reveal proxies that strip encodings and can be frozen or spoofed.
+
+**Why `minimum_length 1024`.** Below about 1 KB the encoder framing can make the body larger, and the response fits in one TCP packet anyway, so compressing it only costs CPU.
+
+**Why no dynamic Brotli.** Stock Caddy has no Brotli encoder, and Brotli is CPU-heavy on the fly. Static files get Brotli from the build step instead.
+
+**HTTP/3.** Compose publishes `443:443/udp`, and Caddy advertises h3 via `Alt-Svc` once `PUBLIC_DOMAIN` enables TLS. Clients without h3 stay on HTTP/2. The host firewall must also allow UDP 443.
+
+**Verify.**
+
+```bash
+curl -sI -H 'Accept-Encoding: br'   https://<domain>/assets/<chunk>.js | grep -i -E 'content-encoding|vary'
+curl -sI -H 'Accept-Encoding: gzip' https://<domain>/assets/<chunk>.js | grep -i content-encoding
+curl -sI                            https://<domain>/assets/<chunk>.js | grep -i content-encoding   # none
+curl -sN -H 'Accept-Encoding: gzip' https://<domain>/api/jobs/<id>/events -D - -o /dev/null | grep -i content-encoding  # none
+```
+
 ## TLS modes
 
 The site address is `{$PUBLIC_DOMAIN::80}`:

@@ -392,6 +392,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      # HTTP/3 (QUIC). Caddy advertises it via Alt-Svc once TLS is on; clients
+      # without h3 stay on h2. The host firewall must allow UDP 443 too.
+      - "443:443/udp"
     environment:
       # Set to your public domain to enable automatic HTTPS; leave unset
       # for plain HTTP on :80 (local/dev). The :80 default must be applied

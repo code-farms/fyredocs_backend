@@ -12,7 +12,34 @@
 # 301-redirected to PUBLIC_DOMAIN, so search engines see one host. Empty →
 # the address list is just PUBLIC_DOMAIN.
 {$PUBLIC_DOMAIN::80} {$PUBLIC_WWW_DOMAIN} {
-	encode gzip zstd
+	# On-the-fly compression for dynamic responses (API JSON, CSV export,
+	# Grafana). Each client gets the best encoding its Accept-Encoding lists
+	# (zstd > gzip); clients that list none get the raw body.
+	#   - Explicit type list instead of Caddy's default (which matches text/*):
+	#     keeps text/event-stream OUT, so SSE job/notification/AI events are
+	#     flushed immediately instead of sitting in an encoder buffer, and keeps
+	#     already-compressed object bytes (PDF/images/zip) untouched.
+	#   - minimum_length 1024: below ~1 KB the encoder framing can make the body
+	#     larger and it fits in one TCP packet anyway, so compressing only costs CPU.
+	#   - No dynamic Brotli (stock Caddy has no br encoder; it is CPU-heavy on the
+	#     fly). Static SPA files get Brotli via `precompressed` below instead.
+	encode zstd gzip {
+		minimum_length 1024
+		match {
+			header Content-Type application/json*
+			header Content-Type application/problem+json*
+			header Content-Type application/javascript*
+			header Content-Type application/xml*
+			header Content-Type application/rss+xml*
+			header Content-Type text/html*
+			header Content-Type text/plain*
+			header Content-Type text/css*
+			header Content-Type text/csv*
+			header Content-Type text/javascript*
+			header Content-Type text/xml*
+			header Content-Type image/svg+xml*
+		}
+	}
 
 	@www header_regexp www Host ^www\.(.+)$
 	redir @www https://{re.www.1}{uri} 301
@@ -167,7 +194,12 @@
 		@assets path /assets/*
 		handle @assets {
 			header Cache-Control "public, max-age=31536000, immutable"
-			file_server
+			# .br/.gz siblings are written at build time by the Vite
+			# precompress plugin; Caddy picks the one matching Accept-Encoding,
+			# sets Vary: Accept-Encoding, and falls back to the raw file.
+			file_server {
+				precompressed br gzip
+			}
 		}
 		# index.html (and the SPA fallback) must revalidate on every load, or the
 		# browser heuristically caches it and keeps requesting a previous
@@ -183,7 +215,9 @@
 			# canonical). Everything else gets the SPA shell, so app routes never
 			# flash home-page copy.
 			try_files {path} {path}.html {path}index.html /_shell.html
-			file_server
+			file_server {
+				precompressed br gzip
+			}
 		}
 	}
 }
