@@ -864,6 +864,10 @@ services:
       CPU_JOB_SLOTS: "${CONVERT_FROM_PDF_CPU_JOB_SLOTS:-2}"
       IO_JOB_SLOTS: "1"
       WORKER_CONCURRENCY: "${CONVERT_FROM_PDF_CONCURRENCY:-}"
+      # Go share of the memory limit (doc 12 §5.6): deploy.sh sets it from the
+      # worker limit; the fallback is doc 12's value for a 1 GiB worker.
+      GOMEMLIMIT: "${CONVERT_FROM_PDF_GOMEMLIMIT:-128MiB}"
+      GOGC: "100"
       # Bounded drain on shutdown; must stay under stop_grace_period.
       WORKER_DRAIN_TIMEOUT: ${WORKER_DRAIN_TIMEOUT:-120s}
       # Result cache: identical input+tool+options reuse a prior output. Keep at
@@ -947,6 +951,10 @@ services:
       CPU_JOB_SLOTS: "${CONVERT_TO_PDF_CPU_JOB_SLOTS:-2}"
       IO_JOB_SLOTS: "${CONVERT_TO_PDF_IO_JOB_SLOTS:-2}"
       WORKER_CONCURRENCY: "${CONVERT_TO_PDF_CONCURRENCY:-}"
+      # Go share of the memory limit (doc 12 §5.6): deploy.sh sets it from the
+      # worker limit; the fallback is doc 12's value for a 1 GiB worker.
+      GOMEMLIMIT: "${CONVERT_TO_PDF_GOMEMLIMIT:-128MiB}"
+      GOGC: "100"
       # Bounded drain on shutdown; must stay under stop_grace_period.
       WORKER_DRAIN_TIMEOUT: ${WORKER_DRAIN_TIMEOUT:-120s}
       # unoserver (LibreOffice) daemon pool. Leave UNSET to auto-size to
@@ -1047,6 +1055,10 @@ services:
       CPU_JOB_SLOTS: "${ORGANIZE_PDF_CPU_JOB_SLOTS:-2}"
       IO_JOB_SLOTS: "${ORGANIZE_PDF_IO_JOB_SLOTS:-4}"
       WORKER_CONCURRENCY: "${ORGANIZE_PDF_CONCURRENCY:-}"
+      # Go share of the memory limit (doc 12 §5.6): deploy.sh sets it from the
+      # worker limit; the fallback is doc 12's value for a 1 GiB worker.
+      GOMEMLIMIT: "${ORGANIZE_PDF_GOMEMLIMIT:-640MiB}"
+      GOGC: "100"
       # Bounded drain on shutdown; must stay under stop_grace_period.
       WORKER_DRAIN_TIMEOUT: ${WORKER_DRAIN_TIMEOUT:-120s}
       # Result cache (see convert-from-pdf). 0 disables.
@@ -1139,6 +1151,10 @@ services:
       CPU_JOB_SLOTS: "${OPTIMIZE_PDF_CPU_JOB_SLOTS:-2}"
       IO_JOB_SLOTS: "1"
       WORKER_CONCURRENCY: "${OPTIMIZE_PDF_CONCURRENCY:-}"
+      # Go share of the memory limit (doc 12 §5.6): deploy.sh sets it from the
+      # worker limit; the fallback is doc 12's value for a 1 GiB worker.
+      GOMEMLIMIT: "${OPTIMIZE_PDF_GOMEMLIMIT:-256MiB}"
+      GOGC: "100"
       # Bounded drain on shutdown; must stay under stop_grace_period.
       WORKER_DRAIN_TIMEOUT: ${WORKER_DRAIN_TIMEOUT:-120s}
       # Result cache (see convert-from-pdf). 0 disables.

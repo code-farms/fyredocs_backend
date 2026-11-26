@@ -584,9 +584,24 @@ compute_resource_budget() {
     # redis maxmemory kept under the redis container cap (existing pattern).
     export REDIS_MAXMEMORY="$(( MEM_REDIS * 75 / 100 ))mb"
 
+    # GOMEMLIMIT: the Go share of each worker's memory limit (doc 12 §5.6). The
+    # engines (LibreOffice, gs, tesseract, python) share the cgroup, so the Go
+    # heap gets only its share and yields to them before the cgroup OOM-kills.
+    # Shares give doc 12's values on a 1 GiB worker and stay >= 2x the Go
+    # heap+stack peaks measured by the engine harness on the 6 vCPU / 12 GB VPS
+    # (2026-11-19): organize 175 MiB (scan-to-pdf imaging), convert-to 24,
+    # optimize 18, convert-from 14. A value pinned in .env wins.
+    local gml
+    gml=$(( MEM_ORG * 70 / 100 )); export ORGANIZE_PDF_GOMEMLIMIT="${ORGANIZE_PDF_GOMEMLIMIT:-${gml}MiB}"
+    gml=$(( MEM_OPT * 25 / 100 )); export OPTIMIZE_PDF_GOMEMLIMIT="${OPTIMIZE_PDF_GOMEMLIMIT:-${gml}MiB}"
+    gml=$(( MEM_TO  * 15 / 100 )); export CONVERT_TO_PDF_GOMEMLIMIT="${CONVERT_TO_PDF_GOMEMLIMIT:-${gml}MiB}"
+    gml=$(( MEM_CF  * 15 / 100 )); export CONVERT_FROM_PDF_GOMEMLIMIT="${CONVERT_FROM_PDF_GOMEMLIMIT:-${gml}MiB}"
+
     echo ""
     printf "  Derived cpu slots: convert-to=%s (unoserver %s)  convert-from=%s  organize=%s (io %s)  optimize=%s (ocr pages/job %s)\n" \
         "$cto" "$insts" "$cf" "$org_cpu" "$org" "$opt" "$ocr"
+    printf "  GOMEMLIMIT: convert-to=%s  convert-from=%s  organize=%s  optimize=%s\n" \
+        "$CONVERT_TO_PDF_GOMEMLIMIT" "$CONVERT_FROM_PDF_GOMEMLIMIT" "$ORGANIZE_PDF_GOMEMLIMIT" "$OPTIMIZE_PDF_GOMEMLIMIT"
     printf "  redis maxmemory: %s\n" "$REDIS_MAXMEMORY"
 }
 
