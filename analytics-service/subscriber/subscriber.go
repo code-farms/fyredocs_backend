@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"fyredocs/shared/natsconn"
 	"fyredocs/shared/queue"
@@ -186,13 +187,18 @@ func handleAnalyticsEvent(ctx context.Context, msg jetstream.Msg) {
 		record.CreatedAt = time.Now().UTC()
 	}
 
-	if err := models.DB.WithContext(ctx).Create(&record).Error; err != nil {
+	// A redelivered job.created hits uq_event_job_lifecycle and is skipped,
+	// so it neither becomes a second row nor a second audit entry.
+	res := models.DB.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&record)
+	if err := res.Error; err != nil {
 		slog.Error("failed to persist analytics event", "eventType", event.EventType, "error", err)
 		nakOrDLQ(ctx, msg, "analytics", err)
 		return
 	}
 
-	recordAuditActivity(ctx, &record)
+	if res.RowsAffected > 0 {
+		recordAuditActivity(ctx, &record)
+	}
 
 	_ = msg.Ack()
 }
@@ -342,7 +348,9 @@ func handleJobEvent(ctx context.Context, msg jetstream.Msg) {
 		record.CreatedAt = time.Now().UTC()
 	}
 
-	if err := models.DB.WithContext(ctx).Create(&record).Error; err != nil {
+	// At-least-once delivery: a duplicate of a transition already recorded
+	// conflicts on uq_event_job_lifecycle and is dropped, not counted twice.
+	if err := models.DB.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&record).Error; err != nil {
 		slog.Error("failed to persist job event", "eventType", eventType, "error", err)
 		nakOrDLQ(ctx, msg, "analytics", err)
 		return
